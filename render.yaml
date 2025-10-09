@@ -7,7 +7,7 @@ databases:
   - name: apex-predator-db
     databaseName: apex_predator
     user: apex_user
-    plan: Standard # Rekomendowany, płatny plan dla danych produkcyjnych
+    plan: Free # Rekomendowany, płatny plan dla danych produkcyjnych
     postgresMajorVersion: 14
     region: frankfurt
 
