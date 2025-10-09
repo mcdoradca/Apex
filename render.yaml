@@ -1,0 +1,50 @@
+# Plik render.yaml zaktualizowany do najnowszej składni (stan na 08.10.2025)
+# Definiuje całą infrastrukturę aplikacji: bazę danych, web service (API) i workera.
+# Zapewnia pełną izolację usług dzięki dyrektywie `rootDir`.
+
+databases:
+  # 1. Definicja usługi Bazy Danych PostgreSQL
+  - name: apex-predator-db
+    databaseName: apex_predator
+    user: apex_user
+    plan: Standard # Rekomendowany, płatny plan dla danych produkcyjnych
+    postgresMajorVersion: 14
+    region: frankfurt
+
+services:
+  # 2. Definicja usługi Bramy API (Web Service)
+  - type: web
+    name: apex-predator-api
+    env: python
+    plan: starter
+    region: frankfurt
+    rootDir: ./api # Kluczowa dyrektywa zapewniająca izolację
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn src.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: # Zaktualizowana składnia odwołania do bazy danych
+          name: apex-predator-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.11.4
+
+  # 3. Definicja usługi Silnika Analitycznego (Background Worker)
+  - type: worker
+    name: apex-predator-worker
+    env: python
+    plan: starter # Plan płatny jest konieczny, aby worker działał w sposób ciągły
+    region: frankfurt
+    rootDir: ./worker # Kluczowa dyrektywa zapewniająca izolację
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python src/main.py"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: # Zaktualizowana składnia odwołania do bazy danych
+          name: apex-predator-db
+          property: connectionString
+      - key: ALPHAVANTAGE_API_KEY
+        sync: false # Wartość ustawiana ręcznie jako sekret w panelu Render
+      - key: PYTHON_VERSION
+        value: 3.11.4
+
