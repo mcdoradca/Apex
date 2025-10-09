@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APEX Predator - Analizator Nasdaq</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- ZAKTUALIZOWANE FAVICONS (zgodnie z prośbą) -->
+    <link rel="shortcut icon" href="favicon.ico">
+    <link rel="icon" type="image/png" href="/favicon-96x96.png">
+    
+    <meta name="referrer" content="no-referrer">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0D1117;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #161B22; }
+        ::-webkit-scrollbar-thumb { background: #30363D; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        /* Custom glowing effects */
+        .glowing-btn { box-shadow: 0 0 5px #0ea5e9, 0 0 15px #0ea5e9, 0 0 25px #0ea5e9; }
+        .sidebar-item-active { background-color: #1f2937; border-left: 3px solid #0ea5e9; color: #f0f0f0; }
+        .sidebar-item { border-left: 3px solid transparent; }
+        
+        /* ZAKTUALIZOWANY STYL LOGOWANIA (zgodnie z prośbą) */
+        .login-background {
+            background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        .login-form-container {
+            /* Zmodyfikowane pozycjonowanie */
+            margin-right: 8vw;
+            width: 340px;
+        }
+        .content-view { display: none; }
+        .content-view.active { display: block; }
+    </style>
+</head>
+<body class="text-gray-200">
+
+    <!-- ZAKTUALIZOWANY Ekran Logowania (zgodnie z prośbą) -->
+    <div id="login-screen" class="min-h-screen flex items-center justify-end login-background">
+        <div class="login-form-container bg-black bg-opacity-60 p-6 rounded-lg shadow-2xl backdrop-blur-sm">
+            <div class="text-center mb-6">
+                <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" 
+                     alt="Logo" 
+                     class="w-24 mx-auto mb-3">
+                <h1 class="text-2xl font-bold text-white">APEX Predator</h1>
+                <p class="text-gray-400 text-sm">AI-Powered Nasdaq Intelligence</p>
+            </div>
+            <form id="login-form">
+                <div class="mb-3">
+                    <label for="username" class="block text-gray-400 mb-1 text-sm text-left">Nazwa użytkownika</label>
+                    <input type="text" id="username" name="username" autocomplete="username" class="w-full bg-gray-900 border border-gray-700 rounded-md py-2 px-3 text-white focus:outline-none focus:border-sky-500 text-sm" placeholder="nazwa@uzytkownika.pl" value="nazwa@uzytkownika.pl" required>
+                </div>
+                <div class="mb-4">
+                    <label for="password" class="block text-gray-400 mb-1 text-sm text-left">Hasło</label>
+                    <input type="password" id="password" name="password" autocomplete="current-password" class="w-full bg-gray-900 border border-gray-700 rounded-md py-2 px-3 text-white focus:outline-none focus:border-sky-500 text-sm" placeholder="••••••••" value="••••••••" required>
+                </div>
+                <button type="submit" id="login-button" class="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-2 px-4 rounded-md transition duration-300 glowing-btn text-sm disabled:bg-gray-600 disabled:cursor-not-allowed disabled:shadow-none">
+                     Zaloguj się
+                </button>
+                 <div class="text-center mt-3 text-xs">
+                    <a href="#" class="text-sky-400 hover:underline">Zapomniałeś hasła?</a>
+                    <span class="text-gray-500 mx-2">|</span>
+                    <a href="#" class="text-sky-400 hover:underline">Utwórz konto</a>
+                </div>
+                <p id="login-status-text" class="text-center text-gray-400 text-xs mt-3"></p>
+            </form>
+        </div>
+    </div>
+
+    <!-- Główny Dashboard Aplikacji (bez zmian) -->
+    <div id="dashboard" class="hidden h-screen flex">
+        <!-- Lewy Sidebar -->
+        <aside class="w-64 bg-[#161B22] p-4 flex flex-col shrink-0">
+             <div class="flex items-center mb-8">
+                <svg class="w-10 h-10 mr-3" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M20 80 L50 20 L80 80 L65 60 L35 60 Z" fill="#0ea5e9"/></svg>
+                <h1 class="text-xl font-bold">APEX Predator</h1>
+            </div>
+
+            <nav id="sidebar-nav" class="flex-grow space-y-2">
+                <a href="#dashboard-view" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors">
+                    <i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i>
+                    <span>Dashboard</span>
+                </a>
+                
+                <div class="pt-4">
+                    <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
+                     <div id="phase1-controls" class="pl-2 mt-2 border-l border-gray-700">
+                        <p class="text-sm font-semibold text-gray-300 mb-2">Faza 1: Skaner</p>
+                        <div class="flex flex-col space-y-2">
+                            <button id="start-btn" class="w-full text-left flex items-center bg-green-600/20 hover:bg-green-600/40 text-green-300 py-1 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play" class="mr-2 h-4 w-4"></i>Start</button>
+                            <button id="pause-btn" class="w-full text-left flex items-center bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-300 py-1 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="pause" class="mr-2 h-4 w-4"></i>Wstrzymaj</button>
+                            <button id="resume-btn" class="w-full text-left flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 py-1 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play-circle" class="mr-2 h-4 w-4"></i>Wznów</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-4">
+                    <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki</h2>
+                     <a href="#apex-elita-view" class="sidebar-item flex items-center p-2 rounded-lg transition-colors hover:bg-gray-800">
+                        <i data-lucide="gem" class="mr-3 w-5 h-5"></i>
+                        <span>APEX Elita</span>
+                    </a>
+                     <a href="#predator-watchlist-view" class="sidebar-item flex items-center p-2 rounded-lg transition-colors hover:bg-gray-800">
+                        <i data-lucide="swords" class="mr-3 w-5 h-5"></i>
+                        <span>Predator Watchlist</span>
+                    </a>
+                </div>
+            </nav>
+
+            <div class="mt-auto">
+                <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">API Gateway:</span>
+                        <span id="api-status" class="flex items-center text-gray-500"><span class="h-2 w-2 rounded-full bg-gray-500 mr-2"></span>Offline</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Silnik:</span>
+                        <span id="worker-status-text" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-xs">IDLE</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Główna zawartość -->
+        <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
+            <header class="p-4 border-b border-gray-800 shrink-0">
+                <div class="max-w-xl mx-auto">
+                     <div class="relative">
+                        <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i>
+                        <input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500">
+                     </div>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <div class="p-6 flex-grow">
+                <!-- Dashboard View -->
+                <div id="dashboard-view" class="content-view active">
+                    <div id="system-status-panel" class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
+                         <h3 class="text-xl font-semibold mb-4">Status Skanowania Rynku</h3>
+                         <div class="space-y-3">
+                             <div class="flex items-center justify-between">
+                                <span class="text-gray-400">Aktualna faza:</span>
+                                <span id="worker-phase" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-sm">NONE</span>
+                             </div>
+                             <div>
+                                <div class="flex justify-between mb-1">
+                                     <span class="text-base font-medium text-gray-400">Postęp</span>
+                                     <span id="progress-text" class="text-sm font-medium text-gray-400">0 / 0</span>
+                                </div>
+                                <div class="w-full bg-gray-700 rounded-full h-2.5">
+                                    <div id="progress-bar" class="bg-sky-500 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                             </div>
+                         </div>
+                         <div class="mt-4">
+                            <h4 class="text-md font-semibold text-gray-400 mb-2">Log Skanowania</h4>
+                            <div id="scan-log" class="h-64 bg-black/50 p-3 rounded-md overflow-y-auto font-mono text-xs text-gray-400 border border-gray-700">
+                                <p>Czekam na rozpoczęcie skanowania...</p>
+                            </div>
+                         </div>
+                    </div>
+                </div>
+
+                 <!-- Analysis Results View -->
+                 <div id="analysis-results-view" class="content-view">
+                    <!-- Wyniki analizy będą renderowane tutaj -->
+                </div>
+                
+                <!-- APEX Elita View -->
+                <div id="apex-elita-view" class="content-view">
+                     <h2 class="text-2xl font-bold mb-4">Sygnały: APEX Elita</h2>
+                     <div id="apex-elita-content">
+                        <!-- Sygnały z APEX Elita będą renderowane tutaj -->
+                     </div>
+                </div>
+
+                <!-- Predator Watchlist View -->
+                <div id="predator-watchlist-view" class="content-view">
+                     <h2 class="text-2xl font-bold mb-4">Predator Watchlist</h2>
+                     <p class="text-gray-500">Ta funkcjonalność jest w trakcie implementacji.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const API_BASE_URL = "https://apex-predator-api.onrender.com"; // Zmień na właściwy URL produkcyjny
+        const POLLING_INTERVAL = 3000; // 3 seconds
+
+        // --- DOM ELEMENTS ---
+        const loginScreen = document.getElementById('login-screen');
+        const loginStatusText = document.getElementById('login-status-text');
+        const loginForm = document.getElementById('login-form');
+        const loginButton = document.getElementById('login-button');
+        const dashboard = document.getElementById('dashboard');
+        
+        const startBtn = document.getElementById('start-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+        const resumeBtn = document.getElementById('resume-btn');
+
+        const apiStatusEl = document.getElementById('api-status');
+        const workerStatusTextEl = document.getElementById('worker-status-text');
+        const workerPhaseEl = document.getElementById('worker-phase');
+        const progressTextEl = document.getElementById('progress-text');
+        const progressBarEl = document.getElementById('progress-bar');
+        const scanLogEl = document.getElementById('scan-log');
+        
+        const tickerInput = document.getElementById('ticker-input');
+        const contentArea = document.querySelector('.p-6.flex-grow');
+
+        // --- STATE ---
+        let pollingId = null;
+
+        // --- API HELPERS ---
+        const apiRequest = async (endpoint, options = {}) => {
+            try {
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                if (!response.ok) {
+                    const errorBody = await response.text();
+                    console.error(`API Error Response for ${endpoint}:`, errorBody);
+                    throw new Error(`Błąd serwera: ${response.status}`);
+                }
+                if (response.status === 202 || response.headers.get("Content-Length") === "0") {
+                    return { message: `Polecenie przyjęte.` };
+                }
+                return await response.json();
+            } catch (error) {
+                console.error(`Błąd połączenia z API dla ${endpoint}:`, error);
+                throw error;
+            }
+        };
+
+        const sendWorkerControl = (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' });
+        const fetchWorkerStatus = () => apiRequest('/api/v1/worker/status');
+        const fetchOnDemandAnalysis = (ticker) => apiRequest(`/api/v1/analysis/on-demand`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker })
+        });
+        const fetchApexElitaSignals = () => apiRequest('/api/v1/signals/apex-elita');
+
+        // --- UI RENDERING ---
+        const updateControlButtons = (status) => {
+            startBtn.disabled = status !== 'IDLE';
+            pauseBtn.disabled = status !== 'RUNNING';
+            resumeBtn.disabled = status !== 'PAUSED';
+        };
+
+        const updateStatusUI = (data) => {
+            apiStatusEl.innerHTML = `<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online`;
+            apiStatusEl.classList.replace('text-gray-500', 'text-green-400');
+
+            workerStatusTextEl.textContent = data.status || 'N/A';
+            workerPhaseEl.textContent = data.phase || 'N/A';
+            updateControlButtons(data.status);
+            
+            const processed = data.progress?.processed || 0;
+            const total = data.progress?.total || 0;
+            progressTextEl.textContent = `${processed} / ${total}`;
+            
+            const percentage = total > 0 ? (processed / total) * 100 : 0;
+            progressBarEl.style.width = `${percentage}%`;
+
+            if (data.log) {
+                scanLogEl.innerHTML = data.log.replace(/\n/g, '<br>');
+                scanLogEl.scrollTop = scanLogEl.scrollHeight;
+            }
+        };
+
+        const renderAnalysisResults = (data) => {
+             const { ticker, fundamentals, technicals, ai_score, recommendation, reasons } = data;
+             const getRecoClass = (rec) => {
+                if (rec.includes("Silny Sygnał Kupna")) return 'text-green-400';
+                if (rec.includes("Sygnał Kupna")) return 'text-sky-400';
+                if (rec.includes("Unikaj") || rec.includes("Sprzedawaj")) return 'text-red-400';
+                return 'text-yellow-400';
+             };
+
+             return `
+                <div class="space-y-6">
+                    <div><h2 class="text-3xl font-bold">Analiza: <span class="text-sky-400">${ticker}</span></h2></div>
+                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800 text-center">
+                        <p class="text-sm text-gray-400">Rekomendacja AI</p>
+                        <p class="text-5xl font-bold ${getRecoClass(recommendation)}">${ai_score.toFixed(1)}</p>
+                        <p class="text-lg font-semibold ${getRecoClass(recommendation)} mt-1">${recommendation}</p>
+                        <div class="text-xs text-gray-500 mt-2 max-w-md mx-auto">${reasons.join(' · ')}</div>
+                    </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
+                            <h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="book-open" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza Fundamentalna</h3>
+                            <div class="grid grid-cols-2 gap-4 text-sm">${Object.entries(fundamentals).map(([k, v]) => `
+                                <div class="bg-black/30 p-3 rounded-md"><p class="text-gray-400 text-xs">${k}</p><p class="font-semibold text-base">${v !== null ? v : 'N/A'}</p></div>`).join('')}
+                            </div>
+                        </div>
+                        <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
+                            <h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="activity" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza Techniczna</h3>
+                            <div class="grid grid-cols-2 gap-4 text-sm">${Object.entries(technicals).map(([k, v]) => `
+                                <div class="bg-black/30 p-3 rounded-md"><p class="text-gray-400 text-xs">${k}</p><p class="font-semibold text-base">${v !== null ? v : 'N/A'}</p></div>`).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+        };
+        
+        const renderApexElita = (signals) => {
+            if (!signals || signals.length === 0) {
+                return '<p class="text-gray-500">Brak aktywnych sygnałów w APEX Elita.</p>';
+            }
+            return `
+                <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-800">
+                    <table class="min-w-full text-sm text-left">
+                        <thead class="bg-gray-800 text-xs text-gray-400 uppercase">
+                            <tr>
+                                <th class="px-4 py-3">Ticker</th>
+                                <th class="px-4 py-3">Cena Wejścia</th>
+                                <th class="px-4 py-3">Stop Loss</th>
+                                <th class="px-4 py-3">Take Profit</th>
+                                <th class="px-4 py-3">R/R Ratio</th>
+                                <th class="px-4 py-3">Data Generacji</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-700">
+                            ${signals.map(s => `
+                                <tr class="hover:bg-gray-800/50">
+                                    <td class="px-4 py-3 font-bold text-sky-400">${s.ticker}</td>
+                                    <td class="px-4 py-3">${s.entry_price.toFixed(2)}</td>
+                                    <td class="px-4 py-3 text-red-400">${s.stop_loss.toFixed(2)}</td>
+                                    <td class="px-4 py-3 text-green-400">${s.take_profit.toFixed(2)}</td>
+                                    <td class="px-4 py-3">${s.risk_reward_ratio.toFixed(2)}</td>
+                                    <td class="px-4 py-3 text-gray-400">${new Date(s.generation_date).toLocaleString()}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        const renderLoading = (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`;
+        const renderError = (title, message) => `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">${title}</h2><p>${message}</p></div>`;
+
+        // --- LOGIC & EVENT HANDLERS ---
+        const handleNavigation = async (hash) => {
+            document.querySelectorAll('.content-view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('sidebar-item-active'));
+            
+            const targetView = document.querySelector(hash);
+            const targetNavItem = document.querySelector(`a[href="${hash}"]`);
+
+            if (targetView) targetView.classList.add('active');
+            if (targetNavItem) targetNavItem.classList.add('sidebar-item-active');
+
+            if (hash === '#apex-elita-view') {
+                const contentEl = document.getElementById('apex-elita-content');
+                contentEl.innerHTML = renderLoading('Pobieranie sygnałów z APEX Elita...');
+                try {
+                    const signals = await fetchApexElitaSignals();
+                    contentEl.innerHTML = renderApexElita(signals);
+                } catch (e) {
+                    contentEl.innerHTML = renderError('Błąd Pobierania Danych', e.message);
+                }
+            } else if (hash.startsWith('#analysis')) {
+                 // Handle specific ticker analysis view if needed later
+            }
+        };
+
+        const startPolling = () => {
+            if (pollingId) clearInterval(pollingId);
+            const poll = async () => {
+                try {
+                    const data = await fetchWorkerStatus();
+                    updateStatusUI(data);
+                } catch (error) {
+                    apiStatusEl.innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline`;
+                    apiStatusEl.classList.replace('text-green-400', 'text-gray-500');
+                    updateControlButtons('ERROR');
+                }
+            };
+            poll(); // initial call
+            pollingId = setInterval(poll, POLLING_INTERVAL);
+        };
+        
+        const initApp = () => {
+            loginButton.disabled = true;
+            loginButton.textContent = 'Proszę czekać...';
+
+            const checkBackendReady = setInterval(async () => {
+                try {
+                    await fetchWorkerStatus();
+                    clearInterval(checkBackendReady);
+                    loginStatusText.textContent = 'System gotowy. Można się zalogować.';
+                    loginButton.disabled = false;
+                    loginButton.textContent = 'Zaloguj się';
+                } catch (e) {
+                    loginStatusText.textContent = 'Oczekiwanie na uruchomienie usług backendu...';
+                }
+            }, 3000);
+        };
+
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            loginScreen.classList.add('hidden');
+            dashboard.classList.remove('hidden');
+            lucide.createIcons();
+            startPolling();
+            handleNavigation('#dashboard-view');
+        });
+
+        startBtn.addEventListener('click', () => sendWorkerControl('start'));
+        pauseBtn.addEventListener('click', () => sendWorkerControl('pause'));
+        resumeBtn.addEventListener('click', () => sendWorkerControl('resume'));
+
+        tickerInput.addEventListener('keypress', async (e) => {
+            if (e.key === 'Enter') {
+                const ticker = tickerInput.value.trim().toUpperCase();
+                if (!ticker) return;
+                
+                handleNavigation('#analysis-results-view');
+                const resultsView = document.getElementById('analysis-results-view');
+                resultsView.innerHTML = renderLoading(`Analizowanie ${ticker}...`);
+
+                try {
+                    const data = await fetchOnDemandAnalysis(ticker);
+                    resultsView.innerHTML = renderAnalysisResults(data);
+                } catch (error) {
+                    resultsView.innerHTML = renderError(`Błąd Analizy dla ${ticker}`, error.message);
+                }
+                lucide.createIcons();
+                tickerInput.value = '';
+            }
+        });
+
+        document.getElementById('sidebar-nav').addEventListener('click', (e) => {
+            const navLink = e.target.closest('a');
+            if (navLink && navLink.hash) {
+                e.preventDefault();
+                handleNavigation(navLink.hash);
+            }
+        });
+
+        // --- APP INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            initApp();
+        });
+    </script>
+</body>
+</html>
+
