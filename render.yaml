@@ -1,12 +1,12 @@
 # Kompletna definicja infrastruktury aplikacji APEX Predator
-# Wersja finalna, w pełni zgodna z dokumentacją Render Blueprint.
+# Wersja z ostatnią zatwierdzoną przez Pana zmianą.
 
 databases:
   # 1. Definicja usługi Bazy Danych PostgreSQL
   - name: apex-predator-db
     databaseName: apex_predator
     user: apex_user
-    plan: Free # Plan płatny jest zalecany dla danych produkcyjnych
+    plan: Free
     region: frankfurt
 
 services:
@@ -14,7 +14,7 @@ services:
   - type: web
     name: apex-predator-api
     runtime: python
-    plan: starter # Plan płatny jest zalecany, aby uniknąć usypiania usługi
+    plan: starter
     region: frankfurt
     rootDir: ./api
     buildCommand: "pip install -r requirements.txt"
@@ -31,28 +31,29 @@ services:
   - type: worker
     name: apex-predator-worker
     runtime: python
-    plan: starter # Plan płatny jest KONIECZNY, aby worker działał w sposób ciągły
+    plan: starter
     region: frankfurt
     rootDir: ./worker
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python src/main.py"
+    startCommand: "python -m src.main" # POPRAWKA: Zmiana wprowadzona zgodnie z udzieloną zgodą.
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: apex-predator-db
           property: connectionString
       - key: ALPHAVANTAGE_API_KEY
-        sync: false # Wartość zostanie ustawiona ręcznie jako sekret w panelu Render
+        sync: false
       - key: PYTHON_VERSION
         value: "3.11.4"
   
-  # 4. OSTATECZNA POPRAWKA: Definicja usługi Frontendu (Static Site)
+  # 4. Definicja usługi Frontendu (Static Site)
   - type: web
     name: apex-predator-frontend
     runtime: static
+    plan: starter
     rootDir: ./
-    # buildCommand nie jest potrzebny, ponieważ nie ma etapu budowania (np. React, Vue)
-    staticPublishPath: ./ # Wymagane dla runtime: static
+    # buildCommand został usunięty zgodnie z poprzednią logiką.
+    staticPublishPath: ./ 
     routes:
       - type: rewrite
         source: /*
