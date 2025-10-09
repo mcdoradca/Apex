@@ -1,5 +1,5 @@
 # Kompletna definicja infrastruktury aplikacji APEX Predator
-# Wersja z ostatnią zatwierdzoną przez Pana zmianą.
+# Wersja finalna, w pełni zgodna z dokumentacją Render Blueprint.
 
 databases:
   # 1. Definicja usługi Bazy Danych PostgreSQL
@@ -35,7 +35,7 @@ services:
     region: frankfurt
     rootDir: ./worker
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python -m src.main" # POPRAWKA: Zmiana wprowadzona zgodnie z udzieloną zgodą.
+    startCommand: "python -m src.main" # POPRAWKA: Naprawia błąd ImportError.
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -46,14 +46,16 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.4"
   
-  # 4. Definicja usługi Frontendu (Static Site)
+  # 4. OSTATECZNA POPRAWKA: Definicja usługi Frontendu (Static Site)
   - type: web
     name: apex-predator-frontend
     runtime: static
     plan: starter
+    # region nie jest wspierany dla Static Sites i jest ignorowany.
     rootDir: ./
-    # buildCommand został usunięty zgodnie z poprzednią logiką.
-    staticPublishPath: ./ 
+    # buildCommand jest wymagany dla non-Docker runtimes. Używamy 'true', gdy nie ma procesu budowania.
+    buildCommand: 'true'
+    staticPublishPath: ./ # Wymagane dla runtime: static.
     routes:
       - type: rewrite
         source: /*
