@@ -1,6 +1,0 @@
-Lista zależności Python dla usługi Silnika Analitycznego.
-sqlalchemy
-psycopg2-binary
-python-dotenv
-requests
-schedule
