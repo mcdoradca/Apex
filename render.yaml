@@ -1,5 +1,5 @@
 # Kompletna definicja infrastruktury aplikacji APEX Predator
-# Wersja finalna, zawierająca usługę Frontend (Static Site)
+# Wersja finalna, ze strukturalnie poprawną definicją usług.
 
 databases:
   # 1. Definicja usługi Bazy Danych PostgreSQL
@@ -25,7 +25,7 @@ services:
           name: apex-predator-db
           property: connectionString
       - key: PYTHON_VERSION
-        value: "3.11.4" # POPRAWKA: Wersja jako tekst
+        value: "3.11.4"
 
   # 3. Definicja usługi Silnika Analitycznego (Background Worker)
   - type: worker
@@ -35,7 +35,7 @@ services:
     region: frankfurt
     rootDir: ./worker
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python src/main.py" # POPRAWKA: Prawidłowa ścieżka
+    startCommand: "python src/main.py"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -44,11 +44,11 @@ services:
       - key: ALPHAVANTAGE_API_KEY
         sync: false # Wartość zostanie ustawiona ręcznie jako sekret w panelu Render
       - key: PYTHON_VERSION
-        value: "3.11.4" # POPRAWKA: Wersja jako tekst
+        value: "3.11.4"
 
-  # 4. Definicja usługi Frontendu (Static Site)
-  - type: static_site
-    name: apex-predator-frontend
+# 4. POPRAWIONA SEKCJA: Definicja usługi Frontendu
+staticSites:
+  - name: apex-predator-frontend
     plan: starter
     region: frankfurt
     # Ta usługa będzie serwować pliki z głównego katalogu
