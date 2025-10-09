@@ -47,13 +47,13 @@ services:
         value: "3.11.4"
   
   # 4. OSTATECZNA POPRAWKA: Definicja usługi Frontendu
-  - type: static_site
+  - type: web
     name: apex-predator-frontend
     plan: starter
     region: frankfurt
     # Ta usługa będzie serwować pliki z głównego katalogu
     rootDir: ./
-    # Render automatycznie znajdzie i opublikuje plik index.html
+    # Brak 'startCommand' oznacza, że Render będzie serwował pliki statyczne.
     # buildCommand nie jest potrzebny dla prostych stron statycznych
     routes:
       - type: rewrite
