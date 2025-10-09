@@ -6,7 +6,7 @@ databases:
   - name: apex-predator-db
     databaseName: apex_predator
     user: apex_user
-    plan: Free # Plan płatny jest zalecany dla danych produkcyjnych
+    plan: starter # Plan płatny jest zalecany dla danych produkcyjnych
     region: frankfurt
 
 services:
