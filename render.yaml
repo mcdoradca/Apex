@@ -1,5 +1,5 @@
 # Kompletna definicja infrastruktury aplikacji APEX Predator
-# Wersja finalna, ze strukturalnie poprawną definicją usług.
+# Wersja finalna, w pełni zgodna z dokumentacją Render Blueprint.
 
 databases:
   # 1. Definicja usługi Bazy Danych PostgreSQL
@@ -13,7 +13,7 @@ services:
   # 2. Definicja usługi Bramy API (Web Service - Backend)
   - type: web
     name: apex-predator-api
-    env: python
+    runtime: python
     plan: starter # Plan płatny jest zalecany, aby uniknąć usypiania usługi
     region: frankfurt
     rootDir: ./api
@@ -30,7 +30,7 @@ services:
   # 3. Definicja usługi Silnika Analitycznego (Background Worker)
   - type: worker
     name: apex-predator-worker
-    env: python
+    runtime: python
     plan: starter # Plan płatny jest KONIECZNY, aby worker działał w sposób ciągły
     region: frankfurt
     rootDir: ./worker
@@ -46,15 +46,15 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.4"
   
-  # 4. OSTATECZNA POPRAWKA: Definicja usługi Frontendu
+  # 4. OSTATECZNA POPRAWKA: Definicja usługi Frontendu (Static Site)
   - type: web
     name: apex-predator-frontend
+    runtime: static
     plan: starter
     region: frankfurt
-    # Ta usługa będzie serwować pliki z głównego katalogu
     rootDir: ./
-    # Brak 'startCommand' oznacza, że Render będzie serwował pliki statyczne.
-    # buildCommand nie jest potrzebny dla prostych stron statycznych
+    # buildCommand nie jest potrzebny, ponieważ nie ma etapu budowania (np. React, Vue)
+    staticPublishPath: ./ # Wymagane dla runtime: static
     routes:
       - type: rewrite
         source: /*
