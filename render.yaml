@@ -25,7 +25,7 @@ services:
           name: apex-predator-db
           property: connectionString
       - key: PYTHON_VERSION
-        value: 3.11
+        value: "3.11.4" # POPRAWKA: Wersja jako tekst
 
   # 3. Definicja usługi Silnika Analitycznego (Background Worker)
   - type: worker
@@ -35,7 +35,7 @@ services:
     region: frankfurt
     rootDir: ./worker
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python src/main.py"
+    startCommand: "python src/main.py" # POPRAWKA: Prawidłowa ścieżka
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -44,10 +44,10 @@ services:
       - key: ALPHAVANTAGE_API_KEY
         sync: false # Wartość zostanie ustawiona ręcznie jako sekret w panelu Render
       - key: PYTHON_VERSION
-        value: 3.11
+        value: "3.11.4" # POPRAWKA: Wersja jako tekst
 
-  # 4. NOWA USŁUGA: Definicja usługi Frontendu (Static Site)
-  - type: static
+  # 4. Definicja usługi Frontendu (Static Site)
+  - type: static_site
     name: apex-predator-frontend
     plan: starter
     region: frankfurt
