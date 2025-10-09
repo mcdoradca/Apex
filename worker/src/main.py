@@ -1,127 +1,75 @@
 import os
 import time
+import schedule
 import logging
+import sys
 from datetime import datetime, timezone
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 
-# Import modułów analitycznych
-from .analysis import phase1_scanner, phase2_engine, phase3_sniper
-from .data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .config import COMMAND_CHECK_INTERVAL_SECONDS
+from analysis import phase1_scanner, phase2_engine, phase3_sniper
+from analysis.utils import update_system_control, check_for_commands, report_heartbeat, get_system_control_value, append_scan_log
+from config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
+from data_ingestion.alpha_vantage_client import AlphaVantageClient
+from database import get_db_session, engine
 
 # Konfiguracja logowania
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
+logger = logging.getLogger(__name__)
 
-# Ładowanie zmiennych środowiskowych z pliku .env
 load_dotenv()
+API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
+if not API_KEY:
+    logger.critical("ALPHAVANTAGE_API_KEY environment variable not set. Exiting.")
+    sys.exit(1)
 
-if not DATABASE_URL or not ALPHAVANTAGE_API_KEY:
-    raise ValueError("DATABASE_URL and ALPHAVANTAGE_API_KEY environment variables must be set.")
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Wewnętrzny stan workera, niezależny od bazy danych
+# Globalny stan workera
 current_state = "IDLE"
 
-def get_db_session():
-    return SessionLocal()
-
-def update_system_control(session, key, value):
-    """Ustandaryzowana funkcja do aktualizacji tabeli system_control."""
-    try:
-        stmt = text("""
-            INSERT INTO system_control (key, value, updated_at)
-            VALUES (:key, :value, :now)
-            ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at;
-        """)
-        session.execute(stmt, {'key': key, 'value': str(value), 'now': datetime.now(timezone.utc)})
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        logging.error(f"Error updating system_control for key {key}: {e}")
-
-def check_for_commands(session):
-    """Sprawdza i reaguje na polecenia z bazy danych."""
-    global current_state
-    try:
-        command_row = session.execute(text("SELECT value FROM system_control WHERE key = 'worker_command'")).fetchone()
-        command = command_row[0] if command_row else 'NONE'
-
-        if command == "PAUSE_REQUESTED" and current_state == "RUNNING":
-            current_state = "PAUSED"
-            update_system_control(session, 'worker_status', 'PAUSED')
-            update_system_control(session, 'worker_command', 'NONE') # Reset polecenia
-            logging.info("Worker paused by command.")
-
-        elif command == "RESUME_REQUESTED" and current_state == "PAUSED":
-            current_state = "RUNNING"
-            update_system_control(session, 'worker_status', 'RUNNING')
-            update_system_control(session, 'worker_command', 'NONE') # Reset polecenia
-            logging.info("Worker resumed by command.")
-
-        elif command == "START_REQUESTED" and current_state == "IDLE":
-            logging.info("Start command received, triggering immediate analysis cycle.")
-            update_system_control(session, 'worker_command', 'NONE') # Reset polecenia
-            return True # Zwracamy True, aby główna pętla wiedziała, że ma uruchomić cykl
-        
-    except Exception as e:
-        logging.error(f"Error checking for commands: {e}")
-
-    return False
-
-def report_heartbeat(session):
-    """Raportuje 'życie' workera do bazy danych."""
-    now_utc_iso = datetime.now(timezone.utc).isoformat()
-    update_system_control(session, 'last_heartbeat', now_utc_iso)
-
-def run_full_analysis_cycle(api_client: AlphaVantageClient):
+def run_full_analysis_cycle():
     """Główna funkcja orkiestrująca cały proces analityczny APEX."""
     global current_state
     session = get_db_session()
 
-    status_row = session.execute(text("SELECT value FROM system_control WHERE key = 'worker_status'")).fetchone()
-    if status_row and status_row[0] == 'RUNNING':
-        logging.warning("Analysis cycle already in progress. Skipping run.")
+    status_in_db = get_system_control_value(session, 'worker_status')
+    if status_in_db == 'RUNNING':
+        logger.info("Analysis cycle already in progress. Skipping scheduled run.")
         session.close()
         return
 
+    api_client = AlphaVantageClient(api_key=API_KEY)
+
     try:
-        logging.info(f"[{datetime.now()}] Starting full analysis cycle...")
+        logger.info("Starting full analysis cycle...")
         current_state = "RUNNING"
         update_system_control(session, 'worker_status', 'RUNNING')
-        update_system_control(session, 'scan_log', f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}] Rozpoczynanie cyklu analizy...")
-
+        append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
+        
         # --- FAZA 1 ---
         update_system_control(session, 'current_phase', 'PHASE_1')
         candidate_tickers = phase1_scanner.run_scan(session, lambda: current_state, api_client)
         if not candidate_tickers:
-            raise Exception("Phase 1 did not yield any candidates.")
+            raise Exception("Faza 1 nie znalazła żadnych kandydatów. Zatrzymywanie cyklu.")
 
         # --- FAZA 2 ---
         update_system_control(session, 'current_phase', 'PHASE_2')
         qualified_tickers = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
         if not qualified_tickers:
-            raise Exception("Phase 2 did not qualify any tickers for APEX Elita.")
+            raise Exception("Faza 2 nie zakwalifikowała żadnych spółek. Zatrzymywanie cyklu.")
 
         # --- FAZA 3 ---
         update_system_control(session, 'current_phase', 'PHASE_3')
         phase3_sniper.run_tactical_planning(session, qualified_tickers, lambda: current_state, api_client)
-        
-        logging.info(f"[{datetime.now()}] Full analysis cycle completed successfully.")
-        update_system_control(session, 'scan_log', f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}] Cykl analizy zakończony pomyślnie.")
+
+        final_log_msg = "Cykl analizy zakończony pomyślnie."
+        logger.info(final_log_msg)
+        append_scan_log(session, final_log_msg)
 
     except Exception as e:
-        error_message = f"An error occurred during analysis: {e}"
-        logging.error(error_message, exc_info=True)
+        error_message = f"Wystąpił błąd podczas analizy: {e}"
+        logger.error(error_message, exc_info=True)
         update_system_control(session, 'worker_status', 'ERROR')
-        update_system_control(session, 'scan_log', f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}] BŁĄD: {e}")
+        append_scan_log(session, f"KRYTYCZNY BŁĄD: {e}")
 
     finally:
         current_state = "IDLE"
@@ -131,34 +79,42 @@ def run_full_analysis_cycle(api_client: AlphaVantageClient):
         update_system_control(session, 'scan_progress_total', '0')
         session.close()
 
-if __name__ == "__main__":
-    logging.info("Worker started. Initializing...")
+def main_loop():
+    """Główna, niekończąca się pętla sterująca pracą workera."""
+    global current_state
+    logger.info("Worker started. Initializing...")
     
-    # Inicjalizacja klienta API
-    api_client = AlphaVantageClient(api_key=ALPHAVANTAGE_API_KEY)
+    schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
+    logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
 
-    # USUNIĘTO AUTOMATYCZNY HARMONOGRAM URUCHAMIANIA ANALIZY.
-    # Aplikacja czeka teraz na polecenie "START_REQUESTED" z API.
-    logging.info("Worker is in manual mode. Waiting for 'start' command from the API.")
-    
-    # Inicjalizacja stanu w bazie danych przy starcie
+    # Inicjalizacja stanu w bazie danych
     with get_db_session() as initial_session:
         update_system_control(initial_session, 'worker_status', 'IDLE')
         update_system_control(initial_session, 'worker_command', 'NONE')
         update_system_control(initial_session, 'current_phase', 'NONE')
+        report_heartbeat(initial_session)
 
-    # Główna pętla sterująca
-    logging.info("Entering main control loop...")
     while True:
         with get_db_session() as session:
             try:
-                # Sprawdź polecenia i jeśli nadszedł START_REQUESTED, uruchom natychmiast
-                if check_for_commands(session):
-                    run_full_analysis_cycle(api_client=api_client)
+                command_triggered_run, new_state = check_for_commands(session, current_state)
+                current_state = new_state
+
+                if command_triggered_run:
+                    run_full_analysis_cycle()
+                
+                if current_state != "PAUSED":
+                    schedule.run_pending()
                 
                 report_heartbeat(session)
             except Exception as loop_error:
-                logging.error(f"Error in main worker loop: {loop_error}")
-            
-        time.sleep(COMMAND_CHECK_INTERVAL_SECONDS) # Używamy interwału z pliku config
+                logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
+        
+        time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
+
+if __name__ == "__main__":
+    if engine:
+        main_loop()
+    else:
+        logger.critical("Worker cannot start because database connection was not established.")
 

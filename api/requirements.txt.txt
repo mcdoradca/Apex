@@ -1,0 +1,6 @@
+Lista zależności Python dla usługi Bramy API.
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+python-dotenv
