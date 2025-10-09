@@ -45,10 +45,10 @@ services:
         sync: false # Wartość zostanie ustawiona ręcznie jako sekret w panelu Render
       - key: PYTHON_VERSION
         value: "3.11.4"
-
-# 4. POPRAWIONA SEKCJA: Definicja usługi Frontendu
-staticSites:
-  - name: apex-predator-frontend
+  
+  # 4. OSTATECZNA POPRAWKA: Definicja usługi Frontendu
+  - type: static_site
+    name: apex-predator-frontend
     plan: starter
     region: frankfurt
     # Ta usługa będzie serwować pliki z głównego katalogu
