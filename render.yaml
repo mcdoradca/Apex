@@ -27,15 +27,15 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.4"
 
-  # 3. Definicja usługi Silnika Analitycznego (Background Worker)
+  # 3. Definicja usługi Silnika Analitycznego (Background Worker) - OSTATECZNA POPRAWKA
   - type: worker
     name: apex-predator-worker
     runtime: python
     plan: starter
     region: frankfurt
-    rootDir: ./worker
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python -m src.main" # POPRAWKA: Naprawia błąd ImportError.
+    # Usunięto rootDir, aby polegać na jawnych ścieżkach.
+    buildCommand: "pip install -r worker/requirements.txt"
+    startCommand: "cd worker && python -m src.main" # Jawna zmiana katalogu i uruchomienie modułu.
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -46,7 +46,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.4"
   
-  # 4. OSTATECZNA POPRAWKA: Definicja usługi Frontendu (Static Site)
+  # 4. Definicja usługi Frontendu (Static Site)
   - type: web
     name: apex-predator-frontend
     runtime: static
