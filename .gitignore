@@ -1,0 +1,17 @@
+Plik .gitignore, aby zapobiec śledzeniu niepotrzebnych plików w repozytorium Git.
+Pliki środowiskowe
+.env
+*.env
+
+Pamięć podręczna Python / pliki tymczasowe
+pycache/
+*.py[cod]
+*$py.class
+
+Katalogi środowisk wirtualnych
+venv/
+env/
+.venv/
+
+Pliki systemowe
+.DS_Store
