@@ -50,7 +50,6 @@ async def startup_event():
     finally:
         db.close()
 
-# POPRAWKA: Usunięto zduplikowany dekorator
 @app.post("/api/v1/worker/control/{action}", status_code=202, summary="Sterowanie Silnikiem Analitycznym")
 def control_worker(action: str, db: Session = Depends(get_db)):
     allowed_actions = {"start": "START_REQUESTED", "pause": "PAUSE_REQUESTED", "resume": "RESUME_REQUESTED"}
@@ -88,11 +87,19 @@ def request_on_demand_analysis(request: schemas.OnDemandRequest, db: Session = D
 @app.get("/api/v1/analysis/on-demand/result/{ticker}")
 def get_on_demand_result(ticker: str, db: Session = Depends(get_db)):
     """Polls for the result of a previously requested on-demand analysis."""
-    result = crud.get_on_demand_result(db, ticker.strip().upper())
-    if not result:
-        return Response(status_code=204) # No content yet, tell the client to keep polling
+    result_obj = crud.get_on_demand_result(db, ticker.strip().upper())
     
-    return json.loads(result.analysis_data)
+    if not result_obj:
+        return Response(status_code=204) # No content yet, client should continue polling.
+
+    # POPRAWKA: Prawidłowe odwołanie się do atrybutu .analysis_data, który zawiera JSON jako string,
+    # a następnie sparsowanie go.
+    try:
+        return json.loads(result_obj.analysis_data)
+    except (json.JSONDecodeError, AttributeError) as e:
+        logger.error("Failed to parse analysis result from database for ticker %s: %s", ticker, e)
+        raise HTTPException(status_code=500, detail="Failed to parse analysis result from database.")
+
 
 @app.get("/api/v1/signals/apex-elita", response_model=List[schemas.TradingSignal])
 def get_apex_elita_signals(db: Session = Depends(get_db)):
