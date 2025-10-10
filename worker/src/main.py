@@ -27,7 +27,7 @@ current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
 def handle_on_demand_analysis(session):
-    """Sprawdza i wykonuje zlecenia analizy na żądanie."""
+    """Checks for and executes on-demand analysis requests."""
     ticker_to_analyze = utils.get_system_control_value(session, 'on_demand_request')
     
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
@@ -66,7 +66,7 @@ def handle_on_demand_analysis(session):
         utils.update_system_control(session, 'on_demand_request', 'NONE')
 
 def run_full_analysis_cycle():
-    """Główna funkcja orkiestrująca cały proces analityczny APEX."""
+    """Main function that orchestrates the entire APEX analysis process."""
     global current_state
     session = get_db_session()
 
@@ -82,31 +82,28 @@ def run_full_analysis_cycle():
         utils.update_system_control(session, 'worker_status', 'RUNNING')
         utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
         
-        # --- FAZA 1 ---
         utils.update_system_control(session, 'current_phase', 'PHASE_1')
         candidate_tickers = phase1_scanner.run_scan(session, lambda: current_state, api_client)
         if not candidate_tickers:
-            raise Exception("Faza 1 nie znalazła żadnych kandydatów. Zatrzymywanie cyklu.")
+            raise Exception("Phase 1 found no candidates. Halting cycle.")
 
-        # --- FAZA 2 ---
         utils.update_system_control(session, 'current_phase', 'PHASE_2')
         qualified_tickers = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
         if not qualified_tickers:
-            raise Exception("Faza 2 nie zakwalifikowała żadnych spółek. Zatrzymywanie cyklu.")
+            raise Exception("Phase 2 qualified no stocks. Halting cycle.")
 
-        # --- FAZA 3 ---
         utils.update_system_control(session, 'current_phase', 'PHASE_3')
         phase3_sniper.run_tactical_planning(session, qualified_tickers, lambda: current_state, api_client)
 
-        final_log_msg = "Cykl analizy zakończony pomyślnie."
+        final_log_msg = "Analysis cycle completed successfully."
         logger.info(final_log_msg)
         utils.append_scan_log(session, final_log_msg)
 
     except Exception as e:
-        error_message = f"Wystąpił błąd podczas analizy: {e}"
+        error_message = f"An error occurred during the analysis: {e}"
         logger.error(error_message, exc_info=True)
         utils.update_system_control(session, 'worker_status', 'ERROR')
-        utils.append_scan_log(session, f"KRYTYCZNY BŁĄD: {e}")
+        utils.append_scan_log(session, f"CRITICAL ERROR: {e}")
 
     finally:
         current_state = "IDLE"
@@ -118,7 +115,7 @@ def run_full_analysis_cycle():
 
 
 def main_loop():
-    """Główna, niekończąca się pętla sterująca pracą workera."""
+    """The main, infinite loop that controls the worker's operation."""
     global current_state
     logger.info("Worker started. Initializing...")
     
