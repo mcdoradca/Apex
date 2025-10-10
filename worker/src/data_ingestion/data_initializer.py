@@ -50,6 +50,7 @@ def initialize_database_if_empty(session: Session, api_client):
             ON CONFLICT (ticker) DO NOTHING;
         """)
         
+        # Użycie bulk insert dla wydajności
         with session.begin():
             session.execute(insert_stmt, companies_to_insert)
         
