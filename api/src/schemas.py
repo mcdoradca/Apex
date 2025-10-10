@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 # Schematy Pydantic do walidacji danych wejściowych i wyjściowych API.
 
@@ -15,6 +15,9 @@ class WorkerStatus(BaseModel):
     last_heartbeat_utc: datetime
     log: str
 
+class OnDemandRequest(BaseModel):
+    ticker: str
+
 class TradingSignal(BaseModel):
     id: int
     ticker: str
@@ -26,6 +29,6 @@ class TradingSignal(BaseModel):
     risk_reward_ratio: float
     signal_candle_timestamp: datetime
 
-    class Config:
-        orm_mode = True
+    # POPRAWKA: Zaktualizowano konfigurację Pydantic v2, 'orm_mode' to 'from_attributes'
+    model_config = ConfigDict(from_attributes=True)
 
