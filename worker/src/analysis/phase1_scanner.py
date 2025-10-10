@@ -11,12 +11,13 @@ logger = logging.getLogger(__name__)
 def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient) -> list[str]:
     """
     Skanuje rynek, iterując po każdej spółce indywidualnie, aby pobrać dane historyczne
-    i poprawnie obliczyć zmianę procentową.
+    i poprawnie obliczyć zmianę procentową, zgodnie z planem API.
     """
     logger.info("Running Phase 1: Market Impulse Scan (Individual Mode)...")
     append_scan_log(session, "Faza 1: Rozpoczynanie skanowania rynku...")
 
     try:
+        # Pobranie tickerów z bazy danych
         all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
         all_tickers = [row[0] for row in all_tickers_rows]
     except Exception as e:
@@ -40,10 +41,9 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             append_scan_log(session, "Skanowanie wznowione.")
 
         try:
-            # Używamy get_daily_adjusted z outputsize='compact' (ostatnie 100 dni), co jest wystarczające
+            # Użycie poprawnego endpointu: TIME_SERIES_DAILY_ADJUSTED
             daily_data = api_client.get_daily_adjusted(ticker, outputsize='compact')
 
-            # KLUCZOWA POPRAWKA: Sprawdzenie, czy odpowiedź z API nie jest pusta (None)
             if not daily_data:
                 logger.warning(f"No data received from API for ticker {ticker}. Skipping.")
                 continue
@@ -52,7 +52,6 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             if not time_series or len(time_series) < 2:
                 continue
 
-            # Pobieramy dwa ostatnie dni
             dates = sorted(time_series.keys(), reverse=True)
             latest_day_data = time_series[dates[0]]
             previous_day_data = time_series[dates[1]]
@@ -66,6 +65,7 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             
             change_percent = ((price - prev_close) / prev_close) * 100
 
+            # Zastosowanie kryteriów filtrowania
             if (MIN_PRICE <= price <= MAX_PRICE and
                 volume >= MIN_VOLUME and
                 change_percent >= MIN_DAY_CHANGE_PERCENT):
@@ -74,14 +74,13 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
                 append_scan_log(session, log_msg)
         
         except Exception as e:
-            # Ten blok 'except' złapie teraz tylko błędy parsowania, a nie błędy związane z 'None'
             logger.error(f"Error processing ticker {ticker} in Phase 1: {e}")
         finally:
             processed_count += 1
-            if processed_count % 10 == 0: # Aktualizuj postęp co 10 spółek
+            if processed_count % 10 == 0:
                 update_scan_progress(session, processed_count, total_companies)
     
-    update_scan_progress(session, total_companies, total_companies) # Ustaw 100% na koniec
+    update_scan_progress(session, total_companies, total_companies)
     final_log = f"Faza 1 zakończona. Znaleziono {len(candidate_tickers)} kandydatów."
     logger.info(final_log)
     append_scan_log(session, final_log)
