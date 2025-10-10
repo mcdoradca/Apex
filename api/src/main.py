@@ -50,13 +50,12 @@ async def startup_event():
     finally:
         db.close()
 
-@app.post("/api/v1/worker/control/{action}", status_code=202)
+# POPRAWKA: Usunięto zduplikowany dekorator
 @app.post("/api/v1/worker/control/{action}", status_code=202, summary="Sterowanie Silnikiem Analitycznym")
 def control_worker(action: str, db: Session = Depends(get_db)):
     allowed_actions = {"start": "START_REQUESTED", "pause": "PAUSE_REQUESTED", "resume": "RESUME_REQUESTED"}
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
-    # POPRAWKA: Definicja zmiennej command
     command = allowed_actions[action]
     crud.set_system_control_value(db, "worker_command", command)
     logger.info(f"Command '{action}' ({command}) sent to worker.")
@@ -82,7 +81,6 @@ def get_worker_status(db: Session = Depends(get_db)):
 def request_on_demand_analysis(request: schemas.OnDemandRequest, db: Session = Depends(get_db)):
     """Accepts a request for on-demand analysis and forwards it to the worker via the database."""
     ticker = request.ticker.strip().upper()
-    # POPRAWKA: Zmiana formatowania logu w celu uniknięcia konfliktu
     logger.info("Received on-demand analysis request for %s. Forwarding to worker.", ticker)
     crud.set_system_control_value(db, key="on_demand_request", value=ticker)
     return {"message": f"Analysis request for {ticker} accepted and queued."}
@@ -94,7 +92,6 @@ def get_on_demand_result(ticker: str, db: Session = Depends(get_db)):
     if not result:
         return Response(status_code=204) # No content yet, tell the client to keep polling
     
-    # POPRAWKA: Parsowanie stringa JSON z bazy danych na obiekt JSON
     return json.loads(result.analysis_data)
 
 @app.get("/api/v1/signals/apex-elita", response_model=List[schemas.TradingSignal])
@@ -105,6 +102,4 @@ def get_apex_elita_signals(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error fetching active signals: {e}")
         raise HTTPException(status_code=500, detail="Could not fetch active signals.")
-
-
 
