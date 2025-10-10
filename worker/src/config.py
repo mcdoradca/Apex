@@ -1,10 +1,11 @@
 # Centralny plik konfiguracyjny dla parametrów analitycznych Silnika.
 
 # === FAZA 1: Parametry Skanera Impulsu ===
-MIN_PRICE = 5.00
-MAX_PRICE = 150.00
-MIN_VOLUME = 500000
-MIN_DAY_CHANGE_PERCENT = 3.0
+# Zaktualizowano zgodnie ze specyfikacją i sugestią użytkownika.
+MIN_PRICE = 0.50
+MAX_PRICE = 20.00
+MIN_VOLUME = 100000
+MIN_DAY_CHANGE_PERCENT = 15.0
 
 # === FAZA 2: Mapowanie Sektorów na ETFy ===
 # Używane do analizy siły względnej.
@@ -33,4 +34,3 @@ MIN_RISK_REWARD_RATIO = 1.2
 # === Konfiguracja Workera ===
 ANALYSIS_SCHEDULE_TIME_CET = "22:30" # Czas CET
 COMMAND_CHECK_INTERVAL_SECONDS = 5 # Co ile sekund worker sprawdza polecenia
-
