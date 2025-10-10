@@ -57,7 +57,7 @@ def control_worker(action: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid action.")
     command = allowed_actions[action]
     crud.set_system_control_value(db, "worker_command", command)
-    logger.info(f"Command '{action}' ({command}) sent to worker.")
+    logger.info("Command '%s' (%s) sent to worker.", action, command)
     return {"message": f"Command '{action}' sent to worker."}
 
 @app.get("/api/v1/worker/status", response_model=schemas.WorkerStatus, summary="Pobieranie Statusu Workera")
@@ -87,18 +87,15 @@ def request_on_demand_analysis(request: schemas.OnDemandRequest, db: Session = D
 @app.get("/api/v1/analysis/on-demand/result/{ticker}")
 def get_on_demand_result(ticker: str, db: Session = Depends(get_db)):
     """Polls for the result of a previously requested on-demand analysis."""
-    result_obj = crud.get_on_demand_result(db, ticker.strip().upper())
+    # POPRAWKA: Funkcja crud.get_on_demand_result zwraca już sparsowany słownik (dict) z kolumny JSONB.
+    # Nie ma potrzeby dalszego parsowania ani dostępu do atrybutu .analysis_data.
+    analysis_result = crud.get_on_demand_result(db, ticker.strip().upper())
     
-    if not result_obj:
+    if not analysis_result:
         return Response(status_code=204) # No content yet, client should continue polling.
 
-    # POPRAWKA: Prawidłowe odwołanie się do atrybutu .analysis_data, który zawiera JSON jako string,
-    # a następnie sparsowanie go.
-    try:
-        return json.loads(result_obj.analysis_data)
-    except (json.JSONDecodeError, AttributeError) as e:
-        logger.error("Failed to parse analysis result from database for ticker %s: %s", ticker, e)
-        raise HTTPException(status_code=500, detail="Failed to parse analysis result from database.")
+    # Zwracamy słownik bezpośrednio, FastAPI przekonwertuje go na JSON.
+    return analysis_result
 
 
 @app.get("/api/v1/signals/apex-elita", response_model=List[schemas.TradingSignal])
