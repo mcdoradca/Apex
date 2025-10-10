@@ -8,13 +8,11 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# POPRAWIONY BLOK IMPORTÓW: Importujemy moduły bezpośrednio, a nie cały pakiet.
 from .analysis import phase1_scanner, phase2_engine, phase3_sniper, on_demand_analyzer, utils
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .database import get_db_session, engine
 
-# Konfiguracja i definicja API_KEY
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
@@ -25,23 +23,20 @@ if not API_KEY:
     logger.critical("ALPHAVANTAGE_API_KEY environment variable not set. Exiting.")
     sys.exit(1)
 
-# Globalny stan workera i klient API
 current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
 def handle_on_demand_analysis(session):
     """Sprawdza i wykonuje zlecenia analizy na żądanie."""
-    # ZMIANA: Używamy bezpośrednio 'utils', a nie 'analysis.utils'
     ticker_to_analyze = utils.get_system_control_value(session, 'on_demand_request')
     
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
         logger.info(f"On-demand request received for: {ticker_to_analyze}. Starting analysis.")
         utils.append_scan_log(session, f"Otrzymano zlecenie analizy na żądanie dla {ticker_to_analyze}...")
         
-        utils.set_system_control_value(session, 'on_demand_request', 'PROCESSING')
+        utils.update_system_control(session, 'on_demand_request', 'PROCESSING')
         
         try:
-            # ZMIANA: Używamy bezpośrednio 'on_demand_analyzer'
             results = on_demand_analyzer.perform_full_analysis(ticker_to_analyze, api_client)
             
             stmt = text("""
@@ -68,7 +63,7 @@ def handle_on_demand_analysis(session):
             session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(error_result)})
             session.commit()
         
-        utils.set_system_control_value(session, 'on_demand_request', 'NONE')
+        utils.update_system_control(session, 'on_demand_request', 'NONE')
 
 def run_full_analysis_cycle():
     """Główna funkcja orkiestrująca cały proces analityczny APEX."""
