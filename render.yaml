@@ -50,7 +50,6 @@ services:
   - type: web
     name: apex-predator-frontend
     runtime: static
-    plan: Free # POPRAWKA: Plan 'starter' nie jest prawidłowy dla 'static'. Zmieniono na 'Free'.
     rootDir: ./
     # buildCommand jest wymagany dla non-Docker runtimes. Używamy 'true', gdy nie ma procesu budowania.
     buildCommand: 'true'
