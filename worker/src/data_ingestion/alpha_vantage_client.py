@@ -23,11 +23,10 @@ class AlphaVantageClient:
 
     def _rate_limiter(self):
         """Zapewnia nieprzekraczanie limitu zapytań na minutę."""
-        # POPRAWKA: Używamy zdefiniowanej wartości requests_per_minute
         while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
 
-        if len(self.request_timestamps) >= (self.request_interval - 1): # Bezpieczny margines
+        if len(self.request_timestamps) >= (self.requests_per_minute - 1): # Corrected variable name
             sleep_time = self.request_interval - (time.monotonic() - self.request_timestamps[-1])
             if sleep_time > 0:
                 time.sleep(sleep_time)
@@ -48,7 +47,6 @@ class AlphaVantageClient:
                 
                 if not data or "Note" in data or "Error Message" in data:
                     logger.warning(f"API Info/Error for {params.get('symbol') or params.get('symbols')}: {data}")
-                    # Nie rzucamy wyjątku dla notatek, bo to często informacja o limicie API
                     if "Note" in data:
                         return None
                     raise requests.exceptions.HTTPError(f"API returned an info/error message: {data}")
@@ -60,7 +58,6 @@ class AlphaVantageClient:
                     time.sleep(self.backoff_factor * (2 ** attempt))
                 else:
                     logger.critical(f"All retries failed for {params.get('symbol') or params.get('symbols')}.")
-                    # Zamiast rzucać wyjątek, który zatrzyma pętlę, zwracamy None
                     return None
         return None
 
@@ -81,7 +78,7 @@ class AlphaVantageClient:
 
     def get_news_sentiment(self, symbol: str):
         """Pobiera sentyment newsów dla spółki."""
-        params = {"function": "NEWS_SENTIMENT", "tickers": symbol, "limit": 50} # limit 50 newsów
+        params = {"function": "NEWS_SENTIMENT", "tickers": symbol, "limit": 50}
         return self._make_request(params)
 
     def get_bollinger_bands(self, symbol: str, time_period: int = 20, series_type: str = 'close'):
@@ -101,7 +98,6 @@ class AlphaVantageClient:
         }
         return self._make_request(params)
 
-    # DODANA BRAKUJĄCA FUNKCJA
     def get_rsi(self, symbol: str, time_period: int = 14, series_type: str = 'close'):
         """Pobiera dane dla wskaźnika RSI."""
         params = {
@@ -110,7 +106,6 @@ class AlphaVantageClient:
         }
         return self._make_request(params)
         
-    # DODANA NOWA FUNKCJA
     def get_sma(self, symbol: str, time_period: int = 50, series_type: str = 'close'):
         """Pobiera dane dla wskaźnika SMA."""
         params = {
@@ -118,3 +113,20 @@ class AlphaVantageClient:
             "time_period": str(time_period), "series_type": series_type
         }
         return self._make_request(params)
+
+    # NOWE METODY
+    def get_stoch(self, symbol: str):
+        """Pobiera dane dla wskaźnika Stochastic Oscillator."""
+        params = {"function": "STOCH", "symbol": symbol, "interval": "daily"}
+        return self._make_request(params)
+
+    def get_adx(self, symbol: str, time_period: int = 14):
+        """Pobiera dane dla wskaźnika ADX."""
+        params = {"function": "ADX", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_macd(self, symbol: str, series_type: str = 'close'):
+        """Pobiera dane dla wskaźnika MACD."""
+        params = {"function": "MACD", "symbol": symbol, "interval": "daily", "series_type": series_type}
+        return self._make_request(params)
+
