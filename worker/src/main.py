@@ -6,11 +6,12 @@ import sys
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-from analysis import phase1_scanner, phase2_engine, phase3_sniper
-from analysis.utils import update_system_control, check_for_commands, report_heartbeat, get_system_control_value, append_scan_log
-from config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
-from data_ingestion.alpha_vantage_client import AlphaVantageClient
-from database import get_db_session, engine
+# Poprawione importy, aby działały w kontekście pakietu 'src'
+from .analysis import phase1_scanner, phase2_engine, phase3_sniper
+from .analysis.utils import update_system_control, check_for_commands, report_heartbeat, get_system_control_value, append_scan_log
+from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
+from .data_ingestion.alpha_vantage_client import AlphaVantageClient
+from .database import get_db_session, engine
 
 # Konfiguracja logowania
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
@@ -117,4 +118,3 @@ if __name__ == "__main__":
         main_loop()
     else:
         logger.critical("Worker cannot start because database connection was not established.")
-
