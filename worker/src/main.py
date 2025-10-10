@@ -11,6 +11,7 @@ from sqlalchemy import text
 from .analysis import phase1_scanner, phase2_engine, phase3_sniper, on_demand_analyzer, utils
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
+from .data_ingestion.data_initializer import initialize_database_if_empty
 from .database import get_db_session, engine
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
@@ -119,6 +120,10 @@ def main_loop():
     global current_state
     logger.info("Worker started. Initializing...")
     
+    # KROK 1: Inicjalizacja bazy danych przy starcie
+    with get_db_session() as session:
+        initialize_database_if_empty(session, api_client)
+        
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
 
