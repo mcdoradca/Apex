@@ -56,12 +56,12 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
 
             price = safe_float(latest_day_data.get('4. close'))
             volume = safe_float(latest_day_data.get('6. volume'))
+            # KRYTYCZNA POPRAWKA: Używamy danych z `previous_day_data`, a nie `latest_day_data`
             prev_close = safe_float(previous_day_data.get('4. close'))
 
             if not all([price, volume, prev_close]) or prev_close == 0:
                 continue
             
-            # POPRAWKA: Prawidłowe obliczenie zmiany procentowej
             change_percent = ((price - prev_close) / prev_close) * 100
 
             if (MIN_PRICE <= price <= MAX_PRICE and
