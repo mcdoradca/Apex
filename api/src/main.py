@@ -4,6 +4,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from typing import List
+from fastapi.middleware.cors import CORSMiddleware  # Import modułu CORS
 
 from . import crud, models, schemas
 from .database import get_db, engine, SessionLocal
@@ -21,6 +22,24 @@ except Exception as e:
     sys.exit(1)
 
 app = FastAPI(title="APEX Predator API", version="1.0.0")
+
+# --- POCZĄTEK SEKCJI CORS ---
+# Definicja adresów, które mogą odpytywać to API
+origins = [
+    "https://apex-predator-frontend.onrender.com",  # Adres Twojego frontendu na Render
+    "http://localhost",
+    "http://localhost:8080", # Przykładowy adres do lokalnego developmentu
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Pozwól na zapytania z tych adresów
+    allow_credentials=True,
+    allow_methods=["*"],  # Pozwól na wszystkie metody (GET, POST, etc.)
+    allow_headers=["*"],  # Pozwól na wszystkie nagłówki
+)
+# --- KONIEC SEKCJI CORS ---
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -96,4 +115,3 @@ def get_apex_elita_signals(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error fetching active signals: {e}")
         raise HTTPException(status_code=500, detail="Could not fetch active signals.")
-
