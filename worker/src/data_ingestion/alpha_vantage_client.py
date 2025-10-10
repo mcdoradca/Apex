@@ -18,6 +18,7 @@ class AlphaVantageClient:
         self.api_key = api_key
         self.retries = retries
         self.backoff_factor = backoff_factor
+        self.requests_per_minute = requests_per_minute # POPRAWKA: Dodanie tej linii
         self.request_interval = 60.0 / requests_per_minute
         self.request_timestamps = deque()
 
@@ -26,7 +27,7 @@ class AlphaVantageClient:
         while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
 
-        if len(self.request_timestamps) >= (self.requests_per_minute - 1): # Corrected variable name
+        if len(self.request_timestamps) >= (self.requests_per_minute - 1): # POPRAWKA: Użycie poprawnej zmiennej
             sleep_time = self.request_interval - (time.monotonic() - self.request_timestamps[-1])
             if sleep_time > 0:
                 time.sleep(sleep_time)
@@ -114,7 +115,6 @@ class AlphaVantageClient:
         }
         return self._make_request(params)
 
-    # NOWE METODY
     def get_stoch(self, symbol: str):
         """Pobiera dane dla wskaźnika Stochastic Oscillator."""
         params = {"function": "STOCH", "symbol": symbol, "interval": "daily"}
