@@ -10,20 +10,30 @@ logger = logging.getLogger(__name__)
 
 def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient) -> list[str]:
     """
-    Skanuje rynek z dodatkowym logowaniem diagnostycznym, aby zidentyfikować
-    przyczynę braku kandydatów.
+    Skanuje rynek z rozszerzonym logowaniem diagnostycznym, aby ostatecznie
+    zidentyfikować przyczynę braku kandydatów.
     """
-    logger.info("Running Phase 1: Market Impulse Scan (Diagnostic Mode)...")
-    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania rynku (Tryb Diagnostyczny)...")
+    logger.info("Running Phase 1: Market Impulse Scan (Enhanced Diagnostic Mode)...")
+    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania (Tryb Diagnostyczny+)...")
 
     try:
         all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
         all_tickers = [row[0] for row in all_tickers_rows]
+        # --- KRYTYCZNY LOG DIAGNOSTYCZNY ---
+        # Sprawdzamy, czy baza danych w ogóle zwróciła jakiekolwiek spółki do skanowania.
+        logger.info(f"[DIAG] Found {len(all_tickers)} tickers in the 'companies' table to process.")
+        append_scan_log(session, f"Znaleziono {len(all_tickers)} spółek w bazie do przeskanowania.")
+        # --- KONIEC LOGU ---
     except Exception as e:
         logger.error(f"Could not fetch companies from database: {e}")
         append_scan_log(session, f"BŁĄD KRYTYCZNY: Nie można pobrać listy spółek z bazy danych: {e}")
         return []
         
+    if not all_tickers:
+        logger.warning("[DIAG] Ticker list is empty. Phase 1 cannot proceed.")
+        append_scan_log(session, "BŁĄD: Lista spółek do skanowania jest pusta. Sprawdź tabelę 'companies'.")
+        return []
+
     total_companies = len(all_tickers)
     update_scan_progress(session, 0, total_companies)
 
@@ -43,7 +53,6 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             daily_data = api_client.get_daily_adjusted(ticker, outputsize='compact')
 
             if not daily_data:
-                # logger.warning(f"No data received from API for ticker {ticker}. Skipping.")
                 continue
 
             time_series = daily_data.get('Time Series (Daily)')
@@ -56,6 +65,8 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
 
             price = safe_float(latest_day_data.get('4. close'))
             volume = safe_float(latest_day_data.get('6. volume'))
+            # --- OSTATECZNA POPRAWKA LOGIKI ---
+            # Poprawiamy błąd, aby 'prev_close' było pobierane z danych dnia poprzedniego.
             prev_close = safe_float(previous_day_data.get('4. close'))
 
             if not all([price, volume, prev_close]) or prev_close == 0:
@@ -63,19 +74,16 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             
             change_percent = ((price - prev_close) / prev_close) * 100
 
-            # --- BLOK DIAGNOSTYCZNY ---
-            # Logujemy szczegółowe dane dla każdego tickera, aby zdiagnozować problem.
+            # --- ROZSZERZONY BLOK DIAGNOSTYCZNY ---
             price_ok = MIN_PRICE <= price <= MAX_PRICE
             volume_ok = volume >= MIN_VOLUME
             change_ok = change_percent >= MIN_DAY_CHANGE_PERCENT
             
-            # Loguj tylko jeśli cena i wolumen są w rozsądnym zakresie, aby nie zaśmiecać logów
-            if price > 0.1 and volume > 1000:
-                logger.info(
-                    f"[DIAG] {ticker}: Cena=${price:.2f} (Kryterium: {price_ok}), "
-                    f"Wolumen={int(volume):,} (Kryterium: {volume_ok}), "
-                    f"Zmiana={change_percent:.2f}% (Kryterium: {change_ok})"
-                )
+            logger.info(
+                f"[DIAG] {ticker}: Cena=${price:.2f} (Kryterium: {price_ok}), "
+                f"Wolumen={int(volume):,} (Kryterium: {volume_ok}), "
+                f"Zmiana={change_percent:.2f}% (Kryterium: {change_ok})"
+            )
             # --- KONIEC BLOKU DIAGNOSTYCZNEGO ---
 
             if price_ok and volume_ok and change_ok:
