@@ -50,8 +50,7 @@ services:
   - type: web
     name: apex-predator-frontend
     runtime: static
-    plan: starter
-    # region nie jest wspierany dla Static Sites i jest ignorowany.
+    plan: Free # POPRAWKA: Plan 'starter' nie jest prawidłowy dla 'static'. Zmieniono na 'Free'.
     rootDir: ./
     # buildCommand jest wymagany dla non-Docker runtimes. Używamy 'true', gdy nie ma procesu budowania.
     buildCommand: 'true'
@@ -60,4 +59,3 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
-
