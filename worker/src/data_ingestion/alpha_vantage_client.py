@@ -23,15 +23,17 @@ class AlphaVantageClient:
 
     def _rate_limiter(self):
         """Zapewnia nieprzekraczanie limitu zapytań na minutę."""
+        # POPRAWKA: Używamy zdefiniowanej wartości requests_per_minute
         while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
 
-        if len(self.request_timestamps) >= (requests_per_minute - 1): # Bezpieczny margines
+        if len(self.request_timestamps) >= (self.request_interval - 1): # Bezpieczny margines
             sleep_time = self.request_interval - (time.monotonic() - self.request_timestamps[-1])
             if sleep_time > 0:
                 time.sleep(sleep_time)
         
         self.request_timestamps.append(time.monotonic())
+
 
     def _make_request(self, params: dict):
         """Wykonywanie zapytań z logiką ponowień i obsługą błędów."""
@@ -46,6 +48,9 @@ class AlphaVantageClient:
                 
                 if not data or "Note" in data or "Error Message" in data:
                     logger.warning(f"API Info/Error for {params.get('symbol') or params.get('symbols')}: {data}")
+                    # Nie rzucamy wyjątku dla notatek, bo to często informacja o limicie API
+                    if "Note" in data:
+                        return None
                     raise requests.exceptions.HTTPError(f"API returned an info/error message: {data}")
                 return data
 
@@ -55,7 +60,8 @@ class AlphaVantageClient:
                     time.sleep(self.backoff_factor * (2 ** attempt))
                 else:
                     logger.critical(f"All retries failed for {params.get('symbol') or params.get('symbols')}.")
-                    raise
+                    # Zamiast rzucać wyjątek, który zatrzyma pętlę, zwracamy None
+                    return None
         return None
 
     def get_batch_quotes(self, symbols: list[str]):
@@ -95,3 +101,20 @@ class AlphaVantageClient:
         }
         return self._make_request(params)
 
+    # DODANA BRAKUJĄCA FUNKCJA
+    def get_rsi(self, symbol: str, time_period: int = 14, series_type: str = 'close'):
+        """Pobiera dane dla wskaźnika RSI."""
+        params = {
+            "function": "RSI", "symbol": symbol, "interval": "daily",
+            "time_period": str(time_period), "series_type": series_type
+        }
+        return self._make_request(params)
+        
+    # DODANA NOWA FUNKCJA
+    def get_sma(self, symbol: str, time_period: int = 50, series_type: str = 'close'):
+        """Pobiera dane dla wskaźnika SMA."""
+        params = {
+            "function": "SMA", "symbol": symbol, "interval": "daily",
+            "time_period": str(time_period), "series_type": series_type
+        }
+        return self._make_request(params)
