@@ -36,46 +36,46 @@ class AlphaVantageClient:
         
         self.request_timestamps.append(time.monotonic())
 
-    def _make_request(self, params: dict):
-        """Wykonywanie zapytań z logiką ponowień i bardziej odporną obsługą błędów."""
+    def _make_raw_request(self, params: dict):
+        """Wykonuje surowe zapytanie, które nie oczekuje odpowiedzi JSON."""
         self._rate_limiter()
         params['apikey'] = self.api_key
         
         for attempt in range(self.retries):
             try:
-                response = requests.get(self.BASE_URL, params=params, timeout=30)
+                response = requests.get(self.BASE_URL, params=params, timeout=60)
                 response.raise_for_status()
-                data = response.json()
-                
-                # POPRAWKA: Usprawnione logowanie odpowiedzi informacyjnych i błędów z API
-                if not data:
-                    logger.warning(f"API returned empty data for {params.get('symbol') or params.get('symbols')}.")
-                    return None
-                
-                if "Note" in data:
-                    logger.warning(f"API Note for {params.get('symbol')}: {data['Note']}. Likely a rate limit issue. Retrying if possible.")
-                    # "Note" oznacza osiągnięcie limitu, czekamy i próbujemy ponownie
-                    if attempt < self.retries - 1:
-                        time.sleep(self.request_interval * (5 * (attempt + 1))) # Dłuższa przerwa przy każdej kolejnej próbie
-                        continue
-                    else:
-                        logger.error(f"Failed to fetch data for {params.get('symbol')} after multiple retries due to API notes.")
-                        return None
-                
-                if "Error Message" in data:
-                    logger.error(f"API Error for {params.get('symbol')}: {data['Error Message']}")
-                    return None
-
-                return data
-
-            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-                logger.error(f"Request failed (attempt {attempt + 1}/{self.retries}) for {params.get('symbol') or params.get('symbols')}: {e}")
+                return response
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Raw request failed (attempt {attempt + 1}/{self.retries}): {e}")
                 if attempt < self.retries - 1:
                     time.sleep(self.backoff_factor * (2 ** attempt))
-                else:
-                    logger.critical(f"All retries failed for {params.get('symbol') or params.get('symbols')}.")
-                    return None
         return None
+
+    def _make_request(self, params: dict):
+        """Wykonywanie zapytań z logiką ponowień i bardziej odporną obsługą błędów."""
+        response = self._make_raw_request(params)
+        if not response:
+            return None
+        
+        try:
+            data = response.json()
+            if not data:
+                logger.warning(f"API returned empty data for {params.get('symbol') or params.get('symbols')}.")
+                return None
+            
+            if "Note" in data:
+                logger.warning(f"API Note for {params.get('symbol')}: {data['Note']}.")
+                return None
+            
+            if "Error Message" in data:
+                logger.error(f"API Error for {params.get('symbol')}: {data['Error Message']}")
+                return None
+
+            return data
+        except json.JSONDecodeError:
+            logger.error(f"Failed to decode JSON from response for {params.get('symbol') or params.get('symbols')}")
+            return None
 
     def get_company_overview(self, symbol: str):
         params = {"function": "OVERVIEW", "symbol": symbol}
