@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient) -> list[str]:
     """
-    Skanuje rynek, iterując po każdej spółce indywidualnie, aby pobrać dane historyczne
-    i poprawnie obliczyć zmianę procentową, zgodnie z planem API.
+    Skanuje rynek z dodatkowym logowaniem diagnostycznym, aby zidentyfikować
+    przyczynę braku kandydatów.
     """
-    logger.info("Running Phase 1: Market Impulse Scan (Individual Mode)...")
-    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania rynku...")
+    logger.info("Running Phase 1: Market Impulse Scan (Diagnostic Mode)...")
+    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania rynku (Tryb Diagnostyczny)...")
 
     try:
         all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
@@ -43,7 +43,7 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             daily_data = api_client.get_daily_adjusted(ticker, outputsize='compact')
 
             if not daily_data:
-                logger.warning(f"No data received from API for ticker {ticker}. Skipping.")
+                # logger.warning(f"No data received from API for ticker {ticker}. Skipping.")
                 continue
 
             time_series = daily_data.get('Time Series (Daily)')
@@ -56,7 +56,6 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
 
             price = safe_float(latest_day_data.get('4. close'))
             volume = safe_float(latest_day_data.get('6. volume'))
-            # KRYTYCZNA POPRAWKA: Używamy danych z `previous_day_data`, a nie `latest_day_data`
             prev_close = safe_float(previous_day_data.get('4. close'))
 
             if not all([price, volume, prev_close]) or prev_close == 0:
@@ -64,9 +63,22 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             
             change_percent = ((price - prev_close) / prev_close) * 100
 
-            if (MIN_PRICE <= price <= MAX_PRICE and
-                volume >= MIN_VOLUME and
-                change_percent >= MIN_DAY_CHANGE_PERCENT):
+            # --- BLOK DIAGNOSTYCZNY ---
+            # Logujemy szczegółowe dane dla każdego tickera, aby zdiagnozować problem.
+            price_ok = MIN_PRICE <= price <= MAX_PRICE
+            volume_ok = volume >= MIN_VOLUME
+            change_ok = change_percent >= MIN_DAY_CHANGE_PERCENT
+            
+            # Loguj tylko jeśli cena i wolumen są w rozsądnym zakresie, aby nie zaśmiecać logów
+            if price > 0.1 and volume > 1000:
+                logger.info(
+                    f"[DIAG] {ticker}: Cena=${price:.2f} (Kryterium: {price_ok}), "
+                    f"Wolumen={int(volume):,} (Kryterium: {volume_ok}), "
+                    f"Zmiana={change_percent:.2f}% (Kryterium: {change_ok})"
+                )
+            # --- KONIEC BLOKU DIAGNOSTYCZNEGO ---
+
+            if price_ok and volume_ok and change_ok:
                 candidate_tickers.append(ticker)
                 log_msg = f"Kwalifikacja: {ticker} (Cena: ${price:.2f}, Zmiana: {change_percent:.2f}%, Wolumen: {int(volume):,})"
                 append_scan_log(session, log_msg)
