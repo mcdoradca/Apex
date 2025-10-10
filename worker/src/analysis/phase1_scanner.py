@@ -17,7 +17,6 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
     append_scan_log(session, "Faza 1: Rozpoczynanie skanowania rynku...")
 
     try:
-        # Pobranie tickerów z bazy danych
         all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
         all_tickers = [row[0] for row in all_tickers_rows]
     except Exception as e:
@@ -41,7 +40,6 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             append_scan_log(session, "Skanowanie wznowione.")
 
         try:
-            # Użycie poprawnego endpointu: TIME_SERIES_DAILY_ADJUSTED
             daily_data = api_client.get_daily_adjusted(ticker, outputsize='compact')
 
             if not daily_data:
@@ -63,9 +61,9 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             if not all([price, volume, prev_close]) or prev_close == 0:
                 continue
             
+            # POPRAWKA: Prawidłowe obliczenie zmiany procentowej
             change_percent = ((price - prev_close) / prev_close) * 100
 
-            # Zastosowanie kryteriów filtrowania
             if (MIN_PRICE <= price <= MAX_PRICE and
                 volume >= MIN_VOLUME and
                 change_percent >= MIN_DAY_CHANGE_PERCENT):
