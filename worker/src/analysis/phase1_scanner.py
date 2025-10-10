@@ -43,6 +43,11 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             # Używamy get_daily_adjusted z outputsize='compact' (ostatnie 100 dni), co jest wystarczające
             daily_data = api_client.get_daily_adjusted(ticker, outputsize='compact')
 
+            # KLUCZOWA POPRAWKA: Sprawdzenie, czy odpowiedź z API nie jest pusta (None)
+            if not daily_data:
+                logger.warning(f"No data received from API for ticker {ticker}. Skipping.")
+                continue
+
             time_series = daily_data.get('Time Series (Daily)')
             if not time_series or len(time_series) < 2:
                 continue
@@ -69,6 +74,7 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
                 append_scan_log(session, log_msg)
         
         except Exception as e:
+            # Ten blok 'except' złapie teraz tylko błędy parsowania, a nie błędy związane z 'None'
             logger.error(f"Error processing ticker {ticker} in Phase 1: {e}")
         finally:
             processed_count += 1
@@ -81,3 +87,4 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
     append_scan_log(session, final_log)
     
     return candidate_tickers
+
