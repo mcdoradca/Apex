@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 def initialize_database_if_empty(session: Session, api_client):
     """
     Sprawdza, czy tabela 'companies' jest pusta. Jeśli tak, pobiera listę
-    spółek z Alpha Vantage i zapisuje ją w bazie danych.
+    spółek z Alpha Vantage i zapisuje ją w bazie danych. Wersja z ostateczną
+    poprawką filtrowania danych.
     """
     try:
         count_result = session.execute(text("SELECT COUNT(*) FROM companies")).scalar_one()
@@ -20,28 +21,41 @@ def initialize_database_if_empty(session: Session, api_client):
 
         logger.info("Table 'companies' is empty. Initializing with data from Alpha Vantage...")
         
-        # Pobranie listy spółek jako plik CSV z Alpha Vantage
         params = {"function": "LISTING_STATUS", "apikey": api_client.api_key}
         response = api_client._make_raw_request(params)
         
         if response is None:
             logger.error("Failed to fetch listing status from Alpha Vantage. Database remains empty.")
             return
-
-        csv_file = StringIO(response.text)
-        reader = csv.DictReader(csv_file)
         
+        csv_file = StringIO(response.text)
+        reader_list = list(csv.DictReader(csv_file))
+        
+        if not reader_list:
+            logger.error("CSV file from Alpha Vantage seems to be empty or corrupted.")
+            return
+
         companies_to_insert = []
-        for row in reader:
-            if row.get('exchange') == 'NASDAQ' and row.get('status') == 'Active':
+        for row in reader_list:
+            ticker = row.get('symbol')
+            # --- POPRAWKA ---
+            # Dodano warunek, który odfiltrowuje warranty i inne niestandardowe
+            # tickery, które często zawierają kropki lub mają ponad 20 znaków.
+            # Zapewnia to wyższą jakość danych do analizy.
+            if (row.get('exchange') == 'NASDAQ' and 
+                row.get('status') == 'Active' and 
+                ticker and '.' not in ticker and len(ticker) <= 20):
+            # --- KONIEC POPRAWKI ---
                 companies_to_insert.append({
-                    "ticker": row['symbol'],
-                    "company_name": row['name'],
-                    "exchange": row['exchange'],
+                    "ticker": ticker,
+                    "company_name": row.get('name'),
+                    "exchange": row.get('exchange'),
                 })
+        
+        logger.info(f"Found {len(companies_to_insert)} active, standard NASDAQ companies to insert.")
 
         if not companies_to_insert:
-            logger.warning("No active NASDAQ companies found in the API response.")
+            logger.warning("No valid companies found after filtering. Halting initialization.")
             return
 
         insert_stmt = text("""
@@ -50,16 +64,12 @@ def initialize_database_if_empty(session: Session, api_client):
             ON CONFLICT (ticker) DO NOTHING;
         """)
         
-        # --- POPRAWKA ---
-        # Usunięto problematyczny blok `with session.begin():` i zastąpiono go
-        # jawnym wykonaniem operacji i zatwierdzeniem transakcji (commit).
-        # To rozwiązuje błąd `InvalidRequestError`.
         session.execute(insert_stmt, companies_to_insert)
         session.commit()
-        # --- KONIEC POPRAWKI ---
         
         logger.info(f"Successfully inserted {len(companies_to_insert)} companies into the database.")
 
     except Exception as e:
         logger.error(f"An error occurred during database initialization: {e}", exc_info=True)
         session.rollback()
+
