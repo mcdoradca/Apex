@@ -26,7 +26,7 @@ SECTOR_TO_ETF_MAP = {
 DEFAULT_MARKET_ETF = "QQQ"
 
 # === FAZA 2: Progi Scoringowe ===
-MIN_APEX_SCORE_TO_QUALIFY = 8 # Minimalny łączny wynik do kwalifikacji do Fazy 3
+MIN_APEX_SCORE_TO_QUALIFY = 7 # Minimalny łączny wynik do kwalifikacji do Fazy 3
 
 # === FAZA 3: Parametry Agenta Snajperskiego ===
 MIN_RISK_REWARD_RATIO = 1.2
