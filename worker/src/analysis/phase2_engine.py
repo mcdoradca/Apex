@@ -26,9 +26,9 @@ def _calculate_catalyst_score(ticker: str, api_client: AlphaVantageClient) -> in
         logger.error(f"Error calculating catalyst score for {ticker}: {e}")
         return 0
 
-def _calculate_relative_strength_score(ticker: str, sector: str, api_client: AlphaVantageClient) -> int:
+def _calculate_relative_strength_score(ticker: str, sector: str, ticker_data, api_client: AlphaVantageClient) -> int:
+    """Zmodyfikowana funkcja, aby przyjmować już pobrane dane tickera."""
     try:
-        ticker_data = api_client.get_daily_adjusted(ticker, 'compact')
         market_data = api_client.get_daily_adjusted(DEFAULT_MARKET_ETF, 'compact')
         sector_etf = SECTOR_TO_ETF_MAP.get(sector, DEFAULT_MARKET_ETF)
         sector_data = api_client.get_daily_adjusted(sector_etf, 'compact')
@@ -68,13 +68,13 @@ def _calculate_energy_compression_score(ticker: str, api_client: AlphaVantageCli
         logger.error(f"Error calculating energy compression for {ticker}: {e}")
         return 0
 
-def _calculate_quality_control_score(ticker: str, api_client: AlphaVantageClient) -> int:
+def _calculate_quality_control_score(ticker: str, overview_data) -> int:
+    """Zmodyfikowana funkcja, aby przyjmować już pobrane dane fundamentalne."""
     try:
-        overview = api_client.get_company_overview(ticker)
-        if not overview: return 0
+        if not overview_data: return 0
 
-        profit_margin = safe_float(overview.get('ProfitMargin', '-1'))
-        pe_ratio = safe_float(overview.get('PERatio', '999'))
+        profit_margin = safe_float(overview_data.get('ProfitMargin', '-1'))
+        pe_ratio = safe_float(overview_data.get('PERatio', '999'))
         
         score = 0
         if profit_margin is not None and profit_margin > 0: score += 1
@@ -95,21 +95,38 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
 
     for ticker in candidate_tickers:
         if get_current_state() == 'PAUSED':
-            # ... logika pauzy ...
             while get_current_state() == 'PAUSED': time.sleep(1)
 
         try:
+            # --- POPRAWKA: Inteligentne sprawdzanie dostępności danych ---
+            # 1. Pobieramy kluczowe dane na samym początku.
+            logger.info(f"[DIAG] Phase 2: Fetching primary data for {ticker}...")
+            overview_data = api_client.get_company_overview(ticker)
+            daily_data = api_client.get_daily_adjusted(ticker, 'compact')
+
+            # 2. Sprawdzamy, czy otrzymaliśmy niezbędne minimum do analizy ("czy pokój nie jest pusty").
+            if not overview_data or not daily_data:
+                log_msg = f"{ticker} - Pominięty. Brak kluczowych danych fundamentalnych lub cenowych z API."
+                logger.warning(f"[DIAG] Skipping {ticker} due to missing primary data (overview or daily).")
+                append_scan_log(session, log_msg)
+                processed_count += 1
+                update_scan_progress(session, processed_count, total_candidates)
+                continue # Przejdź do następnego tickera
+
+            # --- KONIEC POPRAWKI ---
+
             sector_row = session.execute(text("SELECT sector FROM companies WHERE ticker = :ticker"), {'ticker': ticker}).fetchone()
             sector = sector_row[0] if sector_row else "N/A"
             
             catalyst_score = _calculate_catalyst_score(ticker, api_client)
-            strength_score = _calculate_relative_strength_score(ticker, sector, api_client)
+            # Przekazujemy już pobrane dane, aby uniknąć ponownych zapytań
+            strength_score = _calculate_relative_strength_score(ticker, sector, daily_data, api_client)
             compression_score = _calculate_energy_compression_score(ticker, api_client)
-            quality_score = _calculate_quality_control_score(ticker, api_client)
+            quality_score = _calculate_quality_control_score(ticker, overview_data)
+            
             total_score = catalyst_score + strength_score + compression_score + quality_score
             is_qualified = total_score >= MIN_APEX_SCORE_TO_QUALIFY
             
-            # Zapisz wyniki do bazy (UPSERT)
             stmt = text("""
                 INSERT INTO apex_scores (ticker, analysis_date, catalyst_score, relative_strength_score, energy_compression_score, quality_control_score, total_score, is_qualified)
                 VALUES (:ticker, :date, :c_score, :rs_score, :ec_score, :qc_score, :total, :qual)
@@ -141,4 +158,3 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
     logger.info(final_log)
     append_scan_log(session, final_log)
     return qualified_tickers
-
