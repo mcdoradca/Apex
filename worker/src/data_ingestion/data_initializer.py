@@ -32,10 +32,14 @@ def initialize_database_if_empty(session: Session, api_client):
             logger.error(f"Failed to fetch official list from nasdaqtrader.com: {e}")
             return
 
-        # Plik jest w formacie pipe-delimited (|), ma nagłówek i stopkę, którą trzeba usunąć
+        # Plik jest w formacie pipe-delimited (|), ma nagłówek i stopkę
         lines = response.text.strip().split('\n')
-        # Usuwamy ostatnią linię (stopka z datą) i pierwszą (nagłówek)
-        clean_lines = lines[1:-1]
+        
+        # --- OSTATECZNA POPRAWKA ---
+        # Usuwamy TYLKO ostatnią linię (stopka z datą), zostawiając nagłówek dla parsera.
+        # To rozwiązuje problem niepoprawnego odczytywania struktury pliku.
+        clean_lines = lines[:-1]
+        # --- KONIEC POPRAWKI ---
         
         # Używamy StringIO, aby traktować listę linii jak plik
         csv_file = StringIO('\n'.join(clean_lines))
@@ -45,11 +49,9 @@ def initialize_database_if_empty(session: Session, api_client):
         companies_to_insert = []
         for row in reader:
             ticker = row.get('Symbol')
-            # --- OSTATECZNY, DWUSTOPNIOWY FILTR ---
-            # 1. Odrzucamy wszystkie instrumenty, które są oznaczone jako ETF.
+            # Dwustopniowy filtr, który przepuszcza tylko standardowe akcje
             is_etf = row.get('ETF') == 'Y'
             
-            # 2. Z pozostałych, wybieramy tylko te, które mają format standardowej akcji.
             is_standard_stock = (
                 ticker and
                 1 <= len(ticker) <= 5 and
@@ -61,7 +63,7 @@ def initialize_database_if_empty(session: Session, api_client):
                 companies_to_insert.append({
                     "ticker": ticker,
                     "company_name": row.get('Security Name'),
-                    "exchange": "NASDAQ", # Wiemy, że to NASDAQ
+                    "exchange": "NASDAQ",
                 })
         
         final_count = len(companies_to_insert)
