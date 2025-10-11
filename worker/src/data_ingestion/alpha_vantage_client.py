@@ -53,7 +53,22 @@ class AlphaVantageClient:
         return None
 
     def _make_request(self, params: dict):
-        """Wykonywanie zapytań z logiką ponowień i bardziej odporną obsługą błędów."""
+        """
+        Wykonywanie zapytań z logiką ponowień i bardziej odporną obsługą błędów.
+        --- OSTATECZNA POPRAWKA ---
+        Automatycznie dodaje `entitlement=delayed` do wszystkich zapytań, które tego wymagają,
+        zgodnie z wytycznymi supportu Alpha Vantage dla planu premium.
+        """
+        # Lista funkcji, które dotyczą akcji z USA i wymagają tagu 'entitlement'
+        us_equity_functions = [
+            "OVERVIEW", "TIME_SERIES_DAILY_ADJUSTED", "NEWS_SENTIMENT", "BBANDS",
+            "TIME_SERIES_INTRADAY", "RSI", "SMA", "ADX", "MACD", "STOCH", "GLOBAL_QUOTE"
+        ]
+
+        if params.get("function") in us_equity_functions:
+            params['entitlement'] = 'delayed'
+        # --- KONIEC POPRAWKI ---
+
         response = self._make_raw_request(params)
         if not response:
             return None
@@ -66,10 +81,15 @@ class AlphaVantageClient:
             
             if "Note" in data:
                 logger.warning(f"API Note for {params.get('symbol')}: {data['Note']}.")
-                return None
+                # Nie zwracamy None, bo dane mogą być mimo wszystko obecne
             
             if "Error Message" in data:
                 logger.error(f"API Error for {params.get('symbol')}: {data['Error Message']}")
+                return None
+            
+            # Dodatkowe sprawdzenie pod kątem wiadomości o wymaganym planie premium
+            if "To access the actual data, please subscribe" in str(data):
+                logger.error(f"API returned 'sample data' for {params.get('symbol')}. Check entitlement.")
                 return None
 
             return data
@@ -137,4 +157,3 @@ class AlphaVantageClient:
             "function": "STOCH", "symbol": symbol, "interval": "daily"
         }
         return self._make_request(params)
-
