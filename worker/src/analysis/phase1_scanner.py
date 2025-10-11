@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient) -> list[str]:
     """
-    Skanuje rynek z rozszerzonym logowaniem diagnostycznym, aby ostatecznie
-    zidentyfikować przyczynę braku kandydatów.
+    Skanuje rynek z ostatecznym, rygorystycznym filtrem jakościowym, aby do Fazy 2
+    przekazywać wyłącznie standardowe akcje.
     """
     logger.info("Running Phase 1: Market Impulse Scan (Enhanced Diagnostic Mode)...")
     append_scan_log(session, "Faza 1: Rozpoczynanie skanowania (Tryb Diagnostyczny+)...")
@@ -19,11 +19,8 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
     try:
         all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
         all_tickers = [row[0] for row in all_tickers_rows]
-        # --- KRYTYCZNY LOG DIAGNOSTYCZNY ---
-        # Sprawdzamy, czy baza danych w ogóle zwróciła jakiekolwiek spółki do skanowania.
         logger.info(f"[DIAG] Found {len(all_tickers)} tickers in the 'companies' table to process.")
         append_scan_log(session, f"Znaleziono {len(all_tickers)} spółek w bazie do przeskanowania.")
-        # --- KONIEC LOGU ---
     except Exception as e:
         logger.error(f"Could not fetch companies from database: {e}")
         append_scan_log(session, f"BŁĄD KRYTYCZNY: Nie można pobrać listy spółek z bazy danych: {e}")
@@ -50,6 +47,19 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             append_scan_log(session, "Skanowanie wznowione.")
 
         try:
+            # --- POPRAWKA: Rygorystyczny filtr jakości tickera ---
+            # Sprawdzamy ticker na samym początku, aby uniknąć niepotrzebnych zapytań API.
+            # Przepuszczamy tylko standardowe tickery (1-5 wielkich liter), co eliminuje
+            # warranty, ETFy, prawa do akcji i inne niestandardowe instrumenty.
+            is_standard_stock = 1 <= len(ticker) <= 5 and ticker.isalpha() and ticker.isupper()
+            if not is_standard_stock:
+                logger.info(f"[DIAG] Skipping non-standard ticker: {ticker}")
+                processed_count += 1
+                if processed_count % 50 == 0: # Rzadsze aktualizowanie postępu przy pomijaniu
+                    update_scan_progress(session, processed_count, total_companies)
+                continue
+            # --- KONIEC POPRAWKI ---
+
             daily_data = api_client.get_daily_adjusted(ticker, outputsize='compact')
 
             if not daily_data:
@@ -65,8 +75,6 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
 
             price = safe_float(latest_day_data.get('4. close'))
             volume = safe_float(latest_day_data.get('6. volume'))
-            # --- OSTATECZNA POPRAWKA LOGIKI ---
-            # Poprawiamy błąd, aby 'prev_close' było pobierane z danych dnia poprzedniego.
             prev_close = safe_float(previous_day_data.get('4. close'))
 
             if not all([price, volume, prev_close]) or prev_close == 0:
@@ -74,18 +82,10 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             
             change_percent = ((price - prev_close) / prev_close) * 100
 
-            # --- ROZSZERZONY BLOK DIAGNOSTYCZNY ---
             price_ok = MIN_PRICE <= price <= MAX_PRICE
             volume_ok = volume >= MIN_VOLUME
             change_ok = change_percent >= MIN_DAY_CHANGE_PERCENT
             
-            logger.info(
-                f"[DIAG] {ticker}: Cena=${price:.2f} (Kryterium: {price_ok}), "
-                f"Wolumen={int(volume):,} (Kryterium: {volume_ok}), "
-                f"Zmiana={change_percent:.2f}% (Kryterium: {change_ok})"
-            )
-            # --- KONIEC BLOKU DIAGNOSTYCZNEGO ---
-
             if price_ok and volume_ok and change_ok:
                 candidate_tickers.append(ticker)
                 log_msg = f"Kwalifikacja: {ticker} (Cena: ${price:.2f}, Zmiana: {change_percent:.2f}%, Wolumen: {int(volume):,})"
@@ -99,9 +99,8 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
                 update_scan_progress(session, processed_count, total_companies)
     
     update_scan_progress(session, total_companies, total_companies)
-    final_log = f"Faza 1 zakończona. Znaleziono {len(candidate_tickers)} kandydatów."
+    final_log = f"Faza 1 zakończona. Znaleziono {len(candidate_tickers)} kandydatów (po rygorystycznym filtrowaniu)."
     logger.info(final_log)
     append_scan_log(session, final_log)
     
     return candidate_tickers
-
