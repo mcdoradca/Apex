@@ -6,7 +6,7 @@ databases:
   - name: apex-predator-db
     databaseName: apex_predator
     user: apex_user
-    plan: Free
+    plan: Basic-256mb 
     region: frankfurt
 
 services:
