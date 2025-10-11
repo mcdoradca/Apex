@@ -1,0 +1,60 @@
+# Kompletna definicja infrastruktury aplikacji APEX Predator
+# Wersja finalna, w pełni zgodna z dokumentacją Render Blueprint.
+
+databases:
+  # 1. Definicja usługi Bazy Danych PostgreSQL
+  - name: apex-predator-db
+    databaseName: apex_predator
+    user: apex_user
+    plan: Free 
+    region: frankfurt
+
+services:
+  # 2. Definicja usługi Bramy API (Web Service - Backend)
+  - type: web
+    name: apex-predator-api
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: ./api
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn src.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: apex-predator-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.11.4"
+
+  # 3. Definicja usługi Silnika Analitycznego (Background Worker) - OSTATECZNA POPRAWKA
+  - type: worker
+    name: apex-predator-worker
+    runtime: python
+    plan: starter
+    region: frankfurt
+    # Usunięto rootDir, aby polegać na jawnych ścieżkach.
+    buildCommand: "pip install -r worker/requirements.txt"
+    startCommand: "cd worker && python -m src.main" # Jawna zmiana katalogu i uruchomienie modułu.
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: apex-predator-db
+          property: connectionString
+      - key: ALPHAVANTAGE_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.4"
+  
+  # 4. Definicja usługi Frontendu (Static Site)
+  - type: web
+    name: apex-predator-frontend
+    runtime: static
+    rootDir: ./
+    # buildCommand jest wymagany dla non-Docker runtimes. Używamy 'true', gdy nie ma procesu budowania.
+    buildCommand: 'true'
+    staticPublishPath: ./ # Wymagane dla runtime: static.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
