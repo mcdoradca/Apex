@@ -1,15 +1,19 @@
 import logging
 import csv
 from io import StringIO
+import requests
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
+# URL do oficjalnego pliku z listą instrumentów notowanych na NASDAQ
+NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+
 def initialize_database_if_empty(session: Session, api_client):
     """
-    Sprawdza, czy tabela 'companies' jest pusta. Jeśli tak, pobiera listę
-    spółek z Alpha Vantage, stosując ulepszony filtr, i zapisuje ją w bazie.
+    Sprawdza, czy tabela 'companies' jest pusta. Jeśli tak, pobiera oficjalną
+    listę spółek z nasdaqtrader.com, filtruje ją i zapisuje w bazie.
     """
     try:
         count_result = session.execute(text("SELECT COUNT(*) FROM companies")).scalar_one()
@@ -18,46 +22,50 @@ def initialize_database_if_empty(session: Session, api_client):
             logger.info(f"Database already seeded. Found {count_result} companies. Skipping initialization.")
             return
 
-        logger.info("Table 'companies' is empty. Initializing with data from Alpha Vantage...")
+        logger.info("Table 'companies' is empty. Initializing with official data from NASDAQ...")
         
-        params = {"function": "LISTING_STATUS", "apikey": api_client.api_key}
-        response = api_client._make_raw_request(params)
-        
-        if response is None:
-            logger.error("Failed to fetch listing status from Alpha Vantage. Database remains empty.")
-            return
-        
-        csv_file = StringIO(response.text)
-        reader_list = list(csv.DictReader(csv_file))
-        
-        if not reader_list:
-            logger.error("CSV file from Alpha Vantage seems to be empty or corrupted.")
+        try:
+            response = requests.get(NASDAQ_LISTED_URL, timeout=60)
+            response.raise_for_status()
+            logger.info("Successfully downloaded official NASDAQ listed symbols file.")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch official list from nasdaqtrader.com: {e}")
             return
 
+        # Plik jest w formacie pipe-delimited (|), ma nagłówek i stopkę, którą trzeba usunąć
+        lines = response.text.strip().split('\n')
+        # Usuwamy ostatnią linię (stopka z datą) i pierwszą (nagłówek)
+        clean_lines = lines[1:-1]
+        
+        # Używamy StringIO, aby traktować listę linii jak plik
+        csv_file = StringIO('\n'.join(clean_lines))
+        # Używamy DictReader z separatorem '|'
+        reader = csv.DictReader(csv_file, delimiter='|')
+        
         companies_to_insert = []
-        for row in reader_list:
-            ticker = row.get('symbol')
-            # --- POPRAWKA: Ulepszony, bardziej rygorystyczny filtr ---
-            # Przepuszczamy tylko akcje, które wyglądają na standardowe, aby utrzymać
-            # bazę danych w czystości od samego początku.
+        for row in reader:
+            ticker = row.get('Symbol')
+            # --- OSTATECZNY, DWUSTOPNIOWY FILTR ---
+            # 1. Odrzucamy wszystkie instrumenty, które są oznaczone jako ETF.
+            is_etf = row.get('ETF') == 'Y'
+            
+            # 2. Z pozostałych, wybieramy tylko te, które mają format standardowej akcji.
             is_standard_stock = (
                 ticker and
-                '.' not in ticker and
                 1 <= len(ticker) <= 5 and
                 ticker.isalpha() and
                 ticker.isupper()
             )
-            if (row.get('exchange') == 'NASDAQ' and 
-                row.get('status') == 'Active' and 
-                is_standard_stock):
-            # --- KONIEC POPRAWKI ---
+            
+            if not is_etf and is_standard_stock:
                 companies_to_insert.append({
                     "ticker": ticker,
-                    "company_name": row.get('name'),
-                    "exchange": row.get('exchange'),
+                    "company_name": row.get('Security Name'),
+                    "exchange": "NASDAQ", # Wiemy, że to NASDAQ
                 })
         
-        logger.info(f"Found {len(companies_to_insert)} active, standard NASDAQ companies to insert into the database.")
+        final_count = len(companies_to_insert)
+        logger.info(f"Found {final_count} clean, standard common stocks to insert into the database.")
 
         if not companies_to_insert:
             logger.warning("No valid companies found after filtering. Halting initialization.")
@@ -72,7 +80,7 @@ def initialize_database_if_empty(session: Session, api_client):
         session.execute(insert_stmt, companies_to_insert)
         session.commit()
         
-        logger.info(f"Successfully inserted {len(companies_to_insert)} companies into the database.")
+        logger.info(f"Successfully inserted {final_count} companies into the database.")
 
     except Exception as e:
         logger.error(f"An error occurred during database initialization: {e}", exc_info=True)
