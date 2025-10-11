@@ -50,13 +50,16 @@ def initialize_database_if_empty(session: Session, api_client):
             ON CONFLICT (ticker) DO NOTHING;
         """)
         
-        # Użycie bulk insert dla wydajności
-        with session.begin():
-            session.execute(insert_stmt, companies_to_insert)
+        # --- POPRAWKA ---
+        # Usunięto problematyczny blok `with session.begin():` i zastąpiono go
+        # jawnym wykonaniem operacji i zatwierdzeniem transakcji (commit).
+        # To rozwiązuje błąd `InvalidRequestError`.
+        session.execute(insert_stmt, companies_to_insert)
+        session.commit()
+        # --- KONIEC POPRAWKI ---
         
         logger.info(f"Successfully inserted {len(companies_to_insert)} companies into the database.")
 
     except Exception as e:
         logger.error(f"An error occurred during database initialization: {e}", exc_info=True)
         session.rollback()
-
