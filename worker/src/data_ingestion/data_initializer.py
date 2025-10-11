@@ -9,8 +9,7 @@ logger = logging.getLogger(__name__)
 def initialize_database_if_empty(session: Session, api_client):
     """
     Sprawdza, czy tabela 'companies' jest pusta. Jeśli tak, pobiera listę
-    spółek z Alpha Vantage i zapisuje ją w bazie danych. Wersja z ostateczną
-    poprawką filtrowania danych.
+    spółek z Alpha Vantage, stosując ulepszony filtr, i zapisuje ją w bazie.
     """
     try:
         count_result = session.execute(text("SELECT COUNT(*) FROM companies")).scalar_one()
@@ -38,13 +37,19 @@ def initialize_database_if_empty(session: Session, api_client):
         companies_to_insert = []
         for row in reader_list:
             ticker = row.get('symbol')
-            # --- POPRAWKA ---
-            # Dodano warunek, który odfiltrowuje warranty i inne niestandardowe
-            # tickery, które często zawierają kropki lub mają ponad 20 znaków.
-            # Zapewnia to wyższą jakość danych do analizy.
+            # --- POPRAWKA: Ulepszony, bardziej rygorystyczny filtr ---
+            # Przepuszczamy tylko akcje, które wyglądają na standardowe, aby utrzymać
+            # bazę danych w czystości od samego początku.
+            is_standard_stock = (
+                ticker and
+                '.' not in ticker and
+                1 <= len(ticker) <= 5 and
+                ticker.isalpha() and
+                ticker.isupper()
+            )
             if (row.get('exchange') == 'NASDAQ' and 
                 row.get('status') == 'Active' and 
-                ticker and '.' not in ticker and len(ticker) <= 20):
+                is_standard_stock):
             # --- KONIEC POPRAWKI ---
                 companies_to_insert.append({
                     "ticker": ticker,
@@ -52,7 +57,7 @@ def initialize_database_if_empty(session: Session, api_client):
                     "exchange": row.get('exchange'),
                 })
         
-        logger.info(f"Found {len(companies_to_insert)} active, standard NASDAQ companies to insert.")
+        logger.info(f"Found {len(companies_to_insert)} active, standard NASDAQ companies to insert into the database.")
 
         if not companies_to_insert:
             logger.warning("No valid companies found after filtering. Halting initialization.")
