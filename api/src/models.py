@@ -10,10 +10,10 @@ from .database import Base
 
 class Company(Base):
     __tablename__ = 'companies'
-    # --- POPRAWKA ---
-    # Zwiększono długość pola ticker z 10 do 20 znaków, aby pomieścić
-    # niestandardowe tickery z API, co rozwiązuje błąd 'StringDataRightTruncation'.
-    ticker = Column(VARCHAR(20), primary_key=True)
+    # --- OSTATECZNA POPRAWKA ---
+    # Zwiększono długość pola ticker do 50 znaków zgodnie z sugestią,
+    # aby zapewnić maksymalną elastyczność i uniknąć problemów w przyszłości.
+    ticker = Column(VARCHAR(50), primary_key=True)
     # --- KONIEC POPRAWKI ---
     company_name = Column(VARCHAR(255))
     exchange = Column(VARCHAR(50))
@@ -23,7 +23,7 @@ class Company(Base):
 
 class PriceHistoryDaily(Base):
     __tablename__ = 'price_history_daily'
-    ticker = Column(VARCHAR(20), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
     date = Column(DATE, primary_key=True)
     open = Column(NUMERIC(12, 4))
     high = Column(NUMERIC(12, 4))
@@ -36,7 +36,7 @@ class PriceHistoryDaily(Base):
 
 class PriceHistoryIntraday(Base):
     __tablename__ = 'price_history_intraday'
-    ticker = Column(VARCHAR(20), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
     datetime = Column(PG_TIMESTAMP(timezone=True), primary_key=True)
     open = Column(NUMERIC(12, 4))
     high = Column(NUMERIC(12, 4))
@@ -46,7 +46,7 @@ class PriceHistoryIntraday(Base):
 
 class Fundamentals(Base):
     __tablename__ = 'fundamentals'
-    ticker = Column(VARCHAR(20), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
     market_cap = Column(BIGINT)
     pe_ratio = Column(NUMERIC(10, 2))
     eps = Column(NUMERIC(10, 2))
@@ -57,7 +57,7 @@ class Fundamentals(Base):
 class SentimentAnalysis(Base):
     __tablename__ = 'sentiment_analysis'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
-    ticker = Column(VARCHAR(20), ForeignKey('companies.ticker', ondelete='CASCADE'))
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     publish_time = Column(PG_TIMESTAMP(timezone=True))
     url = Column(TEXT)
     title = Column(TEXT)
@@ -67,7 +67,7 @@ class SentimentAnalysis(Base):
 
 class ApexScore(Base):
     __tablename__ = 'apex_scores'
-    ticker = Column(VARCHAR(20), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
     analysis_date = Column(DATE, primary_key=True)
     catalyst_score = Column(INTEGER)
     relative_strength_score = Column(INTEGER)
@@ -79,7 +79,7 @@ class ApexScore(Base):
 class TradingSignal(Base):
     __tablename__ = 'trading_signals'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
-    ticker = Column(VARCHAR(20), ForeignKey('companies.ticker', ondelete='CASCADE'))
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
     status = Column(VARCHAR(50), default='ACTIVE')
     entry_price = Column(NUMERIC(12, 2))
@@ -91,7 +91,7 @@ class TradingSignal(Base):
 class PredatorWatchlist(Base):
     __tablename__ = 'predator_watchlist'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
-    ticker = Column(VARCHAR(20), unique=True, nullable=False)
+    ticker = Column(VARCHAR(50), unique=True, nullable=False)
     added_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
 class SystemControl(Base):
@@ -108,7 +108,7 @@ class AlphaVantageMetadata(Base):
 
 class OnDemandAnalysisResult(Base):
     __tablename__ = 'on_demand_results'
-    ticker = Column(VARCHAR(20), primary_key=True)
+    ticker = Column(VARCHAR(50), primary_key=True)
     analysis_data = Column(JSONB)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
