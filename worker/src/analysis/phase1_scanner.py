@@ -2,15 +2,10 @@ import re
 import time
 import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import text, delete
+from sqlalchemy import text
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from ..config import MIN_PRICE, MAX_PRICE, MIN_VOLUME, MIN_DAY_CHANGE_PERCENT
 from .utils import update_scan_progress, append_scan_log, safe_float
-# --- POPRAWKA ARCHITEKTONICZNA ---
-# Usunięto błędny import `from ..models import Phase1Candidate`.
-# Worker nie musi znać definicji modelu, aby zapisywać dane.
-# Będziemy używać "surowego" polecenia SQL (text), co jest prawidłowym podejściem.
-# --- KONIEC POPRAWKI ---
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +15,6 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
 
     # Czyszczenie starych kandydatów przed nowym skanowaniem
     try:
-        # Używamy `text` do wykonania polecenia SQL na podstawie nazwy tabeli
         session.execute(text("DELETE FROM phase1_candidates"))
         session.commit()
         append_scan_log(session, "Wyczyszczono listę kandydatów z poprzedniego cyklu.")
@@ -28,6 +22,7 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
         logger.error(f"Could not clear old phase 1 candidates: {e}")
         session.rollback()
 
+    # ... reszta kodu bez zmian ...
     try:
         all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
         all_tickers = [row[0] for row in all_tickers_rows]
@@ -45,7 +40,7 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
     update_scan_progress(session, 0, total_companies)
 
     candidate_tickers = []
-    candidates_to_insert = [] # Lista do zapisu partiami
+    candidates_to_insert = []
     processed_count = 0
     
     ticker_format_regex = re.compile(r'^[A-Z]{1,5}$')
@@ -79,12 +74,13 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
                 change_percent >= MIN_DAY_CHANGE_PERCENT):
                 
                 candidate_tickers.append(ticker)
+                # Przygotuj dane do zapisu w nowej tabeli
                 candidates_to_insert.append({
                     "ticker": ticker,
                     "price": price,
                     "change_percent": change_percent,
                     "volume": int(volume),
-                    "score": int(change_percent) 
+                    "score": int(change_percent) # Używamy procentowej zmiany jako prostego scoringu
                 })
                 log_msg = f"Kwalifikacja: {ticker} (Cena: ${price:.2f}, Zmiana: {change_percent:.2f}%)"
                 append_scan_log(session, log_msg)
@@ -96,19 +92,12 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             if processed_count % 50 == 0:
                 update_scan_progress(session, processed_count, total_companies)
     
-    # --- ZAPIS DO BAZY DANYCH ZA POMOCĄ SUROWEGO SQL ---
+    # Zapisz wszystkich znalezionych kandydatów do nowej tabeli
     if candidates_to_insert:
         try:
-            # Używamy `ON CONFLICT DO UPDATE` (UPSERT)
             stmt = text("""
                 INSERT INTO phase1_candidates (ticker, price, change_percent, volume, score, analysis_date)
                 VALUES (:ticker, :price, :change_percent, :volume, :score, NOW())
-                ON CONFLICT (ticker) DO UPDATE SET
-                    price = EXCLUDED.price,
-                    change_percent = EXCLUDED.change_percent,
-                    volume = EXCLUDED.volume,
-                    score = EXCLUDED.score,
-                    analysis_date = NOW();
             """)
             session.execute(stmt, candidates_to_insert)
             session.commit()
