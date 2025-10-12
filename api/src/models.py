@@ -1,20 +1,26 @@
 from sqlalchemy import (
     Column, String, VARCHAR, TIMESTAMP, NUMERIC, BIGINT, DATE,
-    Boolean, INTEGER, TEXT, ForeignKey
+    Boolean, INTEGER, TEXT, ForeignKey, Float
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP, JSONB
 from sqlalchemy.sql import func
 from .database import Base
 
-# Kompletna i poprawna definicja wszystkich tabel bazy danych jako modeli SQLAlchemy.
+# --- NOWA TABELA ---
+# Tabela do przechowywania wyników z Fazy 1
+class Phase1Candidate(Base):
+    __tablename__ = 'phase1_candidates'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    price = Column(Float)
+    change_percent = Column(Float)
+    volume = Column(BIGINT)
+    score = Column(INTEGER, default=0) # Domyślnie 0, do rozbudowy
+    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# ... reszta istniejącego kodu bez zmian ...
 class Company(Base):
     __tablename__ = 'companies'
-    # --- OSTATECZNA POPRAWKA ---
-    # Zwiększono długość pola ticker do 50 znaków zgodnie z sugestią,
-    # aby zapewnić maksymalną elastyczność i uniknąć problemów w przyszłości.
     ticker = Column(VARCHAR(50), primary_key=True)
-    # --- KONIEC POPRAWKI ---
     company_name = Column(VARCHAR(255))
     exchange = Column(VARCHAR(50))
     sector = Column(VARCHAR(100))
