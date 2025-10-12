@@ -1,9 +1,20 @@
 from pydantic import BaseModel, ConfigDict
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Optional
 
-# Schematy Pydantic do walidacji danych wejściowych i wyjściowych API.
+# --- NOWY ELEMENT ---
+# Schemat dla pojedynczego kandydata z Fazy 1
+class Phase1Candidate(BaseModel):
+    ticker: str
+    price: Optional[float] = None
+    change_percent: Optional[float] = None
+    volume: Optional[int] = None
+    score: Optional[int] = None
+    analysis_date: datetime
 
+    model_config = ConfigDict(from_attributes=True)
+
+# ... reszta istniejącego kodu bez zmian ...
 class Progress(BaseModel):
     processed: int
     total: int
@@ -29,6 +40,12 @@ class TradingSignal(BaseModel):
     risk_reward_ratio: float
     signal_candle_timestamp: datetime
 
-    # POPRAWKA: Zaktualizowano konfigurację Pydantic v2, 'orm_mode' to 'from_attributes'
+    model_config = ConfigDict(from_attributes=True)
+
+class ApexScore(BaseModel):
+    ticker: str
+    analysis_date: date
+    total_score: int
+
     model_config = ConfigDict(from_attributes=True)
 
