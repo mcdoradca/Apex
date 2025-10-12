@@ -6,7 +6,11 @@ from sqlalchemy import text, delete
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from ..config import MIN_PRICE, MAX_PRICE, MIN_VOLUME, MIN_DAY_CHANGE_PERCENT
 from .utils import update_scan_progress, append_scan_log, safe_float
-from ..models import Phase1Candidate # Import modelu
+# --- POPRAWKA ARCHITEKTONICZNA ---
+# Usunięto błędny import `from ..models import Phase1Candidate`.
+# Worker nie musi znać definicji modelu, aby zapisywać dane.
+# Będziemy używać "surowego" polecenia SQL (text), co jest prawidłowym podejściem.
+# --- KONIEC POPRAWKI ---
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +20,8 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
 
     # Czyszczenie starych kandydatów przed nowym skanowaniem
     try:
-        session.execute(delete(Phase1Candidate))
+        # Używamy `text` do wykonania polecenia SQL na podstawie nazwy tabeli
+        session.execute(text("DELETE FROM phase1_candidates"))
         session.commit()
         append_scan_log(session, "Wyczyszczono listę kandydatów z poprzedniego cyklu.")
     except Exception as e:
@@ -40,16 +45,15 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
     update_scan_progress(session, 0, total_companies)
 
     candidate_tickers = []
+    candidates_to_insert = [] # Lista do zapisu partiami
     processed_count = 0
     
-    # Wyrażenie regularne do walidacji formatu tickera (1-5 wielkich liter)
     ticker_format_regex = re.compile(r'^[A-Z]{1,5}$')
 
     for ticker in all_tickers:
         if get_current_state() == 'PAUSED':
             while get_current_state() == 'PAUSED': time.sleep(1)
 
-        # --- FILTR FORMATU TICKERA ---
         if not ticker_format_regex.match(ticker):
             processed_count += 1
             continue
@@ -70,22 +74,18 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             
             change_percent = ((price - prev_close) / prev_close) * 100
 
-            price_ok = MIN_PRICE <= price <= MAX_PRICE
-            volume_ok = volume >= MIN_VOLUME
-            change_ok = change_percent >= MIN_DAY_CHANGE_PERCENT
-
-            if price_ok and volume_ok and change_ok:
+            if (MIN_PRICE <= price <= MAX_PRICE and 
+                volume >= MIN_VOLUME and 
+                change_percent >= MIN_DAY_CHANGE_PERCENT):
+                
                 candidate_tickers.append(ticker)
-                # --- ZAPIS DO NOWEJ TABELI ---
-                new_candidate = Phase1Candidate(
-                    ticker=ticker,
-                    price=price,
-                    change_percent=change_percent,
-                    volume=int(volume),
-                    score=int(change_percent) # Przykładowy scoring oparty na proc. zmianie
-                )
-                session.merge(new_candidate)
-                # --- KONIEC ZAPISU ---
+                candidates_to_insert.append({
+                    "ticker": ticker,
+                    "price": price,
+                    "change_percent": change_percent,
+                    "volume": int(volume),
+                    "score": int(change_percent) 
+                })
                 log_msg = f"Kwalifikacja: {ticker} (Cena: ${price:.2f}, Zmiana: {change_percent:.2f}%)"
                 append_scan_log(session, log_msg)
         
@@ -93,11 +93,30 @@ def run_scan(session: Session, get_current_state, api_client: AlphaVantageClient
             logger.error(f"Error processing ticker {ticker} in Phase 1: {e}")
         finally:
             processed_count += 1
-            if processed_count % 50 == 0: # Rzadsze aktualizacje dla wydajności
+            if processed_count % 50 == 0:
                 update_scan_progress(session, processed_count, total_companies)
-                session.commit() # Commituj partiami
     
-    session.commit() # Ostateczny commit
+    # --- ZAPIS DO BAZY DANYCH ZA POMOCĄ SUROWEGO SQL ---
+    if candidates_to_insert:
+        try:
+            # Używamy `ON CONFLICT DO UPDATE` (UPSERT)
+            stmt = text("""
+                INSERT INTO phase1_candidates (ticker, price, change_percent, volume, score, analysis_date)
+                VALUES (:ticker, :price, :change_percent, :volume, :score, NOW())
+                ON CONFLICT (ticker) DO UPDATE SET
+                    price = EXCLUDED.price,
+                    change_percent = EXCLUDED.change_percent,
+                    volume = EXCLUDED.volume,
+                    score = EXCLUDED.score,
+                    analysis_date = NOW();
+            """)
+            session.execute(stmt, candidates_to_insert)
+            session.commit()
+            logger.info(f"Successfully saved {len(candidates_to_insert)} candidates to the database.")
+        except Exception as e:
+            logger.error(f"Could not save phase 1 candidates to database: {e}")
+            session.rollback()
+
     update_scan_progress(session, total_companies, total_companies)
     final_log = f"Faza 1 zakończona. Znaleziono {len(candidate_tickers)} kandydatów."
     logger.info(final_log)
