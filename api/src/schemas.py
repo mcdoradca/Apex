@@ -1,20 +1,18 @@
 from pydantic import BaseModel, ConfigDict
-from datetime import datetime, date
+from datetime import datetime
 from typing import List, Optional
 
-# --- NOWY ELEMENT ---
-# Schemat dla pojedynczego kandydata z Fazy 1
+# Schemat dla nowej tabeli Kandydatów Fazy 1
 class Phase1Candidate(BaseModel):
     ticker: str
-    price: Optional[float] = None
-    change_percent: Optional[float] = None
-    volume: Optional[int] = None
-    score: Optional[int] = None
+    price: float
+    change_percent: float
+    volume: int
+    score: int
     analysis_date: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
-# ... reszta istniejącego kodu bez zmian ...
 class Progress(BaseModel):
     processed: int
     total: int
@@ -44,8 +42,9 @@ class TradingSignal(BaseModel):
 
 class ApexScore(BaseModel):
     ticker: str
-    analysis_date: date
+    analysis_date: datetime
     total_score: int
+    is_qualified: bool
 
     model_config = ConfigDict(from_attributes=True)
 
