@@ -24,7 +24,7 @@
 </head>
 <body class="text-gray-200">
 
-    <!-- EKRAN LOGOWANIA / POCZEKALNIA (PRZYWRÓCONY) -->
+    <!-- EKRAN LOGOWANIA / POCZEKALNIA -->
     <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
         <div class="bg-black bg-opacity-70 p-8 rounded-lg shadow-2xl backdrop-blur-sm w-full max-w-sm">
             <div class="text-center mb-6">
@@ -122,9 +122,12 @@
         const fetchOnDemandResult = (ticker) => apiRequest(`/api/v1/analysis/on-demand/result/${ticker}`);
 
         // --- FUNKCJE RENDERUJĄCE ---
-        const renderLoading = (text) => `...`;
-        const renderError = (title, message) => `...`;
-        // ... (reszta funkcji renderujących bez zmian)
+        const renderLoading = (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`;
+        const renderError = (title, message) => `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">${title}</h2><p>${message}</p></div>`;
+        const showErrorInMainContent = (title, message) => {
+            mainContentEl.innerHTML = renderError(title, message);
+            lucide.createIcons();
+        }
         const renderDashboard = () => {
             return `
             <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
@@ -139,8 +142,39 @@
                 <div class="mt-4"><h4 class="text-md font-semibold text-gray-400 mb-2">Log Skanowania</h4><div id="scan-log" class="h-96 bg-black/50 p-3 rounded-md overflow-y-auto font-mono text-xs text-gray-400 border border-gray-700"></div></div>
             </div>`;
         };
-        const renderCandidateDetails = (candidate) => { /* ... bez zmian ... */ };
-        const renderOnDemandResults = (data, containerSelector) => { /* ... bez zmian ... */ };
+        const renderCandidateDetails = (candidate) => {
+            const detailsHtml = `
+                <div class="space-y-6" data-ticker-details="${candidate.ticker}">
+                    <div><h2 class="text-3xl font-bold">Kandydat Fazy 1: <span class="text-sky-400">${candidate.ticker}</span></h2></div>
+                    <div id="on-demand-results-container">
+                        <!-- Wyniki analizy na żądanie zostaną wstawione tutaj -->
+                    </div>
+                </div>
+            `;
+            mainContentEl.innerHTML = detailsHtml;
+            startOnDemandAnalysis(candidate.ticker, '#on-demand-results-container');
+        };
+
+        const renderOnDemandResults = (data, containerSelector) => {
+            const container = document.querySelector(containerSelector);
+            if (!container) return;
+            
+            if (data.error) {
+                container.innerHTML = renderError(`Błąd Analizy dla ${data.ticker}`, data.message);
+                lucide.createIcons();
+                return;
+            }
+            const { ticker, fundamentals = {}, technicals = {}, ai_score, recommendation, reasons = [] } = data;
+            const getRecoClass = (rec = "") => { if (rec.includes("Silny")) return 'text-green-400'; if (rec.includes("Kupna")) return 'text-sky-400'; if (rec.includes("Unikaj")) return 'text-red-400'; return 'text-yellow-400'; };
+            
+            container.innerHTML = `
+                <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800 text-center"><p class="text-sm text-gray-400">Rekomendacja AI</p><p class="text-5xl font-bold ${getRecoClass(recommendation)}">${ai_score.toFixed(1)}</p><p class="text-lg font-semibold ${getRecoClass(recommendation)} mt-1">${recommendation}</p><div class="text-xs text-gray-500 mt-2 max-w-md mx-auto">${reasons.join(' · ')}</div></div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800"><h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="book-open" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza Fundamentalna</h3><div class="grid grid-cols-2 gap-4 text-sm">${Object.entries(fundamentals).map(([k, v]) => `<div class="bg-black/30 p-3 rounded-md"><p class="text-gray-400 text-xs">${k}</p><p class="font-semibold text-base">${v !== null ? v : 'N/A'}</p></div>`).join('')}</div></div>
+                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800"><h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="activity" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza Techniczna</h3><div class="grid grid-cols-2 gap-4 text-sm">${Object.entries(technicals).map(([k, v]) => `<div class="bg-black/30 p-3 rounded-md"><p class="text-gray-400 text-xs">${k}</p><p class="font-semibold text-base">${v !== null ? v : 'N/A'}</p></div>`).join('')}</div></div>
+                </div>`;
+            lucide.createIcons();
+        };
         
 
         // --- GŁÓWNA LOGIKA APLIKACJI ---
@@ -149,7 +183,6 @@
                 candidatesListEl.innerHTML = `<p class="text-xs text-gray-500 px-2">Brak kandydatów.</p>`;
                 return;
             }
-            // Sortowanie od najwyższego wyniku
             state.candidates.sort((a, b) => b.score - a.score);
             
             candidatesListEl.innerHTML = state.candidates.map(c => `
@@ -176,13 +209,80 @@
             }
         };
 
-        const updateWorkerStatusUI = () => { /* ... (bez zmian, logika aktualizacji UI dashboardu) ... */ };
+        const updateWorkerStatusUI = () => {
+            const data = state.workerStatus;
+            if(!document.getElementById('api-status')) return;
+            document.getElementById('api-status').innerHTML = `<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online`;
+            document.getElementById('worker-status-text').textContent = data.status || 'N/A';
+            startBtn.disabled = data.status !== 'IDLE';
+
+            const dashboardPhase = document.getElementById('worker-phase');
+            if (dashboardPhase) {
+                dashboardPhase.textContent = data.phase || 'N/A';
+                const processed = data.progress?.processed || 0;
+                const total = data.progress?.total || 0;
+                document.getElementById('progress-text').textContent = `${processed} / ${total}`;
+                document.getElementById('progress-bar').style.width = `${total > 0 ? (processed / total) * 100 : 0}%`;
+                const logEl = document.getElementById('scan-log');
+                if (data.log && logEl.innerHTML !== data.log.replace(/\n/g, '<br>')) {
+                    logEl.innerHTML = data.log.replace(/\n/g, '<br>');
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+            }
+        };
         
-        const pollWorkerStatus = async () => { /* ... (bez zmian, logika odpytywania o status) ... */ };
+        const pollWorkerStatus = async () => {
+            try {
+                const oldStatus = state.workerStatus.status;
+                state.workerStatus = await fetchWorkerStatus();
+                updateWorkerStatusUI();
+                if (oldStatus === 'RUNNING' && state.workerStatus.status === 'IDLE') {
+                    await refreshCandidates();
+                }
+            } catch (e) {
+                if(document.getElementById('api-status')) {
+                    document.getElementById('api-status').innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline`;
+                }
+            }
+        };
 
-        const startOnDemandAnalysis = async (ticker, containerSelector) => { /* ... (bez zmian, logika analizy na żądanie) ... */ };
+        // --- NAPRAWIONA FUNKCJA ANALIZY NA ŻĄDANIE ---
+        const startOnDemandAnalysis = async (ticker, containerSelector) => {
+            const container = document.querySelector(containerSelector);
+            if (!container) return;
+            
+            if (state.onDemandPollingId) {
+                clearInterval(state.onDemandPollingId);
+            }
 
-        // --- LOGIKA STARTOWA I LOGOWANIA ---
+            container.innerHTML = renderLoading(`Przygotowuję analizę dla ${ticker}...`);
+            lucide.createIcons();
+
+            try {
+                await requestOnDemandAnalysis(ticker); // Wyślij zlecenie
+                
+                // Rozpocznij odpytywanie o wynik
+                state.onDemandPollingId = setInterval(async () => {
+                    try {
+                        const data = await fetchOnDemandResult(ticker);
+                        if (data) { // Wyniki są gotowe
+                            clearInterval(state.onDemandPollingId);
+                            state.onDemandPollingId = null;
+                            renderOnDemandResults(data, containerSelector);
+                        }
+                    } catch (pollError) {
+                        clearInterval(state.onDemandPollingId);
+                        state.onDemandPollingId = null;
+                        showErrorInMainContent(`Błąd pobierania wyników dla ${ticker}`, pollError.message);
+                    }
+                }, 3000);
+
+            } catch (requestError) {
+                showErrorInMainContent(`Błąd zlecania analizy dla ${ticker}`, requestError.message);
+            }
+        };
+
+        // --- LOGIKA STARTOWA I OBSŁUGA ZDARZEŃ ---
         function startDashboard() {
             loginScreen.classList.add('hidden');
             dashboardScreen.classList.remove('hidden');
@@ -190,20 +290,29 @@
             
             mainContentEl.innerHTML = renderDashboard();
             lucide.createIcons();
-            updateWorkerStatusUI();
             
+            pollWorkerStatus();
             refreshCandidates();
             state.workerStatusPollingId = setInterval(pollWorkerStatus, 5000);
 
-            // Rejestracja event listenerów dla działającego dashboardu
-            startBtn.addEventListener('click', async () => { /* ... */ });
+            startBtn.addEventListener('click', async () => {
+                mainContentEl.innerHTML = renderDashboard();
+                lucide.createIcons();
+                updateWorkerStatusUI();
+                await sendWorkerControl('start');
+                pollWorkerStatus();
+            });
+
             refreshCandidatesBtn.addEventListener('click', refreshCandidates);
+            
             candidatesListEl.addEventListener('click', async (e) => {
                  const deleteBtn = e.target.closest('.delete-btn');
                  if (deleteBtn) {
                      e.stopPropagation();
                      const ticker = deleteBtn.dataset.ticker;
-                     if (confirm(`Czy na pewno chcesz usunąć ${ticker} z listy kandydatów?`)) {
+                     // Użycie confirm jest blokujące, co może być problematyczne.
+                     // W przyszłości można to zastąpić niestandardowym modalem.
+                     if (window.confirm(`Czy na pewno chcesz usunąć ${ticker} z listy kandydatów?`)) {
                          await deletePhase1Candidate(ticker);
                          await refreshCandidates();
                          if (mainContentEl.querySelector(`[data-ticker-details="${ticker}"]`)) {
@@ -212,13 +321,34 @@
                              updateWorkerStatusUI();
                          }
                      }
-                 } else if (e.target.closest('.candidate-item')) {
-                     const ticker = e.target.closest('.candidate-item').dataset.ticker;
-                     // Logika wyświetlania szczegółów...
+                 } else {
+                    const item = e.target.closest('.candidate-item');
+                    if (item) {
+                        const ticker = item.dataset.ticker;
+                        const candidate = state.candidates.find(c => c.ticker === ticker);
+                        if (candidate) {
+                            renderCandidateDetails(candidate);
+                        }
+                    }
                  }
             });
-            tickerInput.addEventListener('keypress', (e) => { /* ... */ });
-            document.querySelector('a[href="#dashboard-view"]').addEventListener('click', (e) => { /* ... */ });
+
+            tickerInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    const ticker = e.target.value.trim().toUpperCase();
+                    if (ticker) {
+                        startOnDemandAnalysis(ticker, '#main-content');
+                        e.target.value = '';
+                    }
+                }
+            });
+
+            document.querySelector('a[href="#dashboard-view"]').addEventListener('click', (e) => {
+                e.preventDefault();
+                mainContentEl.innerHTML = renderDashboard();
+                lucide.createIcons();
+                updateWorkerStatusUI();
+            });
         }
         
         function checkBackendReady() {
