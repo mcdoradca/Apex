@@ -176,7 +176,6 @@
             lucide.createIcons();
         };
         
-
         // --- GŁÓWNA LOGIKA APLIKACJI ---
         const updateCandidatesList = () => {
             if (!state.candidates || state.candidates.length === 0) {
@@ -204,6 +203,7 @@
                 updateCandidatesList();
             } catch (e) {
                 console.error("Failed to refresh candidates", e);
+                 candidatesListEl.innerHTML = `<p class="text-xs text-red-400 px-2">Błąd ładowania listy.</p>`;
             } finally {
                 refreshCandidatesBtn.disabled = false;
             }
@@ -233,7 +233,7 @@
         
         const pollWorkerStatus = async () => {
             try {
-                const oldStatus = state.workerStatus.status;
+                const oldStatus = state.workerStatus ? state.workerStatus.status : null;
                 state.workerStatus = await fetchWorkerStatus();
                 updateWorkerStatusUI();
                 if (oldStatus === 'RUNNING' && state.workerStatus.status === 'IDLE') {
@@ -246,7 +246,6 @@
             }
         };
 
-        // --- NAPRAWIONA FUNKCJA ANALIZY NA ŻĄDANIE ---
         const startOnDemandAnalysis = async (ticker, containerSelector) => {
             const container = document.querySelector(containerSelector);
             if (!container) return;
@@ -259,13 +258,12 @@
             lucide.createIcons();
 
             try {
-                await requestOnDemandAnalysis(ticker); // Wyślij zlecenie
+                await requestOnDemandAnalysis(ticker);
                 
-                // Rozpocznij odpytywanie o wynik
                 state.onDemandPollingId = setInterval(async () => {
                     try {
                         const data = await fetchOnDemandResult(ticker);
-                        if (data) { // Wyniki są gotowe
+                        if (data) {
                             clearInterval(state.onDemandPollingId);
                             state.onDemandPollingId = null;
                             renderOnDemandResults(data, containerSelector);
@@ -310,8 +308,6 @@
                  if (deleteBtn) {
                      e.stopPropagation();
                      const ticker = deleteBtn.dataset.ticker;
-                     // Użycie confirm jest blokujące, co może być problematyczne.
-                     // W przyszłości można to zastąpić niestandardowym modalem.
                      if (window.confirm(`Czy na pewno chcesz usunąć ${ticker} z listy kandydatów?`)) {
                          await deletePhase1Candidate(ticker);
                          await refreshCandidates();
