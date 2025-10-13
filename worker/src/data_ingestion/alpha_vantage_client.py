@@ -31,8 +31,6 @@ class AlphaVantageClient:
     def _make_request(self, params: dict):
         self._rate_limiter()
         params['apikey'] = self.api_key
-        # --- AKTUALIZACJA ---
-        # Zmieniono 'delayed' na 'realtime' zgodnie z nowym planem API.
         params['entitlement'] = 'realtime'
         
         for attempt in range(self.retries):
@@ -45,7 +43,6 @@ class AlphaVantageClient:
                     return None
                 if "Note" in data:
                     logger.warning(f"API Note for {params.get('symbol')}: {data['Note']}.")
-                    return None
                 return data
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
                 logger.error(f"Request failed (attempt {attempt + 1}/{self.retries}): {e}")
@@ -54,15 +51,12 @@ class AlphaVantageClient:
         return None
 
     def get_bulk_quotes(self, symbols: list[str]):
-        """Pobiera notowania blokowe dla listy symboli (CSV)."""
         self._rate_limiter()
         params = {
             "function": "REALTIME_BULK_QUOTES",
             "symbol": ",".join(symbols),
             "datatype": "csv",
             "apikey": self.api_key,
-            # --- AKTUALIZACJA ---
-            # Zmieniono 'delayed' na 'realtime' zgodnie z nowym planem API.
             "entitlement": "realtime"
         }
         for attempt in range(self.retries):
@@ -79,8 +73,13 @@ class AlphaVantageClient:
                 if attempt < self.retries - 1:
                     time.sleep(self.backoff_factor * (2 ** attempt))
         return None
+    
+    # --- PRZYWRÓCONE FUNKCJE ---
+    def get_company_overview(self, symbol: str):
+        params = {"function": "OVERVIEW", "symbol": symbol}
+        return self._make_request(params)
 
-    def get_daily_adjusted(self, symbol: str, outputsize: str = 'compact'):
+    def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
 
@@ -91,4 +90,17 @@ class AlphaVantageClient:
     def get_rsi(self, symbol: str, time_period: int = 14, series_type: str = 'close'):
         params = {"function": "RSI", "symbol": symbol, "interval": "daily", "time_period": str(time_period), "series_type": series_type}
         return self._make_request(params)
+        
+    def get_stoch(self, symbol: str):
+        params = {"function": "STOCH", "symbol": symbol, "interval": "daily"}
+        return self._make_request(params)
+
+    def get_adx(self, symbol: str, time_period: int = 14):
+        params = {"function": "ADX", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_macd(self, symbol: str, series_type: str = 'close'):
+        params = {"function": "MACD", "symbol": symbol, "interval": "daily", "series_type": series_type}
+        return self._make_request(params)
+    # --- KONIEC PRZYWRÓCONYCH FUNKCJI ---
 
