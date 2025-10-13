@@ -31,8 +31,9 @@ class AlphaVantageClient:
     def _make_request(self, params: dict):
         self._rate_limiter()
         params['apikey'] = self.api_key
-        # Dodajemy 'entitlement=delayed' do wszystkich standardowych zapytań
-        params['entitlement'] = 'delayed'
+        # --- AKTUALIZACJA ---
+        # Zmieniono 'delayed' na 'realtime' zgodnie z nowym planem API.
+        params['entitlement'] = 'realtime'
         
         for attempt in range(self.retries):
             try:
@@ -60,7 +61,9 @@ class AlphaVantageClient:
             "symbol": ",".join(symbols),
             "datatype": "csv",
             "apikey": self.api_key,
-            "entitlement": "delayed"
+            # --- AKTUALIZACJA ---
+            # Zmieniono 'delayed' na 'realtime' zgodnie z nowym planem API.
+            "entitlement": "realtime"
         }
         for attempt in range(self.retries):
             try:
