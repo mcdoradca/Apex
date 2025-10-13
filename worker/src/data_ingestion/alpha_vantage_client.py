@@ -53,22 +53,9 @@ class AlphaVantageClient:
         return None
 
     def _make_request(self, params: dict):
-        """
-        Wykonywanie zapytań z logiką ponowień i bardziej odporną obsługą błędów.
-        --- OSTATECZNA POPRAWKA ---
-        Automatycznie dodaje `entitlement=delayed` do wszystkich zapytań, które tego wymagają,
-        zgodnie z wytycznymi supportu Alpha Vantage dla planu premium.
-        """
-        # Lista funkcji, które dotyczą akcji z USA i wymagają tagu 'entitlement'
-        us_equity_functions = [
-            "OVERVIEW", "TIME_SERIES_DAILY_ADJUSTED", "NEWS_SENTIMENT", "BBANDS",
-            "TIME_SERIES_INTRADAY", "RSI", "SMA", "ADX", "MACD", "STOCH", "GLOBAL_QUOTE"
-        ]
-
-        if params.get("function") in us_equity_functions:
-            params['entitlement'] = 'delayed'
-        # --- KONIEC POPRAWKI ---
-
+        """Wykonywanie zapytań z logiką ponowień i bardziej odporną obsługą błędów."""
+        # Zawsze dodajemy tag 'entitlement=delayed' do zapytań
+        params['entitlement'] = 'delayed'
         response = self._make_raw_request(params)
         if not response:
             return None
@@ -81,21 +68,37 @@ class AlphaVantageClient:
             
             if "Note" in data:
                 logger.warning(f"API Note for {params.get('symbol')}: {data['Note']}.")
-                # Nie zwracamy None, bo dane mogą być mimo wszystko obecne
+                # Nie zwracamy None, pozwalamy na przetwarzanie, jeśli są inne dane
             
             if "Error Message" in data:
                 logger.error(f"API Error for {params.get('symbol')}: {data['Error Message']}")
-                return None
-            
-            # Dodatkowe sprawdzenie pod kątem wiadomości o wymaganym planie premium
-            if "To access the actual data, please subscribe" in str(data):
-                logger.error(f"API returned 'sample data' for {params.get('symbol')}. Check entitlement.")
                 return None
 
             return data
         except json.JSONDecodeError:
             logger.error(f"Failed to decode JSON from response for {params.get('symbol') or params.get('symbols')}")
             return None
+
+    def get_bulk_quotes(self, symbols: list[str]):
+        """Pobiera notowania dla do 100 tickerów w jednym zapytaniu."""
+        if not symbols:
+            return None
+        params = {
+            "function": "REALTIME_BULK_QUOTES",
+            "symbols": ",".join(symbols),
+            "datatype": "csv"
+        }
+        # To zapytanie zwraca CSV, więc używamy _make_raw_request
+        params['entitlement'] = 'delayed'
+        response = self._make_raw_request(params)
+        if response:
+            # Dodatkowa walidacja odpowiedzi CSV pod kątem błędu
+            text_response = response.text
+            if "Error Message" in text_response or "Invalid API call" in text_response:
+                logger.error(f"Bulk quote API returned an error: {text_response[:200]}")
+                return None
+            return text_response
+        return None
 
     def get_company_overview(self, symbol: str):
         params = {"function": "OVERVIEW", "symbol": symbol}
@@ -157,3 +160,12 @@ class AlphaVantageClient:
             "function": "STOCH", "symbol": symbol, "interval": "daily"
         }
         return self._make_request(params)
+
+    def get_atr(self, symbol: str, time_period: int = 14):
+        """Pobiera wskaźnik Average True Range (ATR)."""
+        params = {
+            "function": "ATR", "symbol": symbol, "interval": "daily",
+            "time_period": str(time_period)
+        }
+        return self._make_request(params)
+
