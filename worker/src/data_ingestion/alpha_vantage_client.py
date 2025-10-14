@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    def __init__(self, api_key: str, requests_per_minute: int = 75, retries: int = 3, backoff_factor: float = 0.5):
+    def __init__(self, api_key: str, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             raise ValueError("API key cannot be empty.")
         self.api_key = api_key
@@ -74,7 +74,6 @@ class AlphaVantageClient:
                     time.sleep(self.backoff_factor * (2 ** attempt))
         return None
     
-    # --- PRZYWRÓCONE FUNKCJE ---
     def get_company_overview(self, symbol: str):
         params = {"function": "OVERVIEW", "symbol": symbol}
         return self._make_request(params)
@@ -102,5 +101,4 @@ class AlphaVantageClient:
     def get_macd(self, symbol: str, series_type: str = 'close'):
         params = {"function": "MACD", "symbol": symbol, "interval": "daily", "series_type": series_type}
         return self._make_request(params)
-    # --- KONIEC PRZYWRÓCONYCH FUNKCJI ---
 
