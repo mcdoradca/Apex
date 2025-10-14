@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>APEX Predator - Analizator Nasdaq</title>
+    <title>APEX Predator v2.0 - Analizator Nasdaq</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <link rel="shortcut icon" href="favicon.ico">
     <link rel="icon" type="image/png" href="/favicon-96x96.png">
     <meta name="referrer" content="no-referrer">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display.swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: #0D1117; }
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #161B22; }
@@ -20,355 +20,404 @@
         .candidate-item:hover { background-color: #1f2937; }
         .login-background { background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy'); background-size: cover; background-position: center; }
         .glowing-btn { box-shadow: 0 0 5px #0ea5e9, 0 0 15px #0ea5e9; }
+        .phase-header { cursor: pointer; }
     </style>
 </head>
 <body class="text-gray-200">
 
-    <!-- EKRAN LOGOWANIA / POCZEKALNIA -->
     <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
         <div class="bg-black bg-opacity-70 p-8 rounded-lg shadow-2xl backdrop-blur-sm w-full max-w-sm">
             <div class="text-center mb-6">
                 <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-24 mx-auto mb-3">
-                <h1 class="text-2xl font-bold text-white">APEX Predator</h1>
+                <h1 class="text-2xl font-bold text-white">APEX Predator <span class="text-sky-400 text-lg">v2.0</span></h1>
                 <p class="text-gray-400 text-sm">AI-Powered Nasdaq Intelligence</p>
             </div>
             <form id="login-form">
-                <button type="submit" id="login-button" class="w-full bg-sky-600 text-white font-bold py-2 px-4 rounded-md transition duration-300 text-sm disabled:bg-gray-600 disabled:cursor-not-allowed glowing-btn" disabled>
-                    Łączenie...
-                </button>
+                <button type="submit" id="login-button" class="w-full bg-sky-600 text-white font-bold py-2 px-4 rounded-md transition duration-300 text-sm disabled:bg-gray-600 disabled:cursor-not-allowed glowing-btn" disabled>Łączenie...</button>
                 <p id="login-status-text" class="text-center text-gray-400 text-xs mt-4 h-4"></p>
             </form>
         </div>
     </div>
 
-    <!-- GŁÓWNY DASHBOARD (UKRYTY) -->
     <div id="dashboard" class="h-screen flex hidden">
-        <aside class="w-72 bg-[#161B22] p-4 flex flex-col shrink-0">
-             <div class="flex items-center mb-8">
+        <aside class="w-80 bg-[#161B22] p-4 flex flex-col shrink-0 border-r border-gray-800">
+            <div class="flex items-center mb-6">
                 <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
                 <h1 class="text-xl font-bold">APEX Predator</h1>
             </div>
-            <nav id="sidebar-nav" class="flex-grow space-y-1">
-                <a href="#dashboard-view" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
+            
+            <div class="flex-grow space-y-2 overflow-y-auto pr-2">
+                <a href="#" id="dashboard-view-btn" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
                 
                 <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
                     <div class="pl-2 mt-2 border-l border-gray-700">
-                        <p class="text-sm font-semibold text-gray-300 mb-2">Pełen Cykl</p>
-                        <div class="flex flex-col space-y-2">
-                            <button id="start-btn" class="w-full text-left flex items-center bg-green-600/20 hover:bg-green-600/40 text-green-300 py-1 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play" class="mr-2 h-4 w-4"></i>Start</button>
-                        </div>
+                        <p class="text-sm font-semibold text-gray-300 mb-2">Pełen Cykl Analizy</p>
+                        <button id="start-btn" class="w-full text-left flex items-center bg-green-600/20 hover:bg-green-600/40 text-green-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play" class="mr-2 h-4 w-4"></i>Uruchom Pełny Skan</button>
                     </div>
                 </div>
 
-                <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Analizy</h2>
-                    <div id="candidates-container" class="pl-2 mt-2 border-l border-gray-700">
-                        <div class="flex justify-between items-center mb-2">
-                            <p class="text-sm font-semibold text-gray-300">Kandydaci Fazy 1</p>
-                            <button id="refresh-candidates-btn" title="Odśwież listę" class="p-1 text-gray-400 hover:text-sky-400 disabled:opacity-50"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button>
+                <div id="results-container" class="pt-4 space-y-4">
+                    <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Skanowania</h2>
+                    
+                    <!-- Faza 1 -->
+                    <div class="phase-container" data-phase="1">
+                        <div class="phase-header flex justify-between items-center p-2 rounded-md bg-gray-800/50 hover:bg-gray-800/80">
+                            <h3 class="text-sm font-semibold text-sky-300">Faza 1: Kandydaci <span id="phase1-count" class="text-xs text-gray-400"></span></h3>
+                            <i data-lucide="chevron-down" class="w-5 h-5 transition-transform"></i>
                         </div>
-                        <div id="candidates-list" class="max-h-48 overflow-y-auto pr-2 space-y-1">
-                            <p class="text-xs text-gray-500 px-2">Brak kandydatów.</p>
+                        <div id="phase1-list" class="phase-list mt-2 pl-2 border-l border-gray-700 space-y-1 max-h-48 overflow-y-auto"></div>
+                    </div>
+
+                    <!-- Faza 2 -->
+                    <div class="phase-container" data-phase="2">
+                        <div class="phase-header flex justify-between items-center p-2 rounded-md bg-gray-800/50 hover:bg-gray-800/80">
+                            <h3 class="text-sm font-semibold text-amber-300">Faza 2: APEX Elita <span id="phase2-count" class="text-xs text-gray-400"></span></h3>
+                            <i data-lucide="chevron-down" class="w-5 h-5 transition-transform"></i>
                         </div>
+                        <div id="phase2-list" class="phase-list mt-2 pl-2 border-l border-gray-700 space-y-1 max-h-48 overflow-y-auto"></div>
+                    </div>
+
+                    <!-- Faza 3 -->
+                    <div class="phase-container" data-phase="3">
+                        <div class="phase-header flex justify-between items-center p-2 rounded-md bg-gray-800/50 hover:bg-gray-800/80">
+                            <h3 class="text-sm font-semibold text-green-300">Faza 3: Sygnały Taktyczne <span id="phase3-count" class="text-xs text-gray-400"></span></h3>
+                            <i data-lucide="chevron-down" class="w-5 h-5 transition-transform"></i>
+                        </div>
+                        <div id="phase3-list" class="phase-list mt-2 pl-2 border-l border-gray-700 space-y-1 max-h-48 overflow-y-auto"></div>
                     </div>
                 </div>
-            </nav>
-            <div class="mt-auto"><h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3><div class="space-y-2 text-sm"><div class="flex justify-between items-center"><span class="text-gray-400">API Gateway:</span><span id="api-status" class="flex items-center text-gray-500"><span class="h-2 w-2 rounded-full bg-gray-500 mr-2"></span>Offline</span></div><div class="flex justify-between items-center"><span class="text-gray-400">Silnik:</span><span id="worker-status-text" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-xs">IDLE</span></div></div></div>
+            </div>
+
+            <div class="mt-auto pt-4 border-t border-gray-800"><h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3><div class="space-y-2 text-sm"><div class="flex justify-between items-center"><span class="text-gray-400">API Gateway:</span><span id="api-status" class="flex items-center text-gray-500"><span class="h-2 w-2 rounded-full bg-gray-500 mr-2"></span>Offline</span></div><div class="flex justify-between items-center"><span class="text-gray-400">Silnik:</span><span id="worker-status-text" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-xs">IDLE</span></div></div></div>
         </aside>
 
         <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
-            <header class="p-4 border-b border-gray-800 shrink-0"><div class="max-w-xl mx-auto"><div class="relative"><i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i><input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"></div></div></header>
-            
-            <div id="main-content" class="p-6 flex-grow">
-                <!-- Dynamiczna zawartość będzie renderowana tutaj -->
-            </div>
+            <header class="p-4 border-b border-gray-800 shrink-0"><div class="max-w-xl mx-auto"><div class="relative"><i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i><input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter po analizę" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"></div></div></header>
+            <div id="main-content" class="p-6 flex-grow"></div>
         </main>
     </div>
 
     <script>
-        // --- GLOBALNY STAN APLIKACJI ---
         const state = {
-            candidates: [],
+            lists: { 1: [], 2: [], 3: [] },
+            polling: { workerStatus: null, prices: null, onDemand: null },
             workerStatus: {},
-            onDemandPollingId: null,
-            workerStatusPollingId: null
+            activeView: 'dashboard'
         };
 
-        // --- ELEMENTY UI ---
-        const loginScreen = document.getElementById('login-screen');
-        const dashboardScreen = document.getElementById('dashboard');
-        const loginForm = document.getElementById('login-form');
-        const loginButton = document.getElementById('login-button');
-        const loginStatusText = document.getElementById('login-status-text');
-        
-        const mainContentEl = document.getElementById('main-content');
-        const candidatesListEl = document.getElementById('candidates-list');
-        const startBtn = document.getElementById('start-btn');
-        const refreshCandidatesBtn = document.getElementById('refresh-candidates-btn');
-        const tickerInput = document.getElementById('ticker-input');
-
-        // --- LOGIKA API ---
         const API_BASE_URL = "https://apex-predator-api.onrender.com";
-        const apiRequest = async (endpoint, options = {}) => {
-            const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
-            if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
-            if (!response.ok) throw new Error(`Błąd serwera: ${response.status}`);
-            return await response.json();
-        };
-        const fetchWorkerStatus = () => apiRequest('/api/v1/worker/status');
-        const fetchPhase1Candidates = () => apiRequest('/api/v1/candidates/phase1');
-        const deletePhase1Candidate = (ticker) => apiRequest(`/api/v1/candidates/phase1/${ticker}`, { method: 'DELETE' });
-        const sendWorkerControl = (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' });
-        const requestOnDemandAnalysis = (ticker) => apiRequest(`/api/v1/analysis/on-demand`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) });
-        const fetchOnDemandResult = (ticker) => apiRequest(`/api/v1/analysis/on-demand/result/${ticker}`);
-
-        // --- FUNKCJE RENDERUJĄCE ---
-        const renderLoading = (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`;
-        const renderError = (title, message) => `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">${title}</h2><p>${message}</p></div>`;
-        const showErrorInMainContent = (title, message) => {
-            mainContentEl.innerHTML = renderError(title, message);
-            lucide.createIcons();
-        }
-        const renderDashboard = () => {
-            return `
-            <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
-                <h3 class="text-xl font-semibold mb-4">Status Skanowania Rynku</h3>
-                <div class="space-y-3">
-                    <div class="flex items-center justify-between"><span class="text-gray-400">Aktualna faza:</span><span id="worker-phase" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-sm"></span></div>
-                    <div>
-                        <div class="flex justify-between mb-1"><span class="text-base font-medium text-gray-400">Postęp</span><span id="progress-text" class="text-sm font-medium text-gray-400"></span></div>
-                        <div class="w-full bg-gray-700 rounded-full h-2.5"><div id="progress-bar" class="bg-sky-500 h-2.5 rounded-full" style="width: 0%"></div></div>
-                    </div>
-                </div>
-                <div class="mt-4"><h4 class="text-md font-semibold text-gray-400 mb-2">Log Skanowania</h4><div id="scan-log" class="h-96 bg-black/50 p-3 rounded-md overflow-y-auto font-mono text-xs text-gray-400 border border-gray-700"></div></div>
-            </div>`;
-        };
-        const renderCandidateDetails = (candidate) => {
-            const detailsHtml = `
-                <div class="space-y-6" data-ticker-details="${candidate.ticker}">
-                    <div><h2 class="text-3xl font-bold">Kandydat Fazy 1: <span class="text-sky-400">${candidate.ticker}</span></h2></div>
-                    <div id="on-demand-results-container">
-                        <!-- Wyniki analizy na żądanie zostaną wstawione tutaj -->
-                    </div>
-                </div>
-            `;
-            mainContentEl.innerHTML = detailsHtml;
-            startOnDemandAnalysis(candidate.ticker, '#on-demand-results-container');
-        };
-
-        const renderOnDemandResults = (data, containerSelector) => {
-            const container = document.querySelector(containerSelector);
-            if (!container) return;
+        const api = {
+            request: async (endpoint, options = {}) => {
+                const res = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                if (res.status === 204) return null;
+                if (!res.ok) throw new Error(`Server error: ${res.status}`);
+                return res.json();
+            },
+            getWorkerStatus: () => api.request('/api/v1/worker/status'),
+            sendWorkerCommand: (cmd) => api.request(`/api/v1/worker/control/${cmd}`, { method: 'POST' }),
             
-            if (data.error) {
-                container.innerHTML = renderError(`Błąd Analizy dla ${data.ticker}`, data.message);
-                lucide.createIcons();
-                return;
+            getPhase1: () => api.request('/api/v1/candidates/phase1'),
+            getPhase2: () => api.request('/api/v1/results/phase2'),
+            getPhase3: () => api.request('/api/v1/signals/phase3'),
+
+            deletePhase1: (t) => api.request(`/api/v1/candidates/phase1/${t}`, { method: 'DELETE' }),
+            deletePhase2: (t) => api.request(`/api/v1/results/phase2/${t}`, { method: 'DELETE' }),
+            deletePhase3: (id) => api.request(`/api/v1/signals/phase3/${id}`, { method: 'DELETE' }),
+
+            getLivePrices: (tickers) => api.request(`/api/v1/live-prices?tickers=${tickers.join(',')}`),
+            getDetails: (t) => api.request(`/api/v1/details/${t}`),
+
+            requestOnDemand: (t, type) => {
+                const endpoint = type === 'predator' ? '/api/v1/analysis/phase3-on-demand' : '/api/v1/analysis/on-demand';
+                return api.request(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker: t }) });
+            },
+            getOnDemandResult: (t, type) => {
+                const endpoint = type === 'predator' ? `/api/v1/analysis/phase3-on-demand/result/${t}` : `/api/v1/analysis/on-demand/result/${t}`;
+                return api.request(endpoint);
             }
-            const { ticker, fundamentals = {}, technicals = {}, ai_score, recommendation, reasons = [] } = data;
-            const getRecoClass = (rec = "") => { if (rec.includes("Silny")) return 'text-green-400'; if (rec.includes("Kupna")) return 'text-sky-400'; if (rec.includes("Unikaj")) return 'text-red-400'; return 'text-yellow-400'; };
+        };
+
+        const UI = {
+            renderLoading: (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`,
+            renderError: (title, msg) => `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">${title}</h2><p>${msg}</p></div>`,
             
-            container.innerHTML = `
-                <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800 text-center"><p class="text-sm text-gray-400">Rekomendacja AI</p><p class="text-5xl font-bold ${getRecoClass(recommendation)}">${ai_score.toFixed(1)}</p><p class="text-lg font-semibold ${getRecoClass(recommendation)} mt-1">${recommendation}</p><div class="text-xs text-gray-500 mt-2 max-w-md mx-auto">${reasons.join(' · ')}</div></div>
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800"><h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="book-open" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza Fundamentalna</h3><div class="grid grid-cols-2 gap-4 text-sm">${Object.entries(fundamentals).map(([k, v]) => `<div class="bg-black/30 p-3 rounded-md"><p class="text-gray-400 text-xs">${k}</p><p class="font-semibold text-base">${v !== null ? v : 'N/A'}</p></div>`).join('')}</div></div>
-                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800"><h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="activity" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza Techniczna</h3><div class="grid grid-cols-2 gap-4 text-sm">${Object.entries(technicals).map(([k, v]) => `<div class="bg-black/30 p-3 rounded-md"><p class="text-gray-400 text-xs">${k}</p><p class="font-semibold text-base">${v !== null ? v : 'N/A'}</p></div>`).join('')}</div></div>
+            renderDashboard: () => {
+                document.getElementById('main-content').innerHTML = `
+                <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
+                    <h3 class="text-xl font-semibold mb-4">Status Skanowania Rynku</h3>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between"><span class="text-gray-400">Aktualna faza:</span><span id="worker-phase" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-sm"></span></div>
+                        <div>
+                            <div class="flex justify-between mb-1"><span class="text-base font-medium text-gray-400">Postęp</span><span id="progress-text" class="text-sm font-medium text-gray-400"></span></div>
+                            <div class="w-full bg-gray-700 rounded-full h-2.5"><div id="progress-bar" class="bg-sky-500 h-2.5 rounded-full" style="width: 0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="mt-4"><h4 class="text-md font-semibold text-gray-400 mb-2">Log Skanowania</h4><div id="scan-log" class="h-96 bg-black/50 p-3 rounded-md overflow-y-auto font-mono text-xs text-gray-400 border border-gray-700"></div></div>
                 </div>`;
-            lucide.createIcons();
-        };
-        
-        // --- GŁÓWNA LOGIKA APLIKACJI ---
-        const updateCandidatesList = () => {
-            if (!state.candidates || state.candidates.length === 0) {
-                candidatesListEl.innerHTML = `<p class="text-xs text-gray-500 px-2">Brak kandydatów.</p>`;
-                return;
-            }
-            state.candidates.sort((a, b) => b.score - a.score);
-            
-            candidatesListEl.innerHTML = state.candidates.map(c => `
-                <div class="candidate-item flex justify-between items-center p-2 rounded-md cursor-pointer" data-ticker="${c.ticker}">
-                    <div class="flex items-center">
-                        <span class="font-bold text-sm">${c.ticker}</span>
-                        <span class="text-xs text-gray-400 ml-2">(Score: ${c.score})</span>
+                App.updateWorkerStatusUI();
+                lucide.createIcons();
+            },
+
+            renderCandidateList: (phase, data) => {
+                const listEl = document.getElementById(`phase${phase}-list`);
+                document.getElementById(`phase${phase}-count`).textContent = `(${data.length})`;
+                if (data.length === 0) {
+                    listEl.innerHTML = `<p class="text-xs text-gray-500 px-2">Brak danych.</p>`;
+                    return;
+                }
+                const isPhase3 = phase == 3;
+                listEl.innerHTML = data.map(c => `
+                    <div class="candidate-item flex justify-between items-center p-1.5 rounded-md cursor-pointer group" data-ticker="${c.ticker}" data-id="${isPhase3 ? c.id : c.ticker}">
+                        <div class="flex items-center overflow-hidden">
+                            <span class="font-bold text-sm truncate">${c.ticker}</span>
+                            <span class="text-xs text-gray-400 ml-2 font-mono">
+                                ${c.total_score !== undefined ? `S:${c.total_score}`: ''}
+                            </span>
+                            <span class="price-span ml-2 text-xs font-mono text-sky-400" data-price-ticker="${c.ticker}"></span>
+                        </div>
+                        <div class="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button class="predator-btn p-1 text-gray-400 hover:text-amber-400" title="Analiza Fazy 3 (Predator)"><i data-lucide="crosshair" class="w-4 h-4 pointer-events-none"></i></button>
+                            <button class="delete-btn p-1 text-gray-500 hover:text-red-500" title="Usuń"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
+                        </div>
                     </div>
-                    <button class="delete-btn p-1 text-gray-500 hover:text-red-500" data-ticker="${c.ticker}" title="Usuń"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
-                </div>
-            `).join('');
-            lucide.createIcons();
-        };
+                `).join('');
+                lucide.createIcons();
+            },
 
-        const refreshCandidates = async () => {
-            refreshCandidatesBtn.disabled = true;
-            try {
-                state.candidates = await fetchPhase1Candidates() || [];
-                updateCandidatesList();
-            } catch (e) {
-                console.error("Failed to refresh candidates", e);
-                 candidatesListEl.innerHTML = `<p class="text-xs text-red-400 px-2">Błąd ładowania listy.</p>`;
-            } finally {
-                refreshCandidatesBtn.disabled = false;
-            }
-        };
+            renderDetails: (data) => {
+                const { ticker, phase1_data, phase2_data, phase3_signal, on_demand_analysis, phase3_on_demand_analysis } = data;
+                let html = `<div class="space-y-6"><div><h2 class="text-3xl font-bold">Szczegóły dla: <span class="text-sky-400">${ticker}</span></h2></div>`;
 
-        const updateWorkerStatusUI = () => {
-            const data = state.workerStatus;
-            if(!document.getElementById('api-status')) return;
-            document.getElementById('api-status').innerHTML = `<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online`;
-            document.getElementById('worker-status-text').textContent = data.status || 'N/A';
-            startBtn.disabled = data.status !== 'IDLE';
+                const renderCard = (title, content, color = 'sky') => content ? `<div class="bg-[#161B22] p-6 rounded-lg border border-gray-800"><h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="bar-chart-2" class="mr-3 w-5 h-5 text-${color}-400"></i>${title}</h3><div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">${content}</div></div>` : '';
+                const renderKV = (k, v) => v !== null ? `<div class="bg-black/30 p-3 rounded-md"><p class="text-gray-400 text-xs">${k}</p><p class="font-semibold text-base">${typeof v === 'number' ? v.toFixed(2) : v}</p></div>` : '';
 
-            const dashboardPhase = document.getElementById('worker-phase');
-            if (dashboardPhase) {
-                dashboardPhase.textContent = data.phase || 'N/A';
-                const processed = data.progress?.processed || 0;
-                const total = data.progress?.total || 0;
-                document.getElementById('progress-text').textContent = `${processed} / ${total}`;
-                document.getElementById('progress-bar').style.width = `${total > 0 ? (processed / total) * 100 : 0}%`;
-                const logEl = document.getElementById('scan-log');
-                if (data.log && logEl.innerHTML !== data.log.replace(/\n/g, '<br>')) {
-                    logEl.innerHTML = data.log.replace(/\n/g, '<br>');
-                    logEl.scrollTop = logEl.scrollHeight;
-                }
-            }
-        };
-        
-        const pollWorkerStatus = async () => {
-            try {
-                const oldStatus = state.workerStatus ? state.workerStatus.status : null;
-                state.workerStatus = await fetchWorkerStatus();
-                updateWorkerStatusUI();
-                if (oldStatus === 'RUNNING' && state.workerStatus.status === 'IDLE') {
-                    await refreshCandidates();
-                }
-            } catch (e) {
-                if(document.getElementById('api-status')) {
-                    document.getElementById('api-status').innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline`;
-                }
-            }
-        };
+                if (phase1_data) html += renderCard('Dane Fazy 1', `
+                    ${renderKV('Cena (skan)', phase1_data.price)}
+                    ${renderKV('Zmiana %', phase1_data.change_percent)}
+                    ${renderKV('Wolumen', phase1_data.volume)}
+                `, 'sky');
 
-        const startOnDemandAnalysis = async (ticker, containerSelector) => {
-            const container = document.querySelector(containerSelector);
-            if (!container) return;
-            
-            if (state.onDemandPollingId) {
-                clearInterval(state.onDemandPollingId);
-            }
-
-            container.innerHTML = renderLoading(`Przygotowuję analizę dla ${ticker}...`);
-            lucide.createIcons();
-
-            try {
-                await requestOnDemandAnalysis(ticker);
+                if (phase2_data) html += renderCard('Scoring Fazy 2 (APEX)', `
+                    ${renderKV('Momentum', phase2_data.momentum_score)}
+                    ${renderKV('Kompresja', phase2_data.compression_score)}
+                    ${renderKV('Katalizator', phase2_data.catalyst_score)}
+                    <div class="col-span-2 md:col-span-1 bg-amber-800/20 p-3 rounded-md"><p class="text-amber-300 text-xs">Wynik APEX</p><p class="font-bold text-lg text-amber-200">${phase2_data.total_score}</p></div>
+                `, 'amber');
                 
-                state.onDemandPollingId = setInterval(async () => {
-                    try {
-                        const data = await fetchOnDemandResult(ticker);
-                        if (data) {
-                            clearInterval(state.onDemandPollingId);
-                            state.onDemandPollingId = null;
-                            renderOnDemandResults(data, containerSelector);
-                        }
-                    } catch (pollError) {
-                        clearInterval(state.onDemandPollingId);
-                        state.onDemandPollingId = null;
-                        showErrorInMainContent(`Błąd pobierania wyników dla ${ticker}`, pollError.message);
-                    }
-                }, 3000);
+                if (phase3_signal) html += renderCard('Sygnał Taktyczny Fazy 3', `
+                    ${renderKV('Wejście', phase3_signal.entry_price)}
+                    ${renderKV('Stop Loss', phase3_signal.stop_loss)}
+                    ${renderKV('Take Profit', phase3_signal.take_profit)}
+                    ${renderKV('R/R Ratio', phase3_signal.risk_reward_ratio)}
+                `, 'green');
 
-            } catch (requestError) {
-                showErrorInMainContent(`Błąd zlecania analizy dla ${ticker}`, requestError.message);
+                if (phase3_on_demand_analysis) {
+                    const { status, reason, ...plan } = phase3_on_demand_analysis;
+                    const content = status === 'SIGNAL_FOUND' 
+                        ? Object.entries(plan).map(([k,v]) => renderKV(k,v)).join('')
+                        : `<div class="col-span-2 md:col-span-3 text-center p-3 bg-gray-700/50 rounded-md"><p class="font-semibold">Brak sygnału</p><p class="text-xs text-gray-400 mt-1">${reason}</p></div>`;
+                    html += renderCard('Analiza "Predator" (Faza 3 na żądanie)', content, 'amber');
+                }
+                
+                if (on_demand_analysis) {
+                    const { fundamentals = {}, technicals = {}, ai_score, recommendation, reasons = [] } = on_demand_analysis;
+                    const getRecoClass = (rec = "") => { if (rec.includes("Silny")) return 'text-green-400'; if (rec.includes("Kupna")) return 'text-sky-400'; return 'text-red-400'; };
+                    const header = `<div class="bg-[#161B22] p-6 rounded-lg border border-gray-800 text-center mb-6"><p class="text-sm text-gray-400">Rekomendacja AI</p><p class="text-5xl font-bold ${getRecoClass(recommendation)}">${ai_score.toFixed(1)}</p><p class="text-lg font-semibold ${getRecoClass(recommendation)} mt-1">${recommendation}</p><div class="text-xs text-gray-500 mt-2 max-w-md mx-auto">${reasons.join(' · ')}</div></div>`;
+                    const fundamentalContent = Object.entries(fundamentals).map(([k, v]) => renderKV(k, v)).join('');
+                    const technicalContent = Object.entries(technicals).map(([k, v]) => renderKV(k, v)).join('');
+                    html += header + renderCard('Analiza Fundamentalna (On-Demand)', fundamentalContent) + renderCard('Analiza Techniczna (On-Demand)', technicalContent);
+                }
+
+                html += '</div>';
+                document.getElementById('main-content').innerHTML = html;
+                lucide.createIcons();
             }
         };
 
-        // --- LOGIKA STARTOWA I OBSŁUGA ZDARZEŃ ---
-        function startDashboard() {
-            loginScreen.classList.add('hidden');
-            dashboardScreen.classList.remove('hidden');
-            lucide.createIcons();
-            
-            mainContentEl.innerHTML = renderDashboard();
-            lucide.createIcons();
-            
-            pollWorkerStatus();
-            refreshCandidates();
-            state.workerStatusPollingId = setInterval(pollWorkerStatus, 5000);
+        const App = {
+            init() {
+                document.getElementById('login-form').addEventListener('submit', (e) => { e.preventDefault(); this.startDashboard(); });
+                this.checkBackendReady();
+            },
 
-            startBtn.addEventListener('click', async () => {
-                mainContentEl.innerHTML = renderDashboard();
+            checkBackendReady() {
+                document.getElementById('login-status-text').textContent = 'Oczekiwanie na usługi backendu...';
+                const intervalId = setInterval(async () => {
+                    try {
+                        await api.getWorkerStatus();
+                        clearInterval(intervalId);
+                        document.getElementById('login-status-text').textContent = 'System gotowy.';
+                        const btn = document.getElementById('login-button');
+                        btn.disabled = false;
+                        btn.textContent = 'Wejdź do Aplikacji';
+                    } catch (e) {}
+                }, 3000);
+            },
+
+            startDashboard() {
+                document.getElementById('login-screen').classList.add('hidden');
+                document.getElementById('dashboard').classList.remove('hidden');
                 lucide.createIcons();
-                updateWorkerStatusUI();
-                await sendWorkerControl('start');
-                pollWorkerStatus();
-            });
-
-            refreshCandidatesBtn.addEventListener('click', refreshCandidates);
+                UI.renderDashboard();
+                this.setupEventListeners();
+                this.fetchAllLists();
+                state.polling.workerStatus = setInterval(() => this.pollWorkerStatus(), 5000);
+                state.polling.prices = setInterval(() => this.pollPrices(), 5000);
+            },
             
-            candidatesListEl.addEventListener('click', async (e) => {
-                 const deleteBtn = e.target.closest('.delete-btn');
-                 if (deleteBtn) {
-                     e.stopPropagation();
-                     const ticker = deleteBtn.dataset.ticker;
-                     if (window.confirm(`Czy na pewno chcesz usunąć ${ticker} z listy kandydatów?`)) {
-                         await deletePhase1Candidate(ticker);
-                         await refreshCandidates();
-                         if (mainContentEl.querySelector(`[data-ticker-details="${ticker}"]`)) {
-                             mainContentEl.innerHTML = renderDashboard();
-                             lucide.createIcons();
-                             updateWorkerStatusUI();
-                         }
-                     }
-                 } else {
-                    const item = e.target.closest('.candidate-item');
-                    if (item) {
-                        const ticker = item.dataset.ticker;
-                        const candidate = state.candidates.find(c => c.ticker === ticker);
-                        if (candidate) {
-                            renderCandidateDetails(candidate);
+            setupEventListeners() {
+                document.getElementById('start-btn').addEventListener('click', async () => {
+                    UI.renderDashboard();
+                    await api.sendWorkerCommand('start');
+                    this.pollWorkerStatus();
+                });
+                document.getElementById('dashboard-view-btn').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    UI.renderDashboard();
+                });
+                document.getElementById('results-container').addEventListener('click', (e) => this.handleSidebarClick(e));
+                document.querySelector('.phase-header').parentElement.addEventListener('click', e => {
+                    const header = e.target.closest('.phase-header');
+                    if (header) {
+                        const container = header.parentElement;
+                        container.querySelector('.phase-list').classList.toggle('hidden');
+                        container.querySelector('i[data-lucide]').classList.toggle('rotate-180');
+                    }
+                });
+                document.getElementById('ticker-input').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        const ticker = e.target.value.trim().toUpperCase();
+                        if (ticker) {
+                            this.startOnDemandAnalysis(ticker, 'standard');
+                            e.target.value = '';
                         }
                     }
-                 }
-            });
+                });
+            },
+            
+            async fetchAllLists() {
+                const phases = [1, 2, 3];
+                const promises = [api.getPhase1(), api.getPhase2(), api.getPhase3()];
+                const results = await Promise.allSettled(promises);
+                results.forEach((result, index) => {
+                    const phase = phases[index];
+                    if (result.status === 'fulfilled') {
+                        state.lists[phase] = result.value || [];
+                        UI.renderCandidateList(phase, state.lists[phase]);
+                    } else {
+                        console.error(`Failed to fetch phase ${phase} data`, result.reason);
+                        document.getElementById(`phase${phase}-list`).innerHTML = `<p class="text-xs text-red-400 px-2">Błąd ładowania.</p>`;
+                    }
+                });
+                this.pollPrices(); // initial poll
+            },
 
-            tickerInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    const ticker = e.target.value.trim().toUpperCase();
-                    if (ticker) {
-                        startOnDemandAnalysis(ticker, '#main-content');
-                        e.target.value = '';
+            async pollWorkerStatus() {
+                try {
+                    const oldStatus = state.workerStatus.status;
+                    state.workerStatus = await api.getWorkerStatus();
+                    this.updateWorkerStatusUI();
+                    if (oldStatus === 'RUNNING' && state.workerStatus.status === 'IDLE') {
+                        this.fetchAllLists();
+                    }
+                } catch (e) {
+                    if(document.getElementById('api-status')) {
+                        document.getElementById('api-status').innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline`;
                     }
                 }
-            });
+            },
 
-            document.querySelector('a[href="#dashboard-view"]').addEventListener('click', (e) => {
-                e.preventDefault();
-                mainContentEl.innerHTML = renderDashboard();
-                lucide.createIcons();
-                updateWorkerStatusUI();
-            });
-        }
-        
-        function checkBackendReady() {
-            loginStatusText.textContent = 'Oczekiwanie na uruchomienie usług backendu...';
-            const intervalId = setInterval(async () => {
+            async pollPrices() {
+                const allTickers = [...new Set(Object.values(state.lists).flat().map(c => c.ticker))];
+                if (allTickers.length === 0) return;
                 try {
-                    await fetchWorkerStatus();
-                    clearInterval(intervalId);
-                    loginStatusText.textContent = 'System gotowy.';
-                    loginButton.disabled = false;
-                    loginButton.textContent = 'Zaloguj się';
-                } catch (e) {
-                    // Czekaj dalej...
+                    const { prices } = await api.getLivePrices(allTickers);
+                    for (const ticker in prices) {
+                        document.querySelectorAll(`[data-price-ticker="${ticker}"]`).forEach(el => {
+                            el.textContent = `$${prices[ticker]?.toFixed(2) || 'N/A'}`;
+                        });
+                    }
+                } catch (e) { console.error("Price poll failed", e); }
+            },
+
+            updateWorkerStatusUI() {
+                const data = state.workerStatus;
+                if(!document.getElementById('api-status')) return;
+                document.getElementById('api-status').innerHTML = `<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online`;
+                document.getElementById('worker-status-text').textContent = data.status || 'N/A';
+                document.getElementById('start-btn').disabled = data.status === 'RUNNING';
+
+                const dashboardPhase = document.getElementById('worker-phase');
+                if (dashboardPhase) {
+                    dashboardPhase.textContent = data.phase || 'N/A';
+                    const processed = data.progress?.processed || 0;
+                    const total = data.progress?.total || 0;
+                    document.getElementById('progress-text').textContent = `${processed} / ${total}`;
+                    document.getElementById('progress-bar').style.width = `${total > 0 ? (processed / total) * 100 : 0}%`;
+                    const logEl = document.getElementById('scan-log');
+                    if (data.log && logEl) {
+                        logEl.innerHTML = data.log.replace(/\n/g, '<br>');
+                        logEl.scrollTop = logEl.scrollHeight;
+                    }
                 }
-            }, 3000);
-        }
+            },
+            
+            async handleSidebarClick(e) {
+                const item = e.target.closest('.candidate-item');
+                if (!item) return;
 
-        loginForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            startDashboard();
-        });
+                const phase = item.closest('.phase-container').dataset.phase;
+                const id = item.dataset.id;
+                const ticker = item.dataset.ticker;
 
-        document.addEventListener('DOMContentLoaded', checkBackendReady);
+                if (e.target.closest('.delete-btn')) {
+                    if (confirm(`Czy na pewno chcesz usunąć ${ticker} z listy Fazy ${phase}?`)) {
+                        await api[`deletePhase${phase}`](id);
+                        this.fetchAllLists();
+                    }
+                } else if (e.target.closest('.predator-btn')) {
+                    this.startOnDemandAnalysis(ticker, 'predator');
+                } else {
+                    document.getElementById('main-content').innerHTML = UI.renderLoading(`Ładuję szczegóły dla ${ticker}...`);
+                    const data = await api.getDetails(ticker);
+                    UI.renderDetails(data);
+                }
+            },
+
+            startOnDemandAnalysis(ticker, type = 'standard') {
+                if (state.polling.onDemand) clearInterval(state.polling.onDemand);
+                
+                const message = type === 'predator' ? `Uruchamiam analizę 'Predator' dla ${ticker}...` : `Przygotowuję analizę dla ${ticker}...`;
+                document.getElementById('main-content').innerHTML = UI.renderLoading(message);
+
+                api.requestOnDemand(ticker, type).then(() => {
+                    state.polling.onDemand = setInterval(async () => {
+                        try {
+                            const data = await api.getOnDemandResult(ticker, type);
+                            if (data) {
+                                clearInterval(state.polling.onDemand);
+                                if(type === 'predator') {
+                                    // Renderujemy w widoku szczegółów
+                                    const fullDetails = await api.getDetails(ticker);
+                                    UI.renderDetails(fullDetails);
+                                } else {
+                                    // Logika dla standardowej analizy on-demand (jeśli potrzebna inna prezentacja)
+                                    const fullDetails = await api.getDetails(ticker);
+                                    UI.renderDetails(fullDetails);
+                                }
+                            }
+                        } catch (pollError) {
+                            clearInterval(state.polling.onDemand);
+                            document.getElementById('main-content').innerHTML = UI.renderError(`Błąd pobierania wyników dla ${ticker}`, pollError.message);
+                        }
+                    }, 3000);
+                }).catch(reqError => {
+                    document.getElementById('main-content').innerHTML = UI.renderError(`Błąd zlecania analizy dla ${ticker}`, reqError.message);
+                });
+            },
+        };
+
+        document.addEventListener('DOMContentLoaded', () => App.init());
     </script>
 </body>
 </html>
-
