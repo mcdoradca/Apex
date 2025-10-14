@@ -1,9 +1,10 @@
 import logging
 import csv
+import time
 from io import StringIO
 import pandas as pd
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text
 from datetime import datetime, timezone
 from ..config import Phase1Config
 from .utils import append_scan_log, update_scan_progress, safe_float, get_performance
@@ -24,10 +25,11 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
         if not ticker:
             continue
         
-        # --- POPRAWKA: Poprawne parsowanie wartości procentowej ---
-        change_percent_str = row.get('change_percent')
+        # --- FINALNA POPRAWKA: Użycie prawidłowej nazwy kolumny 'change_percentage' ---
+        # Sprawdź najpierw 'change_percentage', a potem wróć do 'change_percent' dla bezpieczeństwa.
+        change_percent_str = row.get('change_percentage') or row.get('change_percent')
+        
         if isinstance(change_percent_str, str):
-            # Usuń znak '%' i białe znaki przed konwersją
             change_percent_val = safe_float(change_percent_str.strip().replace('%', ''))
         else:
             change_percent_val = safe_float(change_percent_str)
@@ -142,7 +144,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
             # 3. Siła względna
             ticker_perf = get_performance(price_data_raw, 5)
-            if ticker_perf is None or ticker_perf < (qqq_perf * Phase1Config.MIN_RELATIVE_STRENGTH):
+            if ticker_perf is None or qqq_perf is None: # Dodatkowe zabezpieczenie
+                 continue
+            if ticker_perf < (qqq_perf * Phase1Config.MIN_RELATIVE_STRENGTH):
                 continue
             
             # Jeśli wszystko się zgadza, dodaj do finalnej listy
@@ -163,23 +167,28 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     # --- Zapis do bazy danych ---
     if final_candidates_data:
         try:
-            insert_stmt = text("""
-                INSERT INTO phase1_candidates (ticker, price, change_percent, volume, score, analysis_date)
-                VALUES (:ticker, :price, :change_percent, :volume, :score, :analysis_date)
-                ON CONFLICT (ticker) DO UPDATE SET
-                    price = EXCLUDED.price,
-                    change_percent = EXCLUDED.change_percent,
-                    volume = EXCLUDED.volume,
-                    score = EXCLUDED.score,
-                    analysis_date = EXCLUDED.analysis_date;
-            """)
-            
-            # Dodaj datę analizy do każdego rekordu
-            today = datetime.now(timezone.utc)
-            for item in final_candidates_data:
-                item['analysis_date'] = today
+            # Wstawiaj dane w transakcji
+            with session.begin_nested():
+                insert_stmt = text("""
+                    INSERT INTO phase1_candidates (ticker, price, change_percent, volume, score, analysis_date)
+                    VALUES (:ticker, :price, :change_percent, :volume, :score, :analysis_date)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        price = EXCLUDED.price,
+                        change_percent = EXCLUDED.change_percent,
+                        volume = EXCLUDED.volume,
+                        score = EXCLUDED.score,
+                        analysis_date = EXCLUDED.analysis_date;
+                """)
+                
+                today = datetime.now(timezone.utc)
+                records_to_insert = []
+                for item in final_candidates_data:
+                    item['analysis_date'] = today
+                    records_to_insert.append(item)
 
-            session.execute(insert_stmt, final_candidates_data)
+                if records_to_insert:
+                    session.execute(insert_stmt, records_to_insert)
+            
             session.commit()
             append_scan_log(session, f"Zapisano {len(final_candidates_data)} kandydatów Fazy 1 w bazie danych.")
         except Exception as e:
