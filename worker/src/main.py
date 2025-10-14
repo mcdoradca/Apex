@@ -4,9 +4,9 @@ import schedule
 import logging
 import sys
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from dotenv import load_dotenv
-from sqlalchemy import text
+from sqlalchemy import text, func
 
 from .analysis import phase1_scanner, phase2_engine, phase3_sniper, on_demand_analyzer, utils
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
@@ -27,47 +27,66 @@ if not API_KEY:
 current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
-def handle_on_demand_analysis(session):
-    """Checks for and executes on-demand analysis requests."""
-    ticker_to_analyze = utils.get_system_control_value(session, 'on_demand_request')
+def handle_on_demand_requests(session):
+    """Sprawdza i wykonuje wszystkie rodzaje analiz na żądanie."""
     
+    # 1. Standardowa analiza na żądanie
+    ticker_to_analyze = utils.get_system_control_value(session, 'on_demand_request')
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
-        logger.info(f"On-demand request received for: {ticker_to_analyze}. Starting analysis.")
-        utils.append_scan_log(session, f"Otrzymano zlecenie analizy na żądanie dla {ticker_to_analyze}...")
-        
+        logger.info(f"On-demand request received for: {ticker_to_analyze}.")
         utils.update_system_control(session, 'on_demand_request', 'PROCESSING')
-        
         try:
             results = on_demand_analyzer.perform_full_analysis(ticker_to_analyze, api_client)
-            
-            stmt = text("""
-                INSERT INTO on_demand_results (ticker, analysis_data, last_updated)
-                VALUES (:ticker, :data, NOW())
-                ON CONFLICT (ticker) DO UPDATE SET
-                analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
-            """)
-            session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(results)})
+            stmt = text("INSERT INTO on_demand_results (ticker, analysis_data, last_updated) VALUES (:t, :d, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
+            session.execute(stmt, {'t': ticker_to_analyze, 'd': json.dumps(results)})
             session.commit()
-            
             logger.info(f"Successfully saved on-demand analysis for {ticker_to_analyze}.")
-            utils.append_scan_log(session, f"Analiza dla {ticker_to_analyze} zakończona i zapisana.")
-
         except Exception as e:
             logger.error(f"Error during on-demand analysis for {ticker_to_analyze}: {e}", exc_info=True)
             error_result = {"error": True, "message": str(e), "ticker": ticker_to_analyze}
-            stmt = text("""
-                INSERT INTO on_demand_results (ticker, analysis_data, last_updated)
-                VALUES (:ticker, :data, NOW())
-                ON CONFLICT (ticker) DO UPDATE SET
-                analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
-            """)
-            session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(error_result)})
+            stmt = text("INSERT INTO on_demand_results (ticker, analysis_data, last_updated) VALUES (:t, :d, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
+            session.execute(stmt, {'t': ticker_to_analyze, 'd': json.dumps(error_result)})
             session.commit()
-        
-        utils.update_system_control(session, 'on_demand_request', 'NONE')
+        finally:
+            utils.update_system_control(session, 'on_demand_request', 'NONE')
+
+    # 2. Analiza Fazy 3 na żądanie ("Predator")
+    predator_ticker = utils.get_system_control_value(session, 'phase3_on_demand_request')
+    if predator_ticker and predator_ticker not in ['NONE', 'PROCESSING']:
+        logger.info(f"Phase 3 on-demand ('Predator') request for: {predator_ticker}.")
+        utils.update_system_control(session, 'phase3_on_demand_request', 'PROCESSING')
+        try:
+            results = phase3_sniper.plan_trade_on_demand(predator_ticker, api_client)
+            stmt = text("INSERT INTO phase3_on_demand_results (ticker, analysis_data, last_updated) VALUES (:t, :d, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
+            session.execute(stmt, {'t': predator_ticker, 'd': json.dumps(results)})
+            session.commit()
+            logger.info(f"Successfully saved Phase 3 on-demand analysis for {predator_ticker}.")
+        except Exception as e:
+            logger.error(f"Error during Phase 3 on-demand for {predator_ticker}: {e}", exc_info=True)
+            error_result = {"error": True, "message": str(e), "ticker": predator_ticker}
+            stmt = text("INSERT INTO phase3_on_demand_results (ticker, analysis_data, last_updated) VALUES (:t, :d, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
+            session.execute(stmt, {'t': predator_ticker, 'd': json.dumps(error_result)})
+            session.commit()
+        finally:
+            utils.update_system_control(session, 'phase3_on_demand_request', 'NONE')
+
+
+def clear_old_scan_data(session):
+    """Czyści dane z poprzednich skanowań, aby uniknąć pokazywania starych wyników."""
+    logger.info("Clearing old scan data...")
+    try:
+        today = date.today()
+        session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date < :today"), {'today': today})
+        session.execute(text("DELETE FROM phase2_results WHERE analysis_date < :today"), {'today': today})
+        # Sygnały z Fazy 3 są zarządzane przez status 'ACTIVE'/'DELETED', więc ich nie czyścimy
+        session.commit()
+        logger.info("Old data cleared successfully.")
+    except Exception as e:
+        logger.error(f"Error clearing old data: {e}")
+        session.rollback()
 
 def run_full_analysis_cycle():
-    """Main function that orchestrates the entire APEX analysis process."""
+    """Główna funkcja orkiestrująca cały proces analizy APEX."""
     global current_state
     session = get_db_session()
 
@@ -81,8 +100,11 @@ def run_full_analysis_cycle():
         logger.info("Starting full analysis cycle...")
         current_state = "RUNNING"
         utils.update_system_control(session, 'worker_status', 'RUNNING')
-        utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
+        utils.update_system_control(session, 'scan_log', '') # Reset logu
+        utils.append_scan_log(session, f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}] Rozpoczynanie nowego cyklu analizy...")
         
+        clear_old_scan_data(session)
+
         utils.update_system_control(session, 'current_phase', 'PHASE_1')
         candidate_tickers = phase1_scanner.run_scan(session, lambda: current_state, api_client)
         if not candidate_tickers:
@@ -96,7 +118,7 @@ def run_full_analysis_cycle():
         utils.update_system_control(session, 'current_phase', 'PHASE_3')
         phase3_sniper.run_tactical_planning(session, qualified_tickers, lambda: current_state, api_client)
 
-        final_log_msg = "Analysis cycle completed successfully."
+        final_log_msg = "Cykl analizy zakończony pomyślnie."
         logger.info(final_log_msg)
         utils.append_scan_log(session, final_log_msg)
 
@@ -104,7 +126,7 @@ def run_full_analysis_cycle():
         error_message = f"An error occurred during the analysis: {e}"
         logger.error(error_message, exc_info=True)
         utils.update_system_control(session, 'worker_status', 'ERROR')
-        utils.append_scan_log(session, f"CRITICAL ERROR: {e}")
+        utils.append_scan_log(session, f"BŁĄD KRYTYCZNY: {e}")
 
     finally:
         current_state = "IDLE"
@@ -114,13 +136,11 @@ def run_full_analysis_cycle():
         utils.update_system_control(session, 'scan_progress_total', '0')
         session.close()
 
-
 def main_loop():
-    """The main, infinite loop that controls the worker's operation."""
+    """Główna, nieskończona pętla kontrolująca operacje workera."""
     global current_state
     logger.info("Worker started. Initializing...")
     
-    # KROK 1: Inicjalizacja bazy danych przy starcie
     with get_db_session() as session:
         initialize_database_if_empty(session, api_client)
         
@@ -131,6 +151,7 @@ def main_loop():
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         utils.update_system_control(initial_session, 'on_demand_request', 'NONE')
+        utils.update_system_control(initial_session, 'phase3_on_demand_request', 'NONE')
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.report_heartbeat(initial_session)
 
@@ -144,7 +165,7 @@ def main_loop():
                     run_full_analysis_cycle()
                 
                 if current_state != "PAUSED":
-                    handle_on_demand_analysis(session)
+                    handle_on_demand_requests(session)
                     schedule.run_pending()
                 
                 utils.report_heartbeat(session)
@@ -158,4 +179,3 @@ if __name__ == "__main__":
         main_loop()
     else:
         logger.critical("Worker cannot start because database connection was not established.")
-
