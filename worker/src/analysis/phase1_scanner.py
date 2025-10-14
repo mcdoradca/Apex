@@ -32,13 +32,11 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
         else:
             change_percent_val = safe_float(change_percent_str)
 
-        # --- FINALNA POPRAWKA: Użycie prawidłowej nazwy kolumny 'price' ---
         data_dict[ticker] = {
-            'price': safe_float(row.get('price')), # Zmieniono z 'latest_price'
+            'price': safe_float(row.get('price')),
             'volume': safe_float(row.get('volume')),
             'change_percent': change_percent_val
         }
-        # --- KONIEC POPRAWKI ---
     return data_dict
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
@@ -59,6 +57,10 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     pre_candidates_data = {}
     chunk_size = 100 
     
+    # Zmienne do logowania diagnostycznego
+    detailed_log_count = 0
+    max_detailed_logs = 10 # Zapisz szczegóły dla pierwszych 10 odrzuconych spółek
+
     for i in range(0, total_tickers, chunk_size):
         if get_current_state() == 'PAUSED':
             while get_current_state() == 'PAUSED': time.sleep(1)
@@ -75,13 +77,32 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             volume = data.get('volume')
             change_percent = data.get('change_percent')
 
-            if not all([price, volume, change_percent is not None]):
-                continue
+            # --- POCZĄTEK LOGOWANIA DIAGNOSTYCZNEGO ---
+            rejection_reasons = []
 
-            if (Phase1Config.MIN_PRICE <= price <= Phase1Config.MAX_PRICE and
-                volume >= Phase1Config.MIN_VOLUME and
-                change_percent >= Phase1Config.MIN_DAY_CHANGE_PERCENT):
-                pre_candidates_data[ticker] = data
+            if not price or not isinstance(price, (int, float)):
+                rejection_reasons.append(f"Invalid Price ({price})")
+            elif not (Phase1Config.MIN_PRICE <= price <= Phase1Config.MAX_PRICE):
+                rejection_reasons.append(f"Price {price} not in [{Phase1Config.MIN_PRICE}, {Phase1Config.MAX_PRICE}]")
+
+            if not volume or not isinstance(volume, (int, float)):
+                rejection_reasons.append(f"Invalid Volume ({volume})")
+            elif volume < Phase1Config.MIN_VOLUME:
+                rejection_reasons.append(f"Volume {int(volume)} < {Phase1Config.MIN_VOLUME}")
+
+            if change_percent is None or not isinstance(change_percent, (int, float)):
+                 rejection_reasons.append(f"Invalid Change ({change_percent})")
+            elif change_percent < Phase1Config.MIN_DAY_CHANGE_PERCENT:
+                rejection_reasons.append(f"Change {change_percent:.2f}% < {Phase1Config.MIN_DAY_CHANGE_PERCENT}%")
+            
+            if rejection_reasons:
+                if detailed_log_count < max_detailed_logs:
+                    logger.info(f"[DIAGNOSTYKA] Odrzucono {ticker}: {'; '.join(rejection_reasons)}")
+                    detailed_log_count += 1
+                continue
+            # --- KONIEC LOGOWANIA DIAGNOSTYCZNEGO ---
+
+            pre_candidates_data[ticker] = data
         
         update_scan_progress(session, min(i + chunk_size, total_tickers), total_tickers)
 
@@ -143,18 +164,17 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
             # 3. Siła względna
             ticker_perf = get_performance(price_data_raw, 5)
-            if ticker_perf is None or qqq_perf is None: # Dodatkowe zabezpieczenie
+            if ticker_perf is None or qqq_perf is None: 
                  continue
             if ticker_perf < (qqq_perf * Phase1Config.MIN_RELATIVE_STRENGTH):
                 continue
             
-            # Jeśli wszystko się zgadza, dodaj do finalnej listy
             final_candidates_data.append({
                 "ticker": ticker,
                 "price": current_price,
                 "change_percent": pre_candidates_data[ticker]['change_percent'],
                 "volume": current_volume,
-                "score": int(volume_ratio) # Prosty score oparty na sile wolumenu
+                "score": int(volume_ratio) 
             })
             append_scan_log(session, f"Kwalifikacja (F1): {ticker} (VolRatio: {volume_ratio:.2f}, ATR%: {atr_percent:.2%}, Perf: {ticker_perf:.2f}%)")
 
@@ -166,7 +186,6 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     # --- Zapis do bazy danych ---
     if final_candidates_data:
         try:
-            # Wstawiaj dane w transakcji
             with session.begin_nested():
                 insert_stmt = text("""
                     INSERT INTO phase1_candidates (ticker, price, change_percent, volume, score, analysis_date)
@@ -180,10 +199,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 """)
                 
                 today = datetime.now(timezone.utc)
-                records_to_insert = []
-                for item in final_candidates_data:
-                    item['analysis_date'] = today
-                    records_to_insert.append(item)
+                records_to_insert = [dict(item, analysis_date=today) for item in final_candidates_data]
 
                 if records_to_insert:
                     session.execute(insert_stmt, records_to_insert)
