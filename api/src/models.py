@@ -16,17 +16,28 @@ class Company(Base):
     industry = Column(VARCHAR(255))
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
-# NOWA TABELA: Przechowuje wyniki Fazy 1
+# ZMODYFIKOWANA TABELA: Przechowuje wyniki Fazy 1 z dodatkowymi danymi
 class Phase1Candidate(Base):
     __tablename__ = 'phase1_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
     price = Column(NUMERIC(12, 4))
     change_percent = Column(NUMERIC(10, 4))
     volume = Column(BIGINT)
-    score = Column(INTEGER)
-    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+    score = Column(INTEGER) # Zachowane dla spójności
+    analysis_date = Column(DATE, server_default=func.now(), primary_key=True)
 
-# ... pozostałe modele bez zmian ...
+# NOWA TABELA: Przechowuje wyniki scoringu Fazy 2
+class Phase2Result(Base):
+    __tablename__ = 'phase2_results'
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
+    analysis_date = Column(DATE, primary_key=True)
+    momentum_score = Column(INTEGER)
+    compression_score = Column(INTEGER)
+    catalyst_score = Column(INTEGER)
+    total_score = Column(INTEGER)
+    is_qualified = Column(Boolean)
+
+# ... reszta modeli bez zmian, ale dodane dla kompletności ...
 
 class PriceHistoryDaily(Base):
     __tablename__ = 'price_history_daily'
@@ -51,17 +62,6 @@ class Fundamentals(Base):
     dividend_yield = Column(NUMERIC(10, 4))
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
-class ApexScore(Base):
-    __tablename__ = 'apex_scores'
-    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
-    analysis_date = Column(DATE, primary_key=True)
-    catalyst_score = Column(INTEGER)
-    relative_strength_score = Column(INTEGER)
-    energy_compression_score = Column(INTEGER)
-    quality_control_score = Column(INTEGER)
-    total_score = Column(INTEGER)
-    is_qualified = Column(Boolean)
-
 class TradingSignal(Base):
     __tablename__ = 'trading_signals'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
@@ -73,6 +73,9 @@ class TradingSignal(Base):
     take_profit = Column(NUMERIC(12, 2))
     risk_reward_ratio = Column(NUMERIC(5, 2))
     signal_candle_timestamp = Column(PG_TIMESTAMP(timezone=True))
+    # Dodajemy pole na szczegóły, np. użyty ATR
+    details_json = Column(JSONB)
+
 
 class SystemControl(Base):
     __tablename__ = 'system_control'
@@ -86,3 +89,9 @@ class OnDemandAnalysisResult(Base):
     analysis_data = Column(JSONB)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
+# NOWA TABELA: Do przechowywania wyników Fazy 3 na żądanie
+class Phase3OnDemandResult(Base):
+    __tablename__ = 'phase3_on_demand_results'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    analysis_data = Column(JSONB)
+    last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
