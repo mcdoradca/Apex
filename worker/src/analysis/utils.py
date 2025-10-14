@@ -37,20 +37,36 @@ def update_scan_progress(session: Session, processed: int, total: int):
 def append_scan_log(session: Session, message: str):
     """Dodaje nową linię do logu skanowania w bazie danych."""
     try:
-        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        # Pobierz aktualny log
+        current_log_result = session.execute(text("SELECT value FROM system_control WHERE key = 'scan_log'")).fetchone()
+        current_log = current_log_result[0] if current_log_result else ""
+        
+        timestamp = datetime.now(timezone.utc).strftime('%H:%M:%S')
         log_message = f"[{timestamp}] {message}\n"
         
-        # Użycie `||` do konkatenacji stringów w PostgreSQL
+        # Dodaj nową wiadomość na początku
+        new_log = log_message + current_log
+        
+        # Ogranicz długość logu do rozsądnej liczby znaków (np. 10000)
+        if len(new_log) > 15000:
+            new_log = new_log[:15000]
+
         stmt = text("""
             UPDATE system_control
-            SET value = value || :message
+            SET value = :new_log
             WHERE key = 'scan_log';
         """)
-        session.execute(stmt, {'message': log_message})
+        session.execute(stmt, {'new_log': new_log})
         session.commit()
     except Exception as e:
         logger.error(f"Error appending to scan_log: {e}")
         session.rollback()
+
+
+def clear_scan_log(session: Session):
+    """Czyści log skanowania w bazie danych."""
+    update_system_control(session, 'scan_log', '')
+
 
 def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]:
     """Sprawdza i reaguje na polecenia z bazy danych."""
@@ -80,27 +96,35 @@ def report_heartbeat(session: Session):
     update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
 def safe_float(value) -> float | None:
-    """Bezpiecznie konwertuje wartość na float."""
-    if value is None: return None
+    """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
+    if value is None:
+        return None
     try:
+        # Jeśli wartość jest stringiem, usuń przecinki przed konwersją
+        if isinstance(value, str):
+            value = value.replace(',', '')
         return float(value)
     except (ValueError, TypeError):
         return None
 
 def get_performance(data: dict, days: int) -> float | None:
-    """Oblicza zwrot procentowy w danym okresie."""
+    """Oblicza zwrot procentowy w danym okresie na podstawie słownika."""
     try:
         time_series = data.get('Time Series (Daily)')
-        if not time_series or len(time_series) < days: return None
+        if not time_series or len(time_series) < days + 1:
+            return None
         
-        dates = sorted(time_series.keys())
-        end_price = safe_float(time_series[dates[-1]]['4. close'])
-        start_price = safe_float(time_series[dates[-days]]['4. close'])
+        # Sortuj daty malejąco, aby mieć pewność, że najnowsze są na początku
+        dates = sorted(time_series.keys(), reverse=True)
         
-        if start_price is None or end_price is None or start_price == 0: return None
+        # [0] to najnowsza data, [days] to data 'days' dni temu
+        end_price = safe_float(time_series[dates[0]]['4. close'])
+        start_price = safe_float(time_series[dates[days]]['4. close'])
+        
+        if start_price is None or end_price is None or start_price == 0:
+            return None
         
         return ((end_price - start_price) / start_price) * 100
     except (IndexError, KeyError, TypeError) as e:
         logger.warning(f"Could not calculate performance: {e}")
         return None
-
