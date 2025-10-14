@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import text, desc
+from sqlalchemy import text, desc, func
 from . import models
 from typing import Optional, Any, Dict, List
 from datetime import date
@@ -18,7 +18,7 @@ def delete_phase1_candidate(db: Session, ticker: str):
     db.commit()
     return {"message": f"Candidate {ticker} from Phase 1 deleted."}
 
-# --- NOWE FUNKCJE DLA WYNIKÓW FAZY 2 ---
+# --- FUNKCJE DLA WYNIKÓW FAZY 2 ---
 def get_phase2_results(db: Session) -> List[models.Phase2Result]:
     """Pobiera wszystkie wyniki Fazy 2 z najnowszego dnia analizy."""
     latest_date = db.query(func.max(models.Phase2Result.analysis_date)).scalar()
@@ -71,7 +71,7 @@ def get_phase3_on_demand_result(db: Session, ticker: str) -> Optional[Dict[str, 
     result = db.query(models.Phase3OnDemandResult).filter(models.Phase3OnDemandResult.ticker == ticker).first()
     return result.analysis_data if result else None
 
-# --- NOWA FUNKCJA ZBIORCZA ---
+# --- FUNKCJA ZBIORCZA ---
 def get_consolidated_details(db: Session, ticker: str) -> Dict[str, Any]:
     """Pobiera wszystkie dostępne dane dla danego tickera z różnych faz."""
     today = date.today()
@@ -82,3 +82,4 @@ def get_consolidated_details(db: Session, ticker: str) -> Dict[str, Any]:
     details['on_demand_analysis'] = get_on_demand_result(db, ticker)
     details['phase3_on_demand_analysis'] = get_phase3_on_demand_result(db, ticker)
     return details
+
