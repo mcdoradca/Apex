@@ -128,3 +128,4 @@ def get_performance(data: dict, days: int) -> float | None:
     except (IndexError, KeyError, TypeError) as e:
         logger.warning(f"Could not calculate performance: {e}")
         return None
+
