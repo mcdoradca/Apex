@@ -31,6 +31,9 @@ class AlphaVantageClient:
     def _make_request(self, params: dict):
         self._rate_limiter()
         params['apikey'] = self.api_key
+        # --- POPRAWKA ---
+        # Dodano parametr 'entitlement', aby zapewnić dostęp do danych w czasie rzeczywistym
+        # dla wszystkich zapytań, zgodnie z wymaganiami klucza Premium.
         params['entitlement'] = 'realtime'
         
         for attempt in range(self.retries):
@@ -82,6 +85,37 @@ class AlphaVantageClient:
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
 
+    # --- NOWA FUNKCJA ZGODNA Z DOKUMENTACJĄ ---
+    # Dodano funkcję do pobierania danych intraday, która może być przydatna w Fazie 3
+    def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact'):
+        """Pobiera dane intraday dla zadanego symbolu."""
+        params = {
+            "function": "TIME_SERIES_INTRADAY",
+            "symbol": symbol,
+            "interval": interval,
+            "outputsize": outputsize,
+            "extended_hours": "false" # Analizujemy tylko godziny handlu
+        }
+        return self._make_request(params)
+    
+    def get_news_sentiment(self, ticker: str):
+        """Pobiera wiadomości i analizę sentymentu."""
+        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": "50"} # Ograniczamy do 50, aby oszczędzać dane
+        return self._make_request(params)
+
+    def get_bollinger_bands(self, symbol: str, time_period: int = 20, series_type: str = 'close'):
+        """Pobiera dane dla wskaźnika Bollinger Bands."""
+        params = {
+            "function": "BBANDS",
+            "symbol": symbol,
+            "interval": "daily",
+            "time_period": str(time_period),
+            "series_type": series_type,
+            "nbdevup": "2",
+            "nbdevdn": "2"
+        }
+        return self._make_request(params)
+
     def get_atr(self, symbol: str, time_period: int = 14):
         params = {"function": "ATR", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
         return self._make_request(params)
@@ -101,4 +135,3 @@ class AlphaVantageClient:
     def get_macd(self, symbol: str, series_type: str = 'close'):
         params = {"function": "MACD", "symbol": symbol, "interval": "daily", "series_type": series_type}
         return self._make_request(params)
-
