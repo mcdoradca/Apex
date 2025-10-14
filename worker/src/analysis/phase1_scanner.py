@@ -25,21 +25,20 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
         if not ticker:
             continue
         
-        # --- FINALNA POPRAWKA: Użycie prawidłowej nazwy kolumny 'change_percentage' ---
-        # Sprawdź najpierw 'change_percentage', a potem wróć do 'change_percent' dla bezpieczeństwa.
         change_percent_str = row.get('change_percentage') or row.get('change_percent')
         
         if isinstance(change_percent_str, str):
             change_percent_val = safe_float(change_percent_str.strip().replace('%', ''))
         else:
             change_percent_val = safe_float(change_percent_str)
-        # --- KONIEC POPRAWKI ---
 
+        # --- FINALNA POPRAWKA: Użycie prawidłowej nazwy kolumny 'price' ---
         data_dict[ticker] = {
-            'price': safe_float(row.get('latest_price')),
+            'price': safe_float(row.get('price')), # Zmieniono z 'latest_price'
             'volume': safe_float(row.get('volume')),
             'change_percent': change_percent_val
         }
+        # --- KONIEC POPRAWKI ---
     return data_dict
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
