@@ -1,15 +1,26 @@
 from pydantic import BaseModel, ConfigDict
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, date
+from typing import List, Optional, Dict, Any
 
-# Schemat dla nowej tabeli Kandydatów Fazy 1
+# Schemat dla Kandydatów Fazy 1 (zgodny z nowym modelem)
 class Phase1Candidate(BaseModel):
     ticker: str
-    price: float
-    change_percent: float
-    volume: int
-    score: int
-    analysis_date: datetime
+    price: Optional[float]
+    change_percent: Optional[float]
+    volume: Optional[int]
+    analysis_date: date
+
+    model_config = ConfigDict(from_attributes=True)
+
+# Schemat dla Wyników Fazy 2
+class Phase2Result(BaseModel):
+    ticker: str
+    analysis_date: date
+    momentum_score: int
+    compression_score: int
+    catalyst_score: int
+    total_score: int
+    is_qualified: bool
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,14 +48,18 @@ class TradingSignal(BaseModel):
     take_profit: float
     risk_reward_ratio: float
     signal_candle_timestamp: datetime
+    details_json: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
-class ApexScore(BaseModel):
+# --- NOWE SCHEMATY ZBIORCZE ---
+class ConsolidatedTickerDetails(BaseModel):
     ticker: str
-    analysis_date: datetime
-    total_score: int
-    is_qualified: bool
+    phase1_data: Optional[Phase1Candidate] = None
+    phase2_data: Optional[Phase2Result] = None
+    phase3_signal: Optional[TradingSignal] = None
+    on_demand_analysis: Optional[Dict[str, Any]] = None
+    phase3_on_demand_analysis: Optional[Dict[str, Any]] = None
 
-    model_config = ConfigDict(from_attributes=True)
-
+class LivePricesResponse(BaseModel):
+    prices: Dict[str, Optional[float]]
