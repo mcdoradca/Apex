@@ -1,70 +1,115 @@
 import logging
 import time
+import json
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .utils import update_scan_progress, append_scan_log, safe_float
-from ..config import MIN_RISK_REWARD_RATIO
+from ..config import MIN_RISK_REWARD_RATIO, ATR_STOP_LOSS_MULTIPLIER
 
 logger = logging.getLogger(__name__)
 
-def _find_impulse_and_fib_zone(daily_data: dict) -> tuple[float, float, float, float] | None:
+def _find_impulse_and_fib_zone(daily_data: dict, atr_value: float) -> tuple[float, float, float, float] | None:
+    """Znajduje impuls i strefę Fibonacciego, używając ATR do walidacji impulsu."""
     try:
         time_series = daily_data.get('Time Series (Daily)')
         if not time_series or len(time_series) < 21: return None
 
-        dates = sorted(time_series.keys(), reverse=True)[:21] # Ostatnie 21 sesji
+        dates = sorted(time_series.keys(), reverse=True)[:21]
         prices = {d: {k.split(' ')[1]: float(v) for k, v in time_series[d].items()} for d in dates}
 
-        # Znajdź najniższy dołek i najwyższy szczyt w tym okresie
         low_point_date = min(dates, key=lambda d: prices[d]['low'])
         low_point_price = prices[low_point_date]['low']
         
-        # Szukaj szczytu po dołku
         dates_after_low = [d for d in dates if d > low_point_date]
         if not dates_after_low: return None
         
         high_point_date = max(dates_after_low, key=lambda d: prices[d]['high'])
         high_point_price = prices[high_point_date]['high']
         
-        # Sprawdź, czy ruch to impuls > 10%
-        if (high_point_price - low_point_price) / low_point_price < 0.10:
+        # Ulepszenie: Sprawdź, czy ruch to impuls > 1.0 * ATR
+        if (high_point_price - low_point_price) < (1.0 * atr_value):
             return None
             
-        # Oblicz strefę Fibonacciego
         fib_50 = high_point_price - 0.5 * (high_point_price - low_point_price)
         fib_61_8 = high_point_price - 0.618 * (high_point_price - low_point_price)
         
-        return high_point_price, low_point_price, fib_50, fib_61_8 # impulse_high, impulse_low, entry_zone_top, entry_zone_bottom
+        return high_point_price, low_point_price, fib_50, fib_61_8
     except Exception as e:
         logger.error(f"Error in _find_impulse_and_fib_zone: {e}")
         return None
-
 
 def _find_entry_signal_candle(intraday_data: dict) -> dict | None:
     try:
         time_series = intraday_data.get('Time Series (60min)')
         if not time_series: return None
-
-        for dt, values in time_series.items():
-            o = safe_float(values.get('1. open'))
-            h = safe_float(values.get('2. high'))
-            l = safe_float(values.get('3. low'))
-            c = safe_float(values.get('4. close'))
-
+        # Szukamy w ostatnich 8 świecach (8 godzin handlu)
+        for dt, values in list(time_series.items())[:8]:
+            o, h, l, c = safe_float(values.get('1. open')), safe_float(values.get('2. high')), safe_float(values.get('3. low')), safe_float(values.get('4. close'))
             if not all([o, h, l, c]): continue
 
-            is_bullish = c > o
-            is_in_upper_half = c > (h + l) / 2
-            has_strong_body = (c - o) > 0.3 * (h - l)
-
+            is_bullish, is_in_upper_half, has_strong_body = c > o, c > (h + l) / 2, (c - o) > 0.3 * (h - l)
             if is_bullish and is_in_upper_half and has_strong_body:
-                return {**values, 'datetime': dt} # Zwróć pasującą świecę wraz z datą
+                return {**values, 'datetime': dt}
         return None
     except Exception as e:
         logger.error(f"Error in _find_entry_signal_candle: {e}")
         return None
+
+def _generate_trade_plan(ticker: str, api_client: AlphaVantageClient) -> dict:
+    """Generuje plan taktyczny dla pojedynczego tickera. Zwraca status i szczegóły."""
+    try:
+        daily_data = api_client.get_daily_adjusted(ticker, 'compact')
+        atr_data = api_client.get_atr(ticker)
+        if not daily_data or not atr_data:
+            return {"status": "NO_SIGNAL", "reason": "Brak kompletnych danych dziennych lub ATR."}
+
+        latest_atr = safe_float(list(atr_data['Technical Analysis: ATR'].values())[0]['ATR'])
+        if not latest_atr:
+            return {"status": "NO_SIGNAL", "reason": "Nie można odczytać wartości ATR."}
+
+        impulse_result = _find_impulse_and_fib_zone(daily_data, latest_atr)
+        if not impulse_result:
+            return {"status": "NO_SIGNAL", "reason": "Brak znaczącego impulsu (>1.0 ATR) w ciągu ostatnich 21 sesji."}
+        
+        impulse_high, impulse_low, entry_zone_top, entry_zone_bottom = impulse_result
+        current_price = safe_float(list(daily_data['Time Series (Daily)'].values())[0]['4. close'])
+        if not (entry_zone_bottom <= current_price <= entry_zone_top):
+            return {"status": "NO_SIGNAL", "reason": f"Cena ({current_price:.2f}) poza strefą wejścia Fib ({entry_zone_bottom:.2f} - {entry_zone_top:.2f})."}
+        
+        intraday_data = api_client.get_intraday(ticker)
+        signal_candle = _find_entry_signal_candle(intraday_data)
+        if not signal_candle:
+            return {"status": "NO_SIGNAL", "reason": "W strefie wejścia, ale brak byczej świecy sygnałowej w ostatnich 8 godzinach."}
+
+        # Dynamiczne zarządzanie ryzykiem oparte na ATR
+        entry_price = current_price
+        stop_loss = entry_price - (ATR_STOP_LOSS_MULTIPLIER * latest_atr)
+        take_profit = entry_price + (MIN_RISK_REWARD_RATIO * (entry_price - stop_loss))
+        
+        potential_risk = entry_price - stop_loss
+        potential_profit = take_profit - entry_price
+        risk_reward_ratio = potential_profit / potential_risk if potential_risk > 0 else 0
+
+        if risk_reward_ratio < MIN_RISK_REWARD_RATIO:
+            return {"status": "NO_SIGNAL", "reason": f"Znaleziono setup, ale R/R ({risk_reward_ratio:.2f}) jest zbyt niskie."}
+
+        return {
+            "status": "SIGNAL_FOUND",
+            "entry_price": entry_price, "stop_loss": stop_loss, "take_profit": take_profit,
+            "risk_reward_ratio": risk_reward_ratio,
+            "signal_candle_timestamp": signal_candle['datetime'],
+            "details": {"atr": latest_atr, "atr_multiplier": ATR_STOP_LOSS_MULTIPLIER}
+        }
+    except Exception as e:
+        logger.error(f"Error generating trade plan for {ticker}: {e}")
+        return {"status": "ERROR", "reason": str(e)}
+
+def plan_trade_on_demand(ticker: str, api_client: AlphaVantageClient) -> dict:
+    """Funkcja obsługująca Fazy 3 na żądanie."""
+    logger.info(f"Running Phase 3 On-Demand for {ticker}...")
+    return _generate_trade_plan(ticker, api_client)
 
 def run_tactical_planning(session: Session, qualified_tickers: list[str], get_current_state, api_client: AlphaVantageClient):
     logger.info("Running Phase 3: Sniper Agent Tactical Planning...")
@@ -78,64 +123,27 @@ def run_tactical_planning(session: Session, qualified_tickers: list[str], get_cu
         if get_current_state() == 'PAUSED':
             while get_current_state() == 'PAUSED': time.sleep(1)
 
-        try:
-            daily_data = api_client.get_daily_adjusted(ticker, 'compact')
-            if not daily_data: continue
+        plan = _generate_trade_plan(ticker, api_client)
 
-            impulse_result = _find_impulse_and_fib_zone(daily_data)
-            if not impulse_result:
-                append_scan_log(session, f"{ticker}: Brak wystarczającego impulsu do analizy taktycznej.")
-                continue
+        if plan['status'] == 'SIGNAL_FOUND':
+            stmt = text("""
+                INSERT INTO trading_signals (ticker, generation_date, status, entry_price, stop_loss, take_profit, risk_reward_ratio, signal_candle_timestamp, details_json)
+                VALUES (:ticker, :gen_date, 'ACTIVE', :entry, :sl, :tp, :rr, :candle_ts, :details)
+            """)
+            candle_ts = datetime.strptime(plan['signal_candle_timestamp'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+            session.execute(stmt, {
+                'ticker': ticker, 'gen_date': datetime.now(timezone.utc), 
+                'entry': plan['entry_price'], 'sl': plan['stop_loss'], 'tp': plan['take_profit'], 
+                'rr': plan['risk_reward_ratio'], 'candle_ts': candle_ts,
+                'details': json.dumps(plan['details'])
+            })
+            session.commit()
+            log_msg = f"SYGNAŁ WYGENEROWANY dla {ticker}: Wejście={plan['entry_price']:.2f}, SL={plan['stop_loss']:.2f}, TP={plan['take_profit']:.2f}, R/R={plan['risk_reward_ratio']:.2f}"
+            append_scan_log(session, log_msg)
+        else:
+            append_scan_log(session, f"{ticker}: {plan['reason']}")
+        
+        processed_count += 1
+        update_scan_progress(session, processed_count, total_qualified)
             
-            impulse_high, impulse_low, entry_zone_top, entry_zone_bottom = impulse_result
-            current_price = safe_float(list(daily_data['Time Series (Daily)'].values())[0]['4. close'])
-            if not (entry_zone_bottom <= current_price <= entry_zone_top):
-                append_scan_log(session, f"{ticker}: Cena ({current_price:.2f}) poza strefą wejścia Fib ({entry_zone_bottom:.2f} - {entry_zone_top:.2f}). Obserwuj.")
-                continue
-            
-            intraday_data = api_client.get_intraday(ticker)
-            if not intraday_data: continue
-            
-            signal_candle = _find_entry_signal_candle(intraday_data)
-            if not signal_candle:
-                append_scan_log(session, f"{ticker}: W strefie wejścia, ale brak świecy sygnałowej. Obserwuj.")
-                continue
-
-            entry_price = safe_float(signal_candle.get('2. high')) + 0.01
-            stop_loss = safe_float(signal_candle.get('3. low')) - 0.01
-            take_profit = impulse_high
-            
-            if entry_price is None or stop_loss is None or take_profit is None or stop_loss >= entry_price:
-                continue
-                
-            potential_risk = entry_price - stop_loss
-            potential_profit = take_profit - entry_price
-            if potential_risk == 0: continue
-            
-            risk_reward_ratio = potential_profit / potential_risk
-
-            if risk_reward_ratio >= MIN_RISK_REWARD_RATIO:
-                stmt = text("""
-                    INSERT INTO trading_signals (ticker, generation_date, status, entry_price, stop_loss, take_profit, risk_reward_ratio, signal_candle_timestamp)
-                    VALUES (:ticker, :gen_date, 'ACTIVE', :entry, :sl, :tp, :rr, :candle_ts)
-                """)
-                candle_ts = datetime.strptime(signal_candle['datetime'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-                session.execute(stmt, {'ticker': ticker, 'gen_date': datetime.now(timezone.utc), 'entry': entry_price, 'sl': stop_loss, 
-                                       'tp': take_profit, 'rr': risk_reward_ratio, 'candle_ts': candle_ts})
-                session.commit()
-                log_msg = f"SYGNAŁ WYGENEROWANY dla {ticker}: Wejście={entry_price:.2f}, SL={stop_loss:.2f}, TP={take_profit:.2f}, R/R={risk_reward_ratio:.2f}"
-                append_scan_log(session, log_msg)
-            else:
-                append_scan_log(session, f"{ticker}: Znaleziono sygnał, ale R/R ({risk_reward_ratio:.2f}) jest zbyt niskie.")
-
-        except Exception as e:
-            logger.error(f"Error processing ticker {ticker} in Phase 3: {e}")
-            session.rollback()
-        finally:
-            processed_count += 1
-            update_scan_progress(session, processed_count, total_qualified)
-            
-    final_log = "Faza 3 zakończona. Zakończono generowanie planów taktycznych."
-    logger.info(final_log)
-    append_scan_log(session, final_log)
-
+    append_scan_log(session, "Faza 3 zakończona.")
