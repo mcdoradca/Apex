@@ -3,181 +3,129 @@ import csv
 from io import StringIO
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from datetime import date
 from ..config import Phase1Config
-from .utils import append_scan_log, update_scan_progress, safe_float
+from .utils import append_scan_log, update_scan_progress, safe_float, get_performance
 
 logger = logging.getLogger(__name__)
 
 def _parse_bulk_quotes_csv(csv_text: str) -> dict:
-    """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
-    if not csv_text or "symbol" not in csv_text:
-        return {}
-    
-    # Użycie StringIO, aby traktować tekst jak plik
+    if not csv_text or "symbol" not in csv_text: return {}
     csv_file = StringIO(csv_text)
     reader = csv.DictReader(csv_file)
-    
     data_dict = {}
     for row in reader:
         ticker = row.get('symbol')
-        if not ticker:
-            continue
-        
+        if not ticker: continue
         data_dict[ticker] = {
             'price': safe_float(row.get('latest_price')),
-            'volume': safe_float(row.get('volume')),
+            'volume': int(safe_float(row.get('volume')) or 0),
             'change_percent': safe_float(row.get('change_percent'))
         }
     return data_dict
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
-    """
-    Przeprowadza skanowanie Fazy 1 w wersji 2.0 (hybrydowej), aby znaleźć
-    kandydatów do dalszej analizy.
-    """
-    logger.info("Running Phase 1 v2.0: Hybrid Momentum Scan...")
-    append_scan_log(session, "Faza 1 (v2.0): Rozpoczynanie hybrydowego skanowania momentum...")
+    logger.info("Running Phase 1: Advanced Momentum Scan...")
+    append_scan_log(session, "Faza 1: Rozpoczynanie zaawansowanego skanowania momentum...")
 
     try:
-        all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
-        all_tickers = [row[0] for row in all_tickers_rows]
+        all_tickers = [row[0] for row in session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()]
         total_tickers = len(all_tickers)
-        logger.info(f"Found {total_tickers} total tickers in database to process.")
-        append_scan_log(session, f"Znaleziono {total_tickers} spółek w bazie do przeskanowania.")
+        logger.info(f"Found {total_tickers} tickers to process.")
+        append_scan_log(session, f"Znaleziono {total_tickers} spółek do skanowania.")
     except Exception as e:
-        logger.error(f"Could not fetch companies from database: {e}", exc_info=True)
-        append_scan_log(session, f"BŁĄD KRYTYCZNY: Nie można pobrać listy spółek z bazy danych: {e}")
+        logger.error(f"Could not fetch companies: {e}", exc_info=True)
         return []
 
-    if not all_tickers:
-        logger.warning("Ticker list from database is empty. Phase 1 cannot proceed.")
-        append_scan_log(session, "BŁĄD: Lista spółek do skanowania jest pusta.")
-        return []
-
-    # --- ETAP 1: Szybkie skanowanie blokowe ---
-    logger.info("--- STARTING STAGE 1: BULK DATA GATHERING & PRE-FILTERING ---")
-    append_scan_log(session, "Etap 1: Szybkie skanowanie blokowe...")
-    
-    pre_candidates = []
+    # --- Etap 1: Szybkie skanowanie blokowe ---
+    append_scan_log(session, "Etap 1: Skanowanie blokowe (cena, wolumen, zmiana)...")
+    pre_candidates_data = {}
     chunk_size = 100 
     
     for i in range(0, total_tickers, chunk_size):
         chunk = all_tickers[i:i + chunk_size]
         try:
             bulk_data_csv = api_client.get_bulk_quotes(chunk)
-            if not bulk_data_csv:
-                continue
-
+            if not bulk_data_csv: continue
             parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
 
             for ticker, data in parsed_data.items():
-                price = data.get('price')
-                volume = data.get('volume')
-                change_percent = data.get('change_percent')
-
-                if not all([price, volume, change_percent]):
-                    continue
-
-                # Wstępne filtrowanie
-                price_ok = Phase1Config.MIN_PRICE <= price <= Phase1Config.MAX_PRICE
-                volume_ok = volume >= Phase1Config.MIN_VOLUME
-                change_ok = change_percent >= Phase1Config.MIN_DAY_CHANGE_PERCENT
-
-                if price_ok and volume_ok and change_ok:
-                    pre_candidates.append(ticker)
-                    
+                if not all(data.values()): continue
+                if (Phase1Config.MIN_PRICE <= data['price'] <= Phase1Config.MAX_PRICE and
+                    data['volume'] >= Phase1Config.MIN_VOLUME and
+                    data['change_percent'] >= Phase1Config.MIN_DAY_CHANGE_PERCENT):
+                    pre_candidates_data[ticker] = data
         except Exception as e:
-            logger.error(f"Error processing bulk chunk starting with {chunk[0]}: {e}", exc_info=True)
-        
+            logger.error(f"Error processing bulk chunk starting with {chunk[0]}: {e}")
         update_scan_progress(session, min(i + chunk_size, total_tickers), total_tickers)
 
-    logger.info(f"Phase 1 (Stage 1) completed. Found {len(pre_candidates)} pre-candidates.")
-    append_scan_log(session, f"Etap 1 zakończony. Znaleziono {len(pre_candidates)} wstępnych kandydatów.")
+    logger.info(f"Stage 1 found {len(pre_candidates_data)} pre-candidates.")
+    append_scan_log(session, f"Etap 1 zakończony. Znaleziono {len(pre_candidates_data)} wstępnych kandydatów.")
+    if not pre_candidates_data: return []
 
-    if not pre_candidates:
-        logger.info("No pre-candidates found after Stage 1. Halting Phase 1.")
-        append_scan_log(session, "Brak kandydatów po etapie 1. Zakończono Fazę 1.")
-        return []
-
-    # --- ETAP 2: Głęboka analiza zaawansowana ---
-    logger.info("--- STARTING STAGE 2: ADVANCED ANALYSIS (ATR & RELATIVE STRENGTH) ---")
-    append_scan_log(session, "Etap 2: Głęboka analiza zaawansowana...")
+    # --- Etap 2: Głęboka analiza (ATR, Siła Względna) ---
+    append_scan_log(session, "Etap 2: Głęboka analiza (ATR, Siła Względna)...")
+    final_candidates_to_insert = []
     
-    final_candidates = []
-    
-    # Pobierz dane dla QQQ (benchmark) raz, aby zaoszczędzić zapytania
     try:
         qqq_data = api_client.get_daily_adjusted('QQQ', outputsize='compact')
-        if not qqq_data:
-            logger.error("Could not fetch QQQ data for relative strength analysis. Halting Stage 2.")
-            append_scan_log(session, "BŁĄD: Nie można pobrać danych dla QQQ. Przerwano Etap 2.")
-            return []
+        qqq_perf = get_performance(qqq_data, 5)
+        if qqq_perf is None: raise Exception("Could not calculate QQQ performance.")
     except Exception as e:
         logger.error(f"Critical error fetching QQQ data: {e}", exc_info=True)
         return []
 
-    for ticker in pre_candidates:
+    processed_deep = 0
+    total_deep = len(pre_candidates_data)
+    update_scan_progress(session, 0, total_deep)
+
+    for ticker, base_data in pre_candidates_data.items():
         try:
-            # Weryfikacja ATR%
+            # 1. Weryfikacja ATR%
             atr_data = api_client.get_atr(ticker)
             price_data = api_client.get_daily_adjusted(ticker, outputsize='compact')
+            if not atr_data or not price_data: continue
 
-            if not atr_data or not price_data or 'Time Series (Daily)' not in price_data:
-                continue
+            latest_atr = safe_float(list(atr_data['Technical Analysis: ATR'].values())[0]['ATR'])
+            if not latest_atr or base_data['price'] == 0: continue
             
-            latest_date = sorted(price_data['Time Series (Daily)'].keys())[0]
-            latest_price = safe_float(price_data['Time Series (Daily)'][latest_date]['4. close'])
+            atr_percent = (latest_atr / base_data['price'])
+            if atr_percent > Phase1Config.MAX_VOLATILITY_ATR_PERCENT: continue
             
-            latest_atr_date = sorted(atr_data['Technical Analysis: ATR'].keys())[0]
-            latest_atr = safe_float(atr_data['Technical Analysis: ATR'][latest_atr_date]['ATR'])
+            # 2. Weryfikacja Siły Względnej
+            ticker_perf = get_performance(price_data, 5)
+            if ticker_perf is None or ticker_perf < (qqq_perf * Phase1Config.MIN_RELATIVE_STRENGTH): continue
 
-            if not latest_price or not latest_atr or latest_price == 0:
-                continue
-            
-            atr_percent = (latest_atr / latest_price)
-            atr_ok = atr_percent <= Phase1Config.MAX_VOLATILITY_ATR_PERCENT
-
-            if not atr_ok:
-                continue
-
-            # Weryfikacja siły względnej (jeśli jest wymagana)
-            # Na razie ten warunek jest pominięty, zgodnie z planem, aby go dodać później
-            # relative_strength_ok = True 
-            
-            # W przyszłości dodamy tutaj logikę obliczania siły względnej vs QQQ
-            
-            final_candidates.append(ticker)
-            log_msg = f"Kwalifikacja: {ticker} (ATR%: {atr_percent:.2%})"
-            logger.info(log_msg)
-            append_scan_log(session, log_msg)
-
+            # Jeśli przeszedł, dodaj do listy finalnej
+            final_candidates_to_insert.append({
+                "ticker": ticker,
+                "price": base_data['price'],
+                "change_percent": base_data['change_percent'],
+                "volume": base_data['volume'],
+                "score": 1, # Placeholder
+                "analysis_date": date.today()
+            })
+            append_scan_log(session, f"Kwalifikacja: {ticker} (ATR%: {atr_percent:.2%}, Perf: {ticker_perf:.2f}%)")
         except Exception as e:
-            logger.error(f"Error in Stage 2 processing for {ticker}: {e}", exc_info=True)
+            logger.warning(f"Error in deep analysis for {ticker}: {e}")
+        finally:
+            processed_deep += 1
+            update_scan_progress(session, processed_deep, total_deep)
 
-    logger.info(f"Phase 1 (Stage 2) completed. Found {len(final_candidates)} final candidates.")
-    append_scan_log(session, f"Etap 2 zakończony. Znaleziono {len(final_candidates)} ostatecznych kandydatów.")
-    
-    # Zapisz ostatecznych kandydatów do bazy danych
-    if final_candidates:
+    if final_candidates_to_insert:
         try:
-            # Najpierw wyczyść starych kandydatów
-            session.execute(text("DELETE FROM phase1_candidates"))
-            
-            # Przygotuj dane do wstawienia
-            candidates_to_insert = [{'ticker': ticker, 'score': 1} for ticker in final_candidates]
-            
-            insert_stmt = text("INSERT INTO phase1_candidates (ticker, score, added_at) VALUES (:ticker, :score, NOW())")
-            session.execute(insert_stmt, candidates_to_insert)
+            session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date = :today"), {'today': date.today()})
+            stmt = text("""
+                INSERT INTO phase1_candidates (ticker, price, change_percent, volume, score, analysis_date)
+                VALUES (:ticker, :price, :change_percent, :volume, :score, :analysis_date)
+            """)
+            session.execute(stmt, final_candidates_to_insert)
             session.commit()
-            logger.info(f"Successfully saved {len(final_candidates)} candidates to the database.")
-            append_scan_log(session, f"Zapisano {len(final_candidates)} kandydatów w bazie danych.")
+            append_scan_log(session, f"Zapisano {len(final_candidates_to_insert)} kandydatów Fazy 1 w bazie danych.")
         except Exception as e:
-            logger.error(f"Failed to save candidates to database: {e}", exc_info=True)
+            logger.error(f"Failed to save P1 candidates: {e}", exc_info=True)
             session.rollback()
 
-    final_log_msg = f"Faza 1 (v2.0) zakończona. Znaleziono {len(final_candidates)} ostatecznych kandydatów."
-    logger.info(final_log_msg)
-    append_scan_log(session, final_log_msg)
-    
-    return final_candidates
-
+    final_tickers = [c['ticker'] for c in final_candidates_to_insert]
+    append_scan_log(session, f"Faza 1 zakończona. Znaleziono {len(final_tickers)} ostatecznych kandydatów.")
+    return final_tickers
