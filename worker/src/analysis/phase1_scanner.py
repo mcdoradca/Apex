@@ -20,7 +20,9 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
         return {}
     
     csv_file = StringIO(csv_text)
-    reader = csv.DictReader(csv_file)
+    # Usunięcie pustych linii, które mogą powodować problemy z readerem
+    lines = (line for line in csv_file if line.strip())
+    reader = csv.DictReader(lines)
     
     data_dict = {}
     for row in reader:
@@ -36,7 +38,6 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
             change_percent_val = safe_float(change_percent_str)
 
         data_dict[ticker] = {
-            # --- POPRAWKA: Użycie 'close' zamiast 'price' ---
             'price': safe_float(row.get('close')),
             'volume': safe_float(row.get('volume')),
             'change_percent': change_percent_val
@@ -146,9 +147,10 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='compact')
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 continue
-
-            daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index').astype(float)
-            daily_df.index = pd.to_datetime(daily_df.index)
+            
+            # --- POPRAWKA: Standaryzacja nazw kolumn ---
+            df_data = {pd.to_datetime(date): {key.split(' ')[1]: float(val) for key, val in values.items()} for date, values in price_data_raw['Time Series (Daily)'].items()}
+            daily_df = pd.DataFrame.from_dict(df_data, orient='index')
             daily_df = daily_df.sort_index()
 
             # 1. Wolumen względny
