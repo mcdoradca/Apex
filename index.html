@@ -18,7 +18,6 @@
         .sidebar-item { border-left: 3px solid transparent; }
         .candidate-item:hover { background-color: #1f2937; }
         .login-background { 
-            /* Zrzut ekranu z URL, aby był dostępny w środowisku Canvas */
             background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy'); 
             background-size: cover; 
             background-position: center; 
@@ -214,7 +213,7 @@
                 workerStatusText: document.getElementById('worker-status-text'),
                 dashboardLink: document.getElementById('dashboard-link'),
                 heartbeatStatus: document.getElementById('heartbeat-status'),
-                alertContainer: document.getElementById('system-alert-container'), // DODANO: Kontener alertu
+                alertContainer: document.getElementById('system-alert-container'), 
                 phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
                 phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
                 phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
@@ -228,33 +227,25 @@
                 }
             };
             
-            // --- KONFIGURACJA API ---
             const API_BASE_URL = "https://apex-predator-api.onrender.com";
             
-            // POMOCNICZA FUNKCJA DLA LOGOWANIA BŁĘDÓW W KONSOLI
             const logger = {
                 error: (message, error) => console.error(message, error),
                 warn: (message) => console.warn(message),
                 info: (message) => console.log(message),
             };
 
-            // FUNKCJA ZWIĘKSZONA O OBSŁUGĘ BŁĘDÓW Z POJAWIAJĄCYM SIĘ OKNEM ALERT
+            // *** POPRAWKA: Usunięcie `alert()` z obsługi błędów ***
             const apiRequest = async (endpoint, options = {}) => {
                 const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
-                // Ustaw status API jako Online po pierwszej udanej odpowiedzi
                 ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
 
                 if (response.status === 204) return null;
                 if (!response.ok) {
                     const errorText = await response.text();
                     logger.error(`API Error: ${response.status} for ${endpoint}`, errorText);
-                    // Tutaj powinna być lepsza obsługa błędu niż alert(), ale używamy go tymczasowo
-                    // aby pokazać błąd użytkownikowi, zgodnie z instrukcjami.
-                    // UWAGA: Ze względu na ograniczenia środowiska, używamy tymczasowo alert.
-                    // W normalnej aplikacji użyto by modala.
-                    if (options.method !== 'GET') {
-                         alert(`Błąd Akcji (${response.status}): ${errorText.substring(0, 100)}...`);
-                    }
+                    // Zamiast alert(), logujemy błąd do konsoli i rzucamy wyjątek,
+                    // który będzie obsłużony w wywołującej funkcji.
                     throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
                 }
                 if (response.headers.get("Content-Length") === "0") return null;
@@ -272,14 +263,12 @@
                 deletePhase3Signal: (id) => apiRequest(`/api/v1/signals/phase3/${id}`, { method: 'DELETE' }),
                 getConsolidatedDetails: (ticker) => apiRequest(`/api/v1/details/${ticker}`),
                 requestOnDemandAnalysis: (ticker) => apiRequest('/api/v1/analysis/on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-                getOnDemandResult: (ticker) => apiRequest('/api/v1/analysis/on-demand/result/${ticker}'),
+                getOnDemandResult: (ticker) => apiRequest(`/api/v1/analysis/on-demand/result/${ticker}`),
                 requestPhase3OnDemand: (ticker) => apiRequest('/api/v1/analysis/phase3-on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-                getPhase3OnDemandResult: (ticker) => apiRequest('/api/v1/analysis/phase3-on-demand/result/${ticker}'),
+                getPhase3OnDemandResult: (ticker) => apiRequest(`/api/v1/analysis/phase3-on-demand/result/${ticker}`),
                 getLivePrices: (tickers) => apiRequest(`/api/v1/live-prices?tickers=${tickers.join(',')}`),
-                getSystemAlert: () => apiRequest('/api/v1/system/alert') // DODANO: Endpoint alertu
+                getSystemAlert: () => apiRequest('/api/v1/system/alert')
             };
-
-            // --- RENDEROWANIE I WIDOKI ---
 
             const renderers = {
                 loading: (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`,
@@ -366,7 +355,6 @@
                          phase3Html = '<p class="text-xs text-gray-500">Brak aktywnego sygnału Fazy 3.</p>';
                     }
                     
-                    // Logika dla przycisków
                     const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
                     const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
 
@@ -396,12 +384,10 @@
                     `;
                 },
                 
-                // Nowa funkcja do aktualizacji cen na żywo na listach
                 updateLivePricesOnLists: (prices) => {
                     prices.forEach(p => {
                         const ticker = p.ticker;
                         const price = p.price;
-                        // Aktualizacja w Fażach 1, 2 i 3
                         document.querySelectorAll(`.live-price-container[data-ticker="${ticker}"]`).forEach(container => {
                             const parentItem = container.closest('.candidate-item');
                             const priceSpan = container.querySelector(`.current-price-${ticker}`);
@@ -410,29 +396,24 @@
                             const phaseType = parentItem.parentElement.id.split('-')[0];
                             
                             if (phaseType === 'phase1' && priceSpan) {
-                                // Faza 1: Cena i Procent Zmiany
                                 const candidate = state.phase1.find(c => c.ticker === ticker);
                                 if (candidate) {
                                     container.innerHTML = `<span class="current-price-${ticker}">${price.toFixed(2)}</span> (${candidate.change_percent.toFixed(2)}%)`;
                                 }
                             } else if (phaseType === 'phase2' && priceSpan) {
-                                // Faza 2: Score i Cena w nawiasie
                                 const result = state.phase2.find(r => r.ticker === ticker);
                                 if (result) {
                                     priceSpan.innerHTML = `Score: ${result.total_score}/10</span> ($${price.toFixed(2)})`;
                                 }
                             } else if (phaseType === 'phase3' && priceSpan) {
-                                // Faza 3: Status i Cena w nawiasie
                                 const signal = state.phase3.find(s => s.ticker === ticker);
                                 if (signal) {
-                                     // Użyj istniejącego span statusu
-                                    const statusSpan = container.querySelector('.text-green-500, .text-yellow-500');
+                                     const statusSpan = container.querySelector('.text-green-500, .text-yellow-500');
                                     const mainInfo = signal.status === 'ACTIVE' ? `R/R: ${signal.risk_reward_ratio.toFixed(2)}` : `($${price.toFixed(2)})`;
                                     
                                     if (statusSpan) {
                                         priceSpan.innerHTML = mainInfo;
                                     } else {
-                                        // Domyślne wyświetlanie, jeśli statusSpan nie istnieje (np. tylko R/R)
                                         priceSpan.innerHTML = mainInfo;
                                     }
                                 }
@@ -442,14 +423,10 @@
                 }
             };
             
-            // --- FUNKCJE KONTROLI I WIDOKÓW ---
-            
-            // DODANO: Funkcja do obsługi alertów systemowych
             async function pollSystemAlerts() {
                  try {
                     const alertData = await api.getSystemAlert();
                     if (alertData.message !== 'NONE') {
-                        // Utwórz dynamiczny pasek alertu
                         const alertHtml = `
                             <div id="dynamic-alert" class="alert-bar bg-red-800/90 text-white font-semibold flex justify-center items-center">
                                 <i data-lucide="bell" class="w-5 h-5 mr-3"></i>
@@ -460,18 +437,16 @@
                         ui.alertContainer.innerHTML = alertHtml;
                         lucide.createIcons();
                         
-                        // Automatyczne usunięcie po 15 sekundach, jeśli użytkownik nie kliknie 'x'
                         setTimeout(() => {
                             const alertElement = document.getElementById('dynamic-alert');
                             if (alertElement) alertElement.remove();
                         }, 15000);
                         
-                        // Po wyświetleniu alertu, Worker czyści pole w bazie
                     }
                 } catch (e) {
                     logger.error("Błąd podczas pobierania alertów systemowych:", e);
                 }
-                setTimeout(pollSystemAlerts, 10000); // Sprawdzaj alerty co 10 sekund
+                setTimeout(pollSystemAlerts, 10000); 
             }
 
 
@@ -479,7 +454,6 @@
                 if (!statusData) return;
                 state.workerStatus = statusData;
                 
-                // Status silnika
                 let statusClass = 'bg-gray-700 text-gray-200';
                 let dotClass = 'bg-gray-500';
                 if (statusData.status === 'RUNNING') { statusClass = 'bg-green-600/20 text-green-400'; dotClass = 'bg-green-500'; }
@@ -492,26 +466,20 @@
                 ui.dashboard.status.className = `text-4xl font-extrabold mt-2 ${statusData.status === 'RUNNING' ? 'text-green-500' : statusData.status === 'PAUSED' ? 'text-yellow-500' : 'text-gray-500'}`;
                 ui.dashboard.status.textContent = statusData.status;
 
-                // Faza
                 ui.dashboard.phase.textContent = `Faza: ${statusData.phase || 'NONE'}`;
 
-                // Postęp
                 const processed = statusData.progress.processed;
                 const total = statusData.progress.total;
                 const percent = total > 0 ? (processed / total) * 100 : 0;
                 ui.dashboard.progressText.textContent = `${processed} / ${total}`;
                 ui.dashboard.progressBar.style.width = `${Math.min(percent, 100).toFixed(0)}%`;
                 
-                // Log
-                // Zapewnienie, że log jest aktualizowany i przewijany do góry, jeśli jest nowy
                 const isScrolledToTop = ui.dashboard.scanLog.scrollTop === 0;
                 ui.dashboard.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
-                // Automatyczne przewijanie tylko jeśli było już na samej górze (tj. nowe wiadomości)
                 if (isScrolledToTop) {
                     ui.dashboard.scanLog.scrollTop = 0;
                 }
                 
-                // Heartbeat
                 if (statusData.last_heartbeat_utc) {
                     const beatTime = new Date(statusData.last_heartbeat_utc);
                     const now = new Date();
@@ -525,7 +493,6 @@
                     }
                 }
 
-                // Kontrola przycisków
                 ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
                 ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
                 ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
@@ -541,35 +508,26 @@
                     ui.workerStatusText.textContent = 'API ERR';
                     ui.dashboard.status.textContent = 'API ERR';
                 }
-                // Użycie setTimeout do cyklicznego odpytywania
                 setTimeout(pollWorkerStatus, 5000); 
             }
             
-            // Nowa funkcja do cyklicznego odpytywania wyników analizy na żądanie
             async function pollOnDemandResults(ticker) {
                 if (!state.activePolling.has(ticker)) return;
 
                 const data = await api.getConsolidatedDetails(ticker);
-                // Status PROCESSING jest teraz sprawdzany przez Workera, który używa 'PROCESSING' jako wartość w `system_control`
-                // Po stronie frontendu, sprawdzamy pole `message` w zwróconych danych
                 const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
                 const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
                 
-                // Jeśli wyświetlamy ten ticker, zaktualizuj widok
                 if (state.dashboardContent?.ticker === ticker) {
-                    // Ponowne renderowanie szczegółów, aby zaktualizować status przycisków i log
                     ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
                     lucide.createIcons();
                 }
 
                 if (isOndemandProcessing || isPhase3Processing) {
-                    // Kontynuuj odpytywanie
                     setTimeout(() => pollOnDemandResults(ticker), 3000);
                 } else {
-                    // Analiza zakończona, usuń z listy aktywnych
                     state.activePolling.delete(ticker);
                     logger.info(`Polling for ${ticker} ended.`);
-                    // Ostatnie odświeżenie listy faz (jeśli Faza 3 coś zapisała)
                     refreshAllData();
                 }
             }
@@ -587,7 +545,6 @@
                     state.phase2 = phase2 || [];
                     state.phase3 = phase3 || [];
 
-                    // Rysowanie list bocznych
                     ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
                     ui.phase1.count.textContent = state.phase1.length;
                     
@@ -598,31 +555,21 @@
                     ui.phase3.count.textContent = state.phase3.length;
                     ui.dashboard.signals.textContent = state.phase3.length;
                     
-                    // Uruchom aktualizację cen na żywo po odświeżeniu list (poprawka w logice renderowania)
-                    // Nie wywołujemy pętli live prices stąd, tylko aktualizujemy jej dane
-                    // updateLivePrices() jest wywoływana z startDashboard() i ma wbudowany timeout.
-
-                    // Odśwież widok szczegółów, jeśli jest otwarty
                     if (state.dashboardContent && state.dashboardContent.type === 'details') {
-                         // Ponieważ Analiza Na Żądanie jest teraz odpytywana osobno, tutaj wystarczy sprawdzić, czy Polling jest aktywny
                          if (!state.activePolling.has(state.dashboardContent.ticker)) {
-                            await showDetails(state.dashboardContent.ticker, true); // True oznacza brak renderowania Loading Screen
+                            await showDetails(state.dashboardContent.ticker, true); 
                          }
                     }
                     
-                    // Po wczytaniu list, upewnij się, że ikony Lucide są poprawnie renderowane
                     lucide.createIcons();
 
                 } catch (e) {
                      logger.error("Błąd podczas odświeżania danych faz:", e);
                 }
-                // Użycie setTimeout do cyklicznego odpytywania
                 setTimeout(refreshAllData, 15000); 
             }
             
-            // Nowa funkcja do cyklicznej aktualizacji cen na żywo (co 5 sekund)
             async function updateLivePrices() {
-                // Pobierz wszystkie tickery z aktualnie załadowanych list faz
                 const allTickers = new Set([
                     ...state.phase1.map(c => c.ticker),
                     ...state.phase2.map(r => r.ticker),
@@ -647,7 +594,6 @@
 
 
             async function showDetails(ticker, skipLoading = false) {
-                // Ukryj widok Dashboard, jeśli jest widoczny
                 const dashboardView = ui.mainContent.querySelector('#dashboard-view');
                 if (dashboardView) dashboardView.classList.add('hidden');
                 
@@ -658,12 +604,9 @@
                 try {
                     const data = await api.getConsolidatedDetails(ticker);
                     
-                    // Zaktualizuj widok szczegółów
                     ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
                     lucide.createIcons();
                     
-                    // Sprawdź, czy jest aktywne przetwarzanie Analizy Na Żądanie lub Fazy 3
-                    // Używamy pola 'ticker' w analysis_data, aby upewnić się, że to nasz ticker jest przetwarzany
                     const isOndemandProcessing = data.on_demand_analysis?.ticker === ticker && data.on_demand_analysis?.message === 'PROCESSING';
                     const isPhase3Processing = data.phase3_on_demand_analysis?.ticker === ticker && data.phase3_on_demand_analysis?.message === 'PROCESSING';
                     
@@ -682,35 +625,28 @@
             }
 
             function startDashboard() {
-                // *** POPRAWKA KLUCZOWA: Ukrycie ekranu logowania i pokazanie dashboardu ***
                 ui.loginScreen.classList.add('hidden');
                 ui.dashboardScreen.classList.remove('hidden');
-                // Ustawienie domyślnego widoku na Dashboard
                 showDashboardView();
-                // Rozpoczęcie cyklicznych odpytywań
                 pollWorkerStatus();
                 refreshAllData();
-                updateLivePrices(); // Dodano start pętli live prices
-                pollSystemAlerts(); // DODANO: Start pętli alertów
+                updateLivePrices(); 
+                pollSystemAlerts(); 
             }
             
             function showDashboardView() {
-                // Usuń całą zawartość z main-content (w tym widok szczegółów)
                 ui.mainContent.innerHTML = '';
                 
-                // Ponownie wstaw widok dashboardu (zapisany w stałym HTML)
                 const dashboardHtml = `
                     <div id="dashboard-view" class="max-w-4xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
                         
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <!-- Karta statusu -->
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
                                 <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
                                 <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
                             </div>
-                            <!-- Karta postępu -->
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
                                 <div class="mt-2">
@@ -721,7 +657,6 @@
                                     <div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
                                 </div>
                             </div>
-                            <!-- Karta sygnałów -->
                              <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3>
                                 <p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p>
@@ -737,7 +672,6 @@
                 `;
                 ui.mainContent.innerHTML = dashboardHtml;
                 
-                // Ponowne mapowanie UI dla dashboardu (kluczowe!)
                 ui.dashboard.status = document.getElementById('dashboard-worker-status');
                 ui.dashboard.phase = document.getElementById('dashboard-current-phase');
                 ui.dashboard.signals = document.getElementById('dashboard-active-signals');
@@ -745,7 +679,6 @@
                 ui.dashboard.progressBar = document.getElementById('progress-bar');
                 ui.dashboard.scanLog = document.getElementById('scan-log');
                 
-                // Uaktualnij widok Dashboardu przy przejściu
                 updateWorkerStatusUI(state.workerStatus);
                 ui.dashboard.signals.textContent = state.phase3.length;
                 
@@ -753,24 +686,19 @@
                 lucide.createIcons(); 
             }
             
-            // --- HANDLERY ZDARZEŃ ---
-            
             function handleWorkerControl(action) {
                 return async () => {
                     try {
                         logger.info(`Sending worker command: ${action}`);
                         const response = await api.sendWorkerControl(action);
                         console.log(response);
-                        // Natychmiastowe odświeżenie statusu, aby zobaczyć komendę
                         await pollWorkerStatus();
                     } catch (e) {
                         logger.error(`Błąd kontroli: ${action}`, e);
-                        // Alert zostanie wyświetlony w apiRequest, jeśli wystąpi błąd serwera.
                     }
                 };
             }
             
-            // Delegacja zdarzeń dla list faz
             document.querySelector('#phases-container').addEventListener('click', (e) => {
                 const candidateItem = e.target.closest('.candidate-item');
                 const accordionToggle = e.target.closest('.accordion-toggle');
@@ -791,7 +719,6 @@
                 }
             });
 
-            // Delegacja zdarzeń dla przycisków analizy na żądanie
             ui.mainContent.addEventListener('click', async (e) => {
                 const onDemandBtn = e.target.closest('.request-on-demand-btn');
                 const phase3Btn = e.target.closest('.request-phase3-on-demand-btn');
@@ -803,17 +730,13 @@
                         onDemandBtn.textContent = 'Wysłano (Czekam na Silnik...)';
                         logger.info(`Requesting on-demand analysis for ${ticker}`);
                         
-                        // Wysłanie żądania do workera
                         await api.requestOnDemandAnalysis(ticker);
                         
-                        // Uruchomienie odpytywania
                         state.activePolling.add(ticker);
                         pollOnDemandResults(ticker);
                         
-                        // Ponowne odświeżenie szczegółów, aby zaktualizować status przycisku
                         await showDetails(ticker, true); 
                     } catch (e) {
-                        // Błąd obsługiwany w apiRequest
                         onDemandBtn.disabled = false;
                         onDemandBtn.textContent = 'Uruchom Pełną Analizę Wskaźników';
                     }
@@ -826,40 +749,31 @@
                         phase3Btn.textContent = 'Wysłano (Czekam na Silnik...)';
                          logger.info(`Requesting Phase 3 on-demand analysis for ${ticker}`);
                          
-                         // Wysłanie żądania do workera
                         await api.requestPhase3OnDemand(ticker);
                         
-                        // Uruchomienie odpytywania
                         state.activePolling.add(ticker);
                         pollOnDemandResults(ticker);
                         
-                        // Ponowne odświeżenie szczegółów, aby zaktualizować status przycisku
                         await showDetails(ticker, true); 
                     } catch (e) {
-                         // Błąd obsługiwany w apiRequest
                         phase3Btn.disabled = false;
                         phase3Btn.textContent = 'Uruchom Analizę Predator (Faza 3)';
                     }
                 }
             });
 
-            // Wyszukiwanie na żądanie z paska
             ui.tickerInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
                     showDetails(ui.tickerInput.value.trim().toUpperCase());
-                    ui.tickerInput.value = ''; // Wyczyść pole po wysłaniu
+                    ui.tickerInput.value = ''; 
                 }
             });
 
-            // Handler dla przycisku Dashboard
             ui.dashboardLink.addEventListener('click', showDashboardView);
 
-            // Handlery dla przycisków kontroli workera
             ui.startBtn.addEventListener('click', handleWorkerControl('start'));
             ui.pauseBtn.addEventListener('click', handleWorkerControl('pause'));
             ui.resumeBtn.addEventListener('click', handleWorkerControl('resume'));
-
-            // --- INICJALIZACJA ---
             
             function checkBackendReady() {
                 ui.loginStatusText.textContent = 'Oczekiwanie na uruchomienie usług backendu...';
@@ -885,20 +799,13 @@
                 startDashboard();
             });
 
-            // Główne wywołanie
             checkBackendReady();
             lucide.createIcons();
             
-            // Ustaw początkowy widok szczegółów dashboardu
-            // WAŻNE: W tym miejscu musimy zachować stałą strukturę HTML, aby móc do niej się odwołać
-            // gdy ponownie uruchamiana jest funkcja showDashboardView()
-            // Zapisujemy referencję do aktualnego widoku Dashboardu (który jest ukryty na początku)
             const initialDashboardView = ui.mainContent.querySelector('#dashboard-view');
-            // Usuwamy go, aby móc go później dynamicznie wstawiać
             initialDashboardView.remove();
-            
-            // Przy starcie aplikacji pokazujemy dashboard-view, ale dopiero po zalogowaniu.
         });
     </script>
 </body>
 </html>
+
