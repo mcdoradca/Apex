@@ -21,18 +21,15 @@ class AlphaVantageClient:
 
     def _rate_limiter(self):
         """Ulepszony, bardziej rygorystyczny ogranicznik zapytań."""
-        # Usuń znaczniki czasu starsze niż minuta
         while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
         
-        # Jeśli kolejka jest pełna, poczekaj, aż zwolni się miejsce
         if len(self.request_timestamps) >= self.requests_per_minute:
             time_to_wait = 60 - (time.monotonic() - self.request_timestamps[0])
             if time_to_wait > 0:
                 logger.warning(f"Rate limit reached. Sleeping for {time_to_wait:.2f} seconds.")
                 time.sleep(time_to_wait)
         
-        # Zawsze zachowaj minimalny odstęp między zapytaniami, aby uniknąć burstów
         if self.request_timestamps:
             time_since_last = time.monotonic() - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
@@ -52,9 +49,9 @@ class AlphaVantageClient:
                 data = response.json()
                 if not data or "Error Message" in data or "Information" in data:
                     logger.warning(f"API returned an error or empty data for {params.get('symbol')}: {data}")
-                    if "premium" in str(data): # Jeśli błąd wspomina o premium, to znaczy, że limit jest problemem
+                    if "premium" in str(data):
                          logger.error("API call failed due to premium limit. Waiting longer.")
-                         time.sleep(20) # Dłuższa przerwa w przypadku błędu limitu
+                         time.sleep(20)
                     return None
                 if "Note" in data:
                     logger.warning(f"API Note for {params.get('symbol')}: {data['Note']}.")
@@ -69,7 +66,7 @@ class AlphaVantageClient:
         self._rate_limiter()
         params = {
             "function": "REALTIME_BULK_QUOTES",
-            "symbols": ",".join(symbols), # Poprawiona nazwa parametru z 'symbol' na 'symbols'
+            "symbol": ",".join(symbols), # POPRAWKA: Prawidłowa nazwa parametru to 'symbol', nie 'symbols'.
             "datatype": "csv",
             "apikey": self.api_key
         }
