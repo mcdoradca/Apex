@@ -20,21 +20,30 @@ class AlphaVantageClient:
         self.request_timestamps = deque()
 
     def _rate_limiter(self):
+        """Ulepszony, bardziej rygorystyczny ogranicznik zapytań."""
+        # Usuń znaczniki czasu starsze niż minuta
         while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
-        if len(self.request_timestamps) >= (self.requests_per_minute - 1):
-            sleep_time = self.request_interval - (time.monotonic() - self.request_timestamps[-1])
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+        
+        # Jeśli kolejka jest pełna, poczekaj, aż zwolni się miejsce
+        if len(self.request_timestamps) >= self.requests_per_minute:
+            time_to_wait = 60 - (time.monotonic() - self.request_timestamps[0])
+            if time_to_wait > 0:
+                logger.warning(f"Rate limit reached. Sleeping for {time_to_wait:.2f} seconds.")
+                time.sleep(time_to_wait)
+        
+        # Zawsze zachowaj minimalny odstęp między zapytaniami, aby uniknąć burstów
+        if self.request_timestamps:
+            time_since_last = time.monotonic() - self.request_timestamps[-1]
+            if time_since_last < self.request_interval:
+                time.sleep(self.request_interval - time_since_last)
+                
         self.request_timestamps.append(time.monotonic())
+
 
     def _make_request(self, params: dict):
         self._rate_limiter()
         params['apikey'] = self.api_key
-        # --- POPRAWKA ---
-        # Dodano parametr 'entitlement', aby zapewnić dostęp do danych w czasie rzeczywistym
-        # dla wszystkich zapytań, zgodnie z wymaganiami klucza Premium.
-        params['entitlement'] = 'realtime'
         
         for attempt in range(self.retries):
             try:
@@ -43,6 +52,9 @@ class AlphaVantageClient:
                 data = response.json()
                 if not data or "Error Message" in data or "Information" in data:
                     logger.warning(f"API returned an error or empty data for {params.get('symbol')}: {data}")
+                    if "premium" in str(data): # Jeśli błąd wspomina o premium, to znaczy, że limit jest problemem
+                         logger.error("API call failed due to premium limit. Waiting longer.")
+                         time.sleep(20) # Dłuższa przerwa w przypadku błędu limitu
                     return None
                 if "Note" in data:
                     logger.warning(f"API Note for {params.get('symbol')}: {data['Note']}.")
@@ -57,17 +69,16 @@ class AlphaVantageClient:
         self._rate_limiter()
         params = {
             "function": "REALTIME_BULK_QUOTES",
-            "symbol": ",".join(symbols),
+            "symbols": ",".join(symbols), # Poprawiona nazwa parametru z 'symbol' na 'symbols'
             "datatype": "csv",
-            "apikey": self.api_key,
-            "entitlement": "realtime"
+            "apikey": self.api_key
         }
         for attempt in range(self.retries):
             try:
                 response = requests.get(self.BASE_URL, params=params, timeout=30)
                 response.raise_for_status()
                 text_response = response.text
-                if "Error Message" in text_response or "Invalid API call" in text_response or "THE SAMPLE DATA SCHEMA" in text_response:
+                if "Error Message" in text_response or "Invalid API call" in text_response:
                     logger.error(f"Bulk quotes API returned an error: {text_response[:200]}")
                     return None
                 return text_response
@@ -84,54 +95,36 @@ class AlphaVantageClient:
     def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
-
-    # --- NOWA FUNKCJA ZGODNA Z DOKUMENTACJĄ ---
-    # Dodano funkcję do pobierania danych intraday, która może być przydatna w Fazie 3
+        
     def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact'):
-        """Pobiera dane intraday dla zadanego symbolu."""
-        params = {
-            "function": "TIME_SERIES_INTRADAY",
-            "symbol": symbol,
-            "interval": interval,
-            "outputsize": outputsize,
-            "extended_hours": "false" # Analizujemy tylko godziny handlu
-        }
-        return self._make_request(params)
-    
-    def get_news_sentiment(self, ticker: str):
-        """Pobiera wiadomości i analizę sentymentu."""
-        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": "50"} # Ograniczamy do 50, aby oszczędzać dane
+        params = {"function": "TIME_SERIES_INTRADAY", "symbol": symbol, "interval": interval, "outputsize": outputsize}
         return self._make_request(params)
 
-    def get_bollinger_bands(self, symbol: str, time_period: int = 20, series_type: str = 'close'):
-        """Pobiera dane dla wskaźnika Bollinger Bands."""
-        params = {
-            "function": "BBANDS",
-            "symbol": symbol,
-            "interval": "daily",
-            "time_period": str(time_period),
-            "series_type": series_type,
-            "nbdevup": "2",
-            "nbdevdn": "2"
-        }
+    def get_atr(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ATR", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
         return self._make_request(params)
 
-    def get_atr(self, symbol: str, time_period: int = 14):
-        params = {"function": "ATR", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
-        return self._make_request(params)
-
-    def get_rsi(self, symbol: str, time_period: int = 14, series_type: str = 'close'):
-        params = {"function": "RSI", "symbol": symbol, "interval": "daily", "time_period": str(time_period), "series_type": series_type}
+    def get_rsi(self, symbol: str, time_period: int = 9, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "RSI", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
         return self._make_request(params)
         
-    def get_stoch(self, symbol: str):
-        params = {"function": "STOCH", "symbol": symbol, "interval": "daily"}
+    def get_stoch(self, symbol: str, interval: str = 'daily'):
+        params = {"function": "STOCH", "symbol": symbol, "interval": interval}
         return self._make_request(params)
 
-    def get_adx(self, symbol: str, time_period: int = 14):
-        params = {"function": "ADX", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
+    def get_adx(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ADX", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
         return self._make_request(params)
 
-    def get_macd(self, symbol: str, series_type: str = 'close'):
-        params = {"function": "MACD", "symbol": symbol, "interval": "daily", "series_type": series_type}
+    def get_macd(self, symbol: str, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "MACD", "symbol": symbol, "interval": interval, "series_type": series_type}
         return self._make_request(params)
+        
+    def get_bollinger_bands(self, symbol: str, time_period: int = 20, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "BBANDS", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
+        return self._make_request(params)
+        
+    def get_news_sentiment(self, ticker: str, limit: int = 50):
+        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)}
+        return self._make_request(params)
+
