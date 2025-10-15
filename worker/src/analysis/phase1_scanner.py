@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 def _parse_bulk_quotes_csv(csv_text: str) -> dict:
     """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych, poprawnie obsługując formaty."""
-    # Modyfikacja 4: Logowanie na początku funkcji
     logger.info(f"[DIAGNOSTYKA] Otrzymano CSV do parsowania (pierwsze 200 znaków): {csv_text[:200]}")
     
     if not csv_text or "symbol" not in csv_text:
@@ -37,7 +36,8 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
             change_percent_val = safe_float(change_percent_str)
 
         data_dict[ticker] = {
-            'price': safe_float(row.get('price')),
+            # --- POPRAWKA: Użycie 'close' zamiast 'price' ---
+            'price': safe_float(row.get('close')),
             'volume': safe_float(row.get('volume')),
             'change_percent': change_percent_val
         }
@@ -61,9 +61,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     pre_candidates_data = {}
     chunk_size = 100 
     
-    # Zmienne do logowania diagnostycznego
     detailed_log_count = 0
-    # Modyfikacja 1: Zwiększona liczba logowanych odrzuceń
     max_detailed_logs = 50 
 
     for i in range(0, total_tickers, chunk_size):
@@ -73,25 +71,21 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         chunk = all_tickers[i:i + chunk_size]
         bulk_data_csv = api_client.get_bulk_quotes(chunk)
         
-        # Modyfikacja 3: Logowanie, gdy bulk_data_csv jest puste
         if not bulk_data_csv:
             logger.warning(f"[DIAGNOSTYKA] Nie otrzymano danych z API dla chunka zaczynającego się od {chunk[0]}.")
             continue
 
         parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
         
-        # Modyfikacja 2: Logowanie, gdy chunk nie przetwarza żadnych tickerów
         if not parsed_data:
             logger.warning(f"[DIAGNOSTYKA] Parsowanie danych dla chunka {chunk[0]} zwróciło pusty wynik.")
             continue
-
 
         for ticker, data in parsed_data.items():
             price = data.get('price')
             volume = data.get('volume')
             change_percent = data.get('change_percent')
 
-            # --- POCZĄTEK LOGOWANIA DIAGNOSTYCZNEGO ---
             rejection_reasons = []
 
             if not price or not isinstance(price, (int, float)):
@@ -114,7 +108,6 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                     logger.info(f"[DIAGNOSTYKA] Odrzucono {ticker}: {'; '.join(rejection_reasons)}")
                     detailed_log_count += 1
                 continue
-            # --- KONIEC LOGOWANIA DIAGNOSTYCZNEGO ---
 
             pre_candidates_data[ticker] = data
         
