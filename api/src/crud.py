@@ -33,9 +33,9 @@ def delete_phase2_result(db: Session, ticker: str):
     return {"message": f"Result {ticker} from Phase 2 deleted."}
 
 # --- FUNKCJE DLA SYGNAŁÓW FAZY 3 ---
-def get_active_signals(db: Session) -> list[models.TradingSignal]:
-    """Pobiera aktywne sygnały (Wyniki Fazy 3)."""
-    return db.query(models.TradingSignal).filter(models.TradingSignal.status == 'ACTIVE').order_by(desc(models.TradingSignal.generation_date)).all()
+def get_active_and_pending_signals(db: Session) -> list[models.TradingSignal]:
+    """Pobiera aktywne i oczekujące sygnały (Wyniki Fazy 3)."""
+    return db.query(models.TradingSignal).filter(models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])).order_by(desc(models.TradingSignal.generation_date)).all()
 
 def delete_trading_signal(db: Session, signal_id: int):
     """Usuwa (deaktywuje) sygnał Fazy 3."""
@@ -57,8 +57,9 @@ def set_system_control_value(db: Session, key: str, value: str):
         INSERT INTO system_control (key, value, updated_at)
         VALUES (:key, :value, NOW())
         ON CONFLICT (key) DO UPDATE
-        SET value = EXCLUDED.value, updated_at = NOW();
+        SET value = :value, updated_at = NOW();
     """)
+    # Usunięto EXCLUDED.value na rzecz :value, aby uniknąć problemów z CONFLICT w starszych wersjach Pythona/SQLAlchemy
     db.execute(stmt, {'key': key, 'value': value})
     db.commit()
 
@@ -77,9 +78,12 @@ def get_consolidated_details(db: Session, ticker: str) -> Dict[str, Any]:
     today = date.today()
     details = {"ticker": ticker}
     details['phase1_data'] = db.query(models.Phase1Candidate).filter(models.Phase1Candidate.ticker == ticker, models.Phase1Candidate.analysis_date == today).first()
-    details['phase2_data'] = db.query(models.Phase2Result).filter(models.Phase2Result.ticker == ticker, models.Phase2Result.analysis_date == today).first()
-    details['phase3_signal'] = db.query(models.TradingSignal).filter(models.TradingSignal.ticker == ticker, models.TradingSignal.status == 'ACTIVE').order_by(desc(models.TradingSignal.generation_date)).first()
+    # Pytamy tylko o najnowszy wynik Fazy 2
+    details['phase2_data'] = db.query(models.Phase2Result).filter(models.Phase2Result.ticker == ticker).order_by(desc(models.Phase2Result.analysis_date)).first()
+    
+    # Pytamy o aktywny/oczekujący sygnał Fazy 3 (jeśli jest)
+    details['phase3_signal'] = db.query(models.TradingSignal).filter(models.TradingSignal.ticker == ticker, models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])).order_by(desc(models.TradingSignal.generation_date)).first()
+    
     details['on_demand_analysis'] = get_on_demand_result(db, ticker)
     details['phase3_on_demand_analysis'] = get_phase3_on_demand_result(db, ticker)
     return details
-
