@@ -54,7 +54,8 @@ async def startup_event():
             'scan_log': 'Czekam na rozpoczęcie skanowania...',
             'last_heartbeat': datetime.now(timezone.utc).isoformat(),
             'on_demand_request': 'NONE',
-            'phase3_on_demand_request': 'NONE'
+            'phase3_on_demand_request': 'NONE',
+            'system_alert': 'NONE' # DODANO: Inicjalizacja alertu
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -87,7 +88,8 @@ def delete_phase2_result_endpoint(ticker: str, db: Session = Depends(get_db)):
 
 @app.get("/api/v1/signals/phase3", response_model=List[schemas.TradingSignal])
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
-    return crud.get_active_signals(db)
+    # Zmieniono na pobieranie ACTIVE i PENDING sygnałów
+    return crud.get_active_and_pending_signals(db)
 
 @app.delete("/api/v1/signals/phase3/{signal_id}", status_code=204)
 def delete_phase3_signal_endpoint(signal_id: int, db: Session = Depends(get_db)):
@@ -167,6 +169,20 @@ def get_worker_status(db: Session = Depends(get_db)):
         logger.error(f"Error fetching worker status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch worker status.")
 
+# DODANO: Endpoint do pobierania globalnego alertu systemowego
+@app.get("/api/v1/system/alert", response_model=schemas.SystemAlert)
+def get_system_alert(db: Session = Depends(get_db)):
+    """Pobiera i czyści globalny alert systemowy."""
+    alert_message = crud.get_system_control_value(db, "system_alert")
+    
+    if alert_message and alert_message != 'NONE':
+        # Czyści alert po odczycie przez frontend (ważne, żeby nie pokazywał się w kółko)
+        crud.set_system_control_value(db, "system_alert", "NONE")
+        return schemas.SystemAlert(message=alert_message)
+        
+    return schemas.SystemAlert(message="NONE")
+
+
 # --- ENDPOINT CEN NA ŻYWO ---
 
 @app.get("/api/v1/live-prices", response_model=List[schemas.LivePrice])
@@ -182,9 +198,22 @@ def get_live_prices(tickers: Optional[str] = Query(None), db: Session = Depends(
         return []
 
     try:
-        prices = crud.get_live_prices_from_api(ticker_list, api_client)
+        # Używamy zaimplementowanej funkcji do pobierania live prices (działa w workwerze, więc importujemy stamtąd)
+        from worker.src.analysis.phase1_scanner import _parse_bulk_quotes_csv
+        bulk_data_csv = api_client.get_bulk_quotes(ticker_list)
+        if not bulk_data_csv:
+            return []
+            
+        parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
+        
+        # Konwersja na schemat LivePrice
+        prices = []
+        for ticker, data in parsed_data.items():
+            if data['price'] is not None:
+                prices.append(schemas.LivePrice(ticker=ticker, price=data['price']))
+                
         return prices
+
     except Exception as e:
         logger.error(f"Error fetching live prices: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch live prices.")
-
