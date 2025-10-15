@@ -271,23 +271,23 @@
                 phase1List: (candidates) => candidates.map(c => 
                     `<div data-ticker="${c.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-1-text">
                         <span class="font-bold">${c.ticker}</span>
-                        <span class="text-gray-500">${c.price ? c.price.toFixed(2) : '--'} (${c.change_percent ? c.change_percent.toFixed(2) : '--'}%)</span>
+                        <span class="text-gray-500 live-price-container" data-ticker="${c.ticker}"><span class="current-price-${c.ticker}">${c.price ? c.price.toFixed(2) : '--'}</span> (${c.change_percent ? c.change_percent.toFixed(2) : '--'}%)</span>
                     </div>`
                 ).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników Fazy 1.</p>`,
                 phase2List: (results) => results.map(r => 
                     `<div data-ticker="${r.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-2-text">
                         <span class="font-bold">${r.ticker}</span>
-                        <span class="text-gray-400">Score: ${r.total_score}/10</span>
+                        <span class="text-gray-400 live-price-container" data-ticker="${r.ticker}"><span class="current-price-${r.ticker}">Score: ${r.total_score}/10</span></span>
                     </div>`
                 ).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników Fazy 2.</p>`,
                 phase3List: (signals) => signals.map(s => 
                     `<div data-ticker="${s.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-3-text">
                         <span class="font-bold">${s.ticker}</span>
-                        <span class="text-gray-400">R/R: ${s.risk_reward_ratio.toFixed(2)}</span>
+                        <span class="text-gray-400 live-price-container" data-ticker="${s.ticker}"><span class="current-price-${s.ticker}">R/R: ${s.risk_reward_ratio.toFixed(2)}</span></span>
                     </div>`
                 ).join('') || `<p class="text-xs text-gray-500 p-2">Brak aktywnych sygnałów.</p>`,
                 
-                consolidatedDetails: (ticker, data) => {
+                consolidatedDetails: (ticker, data, isPolling) => {
                     if (!data) return renderers.error(`Brak Danych dla ${ticker}`, `Nie znaleziono żadnych danych (Faza 1, Faza 2, Faza 3) dla tickera ${ticker}.`);
                     
                     const phase1Html = data.phase1_data ? `
@@ -319,9 +319,19 @@
                             <p class="text-xs text-gray-400 mt-1">${signal.notes || 'Brak notatek.'}</p>
                         </div>
                     ` : '<p class="text-xs text-gray-500">Brak aktywnego sygnału Fazy 3.</p>';
+                    
+                    // Logika dla przycisków
+                    const isOndemandProcessing = data.on_demand_analysis?.ticker === ticker && data.on_demand_analysis?.message === 'PROCESSING';
+                    const isPhase3Processing = data.phase3_on_demand_analysis?.ticker === ticker && data.phase3_on_demand_analysis?.message === 'PROCESSING';
+
+                    const onDemandBtnText = isOndemandProcessing ? 'Analiza w toku...' : 'Uruchom Pełną Analizę Wskaźników';
+                    const phase3BtnText = isPhase3Processing ? 'Analiza w toku...' : 'Uruchom Analizę Predator (Faza 3)';
+                    const onDemandBtnDisabled = isOndemandProcessing ? 'disabled' : '';
+                    const phase3BtnDisabled = isPhase3Processing ? 'disabled' : '';
+
 
                     return `
-                        <div class="max-w-4xl mx-auto">
+                        <div class="max-w-4xl mx-auto" id="ticker-details-${ticker}">
                             <h2 class="text-3xl font-bold text-white mb-6">${ticker} - Skonsolidowany Raport</h2>
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 ${phase1Html}
@@ -330,10 +340,43 @@
                             </div>
                             <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4 border-b border-gray-700 pb-1">Analiza Na Żądanie (Wskaźniki)</h3>
                             <pre class="bg-[#161B22] p-4 rounded-lg text-xs overflow-x-auto font-mono text-gray-300">${JSON.stringify(data.on_demand_analysis || {status: 'Brak aktywnej analizy na żądanie.'}, null, 2)}</pre>
-                            <button data-ticker="${ticker}" class="request-on-demand-btn mt-4 bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors">Uruchom Pełną Analizę Wskaźników</button>
-                            <button data-ticker="${ticker}" class="request-phase3-on-demand-btn mt-4 ml-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors">Uruchom Analizę Predator (Faza 3)</button>
+                            
+                            <div class="mt-4 flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-4">
+                                <button data-ticker="${ticker}" class="request-on-demand-btn bg-sky-600 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed" ${onDemandBtnDisabled}>${onDemandBtnText}</button>
+                                <button data-ticker="${ticker}" class="request-phase3-on-demand-btn bg-red-600 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed" ${phase3BtnDisabled}>${phase3BtnText}</button>
+                            </div>
+                            
                         </div>
                     `;
+                },
+                
+                // Nowa funkcja do aktualizacji cen na żywo na listach
+                updateLivePricesOnLists: (prices) => {
+                    prices.forEach(p => {
+                        const ticker = p.ticker;
+                        const price = p.price;
+                        // Aktualizacja w Fażie 1 (ma pełny format)
+                        document.querySelectorAll(`.phase-1-text .live-price-container[data-ticker="${ticker}"]`).forEach(container => {
+                            // Wymaga to pobrania aktualnego procentu zmiany
+                            const candidate = state.phase1.find(c => c.ticker === ticker);
+                            if (candidate) {
+                                container.innerHTML = `<span class="current-price-${ticker}">${price.toFixed(2)}</span> (${candidate.change_percent.toFixed(2)}%)`;
+                            }
+                        });
+                         // Aktualizacja w Fażach 2 i 3 (mają tylko wynik)
+                        document.querySelectorAll(`.phase-2-text .live-price-container[data-ticker="${ticker}"]`).forEach(container => {
+                             const result = state.phase2.find(r => r.ticker === ticker);
+                             if (result) {
+                                container.innerHTML = `<span class="current-price-${ticker}">Score: ${result.total_score}/10</span> ($${price.toFixed(2)})`;
+                             }
+                        });
+                        document.querySelectorAll(`.phase-3-text .live-price-container[data-ticker="${ticker}"]`).forEach(container => {
+                             const signal = state.phase3.find(s => s.ticker === ticker);
+                             if (signal) {
+                                container.innerHTML = `<span class="current-price-${ticker}">R/R: ${signal.risk_reward_ratio.toFixed(2)}</span> ($${price.toFixed(2)})`;
+                             }
+                        });
+                    });
                 }
             };
             
@@ -408,6 +451,33 @@
                 // Użycie setTimeout do cyklicznego odpytywania
                 setTimeout(pollWorkerStatus, 5000); 
             }
+            
+            // Nowa funkcja do cyklicznego odpytywania wyników analizy na żądanie
+            async function pollOnDemandResults(ticker) {
+                if (!state.activePolling.has(ticker)) return;
+
+                const data = await api.getConsolidatedDetails(ticker);
+                const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
+                const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
+
+                if (state.dashboardContent?.ticker === ticker) {
+                    // Ponowne renderowanie szczegółów, aby zaktualizować status przycisków i log
+                    ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
+                    lucide.createIcons();
+                }
+
+                if (isOndemandProcessing || isPhase3Processing) {
+                    // Kontynuuj odpytywanie
+                    setTimeout(() => pollOnDemandResults(ticker), 3000);
+                } else {
+                    // Analiza zakończona, usuń z listy aktywnych
+                    state.activePolling.delete(ticker);
+                    logger.info(`Polling for ${ticker} ended.`);
+                    // Ostatnie odświeżenie listy faz (jeśli Faza 3 coś zapisała)
+                    refreshAllData();
+                }
+            }
+
 
             async function refreshAllData() {
                 try {
@@ -432,9 +502,15 @@
                     ui.phase3.count.textContent = state.phase3.length;
                     ui.dashboard.signals.textContent = state.phase3.length;
                     
+                    // Uruchom aktualizację cen na żywo po odświeżeniu list
+                    updateLivePrices(); 
+
                     // Odśwież widok szczegółów, jeśli jest otwarty
                     if (state.dashboardContent && state.dashboardContent.type === 'details') {
-                         await showDetails(state.dashboardContent.ticker);
+                         // Ponieważ Analiza Na Żądanie jest teraz odpytywana osobno, tutaj wystarczy sprawdzić, czy Polling jest aktywny
+                         if (!state.activePolling.has(state.dashboardContent.ticker)) {
+                            await showDetails(state.dashboardContent.ticker, true); // True oznacza brak renderowania Loading Screen
+                         }
                     }
                     
                     // Po wczytaniu list, upewnij się, że ikony Lucide są poprawnie renderowane
@@ -446,22 +522,62 @@
                 // Użycie setTimeout do cyklicznego odpytywania
                 setTimeout(refreshAllData, 15000); 
             }
+            
+            // Nowa funkcja do cyklicznej aktualizacji cen na żywo (co 5 sekund)
+            async function updateLivePrices() {
+                // Pobierz wszystkie tickery z aktualnie załadowanych list faz
+                const allTickers = new Set([
+                    ...state.phase1.map(c => c.ticker),
+                    ...state.phase2.map(r => r.ticker),
+                    ...state.phase3.map(s => s.ticker)
+                ]);
+                
+                const tickers = Array.from(allTickers);
+                if (tickers.length === 0) {
+                    setTimeout(updateLivePrices, 5000);
+                    return;
+                }
 
-            async function showDetails(ticker) {
+                try {
+                    const livePrices = await api.getLivePrices(tickers);
+                    renderers.updateLivePricesOnLists(livePrices);
+                } catch (e) {
+                    logger.warn("Nie można pobrać cen na żywo:", e);
+                }
+                
+                setTimeout(updateLivePrices, 5000);
+            }
+
+
+            async function showDetails(ticker, skipLoading = false) {
                 // Ukryj widok Dashboard, jeśli jest widoczny
                 const dashboardView = ui.mainContent.querySelector('#dashboard-view');
                 if (dashboardView) dashboardView.classList.add('hidden');
                 
-                ui.mainContent.innerHTML = renderers.loading(`Pobieranie szczegółów dla ${ticker}...`);
+                if (!skipLoading) {
+                    ui.mainContent.innerHTML = renderers.loading(`Pobieranie szczegółów dla ${ticker}...`);
+                }
                 state.dashboardContent = { type: 'details', ticker: ticker };
                 try {
-                    // Żądanie analizy na żądanie (zwraca komunikat, a nie wynik)
-                    // Wynik jest pobierany przez ConsolidatedDetails, jeśli jest już w DB.
-                    
                     const data = await api.getConsolidatedDetails(ticker);
                     
+                    // Zaktualizuj widok szczegółów
                     ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
-                    lucide.createIcons(); 
+                    lucide.createIcons();
+                    
+                    // Sprawdź, czy jest aktywne przetwarzanie Analizy Na Żądanie lub Fazy 3
+                    const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
+                    const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
+                    
+                    if (isOndemandProcessing || isPhase3Processing) {
+                        if (!state.activePolling.has(ticker)) {
+                            state.activePolling.add(ticker);
+                            pollOnDemandResults(ticker);
+                        }
+                    } else {
+                        state.activePolling.delete(ticker);
+                    }
+                    
                 } catch (e) {
                     ui.mainContent.innerHTML = renderers.error(`Błąd Pobierania`, `Nie udało się pobrać szczegółów dla ${ticker}. Spróbuj ponownie.`);
                 }
@@ -476,6 +592,7 @@
                 // Rozpoczęcie cyklicznych odpytywań
                 pollWorkerStatus();
                 refreshAllData();
+                updateLivePrices(); // Dodano start pętli live prices
             }
             
             function showDashboardView() {
@@ -580,15 +697,22 @@
                 const onDemandBtn = e.target.closest('.request-on-demand-btn');
                 const phase3Btn = e.target.closest('.request-phase3-on-demand-btn');
                 
-                if (onDemandBtn) {
+                if (onDemandBtn && !onDemandBtn.disabled) {
                     const ticker = onDemandBtn.dataset.ticker;
                     try {
                         onDemandBtn.disabled = true;
                         onDemandBtn.textContent = 'Wysłano (Czekam na Silnik...)';
                         logger.info(`Requesting on-demand analysis for ${ticker}`);
+                        
+                        // Wysłanie żądania do workera
                         await api.requestOnDemandAnalysis(ticker);
-                        // Ponowne odświeżenie szczegółów po wysłaniu żądania, aby zmienił się stan
-                        await showDetails(ticker); 
+                        
+                        // Uruchomienie odpytywania
+                        state.activePolling.add(ticker);
+                        pollOnDemandResults(ticker);
+                        
+                        // Ponowne odświeżenie szczegółów, aby zaktualizować status przycisku
+                        await showDetails(ticker, true); 
                     } catch (e) {
                         // Błąd obsługiwany w apiRequest
                         onDemandBtn.disabled = false;
@@ -596,15 +720,22 @@
                     }
                 }
                 
-                 if (phase3Btn) {
+                 if (phase3Btn && !phase3Btn.disabled) {
                     const ticker = phase3Btn.dataset.ticker;
                     try {
                         phase3Btn.disabled = true;
                         phase3Btn.textContent = 'Wysłano (Czekam na Silnik...)';
                          logger.info(`Requesting Phase 3 on-demand analysis for ${ticker}`);
+                         
+                         // Wysłanie żądania do workera
                         await api.requestPhase3OnDemand(ticker);
-                        // Ponowne odświeżenie szczegółów po wysłaniu żądania, aby zmienił się stan
-                        await showDetails(ticker); 
+                        
+                        // Uruchomienie odpytywania
+                        state.activePolling.add(ticker);
+                        pollOnDemandResults(ticker);
+                        
+                        // Ponowne odświeżenie szczegółów, aby zaktualizować status przycisku
+                        await showDetails(ticker, true); 
                     } catch (e) {
                          // Błąd obsługiwany w apiRequest
                         phase3Btn.disabled = false;
