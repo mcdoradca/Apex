@@ -20,7 +20,6 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
         return {}
     
     csv_file = StringIO(csv_text)
-    # Usunięcie pustych linii, które mogą powodować problemy z readerem
     lines = (line for line in csv_file if line.strip())
     reader = csv.DictReader(lines)
     
@@ -148,9 +147,13 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 continue
             
-            # --- POPRAWKA: Standaryzacja nazw kolumn ---
-            df_data = {pd.to_datetime(date): {key.split(' ')[1]: float(val) for key, val in values.items()} for date, values in price_data_raw['Time Series (Daily)'].items()}
-            daily_df = pd.DataFrame.from_dict(df_data, orient='index')
+            time_series_data = price_data_raw['Time Series (Daily)']
+            cleaned_data = {}
+            for date, values in time_series_data.items():
+                cleaned_values = {key.split(' ')[1]: float(val) for key, val in values.items()}
+                cleaned_data[pd.to_datetime(date)] = cleaned_values
+            
+            daily_df = pd.DataFrame.from_dict(cleaned_data, orient='index')
             daily_df = daily_df.sort_index()
 
             # 1. Wolumen względny
