@@ -18,11 +18,19 @@
         .sidebar-item { border-left: 3px solid transparent; }
         .candidate-item:hover { background-color: #1f2937; }
         .login-background { 
+            /* Zrzut ekranu z URL, aby był dostępny w środowisku Canvas */
             background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy'); 
             background-size: cover; 
             background-position: center; 
         }
         .glowing-btn { box-shadow: 0 0 5px #0ea5e9, 0 0 15px #0ea5e9; }
+        .red-dot { background-color: #ef4444; }
+        .green-dot { background-color: #22c55e; }
+        .yellow-dot { background-color: #eab308; }
+        .blue-dot { background-color: #0ea5e9; }
+        .phase-1-text { color: #8b5cf6; } /* Fioletowy */
+        .phase-2-text { color: #f59e0b; } /* Bursztynowy */
+        .phase-3-text { color: #ef4444; } /* Czerwony */
     </style>
 </head>
 <body class="text-gray-200">
@@ -55,7 +63,7 @@
                     <h1 class="text-xl font-bold">APEX Predator</h1>
                 </div>
                 <nav class="space-y-1">
-                    <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
+                    <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
                 </nav>
                  <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
                     <div class="pl-2 mt-2 border-l border-gray-700 space-y-2">
@@ -72,7 +80,7 @@
                 
                 <!-- FAZA 1 -->
                 <div class="px-2">
-                    <button class="accordion-toggle flex justify-between items-center w-full text-left">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
                         <p class="text-sm font-semibold text-gray-300">Faza 1: Kandydaci (<span id="phase-1-count">0</span>)</p>
                         <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
                     </button>
@@ -83,7 +91,7 @@
 
                 <!-- FAZA 2 -->
                  <div class="px-2">
-                    <button class="accordion-toggle flex justify-between items-center w-full text-left">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
                         <p class="text-sm font-semibold text-gray-300">Faza 2: APEX Elita (<span id="phase-2-count">0</span>)</p>
                         <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
                     </button>
@@ -94,7 +102,7 @@
 
                 <!-- FAZA 3 -->
                  <div class="px-2">
-                    <button class="accordion-toggle flex justify-between items-center w-full text-left">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
                         <p class="text-sm font-semibold text-gray-300">Faza 3: Sygnały (<span id="phase-3-count">0</span>)</p>
                         <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
                     </button>
@@ -116,6 +124,10 @@
                         <span class="text-gray-400">Silnik:</span>
                         <span id="worker-status-text" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-xs">IDLE</span>
                     </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Heartbeat:</span>
+                        <span id="heartbeat-status" class="text-gray-500 text-xs">--</span>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -125,6 +137,41 @@
             
             <div id="main-content" class="p-6 flex-grow">
                 <!-- Dynamiczna zawartość będzie renderowana tutaj -->
+                <div id="dashboard-view" class="max-w-4xl mx-auto">
+                    <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <!-- Karta statusu -->
+                        <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                            <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
+                            <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
+                            <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
+                        </div>
+                        <!-- Karta postępu -->
+                        <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                            <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
+                            <div class="mt-2">
+                                <span id="progress-text" class="text-2xl font-extrabold">0 / 0</span>
+                                <span class="text-gray-500 text-sm"> tickery</span>
+                            </div>
+                            <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2">
+                                <div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <!-- Karta sygnałów -->
+                         <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                            <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3>
+                            <p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p>
+                            <p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 (Predator)</p>
+                        </div>
+                    </div>
+
+                    <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
+                    <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-64 overflow-y-scroll border border-gray-700">
+                        <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
+                    </div>
+                </div>
+                
             </div>
         </main>
     </div>
@@ -133,8 +180,9 @@
         document.addEventListener('DOMContentLoaded', () => {
             const state = {
                 phase1: [], phase2: [], phase3: [],
-                workerStatus: { status: 'IDLE' },
+                workerStatus: { status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 } },
                 activePolling: new Set(),
+                dashboardContent: null,
             };
 
             const ui = {
@@ -151,14 +199,27 @@
                 apiStatus: document.getElementById('api-status'),
                 workerStatusText: document.getElementById('worker-status-text'),
                 dashboardLink: document.getElementById('dashboard-link'),
+                heartbeatStatus: document.getElementById('heartbeat-status'),
                 phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
                 phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
                 phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
+                dashboard: {
+                    status: document.getElementById('dashboard-worker-status'),
+                    phase: document.getElementById('dashboard-current-phase'),
+                    signals: document.getElementById('dashboard-active-signals'),
+                    progressText: document.getElementById('progress-text'),
+                    progressBar: document.getElementById('progress-bar'),
+                    scanLog: document.getElementById('scan-log'),
+                }
             };
-
+            
+            // --- KONFIGURACJA API ---
             const API_BASE_URL = "https://apex-predator-api.onrender.com";
             const apiRequest = async (endpoint, options = {}) => {
                 const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                // Ustaw status API jako Online po pierwszej udanej odpowiedzi
+                ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
+
                 if (response.status === 204) return null;
                 if (!response.ok) {
                     const errorText = await response.text();
@@ -185,34 +246,307 @@
                 getLivePrices: (tickers) => apiRequest(`/api/v1/live-prices?tickers=${tickers.join(',')}`)
             };
 
+            // --- RENDEROWANIE I WIDOKI ---
+
             const renderers = {
-                 loading: (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`,
+                loading: (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`,
                 error: (title, message) => `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">${title}</h2><p>${message}</p></div>`,
-                dashboard: () => `...`, 
-                phase1List: (candidates) => `...`, 
-                phase2List: (results) => `...`, 
-                phase3List: (signals) => `...`, 
+                phase1List: (candidates) => candidates.map(c => 
+                    `<div data-ticker="${c.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-1-text">
+                        <span class="font-bold">${c.ticker}</span>
+                        <span class="text-gray-500">${c.price ? c.price.toFixed(2) : '--'} (${c.change_percent ? c.change_percent.toFixed(2) : '--'}%)</span>
+                    </div>`
+                ).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników Fazy 1.</p>`,
+                phase2List: (results) => results.map(r => 
+                    `<div data-ticker="${r.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-2-text">
+                        <span class="font-bold">${r.ticker}</span>
+                        <span class="text-gray-400">Score: ${r.total_score}/10</span>
+                    </div>`
+                ).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników Fazy 2.</p>`,
+                phase3List: (signals) => signals.map(s => 
+                    `<div data-ticker="${s.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-3-text">
+                        <span class="font-bold">${s.ticker}</span>
+                        <span class="text-gray-400">R/R: ${s.risk_reward_ratio.toFixed(2)}</span>
+                    </div>`
+                ).join('') || `<p class="text-xs text-gray-500 p-2">Brak aktywnych sygnałów.</p>`,
+                
+                consolidatedDetails: (ticker, data) => {
+                    if (!data) return renderers.error(`Brak Danych dla ${ticker}`, `Nie znaleziono żadnych danych (Faza 1, Faza 2, Faza 3) dla tickera ${ticker}.`);
+                    
+                    const phase1Html = data.phase1_data ? `
+                        <div class="bg-violet-900/20 p-4 rounded-lg">
+                            <h4 class="font-bold text-violet-300 mb-2 flex items-center"><i data-lucide="scan" class="w-4 h-4 mr-2"></i>Faza 1 (Skaner Impulsu)</h4>
+                            <p class="text-sm">Zmiana Dnia: <span class="font-mono text-violet-300">${data.phase1_data.change_percent.toFixed(2)}%</span></p>
+                            <p class="text-sm">Wolumen: <span class="font-mono text-violet-300">${(data.phase1_data.volume / 1000000).toFixed(2)}M</span></p>
+                            <p class="text-xs text-gray-400 mt-1">Zakwalifikowany: ${new Date(data.phase1_data.analysis_date).toLocaleDateString()}</p>
+                        </div>
+                    ` : '<p class="text-xs text-gray-500">Brak kwalifikacji w Fazie 1.</p>';
+                    
+                    const phase2Html = data.phase2_data ? `
+                         <div class="bg-yellow-900/20 p-4 rounded-lg">
+                            <h4 class="font-bold text-yellow-300 mb-2 flex items-center"><i data-lucide="award" class="w-4 h-4 mr-2"></i>Faza 2 (APEX Elita)</h4>
+                            <p class="text-lg font-extrabold text-yellow-300">${data.phase2_data.total_score}/10</p>
+                            <p class="text-sm text-gray-400">K: ${data.phase2_data.catalyst_score}, S: ${data.phase2_data.relative_strength_score}, E: ${data.phase2_data.energy_compression_score}</p>
+                            <p class="text-xs text-green-400 mt-2">${data.phase2_data.is_qualified ? 'Kwalifikacja OK' : 'Odrzucony'}</p>
+                        </div>
+                    ` : '<p class="text-xs text-gray-500">Brak kwalifikacji w Fazie 2.</p>';
+
+                    const signal = data.phase3_signal || data.phase3_on_demand_analysis?.analysis_data;
+                    const phase3Html = signal ? `
+                        <div class="bg-red-900/20 p-4 rounded-lg">
+                            <h4 class="font-bold text-red-300 mb-2 flex items-center"><i data-lucide="swords" class="w-4 h-4 mr-2"></i>Faza 3 (Sygnał Handlowy)</h4>
+                            <p class="text-sm">Wejście: <span class="font-mono text-red-300">$${signal.entry_price?.toFixed(2) || '--'}</span></p>
+                            <p class="text-sm">Stop-Loss: <span class="font-mono text-red-300">$${signal.stop_loss?.toFixed(2) || '--'}</span></p>
+                            <p class="text-sm">Take-Profit: <span class="font-mono text-red-300">$${signal.take_profit?.toFixed(2) || '--'}</span></p>
+                            <p class="text-sm mt-2 font-semibold">R/R: ${signal.risk_reward_ratio?.toFixed(2) || '--'}</p>
+                            <p class="text-xs text-gray-400 mt-1">${signal.notes || 'Brak notatek.'}</p>
+                        </div>
+                    ` : '<p class="text-xs text-gray-500">Brak aktywnego sygnału Fazy 3.</p>';
+
+                    return `
+                        <div class="max-w-4xl mx-auto">
+                            <h2 class="text-3xl font-bold text-white mb-6">${ticker} - Skonsolidowany Raport</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                ${phase1Html}
+                                ${phase2Html}
+                                ${phase3Html}
+                            </div>
+                            <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4 border-b border-gray-700 pb-1">Analiza Na Żądanie (Wskaźniki)</h3>
+                            <pre class="bg-[#161B22] p-4 rounded-lg text-xs overflow-x-auto font-mono text-gray-300">${JSON.stringify(data.on_demand_analysis || {status: 'Brak aktywnej analizy na żądanie.'}, null, 2)}</pre>
+                            <button data-ticker="${ticker}" class="request-on-demand-btn mt-4 bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors">Uruchom Pełną Analizę Wskaźników</button>
+                            <button data-ticker="${ticker}" class="request-phase3-on-demand-btn mt-4 ml-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors">Uruchom Analizę Predator (Faza 3)</button>
+                        </div>
+                    `;
+                }
             };
-
-            function updateWorkerStatusUI() { /* ... */ }
-            async function pollWorkerStatus() { /* ... */ }
-            async function refreshAllData() { /* ... */ }
-            async function updateLivePrices() { /* ... */ }
-            async function showDetails(ticker) { /* ... */ }
             
-            function startDashboard() { /* ... */ }
+            // --- FUNKCJE KONTROLI I WIDOKÓW ---
 
+            function updateWorkerStatusUI(statusData) {
+                if (!statusData) return;
+                state.workerStatus = statusData;
+                
+                // Status silnika
+                let statusClass = 'bg-gray-700 text-gray-200';
+                let dotClass = 'bg-gray-500';
+                if (statusData.status === 'RUNNING') { statusClass = 'bg-green-600/20 text-green-400'; dotClass = 'bg-green-500'; }
+                else if (statusData.status === 'PAUSED') { statusClass = 'bg-yellow-600/20 text-yellow-400'; dotClass = 'bg-yellow-500'; }
+                else if (statusData.status === 'ERROR') { statusClass = 'bg-red-600/20 text-red-400'; dotClass = 'bg-red-500'; }
+
+                ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass}`;
+                ui.workerStatusText.textContent = statusData.status;
+                
+                ui.dashboard.status.className = `text-4xl font-extrabold mt-2 ${statusData.status === 'RUNNING' ? 'text-green-500' : statusData.status === 'PAUSED' ? 'text-yellow-500' : 'text-gray-500'}`;
+                ui.dashboard.status.textContent = statusData.status;
+
+                // Faza
+                ui.dashboard.phase.textContent = `Faza: ${statusData.phase || 'NONE'}`;
+
+                // Postęp
+                const processed = statusData.progress.processed;
+                const total = statusData.progress.total;
+                const percent = total > 0 ? (processed / total) * 100 : 0;
+                ui.dashboard.progressText.textContent = `${processed} / ${total}`;
+                ui.dashboard.progressBar.style.width = `${Math.min(percent, 100).toFixed(0)}%`;
+                
+                // Log
+                ui.dashboard.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
+                
+                // Heartbeat
+                if (statusData.last_heartbeat_utc) {
+                    const beatTime = new Date(statusData.last_heartbeat_utc);
+                    const now = new Date();
+                    const diffSeconds = (now.getTime() - beatTime.getTime()) / 1000;
+                    if (diffSeconds > 30) {
+                        ui.heartbeatStatus.className = 'text-red-500 text-xs';
+                        ui.heartbeatStatus.textContent = 'PRZERWANY';
+                    } else {
+                        ui.heartbeatStatus.className = 'text-green-500 text-xs';
+                        ui.heartbeatStatus.textContent = beatTime.toLocaleTimeString();
+                    }
+                }
+
+                // Kontrola przycisków
+                ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
+                ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
+                ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
+            }
+            
+            async function pollWorkerStatus() {
+                try {
+                    const statusData = await api.getWorkerStatus();
+                    updateWorkerStatusUI(statusData);
+                } catch (e) {
+                    logger.error("Błąd podczas odpytywania statusu Workera:", e);
+                    ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full red-dot mr-2"></span>Offline';
+                    ui.workerStatusText.textContent = 'API ERR';
+                    ui.dashboard.status.textContent = 'API ERR';
+                }
+                setTimeout(pollWorkerStatus, 5000); // Odpytuj co 5 sekund
+            }
+
+            async function refreshAllData() {
+                try {
+                    const [phase1, phase2, phase3] = await Promise.all([
+                        api.getPhase1Candidates(),
+                        api.getPhase2Results(),
+                        api.getPhase3Signals()
+                    ]);
+                    
+                    state.phase1 = phase1 || [];
+                    state.phase2 = phase2 || [];
+                    state.phase3 = phase3 || [];
+
+                    // Rysowanie list bocznych
+                    ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
+                    ui.phase1.count.textContent = state.phase1.length;
+                    
+                    ui.phase2.list.innerHTML = renderers.phase2List(state.phase2);
+                    ui.phase2.count.textContent = state.phase2.length;
+                    
+                    ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
+                    ui.phase3.count.textContent = state.phase3.length;
+                    ui.dashboard.signals.textContent = state.phase3.length;
+                    
+                    // Odśwież widok szczegółów, jeśli jest otwarty
+                    if (state.dashboardContent && state.dashboardContent.type === 'details') {
+                         await showDetails(state.dashboardContent.ticker);
+                    }
+
+                } catch (e) {
+                     logger.error("Błąd podczas odświeżania danych faz:", e);
+                }
+                setTimeout(refreshAllData, 15000); // Odpytuj co 15 sekund
+            }
+
+            async function showDetails(ticker) {
+                ui.mainContent.innerHTML = renderers.loading(`Pobieranie szczegółów dla ${ticker}...`);
+                state.dashboardContent = { type: 'details', ticker: ticker };
+                try {
+                    const data = await api.getConsolidatedDetails(ticker);
+                    ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
+                    lucide.createIcons(); // Wymagane po dynamicznym renderowaniu ikon
+                } catch (e) {
+                    ui.mainContent.innerHTML = renderers.error(`Błąd Pobierania`, `Nie udało się pobrać szczegółów dla ${ticker}. Spróbuj ponownie.`);
+                }
+            }
+
+            function startDashboard() {
+                // *** POPRAWKA KLUCZOWA: Ukrycie ekranu logowania i pokazanie dashboardu ***
+                ui.loginScreen.classList.add('hidden');
+                ui.dashboardScreen.classList.remove('hidden');
+                // Ustawienie domyślnego widoku na Dashboard
+                showDashboardView();
+                // Rozpoczęcie cyklicznych odpytywań
+                pollWorkerStatus();
+                refreshAllData();
+            }
+            
+            function showDashboardView() {
+                ui.mainContent.querySelector('#dashboard-view').classList.remove('hidden');
+                state.dashboardContent = { type: 'dashboard' };
+            }
+            
+            // --- HANDLERY ZDARZEŃ ---
+            
+            function handleWorkerControl(action) {
+                return async () => {
+                    try {
+                        const message = await api.sendWorkerControl(action);
+                        console.log(message);
+                        // Natychmiastowe odświeżenie statusu, aby zobaczyć komendę
+                        await pollWorkerStatus();
+                    } catch (e) {
+                        alert(`Błąd kontroli: ${e.message}`);
+                    }
+                };
+            }
+            
+            // Delegacja zdarzeń dla list faz
+            document.querySelector('#phases-container').addEventListener('click', (e) => {
+                const candidateItem = e.target.closest('.candidate-item');
+                const accordionToggle = e.target.closest('.accordion-toggle');
+
+                if (candidateItem) {
+                    const ticker = candidateItem.dataset.ticker;
+                    if (ticker) showDetails(ticker);
+                } else if (accordionToggle) {
+                    const content = accordionToggle.nextElementSibling;
+                    const icon = accordionToggle.querySelector('.accordion-icon');
+                    if (content.classList.contains('hidden')) {
+                        content.classList.remove('hidden');
+                        icon.classList.add('rotate-180');
+                    } else {
+                        content.classList.add('hidden');
+                        icon.classList.remove('rotate-180');
+                    }
+                }
+            });
+
+            // Delegacja zdarzeń dla przycisków analizy na żądanie
+            ui.mainContent.addEventListener('click', async (e) => {
+                const onDemandBtn = e.target.closest('.request-on-demand-btn');
+                const phase3Btn = e.target.closest('.request-phase3-on-demand-btn');
+                
+                if (onDemandBtn) {
+                    const ticker = onDemandBtn.dataset.ticker;
+                    try {
+                        onDemandBtn.disabled = true;
+                        onDemandBtn.textContent = 'Wysłano (Czekam na Silnik...)';
+                        await api.requestOnDemandAnalysis(ticker);
+                    } catch (e) {
+                        alert(`Błąd wysyłania żądania analizy: ${e.message}`);
+                    }
+                }
+                
+                 if (phase3Btn) {
+                    const ticker = phase3Btn.dataset.ticker;
+                    try {
+                        phase3Btn.disabled = true;
+                        phase3Btn.textContent = 'Wysłano (Czekam na Silnik...)';
+                        await api.requestPhase3OnDemand(ticker);
+                    } catch (e) {
+                         alert(`Błąd wysyłania żądania Fazy 3: ${e.message}`);
+                    }
+                }
+            });
+
+            // Wyszukiwanie na żądanie z paska
+            ui.tickerInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
+                    showDetails(ui.tickerInput.value.trim().toUpperCase());
+                    ui.tickerInput.value = ''; // Wyczyść pole po wysłaniu
+                }
+            });
+
+            // Handler dla przycisku Dashboard
+            ui.dashboardLink.addEventListener('click', showDashboardView);
+
+            // Handlery dla przycisków kontroli workera
+            ui.startBtn.addEventListener('click', handleWorkerControl('start'));
+            ui.pauseBtn.addEventListener('click', handleWorkerControl('pause'));
+            ui.resumeBtn.addEventListener('click', handleWorkerControl('resume'));
+
+            // --- INICJALIZACJA ---
+            
             function checkBackendReady() {
                 ui.loginStatusText.textContent = 'Oczekiwanie na uruchomienie usług backendu...';
                 const intervalId = setInterval(async () => {
                     try {
-                        await api.getWorkerStatus();
+                        // Pobranie statusu workera to proxy check dla całego API
+                        const statusData = await api.getWorkerStatus(); 
                         clearInterval(intervalId);
+                        
+                        // Aktualizacja statusu API po pierwszym sukcesie
+                        ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
+                        
                         ui.loginStatusText.textContent = 'System gotowy.';
                         ui.loginButton.disabled = false;
                         ui.loginButton.textContent = 'Wejdź do Aplikacji';
                     } catch (e) {
-                        // Czekaj dalej
+                        // Błąd łączenia (np. serwer jeszcze się budzi)
+                        ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full red-dot mr-2"></span>Offline';
+                        ui.loginStatusText.textContent = 'Łączenie nieudane. Ponawiam próbę...';
                     }
                 }, 3000);
             }
@@ -225,9 +559,10 @@
             // Główne wywołanie
             checkBackendReady();
             lucide.createIcons();
+            
+            // Ustaw początkowy widok szczegółów dashboardu
+            ui.dashboardContent = ui.mainContent.querySelector('#dashboard-view');
         });
     </script>
 </body>
 </html>
-
-
