@@ -1,18 +1,13 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime, date
-from typing import List, Optional, Any
+from typing import List, Optional
 
-# --- Schemat dla cen na żywo ---
-class LivePrice(BaseModel):
-    ticker: str
-    price: float
-
-# --- Schematy dla poszczególnych faz ---
+# Schemat dla nowej tabeli Kandydatów Fazy 1
 class Phase1Candidate(BaseModel):
     ticker: str
-    price: float
-    change_percent: float
-    volume: int
+    price: Optional[float] = None
+    change_percent: Optional[float] = None
+    volume: Optional[int] = None
     score: int
     analysis_date: datetime
 
@@ -29,6 +24,20 @@ class Phase2Result(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class Progress(BaseModel):
+    processed: int
+    total: int
+
+class WorkerStatus(BaseModel):
+    status: str
+    phase: str
+    progress: Progress
+    last_heartbeat_utc: datetime
+    log: str
+
+class OnDemandRequest(BaseModel):
+    ticker: str
+
 class TradingSignal(BaseModel):
     id: int
     ticker: str
@@ -39,30 +48,20 @@ class TradingSignal(BaseModel):
     take_profit: float
     risk_reward_ratio: float
     signal_candle_timestamp: datetime
+    notes: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
-
-# --- Schematy dla analiz na żądanie ---
-class OnDemandRequest(BaseModel):
+    
+# NOWY, brakujący schemat dla cen na żywo
+class LivePrice(BaseModel):
     ticker: str
+    price: float
 
-# --- Schematy zbiorcze i statusowe ---
 class ConsolidatedTickerDetails(BaseModel):
     ticker: str
     phase1_data: Optional[Phase1Candidate] = None
     phase2_data: Optional[Phase2Result] = None
     phase3_signal: Optional[TradingSignal] = None
-    on_demand_analysis: Optional[Any] = None
-    phase3_on_demand_analysis: Optional[Any] = None
-
-class Progress(BaseModel):
-    processed: int
-    total: int
-
-class WorkerStatus(BaseModel):
-    status: str
-    phase: str
-    progress: Progress
-    last_heartbeat_utc: Optional[str] = None
-    log: str
+    on_demand_analysis: Optional[dict] = None
+    phase3_on_demand_analysis: Optional[dict] = None
 
