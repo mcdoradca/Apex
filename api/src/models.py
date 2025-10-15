@@ -38,14 +38,19 @@ class Phase2Result(Base):
 class TradingSignal(Base):
     __tablename__ = 'trading_signals'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
-    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), unique=True) # Zmieniono na unique, aby łatwo znaleźć 1 sygnał PENDING/ACTIVE
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
-    status = Column(VARCHAR(50), default='ACTIVE') # ACTIVE, EXECUTED, CANCELLED, DELETED
+    status = Column(VARCHAR(50), default='PENDING') # Zmieniono default na PENDING/ACTIVE, EXECUTED, CANCELLED, DELETED, PENDING
     entry_price = Column(NUMERIC(12, 2))
     stop_loss = Column(NUMERIC(12, 2))
     take_profit = Column(NUMERIC(12, 2))
     risk_reward_ratio = Column(NUMERIC(5, 2))
-    signal_candle_timestamp = Column(PG_TIMESTAMP(timezone=True))
+    signal_candle_timestamp = Column(PG_TIMESTAMP(timezone=True), nullable=True) # Może być null dla PENDING
+    
+    # DODANO: Pola dla strefy wejścia (monitorowanie)
+    entry_zone_bottom = Column(NUMERIC(12, 2), nullable=True)
+    entry_zone_top = Column(NUMERIC(12, 2), nullable=True)
+    
     notes = Column(TEXT)
 
 class SystemControl(Base):
@@ -65,4 +70,3 @@ class Phase3OnDemandResult(Base):
     ticker = Column(VARCHAR(50), primary_key=True)
     analysis_data = Column(JSONB)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
-
