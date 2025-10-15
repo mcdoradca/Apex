@@ -31,10 +31,24 @@
         .phase-1-text { color: #8b5cf6; } /* Fioletowy */
         .phase-2-text { color: #f59e0b; } /* Bursztynowy */
         .phase-3-text { color: #ef4444; } /* Czerwony */
+        
+        .alert-bar { 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            right: 0; 
+            z-index: 1000; 
+            padding: 1rem; 
+            text-align: center;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
     </style>
 </head>
 <body class="text-gray-200">
-
+    
+    <!-- GLOBALNY PASEK ALERTÓW -->
+    <div id="system-alert-container"></div>
+    
     <!-- EKRAN LOGOWANIA / POCZEKALNIA -->
     <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
         <div class="bg-black bg-opacity-70 p-8 rounded-lg shadow-2xl backdrop-blur-sm w-full max-w-sm">
@@ -200,6 +214,7 @@
                 workerStatusText: document.getElementById('worker-status-text'),
                 dashboardLink: document.getElementById('dashboard-link'),
                 heartbeatStatus: document.getElementById('heartbeat-status'),
+                alertContainer: document.getElementById('system-alert-container'), // DODANO: Kontener alertu
                 phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
                 phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
                 phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
@@ -257,10 +272,11 @@
                 deletePhase3Signal: (id) => apiRequest(`/api/v1/signals/phase3/${id}`, { method: 'DELETE' }),
                 getConsolidatedDetails: (ticker) => apiRequest(`/api/v1/details/${ticker}`),
                 requestOnDemandAnalysis: (ticker) => apiRequest('/api/v1/analysis/on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-                getOnDemandResult: (ticker) => apiRequest(`/api/v1/analysis/on-demand/result/${ticker}`),
+                getOnDemandResult: (ticker) => apiRequest('/api/v1/analysis/on-demand/result/${ticker}'),
                 requestPhase3OnDemand: (ticker) => apiRequest('/api/v1/analysis/phase3-on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-                getPhase3OnDemandResult: (ticker) => apiRequest(`/api/v1/analysis/phase3-on-demand/result/${ticker}`),
-                getLivePrices: (tickers) => apiRequest(`/api/v1/live-prices?tickers=${tickers.join(',')}`)
+                getPhase3OnDemandResult: (ticker) => apiRequest('/api/v1/analysis/phase3-on-demand/result/${ticker}'),
+                getLivePrices: (tickers) => apiRequest(`/api/v1/live-prices?tickers=${tickers.join(',')}`),
+                getSystemAlert: () => apiRequest('/api/v1/system/alert') // DODANO: Endpoint alertu
             };
 
             // --- RENDEROWANIE I WIDOKI ---
@@ -280,12 +296,21 @@
                         <span class="text-gray-400 live-price-container" data-ticker="${r.ticker}"><span class="current-price-${r.ticker}">Score: ${r.total_score}/10</span></span>
                     </div>`
                 ).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników Fazy 2.</p>`,
-                phase3List: (signals) => signals.map(s => 
-                    `<div data-ticker="${s.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-3-text">
+                phase3List: (signals) => signals.map(s => {
+                    const statusClass = s.status === 'ACTIVE' ? 'text-green-500' : 'text-yellow-500';
+                    const statusText = s.status === 'ACTIVE' ? 'AKTYWNY' : 'PENDING';
+                    const mainInfo = s.status === 'ACTIVE' 
+                        ? `R/R: ${s.risk_reward_ratio.toFixed(2)}`
+                        : `(${s.entry_zone_bottom.toFixed(2)}-${s.entry_zone_top.toFixed(2)})`;
+                        
+                    return `<div data-ticker="${s.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-3-text">
                         <span class="font-bold">${s.ticker}</span>
-                        <span class="text-gray-400 live-price-container" data-ticker="${s.ticker}"><span class="current-price-${s.ticker}">R/R: ${s.risk_reward_ratio.toFixed(2)}</span></span>
-                    </div>`
-                ).join('') || `<p class="text-xs text-gray-500 p-2">Brak aktywnych sygnałów.</p>`,
+                        <span class="text-gray-400 live-price-container" data-ticker="${s.ticker}">
+                            <span class="${statusClass} mr-1">${statusText}</span>
+                            <span class="current-price-${s.ticker}">${mainInfo}</span>
+                        </span>
+                    </div>`;
+                }).join('') || `<p class="text-xs text-gray-500 p-2">Brak aktywnych sygnałów.</p>`,
                 
                 consolidatedDetails: (ticker, data, isPolling) => {
                     if (!data) return renderers.error(`Brak Danych dla ${ticker}`, `Nie znaleziono żadnych danych (Faza 1, Faza 2, Faza 3) dla tickera ${ticker}.`);
@@ -309,20 +334,41 @@
                     ` : '<p class="text-xs text-gray-500">Brak kwalifikacji w Fazie 2.</p>';
 
                     const signal = data.phase3_signal || data.phase3_on_demand_analysis?.analysis_data;
-                    const phase3Html = signal ? `
-                        <div class="bg-red-900/20 p-4 rounded-lg">
-                            <h4 class="font-bold text-red-300 mb-2 flex items-center"><i data-lucide="swords" class="w-4 h-4 mr-2"></i>Faza 3 (Sygnał Handlowy)</h4>
-                            <p class="text-sm">Wejście: <span class="font-mono text-red-300">$${signal.entry_price?.toFixed(2) || '--'}</span></p>
-                            <p class="text-sm">Stop-Loss: <span class="font-mono text-red-300">$${signal.stop_loss?.toFixed(2) || '--'}</span></p>
-                            <p class="text-sm">Take-Profit: <span class="font-mono text-red-300">$${signal.take_profit?.toFixed(2) || '--'}</span></p>
-                            <p class="text-sm mt-2 font-semibold">R/R: ${signal.risk_reward_ratio?.toFixed(2) || '--'}</p>
-                            <p class="text-xs text-gray-400 mt-1">${signal.notes || 'Brak notatek.'}</p>
-                        </div>
-                    ` : '<p class="text-xs text-gray-500">Brak aktywnego sygnału Fazy 3.</p>';
+                    let phase3Html;
+                    if (signal) {
+                        const statusColor = signal.status === 'ACTIVE' ? 'bg-green-900/20 text-green-300' : 'bg-yellow-900/20 text-yellow-300';
+                        const statusBadge = signal.status === 'ACTIVE' ? 'AKTYWNY SYGNAŁ' : 'MONITORING (PENDING)';
+                        
+                        let details;
+                        if (signal.status === 'ACTIVE') {
+                            details = `
+                                <p class="text-sm">Wejście: <span class="font-mono text-green-300">$${signal.entry_price?.toFixed(2) || '--'}</span></p>
+                                <p class="text-sm">Stop-Loss: <span class="font-mono text-red-300">$${signal.stop_loss?.toFixed(2) || '--'}</span></p>
+                                <p class="text-sm">Take-Profit: <span class="font-mono text-sky-300">$${signal.take_profit?.toFixed(2) || '--'}</span></p>
+                                <p class="text-sm mt-2 font-semibold">R/R: ${signal.risk_reward_ratio?.toFixed(2) || '--'}</p>
+                            `;
+                        } else {
+                            details = `
+                                <p class="text-sm">Strefa Wejścia: <span class="font-mono text-yellow-300">$${signal.entry_zone_bottom?.toFixed(2) || '--'} - $${signal.entry_zone_top?.toFixed(2) || '--'}</span></p>
+                                <p class="text-sm">Potencjalny TP: <span class="font-mono text-sky-300">$${signal.take_profit?.toFixed(2) || '--'}</span></p>
+                                <p class="text-xs text-gray-400 mt-2">Ten sygnał jest monitorowany w tle. Czekamy na wejście do strefy.</p>
+                            `;
+                        }
+                        
+                        phase3Html = `
+                            <div class="${statusColor} p-4 rounded-lg border border-gray-700">
+                                <h4 class="font-bold mb-2 flex items-center"><i data-lucide="swords" class="w-4 h-4 mr-2"></i>Faza 3: ${statusBadge}</h4>
+                                ${details}
+                                <p class="text-xs text-gray-400 mt-3 border-t border-gray-700 pt-2">${signal.notes || 'Brak notatek.'}</p>
+                            </div>
+                        `;
+                    } else {
+                         phase3Html = '<p class="text-xs text-gray-500">Brak aktywnego sygnału Fazy 3.</p>';
+                    }
                     
                     // Logika dla przycisków
-                    const isOndemandProcessing = data.on_demand_analysis?.ticker === ticker && data.on_demand_analysis?.message === 'PROCESSING';
-                    const isPhase3Processing = data.phase3_on_demand_analysis?.ticker === ticker && data.phase3_on_demand_analysis?.message === 'PROCESSING';
+                    const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
+                    const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
 
                     const onDemandBtnText = isOndemandProcessing ? 'Analiza w toku...' : 'Uruchom Pełną Analizę Wskaźników';
                     const phase3BtnText = isPhase3Processing ? 'Analiza w toku...' : 'Uruchom Analizę Predator (Faza 3)';
@@ -355,32 +401,79 @@
                     prices.forEach(p => {
                         const ticker = p.ticker;
                         const price = p.price;
-                        // Aktualizacja w Fażie 1 (ma pełny format)
-                        document.querySelectorAll(`.phase-1-text .live-price-container[data-ticker="${ticker}"]`).forEach(container => {
-                            // Wymaga to pobrania aktualnego procentu zmiany
-                            const candidate = state.phase1.find(c => c.ticker === ticker);
-                            if (candidate) {
-                                container.innerHTML = `<span class="current-price-${ticker}">${price.toFixed(2)}</span> (${candidate.change_percent.toFixed(2)}%)`;
+                        // Aktualizacja w Fażach 1, 2 i 3
+                        document.querySelectorAll(`.live-price-container[data-ticker="${ticker}"]`).forEach(container => {
+                            const parentItem = container.closest('.candidate-item');
+                            const priceSpan = container.querySelector(`.current-price-${ticker}`);
+                            if (!parentItem) return;
+                            
+                            const phaseType = parentItem.parentElement.id.split('-')[0];
+                            
+                            if (phaseType === 'phase1' && priceSpan) {
+                                // Faza 1: Cena i Procent Zmiany
+                                const candidate = state.phase1.find(c => c.ticker === ticker);
+                                if (candidate) {
+                                    container.innerHTML = `<span class="current-price-${ticker}">${price.toFixed(2)}</span> (${candidate.change_percent.toFixed(2)}%)`;
+                                }
+                            } else if (phaseType === 'phase2' && priceSpan) {
+                                // Faza 2: Score i Cena w nawiasie
+                                const result = state.phase2.find(r => r.ticker === ticker);
+                                if (result) {
+                                    priceSpan.innerHTML = `Score: ${result.total_score}/10</span> ($${price.toFixed(2)})`;
+                                }
+                            } else if (phaseType === 'phase3' && priceSpan) {
+                                // Faza 3: Status i Cena w nawiasie
+                                const signal = state.phase3.find(s => s.ticker === ticker);
+                                if (signal) {
+                                     // Użyj istniejącego span statusu
+                                    const statusSpan = container.querySelector('.text-green-500, .text-yellow-500');
+                                    const mainInfo = signal.status === 'ACTIVE' ? `R/R: ${signal.risk_reward_ratio.toFixed(2)}` : `($${price.toFixed(2)})`;
+                                    
+                                    if (statusSpan) {
+                                        priceSpan.innerHTML = mainInfo;
+                                    } else {
+                                        // Domyślne wyświetlanie, jeśli statusSpan nie istnieje (np. tylko R/R)
+                                        priceSpan.innerHTML = mainInfo;
+                                    }
+                                }
                             }
-                        });
-                         // Aktualizacja w Fażach 2 i 3 (mają tylko wynik)
-                        document.querySelectorAll(`.phase-2-text .live-price-container[data-ticker="${ticker}"]`).forEach(container => {
-                             const result = state.phase2.find(r => r.ticker === ticker);
-                             if (result) {
-                                container.innerHTML = `<span class="current-price-${ticker}">Score: ${result.total_score}/10</span> ($${price.toFixed(2)})`;
-                             }
-                        });
-                        document.querySelectorAll(`.phase-3-text .live-price-container[data-ticker="${ticker}"]`).forEach(container => {
-                             const signal = state.phase3.find(s => s.ticker === ticker);
-                             if (signal) {
-                                container.innerHTML = `<span class="current-price-${ticker}">R/R: ${signal.risk_reward_ratio.toFixed(2)}</span> ($${price.toFixed(2)})`;
-                             }
                         });
                     });
                 }
             };
             
             // --- FUNKCJE KONTROLI I WIDOKÓW ---
+            
+            // DODANO: Funkcja do obsługi alertów systemowych
+            async function pollSystemAlerts() {
+                 try {
+                    const alertData = await api.getSystemAlert();
+                    if (alertData.message !== 'NONE') {
+                        // Utwórz dynamiczny pasek alertu
+                        const alertHtml = `
+                            <div id="dynamic-alert" class="alert-bar bg-red-800/90 text-white font-semibold flex justify-center items-center">
+                                <i data-lucide="bell" class="w-5 h-5 mr-3"></i>
+                                <span>${alertData.message}</span>
+                                <button onclick="document.getElementById('dynamic-alert').remove()" class="ml-auto p-1 rounded-full hover:bg-red-700 transition-colors"><i data-lucide="x" class="w-5 h-5"></i></button>
+                            </div>
+                        `;
+                        ui.alertContainer.innerHTML = alertHtml;
+                        lucide.createIcons();
+                        
+                        // Automatyczne usunięcie po 15 sekundach, jeśli użytkownik nie kliknie 'x'
+                        setTimeout(() => {
+                            const alertElement = document.getElementById('dynamic-alert');
+                            if (alertElement) alertElement.remove();
+                        }, 15000);
+                        
+                        // Po wyświetleniu alertu, Worker czyści pole w bazie
+                    }
+                } catch (e) {
+                    logger.error("Błąd podczas pobierania alertów systemowych:", e);
+                }
+                setTimeout(pollSystemAlerts, 10000); // Sprawdzaj alerty co 10 sekund
+            }
+
 
             function updateWorkerStatusUI(statusData) {
                 if (!statusData) return;
@@ -457,9 +550,12 @@
                 if (!state.activePolling.has(ticker)) return;
 
                 const data = await api.getConsolidatedDetails(ticker);
+                // Status PROCESSING jest teraz sprawdzany przez Workera, który używa 'PROCESSING' jako wartość w `system_control`
+                // Po stronie frontendu, sprawdzamy pole `message` w zwróconych danych
                 const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
                 const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
-
+                
+                // Jeśli wyświetlamy ten ticker, zaktualizuj widok
                 if (state.dashboardContent?.ticker === ticker) {
                     // Ponowne renderowanie szczegółów, aby zaktualizować status przycisków i log
                     ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
@@ -502,8 +598,9 @@
                     ui.phase3.count.textContent = state.phase3.length;
                     ui.dashboard.signals.textContent = state.phase3.length;
                     
-                    // Uruchom aktualizację cen na żywo po odświeżeniu list
-                    updateLivePrices(); 
+                    // Uruchom aktualizację cen na żywo po odświeżeniu list (poprawka w logice renderowania)
+                    // Nie wywołujemy pętli live prices stąd, tylko aktualizujemy jej dane
+                    // updateLivePrices() jest wywoływana z startDashboard() i ma wbudowany timeout.
 
                     // Odśwież widok szczegółów, jeśli jest otwarty
                     if (state.dashboardContent && state.dashboardContent.type === 'details') {
@@ -566,8 +663,9 @@
                     lucide.createIcons();
                     
                     // Sprawdź, czy jest aktywne przetwarzanie Analizy Na Żądanie lub Fazy 3
-                    const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
-                    const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
+                    // Używamy pola 'ticker' w analysis_data, aby upewnić się, że to nasz ticker jest przetwarzany
+                    const isOndemandProcessing = data.on_demand_analysis?.ticker === ticker && data.on_demand_analysis?.message === 'PROCESSING';
+                    const isPhase3Processing = data.phase3_on_demand_analysis?.ticker === ticker && data.phase3_on_demand_analysis?.message === 'PROCESSING';
                     
                     if (isOndemandProcessing || isPhase3Processing) {
                         if (!state.activePolling.has(ticker)) {
@@ -593,6 +691,7 @@
                 pollWorkerStatus();
                 refreshAllData();
                 updateLivePrices(); // Dodano start pętli live prices
+                pollSystemAlerts(); // DODANO: Start pętli alertów
             }
             
             function showDashboardView() {
