@@ -130,7 +130,7 @@
         // --- GLOBALNY STAN APLIKACJI ---
         const state = {
             phase1: [], phase2: [], phase3: [],
-            workerStatus: {},
+            workerStatus: { status: 'IDLE' }, // Domyślny stan
             onDemandPollingId: null,
             livePricePollingId: null,
             dataPollingId: null,
@@ -274,6 +274,10 @@
                 const oldStatus = state.workerStatus ? state.workerStatus.status : null;
                 state.workerStatus = await api.getWorkerStatus();
                 updateWorkerStatusUI();
+                 // Odśwież dane jednorazowo po zakończeniu skanowania
+                if (oldStatus === 'RUNNING' && state.workerStatus.status === 'IDLE') {
+                    await refreshAllData();
+                }
             } catch (e) {
                 ui.apiStatus.innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline`;
             }
@@ -306,6 +310,11 @@
         }
         
         async function updateLivePrices() {
+            // BEZPIECZNIK: Nie odpytuj o ceny, jeśli Worker pracuje
+            if (state.workerStatus.status === 'RUNNING') {
+                return;
+            }
+
             const tickers = [...new Set([...state.phase1.map(c => c.ticker), ...state.phase2.map(r => r.ticker), ...state.phase3.map(s => s.ticker)])];
             if (tickers.length === 0) return;
             
@@ -320,6 +329,8 @@
                     }
                 });
             } catch(e) {
+                // Nie loguj błędu, jeśli endpoint jest wyłączony (brak klucza API)
+                if (e.message.includes('404')) return;
                 console.error("Failed to update live prices", e);
             }
         }
@@ -352,20 +363,13 @@
             refreshAllData();
 
             // Uruchomienie cyklicznego odpytywania
-            state.dataPollingId = setInterval(async () => {
-                await pollWorkerStatus();
-                // Odświeżaj dane tylko jeśli worker jest bezczynny, żeby nie nadpisywać w trakcie skanu
-                if (state.workerStatus.status === 'IDLE') {
-                    await refreshAllData();
-                }
-            }, 5000);
-            
+            state.dataPollingId = setInterval(pollWorkerStatus, 5000);
             state.livePricePollingId = setInterval(updateLivePrices, 5000);
 
             // Event Listeners dla przycisków
             ui.startBtn.addEventListener('click', async () => {
                 await api.sendWorkerControl('start');
-                pollWorkerStatus();
+                pollWorkerStatus(); // Natychmiastowe odświeżenie statusu
             });
             ui.pauseBtn.addEventListener('click', () => api.sendWorkerControl('pause'));
             ui.resumeBtn.addEventListener('click', () => api.sendWorkerControl('resume'));
@@ -379,23 +383,39 @@
                 if (action === 'view-details') {
                     showDetails(ticker);
                 } else if (action === 'delete-p1') {
+                    e.stopPropagation();
                     if (confirm(`Czy na pewno chcesz usunąć ${ticker} z Fazy 1?`)) {
                         await api.deletePhase1Candidate(ticker);
                         refreshAllData();
                     }
                 } else if (action === 'delete-p2') {
+                    e.stopPropagation();
                     if (confirm(`Czy na pewno chcesz usunąć ${ticker} z Fazy 2?`)) {
                         await api.deletePhase2Result(ticker);
                         refreshAllData();
                     }
                 } else if (action === 'delete-p3') {
+                     e.stopPropagation();
                      if (confirm(`Czy na pewno chcesz usunąć sygnał #${id}?`)) {
                         await api.deletePhase3Signal(id);
                         refreshAllData();
                     }
                 } else if (action === 'run-predator') {
-                    alert(`Uruchamianie analizy Predator dla ${ticker}...`);
-                    // TODO: Dodać logikę
+                    e.stopPropagation();
+                    ui.mainContent.innerHTML = renderers.loading(`Uruchamianie analizy Predator dla ${ticker}...`);
+                    lucide.createIcons();
+                    try {
+                         await api.requestPhase3OnDemand(ticker);
+                         const intervalId = setInterval(async () => {
+                            const result = await api.getPhase3OnDemandResult(ticker);
+                            if (result) {
+                                clearInterval(intervalId);
+                                ui.mainContent.innerHTML = `<pre class="text-xs">${JSON.stringify(result, null, 2)}</pre>`;
+                            }
+                         }, 3000);
+                    } catch (err) {
+                        ui.mainContent.innerHTML = renderers.error(`Błąd analizy Predator dla ${ticker}`, err.message);
+                    }
                 }
             });
             
@@ -403,8 +423,22 @@
                 if (e.key === 'Enter') {
                     const ticker = e.target.value.trim().toUpperCase();
                     if (ticker) {
-                        // TODO: Logika analizy na żądanie
-                        alert(`Uruchamianie analizy na żądanie dla ${ticker}...`)
+                        ui.mainContent.innerHTML = renderers.loading(`Uruchamianie analizy na żądanie dla ${ticker}...`);
+                        lucide.createIcons();
+                        try {
+                            api.requestOnDemandAnalysis(ticker).then(() => {
+                                const intervalId = setInterval(async () => {
+                                    const result = await api.getOnDemandResult(ticker);
+                                    if (result) {
+                                        clearInterval(intervalId);
+                                        // TODO: Ładniejsze renderowanie
+                                        ui.mainContent.innerHTML = `<pre class="text-xs">${JSON.stringify(result, null, 2)}</pre>`;
+                                    }
+                                }, 3000);
+                            });
+                        } catch (err) {
+                            ui.mainContent.innerHTML = renderers.error(`Błąd analizy dla ${ticker}`, err.message);
+                        }
                         e.target.value = '';
                     }
                 }
