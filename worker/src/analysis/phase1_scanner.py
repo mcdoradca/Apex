@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 def _parse_bulk_quotes_csv(csv_text: str) -> dict:
     """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych, poprawnie obsługując formaty."""
+    # Modyfikacja 4: Logowanie na początku funkcji
+    logger.info(f"[DIAGNOSTYKA] Otrzymano CSV do parsowania (pierwsze 200 znaków): {csv_text[:200]}")
+    
     if not csv_text or "symbol" not in csv_text:
+        logger.warning("[DIAGNOSTYKA] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'.")
         return {}
     
     csv_file = StringIO(csv_text)
@@ -59,7 +63,8 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     
     # Zmienne do logowania diagnostycznego
     detailed_log_count = 0
-    max_detailed_logs = 10 # Zapisz szczegóły dla pierwszych 10 odrzuconych spółek
+    # Modyfikacja 1: Zwiększona liczba logowanych odrzuceń
+    max_detailed_logs = 50 
 
     for i in range(0, total_tickers, chunk_size):
         if get_current_state() == 'PAUSED':
@@ -67,10 +72,19 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             
         chunk = all_tickers[i:i + chunk_size]
         bulk_data_csv = api_client.get_bulk_quotes(chunk)
+        
+        # Modyfikacja 3: Logowanie, gdy bulk_data_csv jest puste
         if not bulk_data_csv:
+            logger.warning(f"[DIAGNOSTYKA] Nie otrzymano danych z API dla chunka zaczynającego się od {chunk[0]}.")
             continue
 
         parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
+        
+        # Modyfikacja 2: Logowanie, gdy chunk nie przetwarza żadnych tickerów
+        if not parsed_data:
+            logger.warning(f"[DIAGNOSTYKA] Parsowanie danych dla chunka {chunk[0]} zwróciło pusty wynik.")
+            continue
+
 
         for ticker, data in parsed_data.items():
             price = data.get('price')
