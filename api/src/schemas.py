@@ -43,11 +43,16 @@ class TradingSignal(BaseModel):
     ticker: str
     generation_date: datetime
     status: str
-    entry_price: float
-    stop_loss: float
-    take_profit: float
-    risk_reward_ratio: float
-    signal_candle_timestamp: datetime
+    entry_price: Optional[float] = None # Może być null dla PENDING
+    stop_loss: Optional[float] = None # Może być null dla PENDING
+    take_profit: Optional[float] = None # Może być null dla PENDING
+    risk_reward_ratio: Optional[float] = None # Może być null dla PENDING
+    signal_candle_timestamp: Optional[datetime] = None # Może być null dla PENDING
+    
+    # DODANO: Pola dla monitorowania strefy
+    entry_zone_bottom: Optional[float] = None 
+    entry_zone_top: Optional[float] = None
+    
     notes: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -64,4 +69,7 @@ class ConsolidatedTickerDetails(BaseModel):
     phase3_signal: Optional[TradingSignal] = None
     on_demand_analysis: Optional[dict] = None
     phase3_on_demand_analysis: Optional[dict] = None
-
+    
+# NOWY SCHEMAT: Globalny Alert Systemowy
+class SystemAlert(BaseModel):
+    message: str
