@@ -53,7 +53,8 @@ def _calculate_relative_strength_score(ticker: str, ticker_data_raw, qqq_data_ra
 
 def _calculate_energy_compression_score(ticker: str, api_client: AlphaVantageClient) -> int:
     try:
-        bbands_data = api_client.get_bollinger_bands(ticker, time_period=20, output_size='full')
+        # POPRAWKA: Usunięto nieistniejący argument output_size
+        bbands_data = api_client.get_bollinger_bands(ticker, time_period=20)
         tech_analysis = bbands_data.get('Technical Analysis: BBANDS')
         if not tech_analysis or len(tech_analysis) < 100: return 0
         
@@ -149,4 +150,3 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
     logger.info(final_log)
     append_scan_log(session, final_log)
     return qualified_tickers
-
