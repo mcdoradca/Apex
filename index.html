@@ -5,12 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>APEX Predator - Analizator Nasdaq</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="shortcut icon" href="favicon.ico">
-    <link rel="icon" type="image/png" href="/favicon-96x96.png">
+    <script src="https://cdn.jsdelivr.net/npm/lucide-static@latest/dist/lucide.min.js"></script>
+    <link rel="icon" type="image/png" href="favicon-96x96.png">
     <meta name="referrer" content="no-referrer">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display.swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: #0D1117; }
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #161B22; }
@@ -20,12 +19,12 @@
         .candidate-item:hover { background-color: #1f2937; }
         .login-background { background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy'); background-size: cover; background-position: center; }
         .glowing-btn { box-shadow: 0 0 5px #0ea5e9, 0 0 15px #0ea5e9; }
-        [data-tooltip]:hover::after { content: attr(data-tooltip); position: absolute; background-color: #1f2937; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; z-index: 10; margin-left: 10px; }
+        .lucide { stroke-width: 2; }
     </style>
 </head>
 <body class="text-gray-200">
 
-    <!-- EKRAN LOGOWANIA -->
+    <!-- EKRAN LOGOWANIA / POCZEKALNIA -->
     <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
         <div class="bg-black bg-opacity-70 p-8 rounded-lg shadow-2xl backdrop-blur-sm w-full max-w-sm">
             <div class="text-center mb-6">
@@ -35,7 +34,7 @@
             </div>
             <form id="login-form">
                 <button type="submit" id="login-button" class="w-full bg-sky-600 text-white font-bold py-2 px-4 rounded-md transition duration-300 text-sm disabled:bg-gray-600 disabled:cursor-not-allowed glowing-btn" disabled>
-                    Łączenie z serwerem...
+                    Łączenie...
                 </button>
                 <p id="login-status-text" class="text-center text-gray-400 text-xs mt-4 h-4"></p>
             </form>
@@ -44,34 +43,85 @@
 
     <!-- GŁÓWNY DASHBOARD (UKRYTY) -->
     <div id="dashboard" class="h-screen flex hidden">
-        <aside class="w-72 bg-[#161B22] p-4 flex flex-col shrink-0 border-r border-gray-800">
-             <div class="flex items-center mb-8">
-                <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
-                <h1 class="text-xl font-bold">APEX Predator</h1>
-            </div>
-            <nav id="sidebar-nav" class="flex-grow space-y-1 pr-1 -mr-1 overflow-y-auto">
-                <a href="#dashboard-view" id="nav-dashboard" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
-                
-                <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
+        <aside class="w-72 bg-[#161B22] p-4 flex flex-col shrink-0">
+             
+            <!-- SEKCJA GÓRNA (STAŁA) -->
+            <div class="shrink-0">
+                <div class="flex items-center mb-8">
+                    <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
+                    <h1 class="text-xl font-bold">APEX Predator</h1>
+                </div>
+                <nav class="space-y-1">
+                    <a href="#dashboard-view" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
+                </nav>
+                 <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
                     <div class="pl-2 mt-2 border-l border-gray-700 space-y-2">
-                        <button id="start-btn" class="w-full text-left flex items-center bg-green-600/20 hover:bg-green-600/40 text-green-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed" data-tooltip="Rozpocznij pełen cykl analizy"><i data-lucide="play" class="mr-2 h-4 w-4"></i>Start</button>
-                        <button id="pause-btn" class="w-full text-left flex items-center bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed" data-tooltip="Wstrzymaj analizę"><i data-lucide="pause" class="mr-2 h-4 w-4"></i>Pauza</button>
-                        <button id="resume-btn" class="w-full text-left flex items-center bg-sky-600/20 hover:bg-sky-600/40 text-sky-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed" data-tooltip="Wznów analizę"><i data-lucide="play-circle" class="mr-2 h-4 w-4"></i>Wznów</button>
+                        <button id="start-btn" class="w-full text-left flex items-center bg-green-600/20 hover:bg-green-600/40 text-green-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play" class="mr-2 h-4 w-4"></i>Start</button>
+                        <button id="pause-btn" class="w-full text-left flex items-center bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="pause" class="mr-2 h-4 w-4"></i>Pauza</button>
+                        <button id="resume-btn" class="w-full text-left flex items-center bg-sky-600/20 hover:bg-sky-600/40 text-sky-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play-circle" class="mr-2 h-4 w-4"></i>Wznów</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SEKCJA ŚRODKOWA (PRZEWIJALNA) -->
+            <div id="phases-container" class="flex-grow overflow-y-auto space-y-4 py-4 mt-4 border-t border-gray-800">
+                <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Skanowania</h2>
+                
+                <!-- FAZA 1 -->
+                <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left">
+                        <p class="text-sm font-semibold text-gray-300">Faza 1: Kandydaci (<span id="phase-1-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-1-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden">
+                        <p class="text-xs text-gray-500 p-2">Brak wyników.</p>
                     </div>
                 </div>
 
-                <div class="pt-4" id="results-container">
-                    <!-- Sekcje wyników będą wstawiane tutaj przez JS -->
+                <!-- FAZA 2 -->
+                 <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left">
+                        <p class="text-sm font-semibold text-gray-300">Faza 2: APEX Elita (<span id="phase-2-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-2-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden">
+                        <p class="text-xs text-gray-500 p-2">Brak wyników.</p>
+                    </div>
                 </div>
-            </nav>
-            <div class="mt-auto pt-4 border-t border-gray-800"><h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3><div class="space-y-2 text-sm"><div class="flex justify-between items-center"><span class="text-gray-400">API Gateway:</span><span id="api-status" class="flex items-center text-gray-500"><span class="h-2 w-2 rounded-full bg-gray-500 mr-2"></span>Offline</span></div><div class="flex justify-between items-center"><span class="text-gray-400">Silnik:</span><span id="worker-status-text" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-xs">IDLE</span></div></div></div>
+
+                <!-- FAZA 3 -->
+                 <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left">
+                        <p class="text-sm font-semibold text-gray-300">Faza 3: Sygnały (<span id="phase-3-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-3-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden">
+                       <p class="text-xs text-gray-500 p-2">Brak wyników.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- SEKCJA DOLNA (STAŁA) -->
+            <div class="mt-auto shrink-0 border-t border-gray-800 pt-4">
+                <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">API Gateway:</span>
+                        <span id="api-status" class="flex items-center text-gray-500"><span class="h-2 w-2 rounded-full bg-gray-500 mr-2"></span>Offline</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Silnik:</span>
+                        <span id="worker-status-text" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-xs">IDLE</span>
+                    </div>
+                </div>
+            </div>
         </aside>
 
         <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
             <header class="p-4 border-b border-gray-800 shrink-0"><div class="max-w-xl mx-auto"><div class="relative"><i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i><input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter, aby uruchomić analizę na żądanie" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"></div></div></header>
             
             <div id="main-content" class="p-6 flex-grow">
-                <!-- Dynamiczna zawartość -->
+                <!-- Dynamiczna zawartość będzie renderowana tutaj -->
             </div>
         </main>
     </div>
@@ -79,18 +129,13 @@
     <script>
         // --- GLOBALNY STAN APLIKACJI ---
         const state = {
-            apiBaseUrl: "https://apex-predator-api.onrender.com",
+            phase1: [], phase2: [], phase3: [],
+            workerStatus: {},
+            onDemandPollingId: null,
+            livePricePollingId: null,
+            dataPollingId: null,
             activeView: 'dashboard',
-            polling: {
-                workerStatus: null,
-                livePrices: null
-            },
-            results: {
-                phase1: [],
-                phase2: [],
-                phase3: []
-            },
-            livePrices: {}
+            activeTicker: null,
         };
 
         // --- ELEMENTY UI ---
@@ -101,49 +146,48 @@
             loginButton: document.getElementById('login-button'),
             loginStatusText: document.getElementById('login-status-text'),
             mainContent: document.getElementById('main-content'),
-            resultsContainer: document.getElementById('results-container'),
+            tickerInput: document.getElementById('ticker-input'),
             startBtn: document.getElementById('start-btn'),
             pauseBtn: document.getElementById('pause-btn'),
             resumeBtn: document.getElementById('resume-btn'),
-            tickerInput: document.getElementById('ticker-input'),
             apiStatus: document.getElementById('api-status'),
             workerStatusText: document.getElementById('worker-status-text'),
-            navDashboard: document.getElementById('nav-dashboard'),
+            phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
+            phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
+            phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
         };
 
         // --- LOGIKA API ---
+        const API_BASE_URL = "https://apex-predator-api.onrender.com";
+        const apiRequest = async (endpoint, options = {}) => {
+            const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+            if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
+            if (!response.ok) throw new Error(`Błąd serwera: ${response.status}`);
+            return await response.json();
+        };
+
         const api = {
-            request: async (endpoint, options = {}) => {
-                const response = await fetch(`${state.apiBaseUrl}${endpoint}`, options);
-                if (response.status === 204) return null;
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ detail: 'Błąd serwera' }));
-                    throw new Error(errorData.detail || `Błąd HTTP: ${response.status}`);
-                }
-                return response.json();
-            },
-            getWorkerStatus: () => api.request('/api/v1/worker/status'),
-            sendWorkerControl: (action) => api.request(`/api/v1/worker/control/${action}`, { method: 'POST' }),
-            getPhase1: () => api.request('/api/v1/candidates/phase1'),
-            deletePhase1: (ticker) => api.request(`/api/v1/candidates/phase1/${ticker}`, { method: 'DELETE' }),
-            getPhase2: () => api.request('/api/v1/results/phase2'),
-            deletePhase2: (ticker) => api.request(`/api/v1/results/phase2/${ticker}`, { method: 'DELETE' }),
-            getPhase3: () => api.request('/api/v1/signals/phase3'),
-            deletePhase3: (id) => api.request(`/api/v1/signals/phase3/${id}`, { method: 'DELETE' }),
-            requestOnDemand: (ticker) => api.request('/api/v1/analysis/on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-            getOnDemandResult: (ticker) => api.request(`/api/v1/analysis/on-demand/result/${ticker}`),
-            requestPhase3OnDemand: (ticker) => api.request('/api/v1/analysis/phase3-on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-            getPhase3OnDemandResult: (ticker) => api.request(`/api/v1/analysis/phase3-on-demand/result/${ticker}`),
-            getConsolidatedDetails: (ticker) => api.request(`/api/v1/details/${ticker}`),
-            getLivePrices: (tickers) => api.request(`/api/v1/live-prices?tickers=${tickers.join(',')}`)
+            getWorkerStatus: () => apiRequest('/api/v1/worker/status'),
+            sendWorkerControl: (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' }),
+            getPhase1Candidates: () => apiRequest('/api/v1/candidates/phase1'),
+            deletePhase1Candidate: (ticker) => apiRequest(`/api/v1/candidates/phase1/${ticker}`, { method: 'DELETE' }),
+            getPhase2Results: () => apiRequest('/api/v1/results/phase2'),
+            deletePhase2Result: (ticker) => apiRequest(`/api/v1/results/phase2/${ticker}`, { method: 'DELETE' }),
+            getPhase3Signals: () => apiRequest('/api/v1/signals/phase3'),
+            deletePhase3Signal: (id) => apiRequest(`/api/v1/signals/phase3/${id}`, { method: 'DELETE' }),
+            getConsolidatedDetails: (ticker) => apiRequest(`/api/v1/details/${ticker}`),
+            requestOnDemandAnalysis: (ticker) => apiRequest(`/api/v1/analysis/on-demand`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
+            getOnDemandResult: (ticker) => apiRequest(`/api/v1/analysis/on-demand/result/${ticker}`),
+            requestPhase3OnDemand: (ticker) => apiRequest(`/api/v1/analysis/phase3-on-demand`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
+            getPhase3OnDemandResult: (ticker) => apiRequest(`/api/v1/analysis/phase3-on-demand/result/${ticker}`),
+            getLivePrices: (tickers) => apiRequest(`/api/v1/live-prices?tickers=${tickers.join(',')}`)
         };
 
         // --- FUNKCJE RENDERUJĄCE ---
-        const render = {
-            loading: (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
+        const renderers = {
+            loading: (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`,
             error: (title, message) => `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">${title}</h2><p>${message}</p></div>`,
-            dashboard: () => {
-                ui.mainContent.innerHTML = `
+            dashboard: () => `
                 <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
                     <h3 class="text-xl font-semibold mb-4">Status Skanowania Rynku</h3>
                     <div class="space-y-3">
@@ -154,314 +198,250 @@
                         </div>
                     </div>
                     <div class="mt-4"><h4 class="text-md font-semibold text-gray-400 mb-2">Log Skanowania</h4><div id="scan-log" class="h-96 bg-black/50 p-3 rounded-md overflow-y-auto font-mono text-xs text-gray-400 border border-gray-700"></div></div>
-                </div>`;
-            },
-            resultLists: () => {
-                const phases = [
-                    { id: 'phase1', title: 'Faza 1: Kandydaci', items: state.results.phase1, key: 'ticker', scoreKey: 'score' },
-                    { id: 'phase2', title: 'Faza 2: APEX Elita', items: state.results.phase2, key: 'ticker', scoreKey: 'total_score' },
-                    { id: 'phase3', title: 'Faza 3: Sygnały', items: state.results.phase3, key: 'id', scoreKey: 'risk_reward_ratio' }
-                ];
-
-                ui.resultsContainer.innerHTML = phases.map(phase => `
-                    <details class="group" open>
-                        <summary class="flex justify-between items-center p-2 cursor-pointer hover:bg-gray-800 rounded-md">
-                            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">${phase.title} (${phase.items.length})</h2>
-                            <i data-lucide="chevron-down" class="w-4 h-4 text-gray-500 group-open:rotate-180 transition-transform"></i>
-                        </summary>
-                        <div id="list-${phase.id}" class="pl-2 mt-2 border-l border-gray-700 space-y-1 text-sm">
-                            ${phase.items.length === 0 
-                                ? '<p class="text-xs text-gray-600 px-2">Brak wyników.</p>'
-                                : phase.items.map(item => `
-                                <div class="candidate-item flex justify-between items-center p-1.5 rounded-md cursor-pointer" data-type="${phase.id}" data-id="${item[phase.key]}" data-ticker="${item.ticker}">
-                                    <div class="flex items-center space-x-2">
-                                        <span class="font-bold w-16 truncate">${item.ticker}</span>
-                                        <span class="text-xs text-gray-400 w-20" id="price-${item.ticker}">${state.livePrices[item.ticker] ? '$' + state.livePrices[item.ticker].toFixed(2) : '...'}</span>
-                                        <span class="text-xs text-sky-400">(${item[phase.scoreKey]})</span>
-                                    </div>
-                                    <div class="flex items-center space-x-1">
-                                        ${phase.id !== 'phase3' ? `<button class="action-btn p-1 text-gray-500 hover:text-cyan-400" data-action="predator" data-tooltip="Analiza Predator (Faza 3)"><i data-lucide="scan-search" class="w-4 h-4 pointer-events-none"></i></button>` : ''}
-                                        <button class="action-btn p-1 text-gray-500 hover:text-red-500" data-action="delete" data-tooltip="Usuń z listy"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
-                                    </div>
-                                </div>
-                            `).join('')
-                            }
+                </div>`,
+            phase1List: (candidates) => {
+                if (!candidates || candidates.length === 0) return `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`;
+                return candidates.map(c => `
+                    <div class="candidate-item flex justify-between items-center p-2 rounded-md cursor-pointer text-sm" data-action="view-details" data-ticker="${c.ticker}">
+                        <div>
+                            <span class="font-bold">${c.ticker}</span>
+                            <span id="price-${c.ticker}" class="text-gray-400 ml-2">${c.price ? `$${c.price.toFixed(2)}` : '...'}</span>
                         </div>
-                    </details>
-                `).join('');
-                lucide.createIcons();
-            },
-            consolidatedDetails: (data) => {
-                const { ticker, phase1_data, phase2_data, phase3_signal, on_demand_analysis, phase3_on_demand_analysis } = data;
-                
-                const renderCard = (title, icon, content) => `
-                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-800">
-                        <h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="${icon}" class="mr-3 w-5 h-5 text-sky-400"></i>${title}</h3>
-                        <div class="space-y-2 text-sm">${content}</div>
-                    </div>`;
-
-                const renderDetail = (label, value) => `<div class="flex justify-between"><span class="text-gray-400">${label}:</span><span class="font-semibold">${value ?? 'N/A'}</span></div>`;
-
-                let content = `<h2 class="text-3xl font-bold mb-6">Analiza Spółki: <span class="text-sky-400">${ticker}</span></h2><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">`;
-                
-                content += renderCard('Faza 1: Kandydat', 'filter', phase1_data ? 
-                    renderDetail('Cena (w dniu skanu)', `$${phase1_data.price.toFixed(2)}`) + 
-                    renderDetail('Zmiana %', `${phase1_data.change_percent.toFixed(2)}%`) +
-                    renderDetail('Wolumen', phase1_data.volume.toLocaleString()) +
-                    renderDetail('Score', phase1_data.score) : '<p class="text-gray-500">Brak danych.</p>');
-
-                content += renderCard('Faza 2: APEX Elita', 'award', phase2_data ?
-                    renderDetail('Wynik Catalyst', phase2_data.catalyst_score) +
-                    renderDetail('Wynik Siły Wzgl.', phase2_data.relative_strength_score) +
-                    renderDetail('Wynik Kompresji', phase2_data.energy_compression_score) +
-                    `<div class="border-t border-gray-700 my-2"></div>` +
-                    renderDetail('Wynik APEX Total', `<strong>${phase2_data.total_score} / 10</strong>`) : '<p class="text-gray-500">Brak danych.</p>');
-
-                content += renderCard('Faza 3: Sygnał Taktyczny', 'target', phase3_signal ?
-                    renderDetail('Cena Wejścia', `$${phase3_signal.entry_price.toFixed(2)}`) +
-                    renderDetail('Stop Loss', `$${phase3_signal.stop_loss.toFixed(2)}`) +
-                    renderDetail('Take Profit', `$${phase3_signal.take_profit.toFixed(2)}`) +
-                    renderDetail('R/R Ratio', phase3_signal.risk_reward_ratio.toFixed(2)) : '<p class="text-gray-500">Brak aktywnego sygnału.</p>');
-                
-                content += '</div>'; // close grid
-
-                if (on_demand_analysis) {
-                    const { ai_score, recommendation, reasons, fundamentals, technicals } = on_demand_analysis;
-                    const getRecoClass = (rec = "") => { if (rec.includes("Silny")) return 'text-green-400'; if (rec.includes("Kupna")) return 'text-sky-400'; return 'text-yellow-400'; };
-                    content += `<div class="mt-6 bg-[#161B22] p-6 rounded-lg border border-gray-800">
-                        <h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="brain-circuit" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza na Żądanie (AI)</h3>
-                        <div class="text-center mb-4"><p class="text-5xl font-bold ${getRecoClass(recommendation)}">${ai_score}</p><p class="text-lg font-semibold ${getRecoClass(recommendation)} mt-1">${recommendation}</p><div class="text-xs text-gray-500 mt-2 max-w-md mx-auto">${reasons.join(' · ')}</div></div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div><h4 class="font-semibold mb-2">Dane Fundamentalne</h4><div class="space-y-2 text-sm">${Object.entries(fundamentals).map(([k, v]) => renderDetail(k, v)).join('')}</div></div>
-                            <div><h4 class="font-semibold mb-2">Dane Techniczne</h4><div class="space-y-2 text-sm">${Object.entries(technicals).map(([k, v]) => renderDetail(k, v)).join('')}</div></div>
+                        <div class="flex items-center space-x-2">
+                           <button class="p-1 text-gray-500 hover:text-sky-400" title="Uruchom analizę Predator (Faza 3)" data-action="run-predator" data-ticker="${c.ticker}"><i data-lucide="crosshair" class="w-4 h-4 pointer-events-none"></i></button>
+                           <button class="p-1 text-gray-500 hover:text-red-500" title="Usuń" data-action="delete-p1" data-ticker="${c.ticker}"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
                         </div>
-                    </div>`;
-                }
-
-                if (phase3_on_demand_analysis) {
-                     content += `<div class="mt-6 bg-[#161B22] p-6 rounded-lg border border-gray-800" id="predator-result-view"></div>`;
-                }
-
-                ui.mainContent.innerHTML = content;
-                lucide.createIcons();
-
-                if(phase3_on_demand_analysis) {
-                    render.predatorResult(phase3_on_demand_analysis, '#predator-result-view');
-                }
+                    </div>`).join('');
             },
-            predatorResult: (data, containerSelector) => {
-                const container = document.querySelector(containerSelector);
-                if (!container) return;
-                
-                let content = `<h3 class="text-xl font-semibold mb-4 flex items-center"><i data-lucide="scan-search" class="mr-3 w-5 h-5 text-sky-400"></i>Analiza Predator (Faza 3)</h3>`;
-                if (data.status === 'SIGNAL_GENERATED') {
-                    content += `<div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-                        <div class="bg-green-900/30 p-3 rounded-md"><p class="text-xs text-green-400">WEJŚCIE</p><p class="font-bold text-lg">$${data.entry_price}</p></div>
-                        <div class="bg-red-900/30 p-3 rounded-md"><p class="text-xs text-red-400">STOP LOSS</p><p class="font-bold text-lg">$${data.stop_loss}</p></div>
-                        <div class="bg-sky-900/30 p-3 rounded-md"><p class="text-xs text-sky-400">TAKE PROFIT</p><p class="font-bold text-lg">$${data.take_profit}</p></div>
-                        <div class="bg-gray-700 p-3 rounded-md"><p class="text-xs text-gray-300">R/R RATIO</p><p class="font-bold text-lg">${data.risk_reward_ratio}:1</p></div>
-                    </div>`;
-                } else {
-                    content += `<div class="bg-yellow-900/20 text-yellow-300 border border-yellow-700 p-4 rounded-md text-sm"><p class="font-semibold">${data.status}</p><p>${data.message}</p></div>`;
-                }
-                container.innerHTML = content;
-                lucide.createIcons();
+            phase2List: (results) => {
+                 if (!results || results.length === 0) return `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`;
+                 return results.map(r => `
+                    <div class="candidate-item flex justify-between items-center p-2 rounded-md cursor-pointer text-sm" data-action="view-details" data-ticker="${r.ticker}">
+                        <div>
+                            <span class="font-bold">${r.ticker}</span>
+                            <span class="text-gray-400 ml-2">Score: ${r.total_score}</span>
+                            <span id="price-${r.ticker}" class="text-sky-400 ml-2">...</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                           <button class="p-1 text-gray-500 hover:text-sky-400" title="Uruchom analizę Predator (Faza 3)" data-action="run-predator" data-ticker="${r.ticker}"><i data-lucide="crosshair" class="w-4 h-4 pointer-events-none"></i></button>
+                           <button class="p-1 text-gray-500 hover:text-red-500" title="Usuń" data-action="delete-p2" data-ticker="${r.ticker}"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
+                        </div>
+                    </div>`).join('');
+            },
+            phase3List: (signals) => {
+                if (!signals || signals.length === 0) return `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`;
+                return signals.map(s => `
+                    <div class="candidate-item flex justify-between items-center p-2 rounded-md cursor-pointer text-sm" data-action="view-details" data-ticker="${s.ticker}">
+                        <div>
+                            <span class="font-bold">${s.ticker}</span>
+                             <span id="price-${s.ticker}" class="text-sky-400 ml-2">...</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                           <button class="p-1 text-gray-500 hover:text-red-500" title="Usuń" data-action="delete-p3" data-id="${s.id}"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
+                        </div>
+                    </div>`).join('');
             }
         };
 
         // --- GŁÓWNA LOGIKA APLIKACJI ---
-        const actions = {
-            updateWorkerStatusUI: (data) => {
-                ui.apiStatus.innerHTML = `<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online`;
-                ui.workerStatusText.textContent = data.status || 'N/A';
-                
-                ui.startBtn.disabled = data.status !== 'IDLE';
-                ui.pauseBtn.disabled = data.status !== 'RUNNING';
-                ui.resumeBtn.disabled = data.status !== 'PAUSED';
+        
+        function updateWorkerStatusUI() {
+            const data = state.workerStatus;
+            ui.apiStatus.innerHTML = `<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online`;
+            ui.workerStatusText.textContent = data.status || 'N/A';
+            
+            ui.startBtn.disabled = data.status === 'RUNNING';
+            ui.pauseBtn.disabled = data.status !== 'RUNNING';
+            ui.resumeBtn.disabled = data.status !== 'PAUSED';
 
-                if (state.activeView === 'dashboard') {
-                    document.getElementById('worker-phase').textContent = data.phase || 'N/A';
-                    const processed = data.progress?.processed || 0;
-                    const total = data.progress?.total || 1;
-                    document.getElementById('progress-text').textContent = `${processed} / ${total}`;
-                    document.getElementById('progress-bar').style.width = `${total > 0 ? (processed / total) * 100 : 0}%`;
-                    const logEl = document.getElementById('scan-log');
-                    const newLogHtml = data.log ? data.log.replace(/\n/g, '<br>') : '';
-                    if (logEl && logEl.innerHTML !== newLogHtml) {
-                        logEl.innerHTML = newLogHtml;
-                        logEl.scrollTop = logEl.scrollHeight;
-                    }
+            const dashboardPhase = document.getElementById('worker-phase');
+            if (dashboardPhase) {
+                dashboardPhase.textContent = data.phase || 'N/A';
+                const processed = data.progress?.processed || 0;
+                const total = data.progress?.total || 0;
+                document.getElementById('progress-text').textContent = `${processed} / ${total}`;
+                document.getElementById('progress-bar').style.width = `${total > 0 ? (processed / total) * 100 : 0}%`;
+                const logEl = document.getElementById('scan-log');
+                if (logEl && data.log && logEl.innerHTML !== data.log.replace(/\n/g, '<br>')) {
+                    logEl.innerHTML = data.log.replace(/\n/g, '<br>');
+                    logEl.scrollTop = logEl.scrollHeight;
                 }
-            },
-            pollWorkerStatus: async () => {
-                try {
-                    const oldStatus = ui.workerStatusText.textContent;
-                    const data = await api.getWorkerStatus();
-                    actions.updateWorkerStatusUI(data);
-                    if (oldStatus === 'RUNNING' && data.status === 'IDLE') {
-                        await actions.refreshAllLists();
-                    }
-                } catch (e) {
-                    ui.apiStatus.innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline`;
-                    console.error("Failed to poll worker status", e);
-                }
-            },
-            refreshAllLists: async () => {
-                try {
-                    [state.results.phase1, state.results.phase2, state.results.phase3] = await Promise.all([
-                        api.getPhase1(), api.getPhase2(), api.getPhase3()
-                    ]);
-                    render.resultLists();
-                    actions.startLivePricePolling();
-                } catch (e) {
-                    console.error("Failed to refresh result lists", e);
-                }
-            },
-            pollLivePrices: async () => {
-                const allTickers = [...new Set([
-                    ...state.results.phase1.map(i => i.ticker),
-                    ...state.results.phase2.map(i => i.ticker),
-                    ...state.results.phase3.map(i => i.ticker)
-                ])];
-
-                if (allTickers.length === 0) return;
-
-                try {
-                    const prices = await api.getLivePrices(allTickers);
-                    prices.forEach(p => {
-                        state.livePrices[p.ticker] = p.price;
-                        const priceEl = document.getElementById(`price-${p.ticker}`);
-                        if (priceEl) priceEl.textContent = `$${p.price.toFixed(2)}`;
-                    });
-                } catch(e) {
-                    console.error("Failed to poll live prices", e);
-                }
-            },
-            startLivePricePolling: () => {
-                if (state.polling.livePrices) clearInterval(state.polling.livePrices);
-                actions.pollLivePrices();
-                state.polling.livePrices = setInterval(actions.pollLivePrices, 5000);
-            },
-            handleSidebarClick: async (e) => {
-                const target = e.target.closest('.candidate-item, .action-btn');
-                if (!target) return;
-
-                const parentItem = target.closest('.candidate-item');
-                const type = parentItem.dataset.type;
-                const id = parentItem.dataset.id;
-                const ticker = parentItem.dataset.ticker;
-                const action = target.dataset.action;
-
-                if (action === 'delete') {
-                    if (confirm(`Czy na pewno chcesz usunąć ${ticker} z tej listy?`)) {
-                        try {
-                            if (type === 'phase1') await api.deletePhase1(ticker);
-                            else if (type === 'phase2') await api.deletePhase2(ticker);
-                            else if (type === 'phase3') await api.deletePhase3(id);
-                            await actions.refreshAllLists();
-                        } catch (e) { alert(`Błąd usuwania: ${e.message}`); }
-                    }
-                } else if (action === 'predator') {
-                    ui.mainContent.innerHTML = render.loading(`Uruchamiam analizę Predator dla ${ticker}...`);
-                    try {
-                        await api.requestPhase3OnDemand(ticker);
-                        const pollId = setInterval(async () => {
-                            const result = await api.getPhase3OnDemandResult(ticker);
-                            if (result) {
-                                clearInterval(pollId);
-                                await actions.showDetailsView(ticker);
-                            }
-                        }, 3000);
-                    } catch (e) { ui.mainContent.innerHTML = render.error('Błąd zlecenia', e.message); }
-                } else { // Click on item itself
-                    await actions.showDetailsView(ticker);
-                }
-            },
-            showDetailsView: async (ticker) => {
-                state.activeView = ticker;
-                document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('sidebar-item-active'));
-                ui.mainContent.innerHTML = render.loading(`Pobieram dane dla ${ticker}...`);
-                try {
-                    const data = await api.getConsolidatedDetails(ticker);
-                    render.consolidatedDetails(data);
-                } catch (e) {
-                    ui.mainContent.innerHTML = render.error('Błąd pobierania danych', e.message);
-                }
-            },
-            showDashboardView: () => {
-                state.activeView = 'dashboard';
-                document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('sidebar-item-active'));
-                ui.navDashboard.classList.add('sidebar-item-active');
-                render.dashboard();
-                actions.pollWorkerStatus(); // to immediately update the view
+            }
+        };
+        
+        async function pollWorkerStatus() {
+            try {
+                const oldStatus = state.workerStatus ? state.workerStatus.status : null;
+                state.workerStatus = await api.getWorkerStatus();
+                updateWorkerStatusUI();
+            } catch (e) {
+                ui.apiStatus.innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline`;
             }
         };
 
-        // --- INICJALIZACJA I OBSŁUGA ZDARZEŃ ---
-        const init = () => {
-            lucide.createIcons();
+        async function refreshAllData() {
+            try {
+                const [p1, p2, p3] = await Promise.all([
+                    api.getPhase1Candidates(),
+                    api.getPhase2Results(),
+                    api.getPhase3Signals()
+                ]);
+                
+                state.phase1 = p1 || [];
+                state.phase2 = p2 || [];
+                state.phase3 = p3 || [];
 
-            ui.navDashboard.addEventListener('click', (e) => {
-                e.preventDefault();
-                actions.showDashboardView();
-            });
+                ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
+                ui.phase2.list.innerHTML = renderers.phase2List(state.phase2);
+                ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
+                
+                ui.phase1.count.textContent = state.phase1.length;
+                ui.phase2.count.textContent = state.phase2.length;
+                ui.phase3.count.textContent = state.phase3.length;
+                
+                lucide.createIcons();
+            } catch (e) {
+                console.error("Failed to refresh scan data", e);
+            }
+        }
+        
+        async function updateLivePrices() {
+            const tickers = [...new Set([...state.phase1.map(c => c.ticker), ...state.phase2.map(r => r.ticker), ...state.phase3.map(s => s.ticker)])];
+            if (tickers.length === 0) return;
             
-            ui.resultsContainer.addEventListener('click', actions.handleSidebarClick);
+            try {
+                const prices = await api.getLivePrices(tickers);
+                if (!prices) return;
+                
+                prices.forEach(p => {
+                    const priceEl = document.getElementById(`price-${p.ticker}`);
+                    if (priceEl) {
+                        priceEl.textContent = `$${p.price.toFixed(2)}`;
+                    }
+                });
+            } catch(e) {
+                console.error("Failed to update live prices", e);
+            }
+        }
+        
+        async function showDetails(ticker) {
+            state.activeView = 'details';
+            state.activeTicker = ticker;
+            ui.mainContent.innerHTML = renderers.loading(`Ładowanie szczegółów dla ${ticker}...`);
+            try {
+                const data = await api.getConsolidatedDetails(ticker);
+                // Tutaj będzie renderowanie widoku szczegółów
+                ui.mainContent.innerHTML = `<pre class="text-xs">${JSON.stringify(data, null, 2)}</pre>`;
+            } catch(e) {
+                ui.mainContent.innerHTML = renderers.error('Błąd Ładowania Danych', e.message);
+            }
+            lucide.createIcons();
+        }
 
-            ui.startBtn.addEventListener('click', async () => { 
-                await api.sendWorkerControl('start'); 
-                actions.showDashboardView(); 
+
+        // --- LOGIKA STARTOWA I OBSŁUGA ZDARZEŃ ---
+        function startDashboard() {
+            ui.loginScreen.classList.add('hidden');
+            ui.dashboardScreen.classList.remove('hidden');
+            lucide.createIcons();
+            
+            ui.mainContent.innerHTML = renderers.dashboard();
+            lucide.createIcons();
+            
+            pollWorkerStatus();
+            refreshAllData();
+
+            // Uruchomienie cyklicznego odpytywania
+            state.dataPollingId = setInterval(async () => {
+                await pollWorkerStatus();
+                // Odświeżaj dane tylko jeśli worker jest bezczynny, żeby nie nadpisywać w trakcie skanu
+                if (state.workerStatus.status === 'IDLE') {
+                    await refreshAllData();
+                }
+            }, 5000);
+            
+            state.livePricePollingId = setInterval(updateLivePrices, 5000);
+
+            // Event Listeners dla przycisków
+            ui.startBtn.addEventListener('click', async () => {
+                await api.sendWorkerControl('start');
+                pollWorkerStatus();
             });
             ui.pauseBtn.addEventListener('click', () => api.sendWorkerControl('pause'));
             ui.resumeBtn.addEventListener('click', () => api.sendWorkerControl('resume'));
 
-            ui.tickerInput.addEventListener('keypress', async (e) => {
+            document.getElementById('phases-container').addEventListener('click', async (e) => {
+                const target = e.target.closest('[data-action]');
+                if (!target) return;
+                
+                const { action, ticker, id } = target.dataset;
+
+                if (action === 'view-details') {
+                    showDetails(ticker);
+                } else if (action === 'delete-p1') {
+                    if (confirm(`Czy na pewno chcesz usunąć ${ticker} z Fazy 1?`)) {
+                        await api.deletePhase1Candidate(ticker);
+                        refreshAllData();
+                    }
+                } else if (action === 'delete-p2') {
+                    if (confirm(`Czy na pewno chcesz usunąć ${ticker} z Fazy 2?`)) {
+                        await api.deletePhase2Result(ticker);
+                        refreshAllData();
+                    }
+                } else if (action === 'delete-p3') {
+                     if (confirm(`Czy na pewno chcesz usunąć sygnał #${id}?`)) {
+                        await api.deletePhase3Signal(id);
+                        refreshAllData();
+                    }
+                } else if (action === 'run-predator') {
+                    alert(`Uruchamianie analizy Predator dla ${ticker}...`);
+                    // TODO: Dodać logikę
+                }
+            });
+            
+            ui.tickerInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
-                    const ticker = ui.tickerInput.value.trim().toUpperCase();
-                    if (!ticker) return;
-                    ui.tickerInput.value = '';
-                    ui.mainContent.innerHTML = render.loading(`Uruchamiam analizę na żądanie dla ${ticker}...`);
-                    try {
-                        await api.requestOnDemand(ticker);
-                        const pollId = setInterval(async () => {
-                            const result = await api.getOnDemandResult(ticker);
-                            if (result) {
-                                clearInterval(pollId);
-                                await actions.showDetailsView(ticker);
-                            }
-                        }, 3000);
-                    } catch (e) {
-                        ui.mainContent.innerHTML = render.error('Błąd zlecenia analizy', e.message);
+                    const ticker = e.target.value.trim().toUpperCase();
+                    if (ticker) {
+                        // TODO: Logika analizy na żądanie
+                        alert(`Uruchamianie analizy na żądanie dla ${ticker}...`)
+                        e.target.value = '';
                     }
                 }
             });
-
-            state.polling.workerStatus = setInterval(actions.pollWorkerStatus, 3000);
-            actions.refreshAllLists();
-            actions.showDashboardView();
-        };
-
-        const checkBackendReady = () => {
-            ui.loginStatusText.textContent = 'Oczekiwanie na uruchomienie usług...';
-            const intervalId = setInterval(async () => {
-                try {
-                    await api.getWorkerStatus();
-                    clearInterval(intervalId);
-                    ui.loginStatusText.textContent = 'System gotowy.';
-                    ui.loginButton.disabled = false;
-                    ui.loginButton.textContent = 'Uruchom Panel';
-                } catch (e) { /* Czekaj dalej... */ }
-            }, 3000);
-        };
+            
+            // Accordion logic
+            document.querySelectorAll('.accordion-toggle').forEach(button => {
+                button.addEventListener('click', () => {
+                    const content = button.nextElementSibling;
+                    const icon = button.querySelector('.accordion-icon');
+                    content.classList.toggle('hidden');
+                    icon.classList.toggle('rotate-180');
+                });
+            });
+        }
+        
+        async function checkBackendReady() {
+            ui.loginStatusText.textContent = 'Oczekiwanie na uruchomienie usług backendu...';
+            try {
+                await api.getWorkerStatus();
+                ui.loginStatusText.textContent = 'System gotowy.';
+                ui.loginButton.disabled = false;
+                ui.loginButton.textContent = 'Wejdź do Aplikacji';
+            } catch (e) {
+                setTimeout(checkBackendReady, 3000);
+            }
+        }
 
         ui.loginForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            ui.loginScreen.classList.add('hidden');
-            ui.dashboardScreen.classList.remove('hidden');
-            init();
+            startDashboard();
         });
 
-        document.addEventListener('DOMContentLoaded', checkBackendReady);
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            checkBackendReady();
+        });
     </script>
 </body>
 </html>
