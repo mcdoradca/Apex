@@ -1,9 +1,9 @@
 from sqlalchemy import (
     Column, String, VARCHAR, TIMESTAMP, NUMERIC, BIGINT, DATE,
-    Boolean, INTEGER, TEXT, ForeignKey
+    Boolean, INTEGER, TEXT, ForeignKey, Index
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP, JSONB
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 from .database import Base
 
 class Company(Base):
@@ -38,7 +38,7 @@ class Phase2Result(Base):
 class TradingSignal(Base):
     __tablename__ = 'trading_signals'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
-    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), unique=True) # Zmieniono na unique, aby łatwo znaleźć 1 sygnał PENDING/ACTIVE
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE')) # Usunięto unique=True
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
     status = Column(VARCHAR(50), default='PENDING') # Zmieniono default na PENDING/ACTIVE, EXECUTED, CANCELLED, DELETED, PENDING
     entry_price = Column(NUMERIC(12, 2))
@@ -52,6 +52,18 @@ class TradingSignal(Base):
     entry_zone_top = Column(NUMERIC(12, 2), nullable=True)
     
     notes = Column(TEXT)
+
+    # KRYTYCZNA POPRAWKA: Definicja częściowego indeksu unikalnego
+    # Zapewnia, że może istnieć tylko jeden sygnał 'ACTIVE' lub 'PENDING' dla danego tickera,
+    # jednocześnie pozwalając na archiwizację wielu sygnałów historycznych (np. EXECUTED, CANCELLED).
+    __table_args__ = (
+        Index(
+            'uq_active_pending_ticker',
+            'ticker',
+            unique=True,
+            postgresql_where=text("status IN ('ACTIVE', 'PENDING')")
+        ),
+    )
 
 class SystemControl(Base):
     __tablename__ = 'system_control'
@@ -70,3 +82,4 @@ class Phase3OnDemandResult(Base):
     ticker = Column(VARCHAR(50), primary_key=True)
     analysis_data = Column(JSONB)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
