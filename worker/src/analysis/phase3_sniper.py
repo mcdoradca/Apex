@@ -58,7 +58,11 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.apply(pd.to_numeric)
 
 def plan_trade_on_demand(ticker: str, api_client: AlphaVantageClient) -> dict:
-    """Funkcja generująca plan handlowy dla Fazy 3 (Predator) na żądanie."""
+    """
+    Generuje plan handlowy dla Fazy 3 (Predator) na żądanie.
+    Logika została w pełni zaktualizowana, aby używać DYNAMICZNEGO stop-lossa
+    opartego na wskaźniku ATR, zgodnie z dokumentacją strategii.
+    """
     logger.info(f"[Predator] Running on-demand analysis for {ticker}")
     
     daily_data_raw = api_client.get_daily_adjusted(ticker, 'compact')
@@ -92,24 +96,40 @@ def plan_trade_on_demand(ticker: str, api_client: AlphaVantageClient) -> dict:
         if signal_candle is None:
             return {"signal": False, "reason": "Cena w strefie, ale nie pojawiła się silna bycza świeca sygnałowa (ostatnie 8h). Obserwuj."}
 
-        # Kalkulacja R/R
+        # --- NOWA LOGIKA KALKULACJI RYZYKA OPARTA NA ATR (ZGODNIE Z DOKUMENTACJĄ) ---
+        
+        # 2a. Pobierz dane ATR
+        atr_data_raw = api_client.get_atr(ticker)
+        if not atr_data_raw or 'Technical Analysis: ATR' not in atr_data_raw:
+            return {"signal": False, "reason": "Cena w strefie, ale brak danych ATR do kalkulacji ryzyka."}
+        
+        try:
+            latest_atr_date = sorted(atr_data_raw['Technical Analysis: ATR'].keys())[-1]
+            latest_atr = safe_float(atr_data_raw['Technical Analysis: ATR'][latest_atr_date]['ATR'])
+            if not latest_atr:
+                raise ValueError("Latest ATR is null or zero.")
+        except (IndexError, KeyError, ValueError) as e:
+            logger.error(f"Could not parse ATR for {ticker}: {e}")
+            return {"signal": False, "reason": f"Błąd odczytu wskaźnika ATR: {e}"}
+
+        # 2b. Oblicz parametry transakcji
         entry_price = signal_candle['high'] + 0.01
-        # Używamy impulselow jako potencjalnego SL dla pełnego planu (mimo że ATR jest lepsze, trzymamy się logiki z Faz 1/3)
-        stop_loss = impulse_result['impulse_low'] 
-        take_profit = impulse_result['impulse_high']
+        stop_loss = entry_price - (Phase3Config.ATR_MULTIPLIER_FOR_SL * latest_atr)
+        take_profit = impulse_result['impulse_high'] # Cel zysku nadal na szczycie impulsu
         
         potential_risk = entry_price - stop_loss
         potential_profit = take_profit - entry_price
         
         if potential_risk <= 0:
-            return {"signal": False, "reason": "Błąd kalkulacji: Ryzyko równe zero lub negatywne."}
+            return {"signal": False, "reason": "Błąd kalkulacji: Ryzyko (oparte na ATR) równe zero lub negatywne."}
         
         risk_reward_ratio = potential_profit / potential_risk
 
+        # 2c. Sprawdź, czy R/R jest akceptowalne
         if risk_reward_ratio < Phase3Config.MIN_RISK_REWARD_RATIO:
             return {
                 "signal": False,
-                "reason": f"Sygnał wejścia, ale R/R ({risk_reward_ratio:.2f}) jest poniżej progu ({Phase3Config.MIN_RISK_REWARD_RATIO})."
+                "reason": f"Sygnał wejścia, ale R/R ({risk_reward_ratio:.2f}) jest poniżej progu ({Phase3Config.MIN_RISK_REWARD_RATIO}). SL oparty na ATR."
             }
 
         return {
@@ -120,7 +140,7 @@ def plan_trade_on_demand(ticker: str, api_client: AlphaVantageClient) -> dict:
             "take_profit": round(take_profit, 2),
             "risk_reward_ratio": round(risk_reward_ratio, 2),
             "status": "ACTIVE", # Bezpośredni sygnał do wejścia
-            "notes": f"SYGNAŁ AKTYWNY. Bycza świeca z {signal_candle.name} w strefie korekty."
+            "notes": f"SYGNAŁ AKTYWNY (ATR). Bycza świeca z {signal_candle.name} w strefie korekty. SL oparty na ATR({latest_atr:.2f})."
         }
     
     # 3. Jeśli cena JEST poza strefą (monitoring) - zwracamy status PENDING
@@ -296,9 +316,3 @@ def monitor_pending_signals(session: Session, api_client: AlphaVantageClient):
         except Exception as e:
             logger.error(f"Error monitoring signal for {ticker}: {e}", exc_info=True)
             session.rollback()
-
-
-# Nowa kolumna musi być dodana w models.py (w Twoim projekcie API)
-# Przekazano te kolumny w wcześniejszym pliku:
-# entry_zone_bottom = Column(NUMERIC(12, 2))
-# entry_zone_top = Column(NUMERIC(12, 2))
