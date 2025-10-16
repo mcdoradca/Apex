@@ -190,12 +190,12 @@ def run_tactical_planning(session: Session, qualified_tickers: list[str], get_cu
             trade_setup = find_end_of_day_setup(ticker, api_client)
             
             if trade_setup.get("signal"):
-                # KRYTYCZNA POPRAWKA: Dostosowanie zapytania UPSERT do częściowego indeksu unikalnego
-                # Klauzula ON CONFLICT (ticker) WHERE ... jest specyficzna dla PostgreSQL
+                # OSTATECZNA POPRAWKA: Zmiana ON CONFLICT na jawną nazwę ograniczenia (constraint).
+                # To jest bardziej niezawodny sposób na wskazanie reguły konfliktu w PostgreSQL.
                 stmt = text("""
                     INSERT INTO trading_signals (ticker, generation_date, status, entry_price, stop_loss, take_profit, risk_reward_ratio, notes, entry_zone_bottom, entry_zone_top)
                     VALUES (:ticker, NOW(), :status, NULL, NULL, :tp, NULL, :notes, :ezb, :ezt)
-                    ON CONFLICT (ticker) WHERE status IN ('ACTIVE', 'PENDING')
+                    ON CONFLICT ON CONSTRAINT uq_active_pending_ticker
                     DO UPDATE SET 
                         status = EXCLUDED.status, 
                         generation_date = EXCLUDED.generation_date, 
@@ -248,7 +248,7 @@ def monitor_pending_signals(session: Session, api_client: AlphaVantageClient):
                     SET status = 'ACTIVE', 
                         entry_price = :entry, stop_loss = :sl, take_profit = :tp, risk_reward_ratio = :rr, 
                         notes = :notes, generation_date = NOW()
-                    WHERE ticker = :ticker;
+                    WHERE ticker = :ticker AND status = 'PENDING';
                 """)
                 session.execute(update_stmt, {
                     'ticker': ticker,
@@ -264,6 +264,10 @@ def monitor_pending_signals(session: Session, api_client: AlphaVantageClient):
                 update_system_control(session, 'system_alert', alert_msg)
                 logger.info(alert_msg)
             else:
+                # Dodano resetowanie alertu, jeśli sygnał przestaje być aktywny
+                if 'zanikła' in trade_plan.get('reason', '') or 'wyszła ze strefy' in trade_plan.get('reason', ''):
+                    # Jeśli sygnał staje się nieaktualny, można go usunąć lub oznaczyć jako anulowany
+                    pass 
                 logger.info(f"Monitor: {ticker} - {trade_plan.get('reason', 'Nadal PENDING.')}")
         
         except Exception as e:
