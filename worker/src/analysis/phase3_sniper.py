@@ -190,12 +190,22 @@ def run_tactical_planning(session: Session, qualified_tickers: list[str], get_cu
             trade_setup = find_end_of_day_setup(ticker, api_client)
             
             if trade_setup.get("signal"):
+                # KRYTYCZNA POPRAWKA: Dostosowanie zapytania UPSERT do częściowego indeksu unikalnego
+                # Klauzula ON CONFLICT (ticker) WHERE ... jest specyficzna dla PostgreSQL
                 stmt = text("""
                     INSERT INTO trading_signals (ticker, generation_date, status, entry_price, stop_loss, take_profit, risk_reward_ratio, notes, entry_zone_bottom, entry_zone_top)
                     VALUES (:ticker, NOW(), :status, NULL, NULL, :tp, NULL, :notes, :ezb, :ezt)
-                    ON CONFLICT (ticker) DO UPDATE SET 
-                        status = EXCLUDED.status, generation_date = EXCLUDED.generation_date, take_profit = EXCLUDED.take_profit,
-                        notes = EXCLUDED.notes, entry_zone_bottom = EXCLUDED.entry_zone_bottom, entry_zone_top = EXCLUDED.entry_zone_top;
+                    ON CONFLICT (ticker) WHERE status IN ('ACTIVE', 'PENDING')
+                    DO UPDATE SET 
+                        status = EXCLUDED.status, 
+                        generation_date = EXCLUDED.generation_date, 
+                        take_profit = EXCLUDED.take_profit,
+                        notes = EXCLUDED.notes, 
+                        entry_zone_bottom = EXCLUDED.entry_zone_bottom, 
+                        entry_zone_top = EXCLUDED.entry_zone_top,
+                        entry_price = NULL, 
+                        stop_loss = NULL, 
+                        risk_reward_ratio = NULL;
                 """)
                 session.execute(stmt, {
                     'ticker': ticker, 
