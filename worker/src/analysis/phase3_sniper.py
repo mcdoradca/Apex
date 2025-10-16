@@ -74,9 +74,11 @@ def find_end_of_day_setup(ticker: str, api_client: AlphaVantageClient) -> dict:
     
     current_price = daily_df['close'].iloc[-1]
     
+    # Warunek: cena musi być PONIŻEJ górnej granicy strefy (aby dać miejsce na ruch)
     if current_price > impulse_result["entry_zone_top"]:
         return {"signal": False, "reason": f"Cena ({current_price:.2f}) jest powyżej strefy wejścia."}
     
+    # Jeśli setup jest prawidłowy, zwracamy sygnał PENDING
     return {
         "signal": True, "status": "PENDING", "ticker": ticker,
         "entry_zone_bottom": round(impulse_result['entry_zone_bottom'], 2),
@@ -90,6 +92,7 @@ def plan_trade_on_demand(ticker: str, api_client: AlphaVantageClient) -> dict:
     PEŁNA ANALIZA DLA MONITORA INTRADAY I ANALIZY NA ŻĄDANIE.
     Szuka świecy sygnałowej i liczy R/R.
     """
+    # Ta funkcja pozostaje taka sama jak w poprzedniej wersji, ale teraz jest wywoływana tylko przez monitor.
     logger.info(f"[Live Monitor] Running full trade analysis for {ticker}")
     daily_data_raw = api_client.get_daily_adjusted(ticker, 'compact')
     if not daily_data_raw or 'Time Series (Daily)' not in daily_data_raw: return {"signal": False, "reason": "Brak danych dziennych."}
@@ -162,11 +165,13 @@ def run_tactical_planning(session: Session, qualified_tickers: list[str], get_cu
         if get_current_state() == 'PAUSED':
             while get_current_state() == 'PAUSED': time.sleep(1)
         try:
+            # ZMIANA: Wywołujemy nową, uproszczoną funkcję
             trade_plan = find_end_of_day_setup(ticker, api_client)
             if not trade_plan.get("signal"):
                 append_scan_log(session, f"INFO (F3 EOD): {ticker} - {trade_plan.get('reason')}")
                 continue
 
+            status = trade_plan.get("status", "PENDING")
             stmt = text("""
                 INSERT INTO trading_signals (ticker, generation_date, status, notes, entry_zone_bottom, entry_zone_top, take_profit)
                 VALUES (:ticker, NOW(), :status, :notes, :ezb, :ezt, :tp)
@@ -175,17 +180,11 @@ def run_tactical_planning(session: Session, qualified_tickers: list[str], get_cu
                     notes = EXCLUDED.notes, entry_zone_bottom = EXCLUDED.entry_zone_bottom, 
                     entry_zone_top = EXCLUDED.entry_zone_top, take_profit = EXCLUDED.take_profit;
             """)
-            
-            # --- POPRAWKA: Konwersja typów NumPy na standardowe typy Pythona ---
-            params = {
-                'ticker': trade_plan['ticker'], 
-                'status': trade_plan['status'], 
-                'notes': trade_plan.get('notes'),
-                'ezb': float(trade_plan['entry_zone_bottom']) if trade_plan.get('entry_zone_bottom') is not None else None,
-                'ezt': float(trade_plan['entry_zone_top']) if trade_plan.get('entry_zone_top') is not None else None,
-                'tp': float(trade_plan['take_profit']) if trade_plan.get('take_profit') is not None else None
-            }
-            session.execute(stmt, params)
+            session.execute(stmt, {
+                'ticker': ticker, 'status': status, 'notes': trade_plan.get('notes'),
+                'ezb': trade_plan.get('entry_zone_bottom'), 'ezt': trade_plan.get('entry_zone_top'),
+                'tp': trade_plan.get('take_profit')
+            })
             session.commit()
             append_scan_log(session, f"PENDING (F3 EOD): Dodano {ticker} do listy obserwacyjnej.")
 
@@ -225,6 +224,7 @@ def monitor_pending_signals(session: Session, api_client: AlphaVantageClient):
     logger.info(f"Re-analyzing {len(pending_tickers)} PENDING tickers: {', '.join(pending_tickers)}")
     for ticker in pending_tickers:
         try:
+            # ZMIANA: Wywołujemy pełną, szczegółową analizę
             trade_plan = plan_trade_on_demand(ticker, api_client)
             if trade_plan.get('status') == 'ACTIVE':
                 update_stmt = text("""
@@ -234,17 +234,11 @@ def monitor_pending_signals(session: Session, api_client: AlphaVantageClient):
                         notes = :notes, generation_date = NOW()
                     WHERE ticker = :ticker AND status = 'PENDING';
                 """)
-                
-                # --- POPRAWKA: Konwersja typów NumPy na standardowe typy Pythona ---
-                params = {
-                    'ticker': ticker, 
-                    'notes': trade_plan['notes'],
-                    'entry': float(trade_plan['entry_price']) if trade_plan.get('entry_price') is not None else None,
-                    'sl': float(trade_plan['stop_loss']) if trade_plan.get('stop_loss') is not None else None,
-                    'tp': float(trade_plan['take_profit']) if trade_plan.get('take_profit') is not None else None,
-                    'rr': float(trade_plan['risk_reward_ratio']) if trade_plan.get('risk_reward_ratio') is not None else None
-                }
-                session.execute(update_stmt, params)
+                session.execute(update_stmt, {
+                    'ticker': ticker, 'notes': trade_plan['notes'],
+                    'entry': trade_plan['entry_price'], 'sl': trade_plan['stop_loss'],
+                    'tp': trade_plan['take_profit'], 'rr': trade_plan['risk_reward_ratio']
+                })
                 session.commit()
                 alert_msg = f"SYGNAŁ AKTYWOWANY: {ticker} spełnił warunki! Wejście: ${trade_plan['entry_price']:.2f}, R/R: {trade_plan['risk_reward_ratio']:.2f}"
                 update_system_control(session, 'system_alert', alert_msg)
