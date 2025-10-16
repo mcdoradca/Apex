@@ -10,7 +10,8 @@ from .utils import append_scan_log, update_scan_progress, safe_float
 logger = logging.getLogger(__name__)
 
 def _parse_bulk_quotes_csv(csv_text: str) -> dict:
-    """Ulepszony parser, który potrafi obsłużyć różne formaty odpowiedzi API (w trakcie sesji i po jej zakończeniu)."""
+    """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
+    # Modyfikacja 4: Logowanie na początku funkcji
     logger.info(f"[DIAGNOSTYKA] Otrzymano CSV do parsowania (pierwsze 200 znaków): {csv_text[:200]}")
     if not csv_text or "symbol" not in csv_text:
         logger.warning("[DIAGNOSTYKA] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'.")
@@ -25,32 +26,12 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
         if not ticker:
             continue
         
-        # --- INTELIGENTNA LOGIKA PARSOWANIA ---
-        # Sprawdzamy czy mamy dane live (close != 0) czy dane poza sesją (close = 0)
-        close_price = safe_float(row.get('close'))
-        previous_close = safe_float(row.get('previous_close'))
-        
-        # Jeśli close jest 0 lub brak, ale mamy previous_close, to uznajemy że jesteśmy poza sesją
-        # i używamy previous_close jako ceny referencyjnej
-        if (not close_price or close_price == 0.0) and previous_close:
-            logger.info(f"[DIAGNOSTYKA] Poza sesją - używam previous_close dla {ticker}: {previous_close}")
-            # Poza sesją używamy previous_close jako ceny, ale volume i change_percent są None
-            # bo nie ma rzeczywistych danych z dzisiejszej sesji
-            data_dict[ticker] = {
-                'price': previous_close,
-                'volume': None,  # Brak danych volume poza sesją
-                'change_percent': None  # Brak danych change poza sesją
-            }
-        else:
-            # W trakcie sesji - używamy normalnych danych
-            data_dict[ticker] = {
-                'price': close_price,
-                'volume': safe_float(row.get('volume')),
-                'change_percent': safe_float(row.get('change_percent'))
-            }
-        
-        logger.info(f"[DIAGNOSTYKA] {ticker}: cena={data_dict[ticker]['price']}, wolumen={data_dict[ticker]['volume']}, zmiana%={data_dict[ticker]['change_percent']}")
-        
+        # Poprawka: Odczyt ceny z 'close'
+        data_dict[ticker] = {
+            'price': safe_float(row.get('close')),
+            'volume': safe_float(row.get('volume')),
+            'change_percent': safe_float(row.get('change_percent'))
+        }
     return data_dict
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
@@ -82,6 +63,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     chunk_size = 100 
     
     detailed_logs_count = 0
+    # Modyfikacja 1: Zwiększona liczba logów
     max_detailed_logs = 50
 
     for i in range(0, total_tickers, chunk_size):
@@ -89,11 +71,13 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         try:
             bulk_data_csv = api_client.get_bulk_quotes(chunk)
             if not bulk_data_csv:
+                # Modyfikacja 3: Logowanie pustej odpowiedzi CSV
                 logger.warning(f"[DIAGNOSTYKA] Nie otrzymano danych CSV dla chunka zaczynającego się od {chunk[0]}.")
                 continue
 
             parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
 
+            # Modyfikacja 2: Logowanie pustego wyniku parsowania
             if not parsed_data:
                 logger.warning(f"[DIAGNOSTYKA] Parsowanie danych dla chunka {chunk[0]} zwróciło pusty wynik.")
                 continue
@@ -117,19 +101,15 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                     is_ok = False
                     reasons.append(f"Price {price:.2f} out of range")
 
-                # Volume i change_percent mogą być None poza sesją - to normalne
                 if volume is None:
-                    # Poza sesją volume jest None - pomijamy sprawdzenie volume w Etapie 1
-                    # Zostanie zweryfikowane w Etapie 2 z danych dziennych
-                    pass
+                    is_ok = False
+                    reasons.append("Invalid Volume (None)")
                 elif volume < Phase1Config.MIN_VOLUME:
                     is_ok = False
                     reasons.append(f"Volume {int(volume)} < {Phase1Config.MIN_VOLUME}")
 
                 if change_percent is None:
-                    # Poza sesją change_percent jest None - pomijamy sprawdzenie w Etapie 1
-                    # Zostanie zweryfikowane w Etapie 2 z danych dziennych
-                    pass
+                    is_ok = False
                 elif change_percent < Phase1Config.MIN_DAY_CHANGE_PERCENT:
                     is_ok = False
                     reasons.append(f"Change {change_percent:.2f}% < {Phase1Config.MIN_DAY_CHANGE_PERCENT}%")
@@ -175,22 +155,17 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             daily_df = daily_df.apply(pd.to_numeric)
             daily_df.sort_index(inplace=True)
 
-            # Weryfikacja Wolumenu Względnego - TERAZ zawsze z aktualnych danych dziennych
-            if len(daily_df) < 22: 
-                continue
-                
+
+            # Weryfikacja Wolumenu Względnego
+            if len(daily_df) < 22: continue
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            # Używamy aktualnego wolumenu z danych dziennych, a nie z BULK_QUOTES
-            current_volume = daily_df['volume'].iloc[-1]
+            current_volume = candidate['volume']
             
-            if avg_volume == 0: 
-                continue
-                
+            if avg_volume == 0: continue
             volume_ratio = current_volume / avg_volume
             volume_ratio_ok = volume_ratio >= Phase1Config.MIN_VOLUME_RATIO
 
-            if not volume_ratio_ok: 
-                continue
+            if not volume_ratio_ok: continue
 
             # Weryfikacja ATR%
             atr_data_raw = api_client.get_atr(ticker)
@@ -199,8 +174,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
             latest_atr_date = sorted(atr_data_raw['Technical Analysis: ATR'].keys())[-1]
             latest_atr = safe_float(atr_data_raw['Technical Analysis: ATR'][latest_atr_date]['ATR'])
-            # Używamy aktualnej ceny z danych dziennych, a nie z BULK_QUOTES
-            current_price = daily_df['close'].iloc[-1]
+            current_price = candidate['price']
 
             if not current_price or not latest_atr or current_price == 0:
                 continue
@@ -208,23 +182,15 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             atr_percent = (latest_atr / current_price)
             atr_ok = atr_percent <= Phase1Config.MAX_VOLATILITY_ATR_PERCENT
 
-            if not atr_ok: 
-                continue
+            if not atr_ok: continue
             
-            # Aktualizujemy kandydata z rzeczywistymi danymi z Etapu 2
-            updated_candidate = {
-                'ticker': ticker,
-                'price': current_price,
-                'volume': current_volume,
-                'change_percent': ((current_price - daily_df['close'].iloc[-2]) / daily_df['close'].iloc[-2]) * 100
-            }
-            
-            final_candidates.append(updated_candidate)
+            final_candidates.append(candidate)
             log_msg = f"Kwalifikacja (F1): {ticker} (VolRatio: {volume_ratio:.2f}, ATR%: {atr_percent:.2%})"
             append_scan_log(session, log_msg)
 
         except Exception as e:
             logger.error(f"Error in Stage 2 processing for {ticker}: {e}", exc_info=True)
+
 
     logger.info(f"Phase 1 (Stage 2) completed. Found {len(final_candidates)} final candidates.")
     append_scan_log(session, f"Faza 1 zakończona. Znaleziono {len(final_candidates)} ostatecznych kandydatów.")
@@ -254,3 +220,4 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             session.rollback()
     
     return [c['ticker'] for c in final_candidates]
+
