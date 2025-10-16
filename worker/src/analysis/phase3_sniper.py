@@ -216,7 +216,12 @@ def run_tactical_planning(session: Session, qualified_tickers: list[str], get_cu
                     'ezt': trade_setup.get('entry_zone_top')
                 })
                 session.commit()
-                append_scan_log(session, f"PENDING (F3): {ticker} dodany do listy obserwacyjnej.")
+                # POPRAWKA LOGOWANIA ZGODNIE Z SUGESTIĄ
+                tp = trade_setup.get('take_profit', 0)
+                ezb = trade_setup.get('entry_zone_bottom', 0)
+                ezt = trade_setup.get('entry_zone_top', 0)
+                log_message = f"PENDING (F3): {ticker} | Strefa Wejścia: {ezb:.2f}-{ezt:.2f} | Potencjalny Take-Profit: {tp:.2f}"
+                append_scan_log(session, log_message)
             else:
                 append_scan_log(session, f"INFO (F3): {ticker} - {trade_setup.get('reason')}")
 
