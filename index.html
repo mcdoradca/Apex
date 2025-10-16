@@ -121,7 +121,7 @@
                         <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
                     </button>
                     <div id="phase-3-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden">
-                       <p class="text-xs text-gray-500 p-2">Brak wyników.</p>
+                       <p class="text-xs text-gray-500 p-2">Brak aktywnych sygnałów.</p>
                     </div>
                 </div>
             </div>
@@ -622,6 +622,39 @@
             
             // Nowa funkcja do cyklicznej aktualizacji cen na żywo (co 5 sekund)
             async function updateLivePrices() {
+                // --- POCZĄTEK ZMIAN ---
+                // Dodatkowa logika sprawdzająca, czy warto odpytywać o ceny
+
+                // Sprawdzenie 1: Czy worker nie jest w trakcie głównego skanowania
+                const isWorkerRunning = state.workerStatus.status === 'RUNNING';
+                if (isWorkerRunning) {
+                    // Worker jest zajęty, wstrzymaj odpytywanie i spróbuj ponownie za 15 sekund
+                    logger.info("Live price polling paused while worker is running.");
+                    setTimeout(updateLivePrices, 15000);
+                    return;
+                }
+                
+                // Sprawdzenie 2: Czy giełda jest otwarta (pon-pt, 9:30 - 16:00 czasu wschodniego)
+                const now = new Date();
+                const easternTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+                const dayOfWeek = easternTime.getDay(); // 0=Niedziela, 6=Sobota
+                const hour = easternTime.getHours();
+                const minute = easternTime.getMinutes();
+
+                const isMarketOpen = (
+                    dayOfWeek >= 1 && dayOfWeek <= 5 && // Poniedziałek - Piątek
+                    (hour > 9 || (hour === 9 && minute >= 30)) && // Po 9:30
+                    hour < 16 // Przed 16:00
+                );
+
+                if (!isMarketOpen) {
+                    // Poza godzinami pracy giełdy, spróbuj ponownie za 5 minut, aby nie marnować zapytań
+                    logger.info("Market is closed. Live price polling will resume later.");
+                    setTimeout(updateLivePrices, 300000); // 5 minut
+                    return;
+                }
+                // --- KONIEC ZMIAN ---
+
                 // Pobierz wszystkie tickery z aktualnie załadowanych list faz
                 const allTickers = new Set([
                     ...state.phase1.map(c => c.ticker),
@@ -642,7 +675,7 @@
                     logger.warn("Nie można pobrać cen na żywo:", e);
                 }
                 
-                setTimeout(updateLivePrices, 5000);
+                setTimeout(updateLivePrices, 5000); // Normalne odpytywanie co 5 sekund, gdy warunki są spełnione
             }
 
 
@@ -902,3 +935,4 @@
     </script>
 </body>
 </html>
+
