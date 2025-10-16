@@ -90,7 +90,7 @@ def run_full_analysis_cycle():
         utils.update_system_control(session, 'scan_log', '') # Wyczyść logi na początku
         session.execute(text("DELETE FROM phase1_candidates"))
         session.execute(text("DELETE FROM phase2_results"))
-        # Zmieniono logikę: nie usuwamy ACTIVE/PENDING sygnałów, tylko wygasłe.
+        # ZMIANA LOGIKI: Sygnały PENDING nie są usuwane, tylko ACTIVE stają się EXPIRED
         session.execute(text("UPDATE trading_signals SET status = 'EXPIRED' WHERE status = 'ACTIVE'"))
         session.commit()
         logger.info("Old data cleared successfully.")
@@ -131,9 +131,14 @@ def main_loop():
         initialize_database_if_empty(session, api_client)
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
-    # Dodano monitorowanie sygnałów PENDING co godzinę
-    schedule.every(1).hour.do(lambda: phase3_sniper.monitor_pending_signals(get_db_session(), api_client))
+    
+    # --- ZMIANA: Monitorowanie sygnałów PENDING co 15 minut, a nie co godzinę ---
+    # Funkcja wewnątrz `monitor_pending_signals` sama sprawdza, czy rynek jest otwarty.
+    schedule.every(15).minutes.do(lambda: phase3_sniper.monitor_pending_signals(get_db_session(), api_client))
+    
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
+    logger.info("Pending signals monitor scheduled every 15 minutes.")
+
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
@@ -141,7 +146,7 @@ def main_loop():
         utils.update_system_control(initial_session, 'on_demand_request', 'NONE')
         utils.update_system_control(initial_session, 'phase3_on_demand_request', 'NONE')
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
-        utils.update_system_control(initial_session, 'system_alert', 'NONE') # Inicjalizacja alertu
+        utils.update_system_control(initial_session, 'system_alert', 'NONE')
         utils.report_heartbeat(initial_session)
 
     while True:
