@@ -30,7 +30,8 @@ def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
         return {
             "impulse_high": high_point_price,
             "impulse_low": low_point_price,
-            "entry_zone_top": high_point_price - 0.5 * (high_point_price - low_point_price),
+            # --- KLUCZOWA ZMIANA: Poszerzenie strefy wejścia z 50% do 38.2% ---
+            "entry_zone_top": high_point_price - 0.382 * (high_point_price - low_point_price),
             "entry_zone_bottom": high_point_price - 0.618 * (high_point_price - low_point_price)
         }
     except Exception as e:
@@ -316,3 +317,4 @@ def monitor_pending_signals(session: Session, api_client: AlphaVantageClient):
         except Exception as e:
             logger.error(f"Error monitoring signal for {ticker}: {e}", exc_info=True)
             session.rollback()
+
