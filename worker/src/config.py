@@ -20,7 +20,8 @@ class Phase2Config:
 
 # === FAZA 3: Parametry Agenta Snajperskiego (zgodnie z dokumentem optymalizacji) ===
 class Phase3Config:
-    MIN_RISK_REWARD_RATIO = 1.0
+    # ZMNIEJSZONO: z 1.0 do 0.85 w celu przetestowania bardziej agresywnego podejścia.
+    MIN_RISK_REWARD_RATIO = 0.85
     ATR_MULTIPLIER_FOR_SL = 1.5 # Mnożnik ATR do ustawienia Stop-Loss
 
 # === Mapowanie Sektorów na ETFy (używane w Fazie 2) ===
@@ -42,3 +43,4 @@ DEFAULT_MARKET_ETF = "QQQ"
 # === Konfiguracja Workera ===
 ANALYSIS_SCHEDULE_TIME_CET = "22:30"
 COMMAND_CHECK_INTERVAL_SECONDS = 5
+
