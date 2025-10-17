@@ -18,38 +18,22 @@
         .sidebar-item { border-left: 3px solid transparent; }
         .candidate-item:hover { background-color: #1f2937; }
         .login-background { 
-            /* Zrzut ekranu z URL, aby był dostępny w środowisku Canvas */
             background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy'); 
-            background-size: cover; 
-            background-position: center; 
+            background-size: cover; background-position: center; 
         }
         .glowing-btn { box-shadow: 0 0 5px #0ea5e9, 0 0 15px #0ea5e9; }
-        .red-dot { background-color: #ef4444; }
-        .green-dot { background-color: #22c55e; }
-        .yellow-dot { background-color: #eab308; }
-        .blue-dot { background-color: #0ea5e9; }
-        .phase-1-text { color: #8b5cf6; } /* Fioletowy */
-        .phase-2-text { color: #f59e0b; } /* Bursztynowy */
-        .phase-3-text { color: #ef4444; } /* Czerwony */
-        
-        .alert-bar { 
-            position: fixed; 
-            top: 0; 
-            left: 0; 
-            right: 0; 
-            z-index: 1000; 
-            padding: 1rem; 
-            text-align: center;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        }
+        .phase-1-text { color: #8b5cf6; }
+        .phase-2-text { color: #f59e0b; }
+        .phase-3-text { color: #ef4444; }
+        .watchlist-text { color: #10b981; }
+        .alert-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; }
+        .progress-circle { transform: rotate(-90deg); }
     </style>
 </head>
 <body class="text-gray-200">
     
-    <!-- GLOBALNY PASEK ALERTÓW -->
     <div id="system-alert-container"></div>
     
-    <!-- EKRAN LOGOWANIA / POCZEKALNIA -->
     <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
         <div class="bg-black bg-opacity-70 p-8 rounded-lg shadow-2xl backdrop-blur-sm w-full max-w-sm">
             <div class="text-center mb-6">
@@ -66,11 +50,8 @@
         </div>
     </div>
 
-    <!-- GŁÓWNY DASHBOARD (UKRYTY) -->
     <div id="dashboard" class="h-screen flex hidden">
         <aside class="w-72 bg-[#161B22] p-4 flex flex-col shrink-0">
-             
-            <!-- SEKCJA GÓRNA (STAŁA) -->
             <div class="shrink-0">
                 <div class="flex items-center mb-8">
                     <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
@@ -88,45 +69,31 @@
                 </div>
             </div>
 
-            <!-- SEKCJA ŚRODKOWA (PRZEWIJALNA) -->
             <div id="phases-container" class="flex-grow overflow-y-auto space-y-4 py-4 mt-4 border-t border-gray-800">
                 <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Skanowania</h2>
-                
-                <!-- FAZA 1 -->
                 <div class="px-2">
                     <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
                         <p class="text-sm font-semibold text-gray-300">Faza 1: Kandydaci (<span id="phase-1-count">0</span>)</p>
                         <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
                     </button>
-                    <div id="phase-1-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden">
-                        <p class="text-xs text-gray-500 p-2">Brak wyników.</p>
-                    </div>
+                    <div id="phase-1-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
                 </div>
-
-                <!-- FAZA 2 -->
                  <div class="px-2">
                     <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
                         <p class="text-sm font-semibold text-gray-300">Faza 2: APEX Elita (<span id="phase-2-count">0</span>)</p>
                         <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
                     </button>
-                    <div id="phase-2-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden">
-                        <p class="text-xs text-gray-500 p-2">Brak wyników.</p>
-                    </div>
+                    <div id="phase-2-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
                 </div>
-
-                <!-- FAZA 3 -->
                  <div class="px-2">
                     <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
                         <p class="text-sm font-semibold text-gray-300">Faza 3: Sygnały (<span id="phase-3-count">0</span>)</p>
                         <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
                     </button>
-                    <div id="phase-3-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden">
-                       <p class="text-xs text-gray-500 p-2">Brak aktywnych sygnałów.</p>
-                    </div>
+                    <div id="phase-3-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
                 </div>
             </div>
             
-            <!-- SEKCJA DOLNA (STAŁA) -->
             <div class="mt-auto shrink-0 border-t border-gray-800 pt-4">
                 <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3>
                 <div class="space-y-2 text-sm">
@@ -147,62 +114,30 @@
         </aside>
 
         <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
-            <header class="p-4 border-b border-gray-800 shrink-0"><div class="max-w-xl mx-auto"><div class="relative"><i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i><input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter, aby uruchomić analizę na żądanie" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"></div></div></header>
+            <header class="p-4 border-b border-gray-800 shrink-0"><div class="max-w-xl mx-auto"><div class="relative"><i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i><input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter, aby uruchomić analizę AI" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"></div></div></header>
             
             <div id="main-content" class="p-6 flex-grow">
                 <!-- Dynamiczna zawartość będzie renderowana tutaj -->
-                <div id="dashboard-view" class="max-w-4xl mx-auto">
-                    <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
-                    
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                        <!-- Karta statusu -->
-                        <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                            <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
-                            <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
-                            <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
-                        </div>
-                        <!-- Karta postępu -->
-                        <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                            <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
-                            <div class="mt-2">
-                                <span id="progress-text" class="text-2xl font-extrabold">0 / 0</span>
-                                <span class="text-gray-500 text-sm"> tickery</span>
-                            </div>
-                            <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2">
-                                <div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
-                            </div>
-                        </div>
-                        <!-- Karta sygnałów -->
-                         <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                            <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3>
-                            <p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p>
-                            <p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 (Predator)</p>
-                        </div>
-                    </div>
-
-                    <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
-                    <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-64 overflow-y-scroll border border-gray-700">
-                        <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
-                    </div>
-                </div>
-                
             </div>
         </main>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
+            // ... (reszta kodu pozostaje bez zmian, poniżej tylko kluczowe modyfikacje) ...
+            
+            // --- STAN APLIKACJI ---
             const state = {
                 phase1: [], phase2: [], phase3: [],
                 workerStatus: { status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 } },
                 activePolling: new Set(),
-                dashboardContent: null,
+                activeView: 'dashboard',
             };
 
+            // --- SELEKTORY UI ---
             const ui = {
                 loginScreen: document.getElementById('login-screen'),
                 dashboardScreen: document.getElementById('dashboard'),
-                loginForm: document.getElementById('login-form'),
                 loginButton: document.getElementById('login-button'),
                 loginStatusText: document.getElementById('login-status-text'),
                 mainContent: document.getElementById('main-content'),
@@ -214,725 +149,331 @@
                 workerStatusText: document.getElementById('worker-status-text'),
                 dashboardLink: document.getElementById('dashboard-link'),
                 heartbeatStatus: document.getElementById('heartbeat-status'),
-                alertContainer: document.getElementById('system-alert-container'), // DODANO: Kontener alertu
+                alertContainer: document.getElementById('system-alert-container'),
                 phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
                 phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
                 phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
-                dashboard: {
+            };
+            
+            // --- KONFIGURACJA API ---
+            const API_BASE_URL = "https://apex-predator-api.onrender.com";
+            const logger = {
+                error: (message, error) => console.error(message, error),
+                info: (message) => console.log(message),
+            };
+
+            const apiRequest = async (endpoint, options = {}) => {
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
+                }
+                if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
+                return await response.json();
+            };
+            
+            const api = {
+                getWorkerStatus: () => apiRequest('/api/v1/worker/status'),
+                sendWorkerControl: (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' }),
+                getPhase1Candidates: () => apiRequest('/api/v1/candidates/phase1'),
+                getPhase2Results: () => apiRequest('/api/v1/results/phase2'),
+                getPhase3Signals: () => apiRequest('/api/v1/signals/phase3'),
+                getConsolidatedDetails: (ticker) => apiRequest(`/api/v1/details/${ticker}`),
+                requestAIAnalysis: (ticker) => apiRequest('/api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
+                getAIAnalysisResult: (ticker) => apiRequest(`/api/v1/ai-analysis/result/${ticker}`),
+                addToWatchlist: (ticker) => apiRequest(`/api/v1/watchlist/${ticker}`, { method: 'POST' }),
+                getSystemAlert: () => apiRequest('/api/v1/system/alert'),
+            };
+
+            // --- RENDEROWANIE I WIDOKI ---
+            const renderers = {
+                loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
+                phase1List: (candidates) => candidates.map(c => `<div data-ticker="${c.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+                phase2List: (results) => results.map(r => `<div data-ticker="${r.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+                phase3List: (signals) => signals.map(s => {
+                    let statusClass, statusText, icon;
+                    if (s.status === 'ACTIVE') { statusClass = 'text-green-400'; statusText = 'AKTYWNY'; icon = 'zap';}
+                    else if (s.status === 'PENDING') { statusClass = 'text-yellow-400'; statusText = 'OCZEKUJĄCY'; icon = 'hourglass'; }
+                    else { statusClass = 'watchlist-text'; statusText = 'OBSERWOWANY'; icon = 'eye';}
+                    return `<div data-ticker="${s.ticker}" class="candidate-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
+                }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
+                
+                // NOWY, ROZBUDOWANY RENDERER ANALIZY AI
+                aiAnalysisDetails: (ticker, data) => {
+                    if (data.status === 'PROCESSING') {
+                        return renderers.loading(data.message || `Analiza ${ticker} w toku...`);
+                    }
+                    if (data.status === 'ERROR') {
+                        return `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Analizy ${ticker}</h2><p>${data.message}</p></div>`;
+                    }
+                    
+                    const { overall_score, max_score, recommendation, agents } = data;
+                    const scorePercent = (overall_score / max_score) * 100;
+                    
+                    let rec_color = "bg-gray-500";
+                    if (recommendation === "SILNY KANDYDAT DO KUPNA") rec_color = "bg-green-500";
+                    else if (recommendation === "MOCNY KANDYDAT DO OBSERWACJI") rec_color = "bg-sky-500";
+                    
+                    const createAgentCard = (agentName, icon, agentData) => `
+                        <div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg">
+                            <h4 class="font-bold text-gray-300 mb-3 flex items-center"><i data-lucide="${icon}" class="w-5 h-5 mr-2 text-sky-400"></i>Agent: ${agentName} <span class="ml-auto text-xs font-mono bg-gray-700 px-2 py-1 rounded-md">${agentData.score}/${agentData.max_score}</span></h4>
+                            <p class="text-sm text-gray-400 mb-3">${agentData.summary}</p>
+                            <div class="text-xs space-y-1 border-t border-gray-700 pt-2">
+                                ${Object.entries(agentData.details).map(([key, value]) => `<div class="flex justify-between"><span class="text-gray-500">${key}:</span><span class="font-mono text-gray-300">${value}</span></div>`).join('')}
+                            </div>
+                        </div>`;
+
+                    return `
+                        <div class="max-w-4xl mx-auto" id="ai-details-${ticker}">
+                            <div class="flex justify-between items-start mb-6">
+                                <div>
+                                    <h2 class="text-3xl font-bold text-white">${ticker}</h2>
+                                    <p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p>
+                                </div>
+                                <button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Dodaj do Obserwowanych</button>
+                            </div>
+
+                            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                                <div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg">
+                                    <h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3>
+                                    <p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p>
+                                    <p class="text-sm text-gray-400">
+                                        Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.
+                                        Rekomendacja opiera się na analizie momentum, zmienności, sentymencie rynkowym oraz aktualnym układzie technicznym na wykresie.
+                                    </p>
+                                </div>
+                                <div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center">
+                                    <h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3>
+                                    <div class="relative w-24 h-24">
+                                        <svg class="w-full h-full" viewBox="0 0 36 36">
+                                            <path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path>
+                                            <path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent}, 100"></path>
+                                        </svg>
+                                        <div class="absolute inset-0 flex items-center justify-center">
+                                            <span class="text-2xl font-bold text-white">${overall_score}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                ${createAgentCard('Momentum', 'trending-up', agents.momentum)}
+                                ${createAgentCard('Zmienności', 'activity', agents.volatility)}
+                                ${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}
+                                ${createAgentCard('Taktycznego', 'crosshair', agents.tactical_setup)}
+                            </div>
+                        </div>
+                    `;
+                },
+                dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
+                    <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div>
+                        <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div>
+                        <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3><p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p></div>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
+                    <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div>
+                </div>`,
+            };
+            
+            // --- GŁÓWNE FUNKCJE KONTROLI APLIKACJI ---
+            
+            function updateDashboardUI(statusData) {
+                if (state.activeView !== 'dashboard' || !document.getElementById('dashboard-view')) return;
+                const ui = {
                     status: document.getElementById('dashboard-worker-status'),
                     phase: document.getElementById('dashboard-current-phase'),
                     signals: document.getElementById('dashboard-active-signals'),
                     progressText: document.getElementById('progress-text'),
                     progressBar: document.getElementById('progress-bar'),
                     scanLog: document.getElementById('scan-log'),
-                }
-            };
-            
-            // --- KONFIGURACJA API ---
-            const API_BASE_URL = "https://apex-predator-api.onrender.com";
-            
-            // POMOCNICZA FUNKCJA DLA LOGOWANIA BŁĘDÓW W KONSOLI
-            const logger = {
-                error: (message, error) => console.error(message, error),
-                warn: (message) => console.warn(message),
-                info: (message) => console.log(message),
-            };
-
-            // FUNKCJA ZWIĘKSZONA O OBSŁUGĘ BŁĘDÓW Z POJAWIAJĄCYM SIĘ OKNEM ALERT
-            const apiRequest = async (endpoint, options = {}) => {
-                const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
-                // Ustaw status API jako Online po pierwszej udanej odpowiedzi
-                ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
-
-                if (response.status === 204) return null;
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    logger.error(`API Error: ${response.status} for ${endpoint}`, errorText);
-                    // Tutaj powinna być lepsza obsługa błędu niż alert(), ale używamy go tymczasowo
-                    // aby pokazać błąd użytkownikowi, zgodnie z instrukcjami.
-                    // UWAGA: Ze względu na ograniczenia środowiska, używamy tymczasowo alert.
-                    // W normalnej aplikacji użyto by modala.
-                    if (options.method !== 'GET') {
-                         alert(`Błąd Akcji (${response.status}): ${errorText.substring(0, 100)}...`);
-                    }
-                    throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
-                }
-                if (response.headers.get("Content-Length") === "0") return null;
-                return await response.json();
-            };
-
-            const api = {
-                getWorkerStatus: () => apiRequest('/api/v1/worker/status'),
-                sendWorkerControl: (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' }),
-                getPhase1Candidates: () => apiRequest('/api/v1/candidates/phase1'),
-                deletePhase1Candidate: (ticker) => apiRequest(`/api/v1/candidates/phase1/${ticker}`, { method: 'DELETE' }),
-                getPhase2Results: () => apiRequest('/api/v1/results/phase2'),
-                deletePhase2Result: (ticker) => apiRequest(`/api/v1/results/phase2/${ticker}`, { method: 'DELETE' }),
-                getPhase3Signals: () => apiRequest('/api/v1/signals/phase3'),
-                deletePhase3Signal: (id) => apiRequest(`/api/v1/signals/phase3/${id}`, { method: 'DELETE' }),
-                getConsolidatedDetails: (ticker) => apiRequest(`/api/v1/details/${ticker}`),
-                requestOnDemandAnalysis: (ticker) => apiRequest('/api/v1/analysis/on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-                getOnDemandResult: (ticker) => apiRequest('/api/v1/analysis/on-demand/result/${ticker}'),
-                requestPhase3OnDemand: (ticker) => apiRequest('/api/v1/analysis/phase3-on-demand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-                getPhase3OnDemandResult: (ticker) => apiRequest('/api/v1/analysis/phase3-on-demand/result/${ticker}'),
-                getLivePrices: (tickers) => apiRequest(`/api/v1/live-prices?tickers=${tickers.join(',')}`),
-                getSystemAlert: () => apiRequest('/api/v1/system/alert') // DODANO: Endpoint alertu
-            };
-
-            // --- RENDEROWANIE I WIDOKI ---
-
-            const renderers = {
-                loading: (text) => `<div class="text-center py-10"><div role="status"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div>`,
-                error: (title, message) => `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">${title}</h2><p>${message}</p></div>`,
-                phase1List: (candidates) => candidates.map(c => 
-                    `<div data-ticker="${c.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-1-text">
-                        <span class="font-bold">${c.ticker}</span>
-                        <span class="text-gray-500 live-price-container" data-ticker="${c.ticker}"><span class="current-price-${c.ticker}">${c.price ? c.price.toFixed(2) : '--'}</span> (${c.change_percent ? c.change_percent.toFixed(2) : '--'}%)</span>
-                    </div>`
-                ).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników Fazy 1.</p>`,
-                phase2List: (results) => results.map(r => 
-                    `<div data-ticker="${r.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-2-text">
-                        <span class="font-bold">${r.ticker}</span>
-                        <span class="text-gray-400 live-price-container" data-ticker="${r.ticker}"><span class="current-price-${r.ticker}">Score: ${r.total_score}/10</span></span>
-                    </div>`
-                ).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników Fazy 2.</p>`,
-                phase3List: (signals) => signals.map(s => {
-                    const statusClass = s.status === 'ACTIVE' ? 'text-green-500' : 'text-yellow-500';
-                    const statusText = s.status === 'ACTIVE' ? 'AKTYWNY' : 'PENDING';
-                    const mainInfo = s.status === 'ACTIVE' 
-                        ? `R/R: ${s.risk_reward_ratio.toFixed(2)}`
-                        : `(${s.entry_zone_bottom.toFixed(2)}-${s.entry_zone_top.toFixed(2)})`;
-                        
-                    return `<div data-ticker="${s.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-3-text">
-                        <span class="font-bold">${s.ticker}</span>
-                        <span class="text-gray-400 live-price-container" data-ticker="${s.ticker}">
-                            <span class="${statusClass} mr-1">${statusText}</span>
-                            <span class="current-price-${s.ticker}">${mainInfo}</span>
-                        </span>
-                    </div>`;
-                }).join('') || `<p class="text-xs text-gray-500 p-2">Brak aktywnych sygnałów.</p>`,
-                
-                consolidatedDetails: (ticker, data, isPolling) => {
-                    if (!data) return renderers.error(`Brak Danych dla ${ticker}`, `Nie znaleziono żadnych danych (Faza 1, Faza 2, Faza 3) dla tickera ${ticker}.`);
-                    
-                    const phase1Html = data.phase1_data ? `
-                        <div class="bg-violet-900/20 p-4 rounded-lg">
-                            <h4 class="font-bold text-violet-300 mb-2 flex items-center"><i data-lucide="scan" class="w-4 h-4 mr-2"></i>Faza 1 (Skaner Impulsu)</h4>
-                            <p class="text-sm">Zmiana Dnia: <span class="font-mono text-violet-300">${data.phase1_data.change_percent.toFixed(2)}%</span></p>
-                            <p class="text-sm">Wolumen: <span class="font-mono text-violet-300">${(data.phase1_data.volume / 1000000).toFixed(2)}M</span></p>
-                            <p class="text-xs text-gray-400 mt-1">Zakwalifikowany: ${new Date(data.phase1_data.analysis_date).toLocaleDateString()}</p>
-                        </div>
-                    ` : '<p class="text-xs text-gray-500">Brak kwalifikacji w Fazie 1.</p>';
-                    
-                    const phase2Html = data.phase2_data ? `
-                         <div class="bg-yellow-900/20 p-4 rounded-lg">
-                            <h4 class="font-bold text-yellow-300 mb-2 flex items-center"><i data-lucide="award" class="w-4 h-4 mr-2"></i>Faza 2 (APEX Elita)</h4>
-                            <p class="text-lg font-extrabold text-yellow-300">${data.phase2_data.total_score}/10</p>
-                            <p class="text-sm text-gray-400">K: ${data.phase2_data.catalyst_score}, S: ${data.phase2_data.relative_strength_score}, E: ${data.phase2_data.energy_compression_score}</p>
-                            <p class="text-xs text-green-400 mt-2">${data.phase2_data.is_qualified ? 'Kwalifikacja OK' : 'Odrzucony'}</p>
-                        </div>
-                    ` : '<p class="text-xs text-gray-500">Brak kwalifikacji w Fazie 2.</p>';
-
-                    const signal = data.phase3_signal || data.phase3_on_demand_analysis?.analysis_data;
-                    let phase3Html;
-                    if (signal) {
-                        const statusColor = signal.status === 'ACTIVE' ? 'bg-green-900/20 text-green-300' : 'bg-yellow-900/20 text-yellow-300';
-                        const statusBadge = signal.status === 'ACTIVE' ? 'AKTYWNY SYGNAŁ' : 'MONITORING (PENDING)';
-                        
-                        let details;
-                        if (signal.status === 'ACTIVE') {
-                            details = `
-                                <p class="text-sm">Wejście: <span class="font-mono text-green-300">$${signal.entry_price?.toFixed(2) || '--'}</span></p>
-                                <p class="text-sm">Stop-Loss: <span class="font-mono text-red-300">$${signal.stop_loss?.toFixed(2) || '--'}</span></p>
-                                <p class="text-sm">Take-Profit: <span class="font-mono text-sky-300">$${signal.take_profit?.toFixed(2) || '--'}</span></p>
-                                <p class="text-sm mt-2 font-semibold">R/R: ${signal.risk_reward_ratio?.toFixed(2) || '--'}</p>
-                            `;
-                        } else {
-                            details = `
-                                <p class="text-sm">Strefa Wejścia: <span class="font-mono text-yellow-300">$${signal.entry_zone_bottom?.toFixed(2) || '--'} - $${signal.entry_zone_top?.toFixed(2) || '--'}</span></p>
-                                <p class="text-sm">Potencjalny TP: <span class="font-mono text-sky-300">$${signal.take_profit?.toFixed(2) || '--'}</span></p>
-                                <p class="text-xs text-gray-400 mt-2">Ten sygnał jest monitorowany w tle. Czekamy na wejście do strefy.</p>
-                            `;
-                        }
-                        
-                        phase3Html = `
-                            <div class="${statusColor} p-4 rounded-lg border border-gray-700">
-                                <h4 class="font-bold mb-2 flex items-center"><i data-lucide="swords" class="w-4 h-4 mr-2"></i>Faza 3: ${statusBadge}</h4>
-                                ${details}
-                                <p class="text-xs text-gray-400 mt-3 border-t border-gray-700 pt-2">${signal.notes || 'Brak notatek.'}</p>
-                            </div>
-                        `;
-                    } else {
-                         phase3Html = '<p class="text-xs text-gray-500">Brak aktywnego sygnału Fazy 3.</p>';
-                    }
-                    
-                    // Logika dla przycisków
-                    const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
-                    const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
-
-                    const onDemandBtnText = isOndemandProcessing ? 'Analiza w toku...' : 'Uruchom Pełną Analizę Wskaźników';
-                    const phase3BtnText = isPhase3Processing ? 'Analiza w toku...' : 'Uruchom Analizę Predator (Faza 3)';
-                    const onDemandBtnDisabled = isOndemandProcessing ? 'disabled' : '';
-                    const phase3BtnDisabled = isPhase3Processing ? 'disabled' : '';
-
-
-                    return `
-                        <div class="max-w-4xl mx-auto" id="ticker-details-${ticker}">
-                            <h2 class="text-3xl font-bold text-white mb-6">${ticker} - Skonsolidowany Raport</h2>
-                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                ${phase1Html}
-                                ${phase2Html}
-                                ${phase3Html}
-                            </div>
-                            <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4 border-b border-gray-700 pb-1">Analiza Na Żądanie (Wskaźniki)</h3>
-                            <pre class="bg-[#161B22] p-4 rounded-lg text-xs overflow-x-auto font-mono text-gray-300">${JSON.stringify(data.on_demand_analysis || {status: 'Brak aktywnej analizy na żądanie.'}, null, 2)}</pre>
-                            
-                            <div class="mt-4 flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-4">
-                                <button data-ticker="${ticker}" class="request-on-demand-btn bg-sky-600 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed" ${onDemandBtnDisabled}>${onDemandBtnText}</button>
-                                <button data-ticker="${ticker}" class="request-phase3-on-demand-btn bg-red-600 text-white font-bold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed" ${phase3BtnDisabled}>${phase3BtnText}</button>
-                            </div>
-                            
-                        </div>
-                    `;
-                },
-                
-                // Nowa funkcja do aktualizacji cen na żywo na listach
-                updateLivePricesOnLists: (prices) => {
-                    prices.forEach(p => {
-                        const ticker = p.ticker;
-                        const price = p.price;
-                        // Aktualizacja w Fażach 1, 2 i 3
-                        document.querySelectorAll(`.live-price-container[data-ticker="${ticker}"]`).forEach(container => {
-                            const parentItem = container.closest('.candidate-item');
-                            const priceSpan = container.querySelector(`.current-price-${ticker}`);
-                            if (!parentItem) return;
-                            
-                            const phaseType = parentItem.parentElement.id.split('-')[0];
-                            
-                            if (phaseType === 'phase1' && priceSpan) {
-                                // Faza 1: Cena i Procent Zmiany
-                                const candidate = state.phase1.find(c => c.ticker === ticker);
-                                if (candidate) {
-                                    container.innerHTML = `<span class="current-price-${ticker}">${price.toFixed(2)}</span> (${candidate.change_percent.toFixed(2)}%)`;
-                                }
-                            } else if (phaseType === 'phase2' && priceSpan) {
-                                // Faza 2: Score i Cena w nawiasie
-                                const result = state.phase2.find(r => r.ticker === ticker);
-                                if (result) {
-                                    priceSpan.innerHTML = `Score: ${result.total_score}/10</span> ($${price.toFixed(2)})`;
-                                }
-                            } else if (phaseType === 'phase3' && priceSpan) {
-                                // Faza 3: Status i Cena w nawiasie
-                                const signal = state.phase3.find(s => s.ticker === ticker);
-                                if (signal) {
-                                     // Użyj istniejącego span statusu
-                                    const statusSpan = container.querySelector('.text-green-500, .text-yellow-500');
-                                    const mainInfo = signal.status === 'ACTIVE' ? `R/R: ${signal.risk_reward_ratio.toFixed(2)}` : `($${price.toFixed(2)})`;
-                                    
-                                    if (statusSpan) {
-                                        priceSpan.innerHTML = mainInfo;
-                                    } else {
-                                        // Domyślne wyświetlanie, jeśli statusSpan nie istnieje (np. tylko R/R)
-                                        priceSpan.innerHTML = mainInfo;
-                                    }
-                                }
-                            }
-                        });
-                    });
-                }
-            };
-            
-            // --- FUNKCJE KONTROLI I WIDOKÓW ---
-            
-            // DODANO: Funkcja do obsługi alertów systemowych
-            async function pollSystemAlerts() {
-                 try {
-                    const alertData = await api.getSystemAlert();
-                    if (alertData.message !== 'NONE') {
-                        // Utwórz dynamiczny pasek alertu
-                        const alertHtml = `
-                            <div id="dynamic-alert" class="alert-bar bg-red-800/90 text-white font-semibold flex justify-center items-center">
-                                <i data-lucide="bell" class="w-5 h-5 mr-3"></i>
-                                <span>${alertData.message}</span>
-                                <button onclick="document.getElementById('dynamic-alert').remove()" class="ml-auto p-1 rounded-full hover:bg-red-700 transition-colors"><i data-lucide="x" class="w-5 h-5"></i></button>
-                            </div>
-                        `;
-                        ui.alertContainer.innerHTML = alertHtml;
-                        lucide.createIcons();
-                        
-                        // Automatyczne usunięcie po 15 sekundach, jeśli użytkownik nie kliknie 'x'
-                        setTimeout(() => {
-                            const alertElement = document.getElementById('dynamic-alert');
-                            if (alertElement) alertElement.remove();
-                        }, 15000);
-                        
-                        // Po wyświetleniu alertu, Worker czyści pole w bazie
-                    }
-                } catch (e) {
-                    logger.error("Błąd podczas pobierania alertów systemowych:", e);
-                }
-                setTimeout(pollSystemAlerts, 10000); // Sprawdzaj alerty co 10 sekund
-            }
-
-
-            function updateWorkerStatusUI(statusData) {
-                if (!statusData) return;
-                state.workerStatus = statusData;
-                
-                // Status silnika
-                let statusClass = 'bg-gray-700 text-gray-200';
-                let dotClass = 'bg-gray-500';
-                if (statusData.status === 'RUNNING') { statusClass = 'bg-green-600/20 text-green-400'; dotClass = 'bg-green-500'; }
-                else if (statusData.status === 'PAUSED') { statusClass = 'bg-yellow-600/20 text-yellow-400'; dotClass = 'bg-yellow-500'; }
-                else if (statusData.status === 'ERROR') { statusClass = 'bg-red-600/20 text-red-400'; dotClass = 'bg-red-500'; }
-
-                ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass}`;
-                ui.workerStatusText.textContent = statusData.status;
-                
-                ui.dashboard.status.className = `text-4xl font-extrabold mt-2 ${statusData.status === 'RUNNING' ? 'text-green-500' : statusData.status === 'PAUSED' ? 'text-yellow-500' : 'text-gray-500'}`;
-                ui.dashboard.status.textContent = statusData.status;
-
-                // Faza
-                ui.dashboard.phase.textContent = `Faza: ${statusData.phase || 'NONE'}`;
-
-                // Postęp
-                const processed = statusData.progress.processed;
-                const total = statusData.progress.total;
+                };
+                ui.status.textContent = statusData.status;
+                ui.phase.textContent = `Faza: ${statusData.phase || 'NONE'}`;
+                const processed = statusData.progress.processed, total = statusData.progress.total;
                 const percent = total > 0 ? (processed / total) * 100 : 0;
-                ui.dashboard.progressText.textContent = `${processed} / ${total}`;
-                ui.dashboard.progressBar.style.width = `${Math.min(percent, 100).toFixed(0)}%`;
-                
-                // Log
-                // Zapewnienie, że log jest aktualizowany i przewijany do góry, jeśli jest nowy
-                const isScrolledToTop = ui.dashboard.scanLog.scrollTop === 0;
-                ui.dashboard.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
-                // Automatyczne przewijanie tylko jeśli było już na samej górze (tj. nowe wiadomości)
-                if (isScrolledToTop) {
-                    ui.dashboard.scanLog.scrollTop = 0;
+                ui.progressText.textContent = `${processed} / ${total}`;
+                ui.progressBar.style.width = `${Math.min(percent, 100).toFixed(0)}%`;
+                if (ui.scanLog.textContent !== statusData.log) {
+                    ui.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
+                    ui.scanLog.scrollTop = 0;
                 }
-                
-                // Heartbeat
-                if (statusData.last_heartbeat_utc) {
-                    const beatTime = new Date(statusData.last_heartbeat_utc);
-                    const now = new Date();
-                    const diffSeconds = (now.getTime() - beatTime.getTime()) / 1000;
-                    if (diffSeconds > 30) {
-                        ui.heartbeatStatus.className = 'text-red-500 text-xs';
-                        ui.heartbeatStatus.textContent = 'PRZERWANY';
-                    } else {
-                        ui.heartbeatStatus.className = 'text-green-500 text-xs';
-                        ui.heartbeatStatus.textContent = beatTime.toLocaleTimeString();
-                    }
-                }
-
-                // Kontrola przycisków
-                ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
-                ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
-                ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
+                ui.signals.textContent = state.phase3.length;
             }
-            
+
             async function pollWorkerStatus() {
                 try {
                     const statusData = await api.getWorkerStatus();
-                    updateWorkerStatusUI(statusData);
-                } catch (e) {
-                    logger.error("Błąd podczas odpytywania statusu Workera:", e);
-                    ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full red-dot mr-2"></span>Offline';
-                    ui.workerStatusText.textContent = 'API ERR';
-                    ui.dashboard.status.textContent = 'API ERR';
-                }
-                // Użycie setTimeout do cyklicznego odpytywania
+                    state.workerStatus = statusData;
+                    
+                    let statusClass = 'bg-gray-700 text-gray-200';
+                    if (statusData.status === 'RUNNING') statusClass = 'bg-green-600/20 text-green-400';
+                    else if (statusData.status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
+                    else if (statusData.status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
+                    ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass}`;
+                    ui.workerStatusText.textContent = statusData.status;
+
+                    if (statusData.last_heartbeat_utc) {
+                        const diffSeconds = (new Date() - new Date(statusData.last_heartbeat_utc)) / 1000;
+                        ui.heartbeatStatus.className = `text-xs ${diffSeconds > 30 ? 'text-red-500' : 'text-green-500'}`;
+                        ui.heartbeatStatus.textContent = diffSeconds > 30 ? 'PRZERWANY' : new Date(statusData.last_heartbeat_utc).toLocaleTimeString();
+                    }
+                    ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
+                    ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
+                    ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
+
+                    updateDashboardUI(statusData);
+
+                } catch (e) { logger.error("Błąd odpytywania statusu Workera:", e); }
                 setTimeout(pollWorkerStatus, 5000); 
             }
             
-            // Nowa funkcja do cyklicznego odpytywania wyników analizy na żądanie
-            async function pollOnDemandResults(ticker) {
-                if (!state.activePolling.has(ticker)) return;
-
-                const data = await api.getConsolidatedDetails(ticker);
-                // Status PROCESSING jest teraz sprawdzany przez Workera, który używa 'PROCESSING' jako wartość w `system_control`
-                // Po stronie frontendu, sprawdzamy pole `message` w zwróconych danych
-                const isOndemandProcessing = data.on_demand_analysis?.message === 'PROCESSING';
-                const isPhase3Processing = data.phase3_on_demand_analysis?.message === 'PROCESSING';
-                
-                // Jeśli wyświetlamy ten ticker, zaktualizuj widok
-                if (state.dashboardContent?.ticker === ticker) {
-                    // Ponowne renderowanie szczegółów, aby zaktualizować status przycisków i log
-                    ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
-                    lucide.createIcons();
-                }
-
-                if (isOndemandProcessing || isPhase3Processing) {
-                    // Kontynuuj odpytywanie
-                    setTimeout(() => pollOnDemandResults(ticker), 3000);
-                } else {
-                    // Analiza zakończona, usuń z listy aktywnych
-                    state.activePolling.delete(ticker);
-                    logger.info(`Polling for ${ticker} ended.`);
-                    // Ostatnie odświeżenie listy faz (jeśli Faza 3 coś zapisała)
-                    refreshAllData();
-                }
-            }
-
-
-            async function refreshAllData() {
+            async function refreshSidebarData() {
                 try {
                     const [phase1, phase2, phase3] = await Promise.all([
-                        api.getPhase1Candidates(),
-                        api.getPhase2Results(),
-                        api.getPhase3Signals()
+                        api.getPhase1Candidates(), api.getPhase2Results(), api.getPhase3Signals()
                     ]);
-                    
                     state.phase1 = phase1 || [];
                     state.phase2 = phase2 || [];
                     state.phase3 = phase3 || [];
 
-                    // Rysowanie list bocznych
                     ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
                     ui.phase1.count.textContent = state.phase1.length;
-                    
                     ui.phase2.list.innerHTML = renderers.phase2List(state.phase2);
                     ui.phase2.count.textContent = state.phase2.length;
-                    
                     ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
                     ui.phase3.count.textContent = state.phase3.length;
-                    ui.dashboard.signals.textContent = state.phase3.length;
                     
-                    // Uruchom aktualizację cen na żywo po odświeżeniu list (poprawka w logice renderowania)
-                    // Nie wywołujemy pętli live prices stąd, tylko aktualizujemy jej dane
-                    // updateLivePrices() jest wywoływana z startDashboard() i ma wbudowany timeout.
-
-                    // Odśwież widok szczegółów, jeśli jest otwarty
-                    if (state.dashboardContent && state.dashboardContent.type === 'details') {
-                         // Ponieważ Analiza Na Żądanie jest teraz odpytywana osobno, tutaj wystarczy sprawdzić, czy Polling jest aktywny
-                         if (!state.activePolling.has(state.dashboardContent.ticker)) {
-                            await showDetails(state.dashboardContent.ticker, true); // True oznacza brak renderowania Loading Screen
-                         }
-                    }
-                    
-                    // Po wczytaniu list, upewnij się, że ikony Lucide są poprawnie renderowane
                     lucide.createIcons();
+                } catch (e) { logger.error("Błąd odświeżania danych faz:", e); }
+                setTimeout(refreshSidebarData, 15000); 
+            }
 
-                } catch (e) {
-                     logger.error("Błąd podczas odświeżania danych faz:", e);
-                }
-                // Użycie setTimeout do cyklicznego odpytywania
-                setTimeout(refreshAllData, 15000); 
+            async function showDashboard() {
+                state.activeView = 'dashboard';
+                ui.mainContent.innerHTML = renderers.dashboard();
+                updateDashboardUI(state.workerStatus);
+                lucide.createIcons();
             }
             
-            // Nowa funkcja do cyklicznej aktualizacji cen na żywo (co 5 sekund)
-            async function updateLivePrices() {
-                // --- POCZĄTEK ZMIAN ---
-                // Dodatkowa logika sprawdzająca, czy warto odpytywać o ceny
-
-                // Sprawdzenie 1: Czy worker nie jest w trakcie głównego skanowania
-                const isWorkerRunning = state.workerStatus.status === 'RUNNING';
-                if (isWorkerRunning) {
-                    // Worker jest zajęty, wstrzymaj odpytywanie i spróbuj ponownie za 15 sekund
-                    logger.info("Live price polling paused while worker is running.");
-                    setTimeout(updateLivePrices, 15000);
-                    return;
-                }
-                
-                // Sprawdzenie 2: Czy giełda jest otwarta (pon-pt, 9:30 - 16:00 czasu wschodniego)
-                const now = new Date();
-                const easternTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-                const dayOfWeek = easternTime.getDay(); // 0=Niedziela, 6=Sobota
-                const hour = easternTime.getHours();
-                const minute = easternTime.getMinutes();
-
-                const isMarketOpen = (
-                    dayOfWeek >= 1 && dayOfWeek <= 5 && // Poniedziałek - Piątek
-                    (hour > 9 || (hour === 9 && minute >= 30)) && // Po 9:30
-                    hour < 16 // Przed 16:00
-                );
-
-                if (!isMarketOpen) {
-                    // Poza godzinami pracy giełdy, spróbuj ponownie za 5 minut, aby nie marnować zapytań
-                    logger.info("Market is closed. Live price polling will resume later.");
-                    setTimeout(updateLivePrices, 300000); // 5 minut
-                    return;
-                }
-                // --- KONIEC ZMIAN ---
-
-                // Pobierz wszystkie tickery z aktualnie załadowanych list faz
-                const allTickers = new Set([
-                    ...state.phase1.map(c => c.ticker),
-                    ...state.phase2.map(r => r.ticker),
-                    ...state.phase3.map(s => s.ticker)
-                ]);
-                
-                const tickers = Array.from(allTickers);
-                if (tickers.length === 0) {
-                    setTimeout(updateLivePrices, 5000);
-                    return;
-                }
-
+            async function showAiAnalysis(ticker) {
+                state.activeView = `ai-${ticker}`;
+                ui.mainContent.innerHTML = renderers.loading(`Uruchamianie agentów AI dla ${ticker}...`);
                 try {
-                    const livePrices = await api.getLivePrices(tickers);
-                    renderers.updateLivePricesOnLists(livePrices);
-                } catch (e) {
-                    logger.warn("Nie można pobrać cen na żywo:", e);
+                    await api.requestAIAnalysis(ticker);
+                    state.activePolling.add(ticker);
+                    pollAIResult(ticker);
+                } catch(e) {
+                     ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Zlecenia Analizy</h2><p>${e.message}</p></div>`;
                 }
-                
-                setTimeout(updateLivePrices, 5000); // Normalne odpytywanie co 5 sekund, gdy warunki są spełnione
             }
-
-
-            async function showDetails(ticker, skipLoading = false) {
-                // Ukryj widok Dashboard, jeśli jest widoczny
-                const dashboardView = ui.mainContent.querySelector('#dashboard-view');
-                if (dashboardView) dashboardView.classList.add('hidden');
-                
-                if (!skipLoading) {
-                    ui.mainContent.innerHTML = renderers.loading(`Pobieranie szczegółów dla ${ticker}...`);
+            
+            async function pollAIResult(ticker) {
+                if (!state.activePolling.has(ticker) || state.activeView !== `ai-${ticker}`) {
+                    state.activePolling.delete(ticker);
+                    return;
                 }
-                state.dashboardContent = { type: 'details', ticker: ticker };
                 try {
-                    const data = await api.getConsolidatedDetails(ticker);
-                    
-                    // Zaktualizuj widok szczegółów
-                    ui.mainContent.innerHTML = renderers.consolidatedDetails(ticker, data);
+                    const data = await api.getAIAnalysisResult(ticker);
+                    ui.mainContent.innerHTML = renderers.aiAnalysisDetails(ticker, data);
                     lucide.createIcons();
-                    
-                    // Sprawdź, czy jest aktywne przetwarzanie Analizy Na Żądanie lub Fazy 3
-                    // Używamy pola 'ticker' w analysis_data, aby upewnić się, że to nasz ticker jest przetwarzany
-                    const isOndemandProcessing = data.on_demand_analysis?.ticker === ticker && data.on_demand_analysis?.message === 'PROCESSING';
-                    const isPhase3Processing = data.phase3_on_demand_analysis?.ticker === ticker && data.phase3_on_demand_analysis?.message === 'PROCESSING';
-                    
-                    if (isOndemandProcessing || isPhase3Processing) {
-                        if (!state.activePolling.has(ticker)) {
-                            state.activePolling.add(ticker);
-                            pollOnDemandResults(ticker);
-                        }
+                    // Jeśli analiza w toku, kontynuuj odpytywanie
+                    if (data.status === 'PROCESSING') {
+                         setTimeout(() => pollAIResult(ticker), 3000);
                     } else {
                         state.activePolling.delete(ticker);
                     }
-                    
-                } catch (e) {
-                    ui.mainContent.innerHTML = renderers.error(`Błąd Pobierania`, `Nie udało się pobrać szczegółów dla ${ticker}. Spróbuj ponownie.`);
+                } catch(e) {
+                    // 404 oznacza, że wynik nie jest jeszcze gotowy
+                    if (e.message.includes('404')) {
+                        setTimeout(() => pollAIResult(ticker), 3000);
+                    } else {
+                        ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Pobierania Analizy</h2><p>${e.message}</p></div>`;
+                        state.activePolling.delete(ticker);
+                    }
                 }
             }
 
-            function startDashboard() {
-                // *** POPRAWKA KLUCZOWA: Ukrycie ekranu logowania i pokazanie dashboardu ***
-                ui.loginScreen.classList.add('hidden');
-                ui.dashboardScreen.classList.remove('hidden');
-                // Ustawienie domyślnego widoku na Dashboard
-                showDashboardView();
-                // Rozpoczęcie cyklicznych odpytywań
-                pollWorkerStatus();
-                refreshAllData();
-                updateLivePrices(); // Dodano start pętli live prices
-                pollSystemAlerts(); // DODANO: Start pętli alertów
-            }
-            
-            function showDashboardView() {
-                // Usuń całą zawartość z main-content (w tym widok szczegółów)
-                ui.mainContent.innerHTML = '';
-                
-                // Ponownie wstaw widok dashboardu (zapisany w stałym HTML)
-                const dashboardHtml = `
-                    <div id="dashboard-view" class="max-w-4xl mx-auto">
-                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <!-- Karta statusu -->
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
-                                <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
-                                <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
-                            </div>
-                            <!-- Karta postępu -->
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
-                                <div class="mt-2">
-                                    <span id="progress-text" class="text-2xl font-extrabold">0 / 0</span>
-                                    <span class="text-gray-500 text-sm"> tickery</span>
-                                </div>
-                                <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2">
-                                    <div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
-                                </div>
-                            </div>
-                            <!-- Karta sygnałów -->
-                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3>
-                                <p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p>
-                                <p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 (Predator)</p>
-                            </div>
-                        </div>
 
-                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
-                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-64 overflow-y-scroll border border-gray-700">
-                            <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
-                        </div>
-                    </div>
-                `;
-                ui.mainContent.innerHTML = dashboardHtml;
-                
-                // Ponowne mapowanie UI dla dashboardu (kluczowe!)
-                ui.dashboard.status = document.getElementById('dashboard-worker-status');
-                ui.dashboard.phase = document.getElementById('dashboard-current-phase');
-                ui.dashboard.signals = document.getElementById('dashboard-active-signals');
-                ui.dashboard.progressText = document.getElementById('progress-text');
-                ui.dashboard.progressBar = document.getElementById('progress-bar');
-                ui.dashboard.scanLog = document.getElementById('scan-log');
-                
-                // Uaktualnij widok Dashboardu przy przejściu
-                updateWorkerStatusUI(state.workerStatus);
-                ui.dashboard.signals.textContent = state.phase3.length;
-                
-                state.dashboardContent = { type: 'dashboard' };
-                lucide.createIcons(); 
-            }
-            
             // --- HANDLERY ZDARZEŃ ---
+            ui.tickerInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
+                    showAiAnalysis(ui.tickerInput.value.trim().toUpperCase());
+                    ui.tickerInput.value = '';
+                }
+            });
             
-            function handleWorkerControl(action) {
-                return async () => {
+            ui.mainContent.addEventListener('click', async e => {
+                const watchlistBtn = e.target.closest('#add-to-watchlist-btn');
+                if (watchlistBtn) {
+                    const ticker = watchlistBtn.dataset.ticker;
                     try {
-                        logger.info(`Sending worker command: ${action}`);
-                        const response = await api.sendWorkerControl(action);
-                        console.log(response);
-                        // Natychmiastowe odświeżenie statusu, aby zobaczyć komendę
-                        await pollWorkerStatus();
+                        watchlistBtn.disabled = true;
+                        watchlistBtn.innerHTML = `<i data-lucide="check" class="mr-2 h-5 w-5"></i>Dodano`;
+                        lucide.createIcons();
+                        await api.addToWatchlist(ticker);
+                        // Odśwież listę boczną, aby pokazać nowy element
+                        await refreshSidebarData();
                     } catch (e) {
-                        logger.error(`Błąd kontroli: ${action}`, e);
-                        // Alert zostanie wyświetlony w apiRequest, jeśli wystąpi błąd serwera.
+                         watchlistBtn.innerHTML = `Błąd`;
+                         logger.error(`Błąd dodawania do watchlist: ${ticker}`, e);
                     }
-                };
-            }
-            
-            // Delegacja zdarzeń dla list faz
-            document.querySelector('#phases-container').addEventListener('click', (e) => {
+                }
+            });
+
+            document.getElementById('phases-container').addEventListener('click', (e) => {
                 const candidateItem = e.target.closest('.candidate-item');
                 const accordionToggle = e.target.closest('.accordion-toggle');
 
                 if (candidateItem) {
                     const ticker = candidateItem.dataset.ticker;
-                    if (ticker) showDetails(ticker);
+                    if (ticker) showAiAnalysis(ticker);
                 } else if (accordionToggle) {
                     const content = accordionToggle.nextElementSibling;
                     const icon = accordionToggle.querySelector('.accordion-icon');
-                    if (content.classList.contains('hidden')) {
-                        content.classList.remove('hidden');
-                        icon.classList.add('rotate-180');
-                    } else {
-                        content.classList.add('hidden');
-                        icon.classList.remove('rotate-180');
-                    }
+                    content.classList.toggle('hidden');
+                    icon.classList.toggle('rotate-180');
                 }
             });
 
-            // Delegacja zdarzeń dla przycisków analizy na żądanie
-            ui.mainContent.addEventListener('click', async (e) => {
-                const onDemandBtn = e.target.closest('.request-on-demand-btn');
-                const phase3Btn = e.target.closest('.request-phase3-on-demand-btn');
-                
-                if (onDemandBtn && !onDemandBtn.disabled) {
-                    const ticker = onDemandBtn.dataset.ticker;
-                    try {
-                        onDemandBtn.disabled = true;
-                        onDemandBtn.textContent = 'Wysłano (Czekam na Silnik...)';
-                        logger.info(`Requesting on-demand analysis for ${ticker}`);
-                        
-                        // Wysłanie żądania do workera
-                        await api.requestOnDemandAnalysis(ticker);
-                        
-                        // Uruchomienie odpytywania
-                        state.activePolling.add(ticker);
-                        pollOnDemandResults(ticker);
-                        
-                        // Ponowne odświeżenie szczegółów, aby zaktualizować status przycisku
-                        await showDetails(ticker, true); 
-                    } catch (e) {
-                        // Błąd obsługiwany w apiRequest
-                        onDemandBtn.disabled = false;
-                        onDemandBtn.textContent = 'Uruchom Pełną Analizę Wskaźników';
-                    }
-                }
-                
-                 if (phase3Btn && !phase3Btn.disabled) {
-                    const ticker = phase3Btn.dataset.ticker;
-                    try {
-                        phase3Btn.disabled = true;
-                        phase3Btn.textContent = 'Wysłano (Czekam na Silnik...)';
-                         logger.info(`Requesting Phase 3 on-demand analysis for ${ticker}`);
-                         
-                         // Wysłanie żądania do workera
-                        await api.requestPhase3OnDemand(ticker);
-                        
-                        // Uruchomienie odpytywania
-                        state.activePolling.add(ticker);
-                        pollOnDemandResults(ticker);
-                        
-                        // Ponowne odświeżenie szczegółów, aby zaktualizować status przycisku
-                        await showDetails(ticker, true); 
-                    } catch (e) {
-                         // Błąd obsługiwany w apiRequest
-                        phase3Btn.disabled = false;
-                        phase3Btn.textContent = 'Uruchom Analizę Predator (Faza 3)';
-                    }
-                }
+            ui.dashboardLink.addEventListener('click', showDashboard);
+            ['start', 'pause', 'resume'].forEach(action => {
+                document.getElementById(`${action}-btn`).addEventListener('click', async () => {
+                    try { await api.sendWorkerControl(action); await pollWorkerStatus(); }
+                    catch(e) { logger.error(`Błąd kontroli workera: ${action}`, e); }
+                });
             });
-
-            // Wyszukiwanie na żądanie z paska
-            ui.tickerInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
-                    showDetails(ui.tickerInput.value.trim().toUpperCase());
-                    ui.tickerInput.value = ''; // Wyczyść pole po wysłaniu
-                }
-            });
-
-            // Handler dla przycisku Dashboard
-            ui.dashboardLink.addEventListener('click', showDashboardView);
-
-            // Handlery dla przycisków kontroli workera
-            ui.startBtn.addEventListener('click', handleWorkerControl('start'));
-            ui.pauseBtn.addEventListener('click', handleWorkerControl('pause'));
-            ui.resumeBtn.addEventListener('click', handleWorkerControl('resume'));
 
             // --- INICJALIZACJA ---
-            
-            function checkBackendReady() {
-                ui.loginStatusText.textContent = 'Oczekiwanie na uruchomienie usług backendu...';
-                const intervalId = setInterval(async () => {
-                    try {
-                        const statusData = await api.getWorkerStatus(); 
-                        clearInterval(intervalId);
-                        
-                        ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
-                        
-                        ui.loginStatusText.textContent = 'System gotowy.';
-                        ui.loginButton.disabled = false;
-                        ui.loginButton.textContent = 'Wejdź do Aplikacji';
-                    } catch (e) {
-                        ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full red-dot mr-2"></span>Offline';
-                        ui.loginStatusText.textContent = 'Łączenie nieudane. Ponawiam próbę...';
-                    }
-                }, 3000);
+            function startApp() {
+                ui.loginScreen.classList.add('hidden');
+                ui.dashboardScreen.classList.remove('hidden');
+                showDashboard();
+                pollWorkerStatus();
+                refreshSidebarData();
+                lucide.createIcons();
             }
 
-            ui.loginForm.addEventListener('submit', (e) => {
+            const intervalId = setInterval(async () => {
+                try {
+                    await api.getWorkerStatus(); 
+                    clearInterval(intervalId);
+                    ui.loginStatusText.textContent = 'System gotowy.';
+                    ui.loginButton.disabled = false;
+                    ui.loginButton.textContent = 'Wejdź do Aplikacji';
+                } catch (e) {
+                    ui.loginStatusText.textContent = 'Backend nie jest gotowy. Ponawiam...';
+                }
+            }, 3000);
+            
+            document.getElementById('login-form').addEventListener('submit', (e) => {
                 e.preventDefault();
-                startDashboard();
+                startApp();
             });
-
-            // Główne wywołanie
-            checkBackendReady();
-            lucide.createIcons();
-            
-            // Ustaw początkowy widok szczegółów dashboardu
-            // WAŻNE: W tym miejscu musimy zachować stałą strukturę HTML, aby móc do niej się odwołać
-            // gdy ponownie uruchamiana jest funkcja showDashboardView()
-            // Zapisujemy referencję do aktualnego widoku Dashboardu (który jest ukryty na początku)
-            const initialDashboardView = ui.mainContent.querySelector('#dashboard-view');
-            // Usuwamy go, aby móc go później dynamicznie wstawiać
-            initialDashboardView.remove();
-            
-            // Przy starcie aplikacji pokazujemy dashboard-view, ale dopiero po zalogowaniu.
         });
     </script>
 </body>
 </html>
-
