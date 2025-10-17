@@ -2,10 +2,6 @@ from pydantic import BaseModel, ConfigDict
 from datetime import datetime, date
 from typing import List, Optional, Any
 
-# ==============================================================================
-# KRYTYCZNA POPRAWKA: Dodanie brakującego schematu odpowiedzi dla zlecenia analizy AI.
-# To jest ostateczne rozwiązanie błędu 'AttributeError'.
-# ==============================================================================
 class AIAnalysisRequestResponse(BaseModel):
     message: str
     ticker: str
@@ -21,7 +17,7 @@ class WorkerStatus(BaseModel):
     status: str
     phase: str
     progress: Progress
-    last_heartbeat_utc: str # Zmieniono na string, aby uniknąć problemów z deserializacją
+    last_heartbeat_utc: str
     log: str
 
 class SystemAlert(BaseModel):
@@ -53,13 +49,17 @@ class Phase2Result(BaseModel):
 class TradingSignal(BaseModel):
     id: int
     ticker: str
-    generation_date: datetime
+    # =================================================================
+    # KRYTYCZNA POPRAWKA: Zmiana typu daty na 'str'
+    # To zapobiega błędom serializacji, które powodują awarię API (Błąd 500).
+    # =================================================================
+    generation_date: str
     status: str
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
-    signal_candle_timestamp: Optional[datetime] = None
+    signal_candle_timestamp: Optional[str] = None # Zmieniono na str
     entry_zone_bottom: Optional[float] = None
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
@@ -67,7 +67,6 @@ class TradingSignal(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class AIAnalysisResult(BaseModel):
-    # Pydantic automatycznie zwaliduje, czy 'analysis_data' to słownik (JSON)
     analysis_data: dict
     
     model_config = ConfigDict(from_attributes=True)
