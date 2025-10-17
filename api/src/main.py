@@ -4,7 +4,6 @@ import os
 from fastapi import FastAPI, Depends, HTTPException, Response, Query
 # ==========================================================
 # KRYTYCZNA POPRAWKA: Importowanie mechanizmu CORS
-# To jest ostateczne rozwiązanie błędu 'CORS policy'.
 # ==========================================================
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -27,7 +26,7 @@ except Exception as e:
 app = FastAPI(title="APEX Predator API", version="2.1.0")
 
 # ==============================================================================
-# KRYTYCZNA POPRAWKA: Dodanie konfiguracji CORS
+# KRYTYCZNA POPRAWKA: Przywrócenie konfiguracji CORS
 # Ten blok kodu mówi serwerowi API, aby akceptował zapytania z dowolnego źródła
 # (w tym z Twojej aplikacji frontendowej na Render.com). To rozwiązuje błąd
 # "has been blocked by CORS policy" widoczny w konsoli przeglądarki.
