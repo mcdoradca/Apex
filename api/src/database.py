@@ -1,50 +1,73 @@
-import os
-import time
-import logging
-import sys
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError
-from dotenv import load_dotenv
+from sqlalchemy import (
+    Column, String, VARCHAR, TIMESTAMP, NUMERIC, BIGINT, DATE,
+    Boolean, INTEGER, TEXT, ForeignKey, Index
+)
+from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP, JSONB
+from sqlalchemy.sql import func
+from .database import Base
 
-load_dotenv()
+class Company(Base):
+    __tablename__ = 'companies'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    company_name = Column(VARCHAR(255))
+    exchange = Column(VARCHAR(50))
+    sector = Column(VARCHAR(100))
+    industry = Column(VARCHAR(255))
+    last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
-# Konfiguracja loggera
-logger = logging.getLogger(__name__)
+class Phase1Candidate(Base):
+    __tablename__ = 'phase1_candidates'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    price = Column(NUMERIC(12, 4))
+    change_percent = Column(NUMERIC(10, 4))
+    volume = Column(BIGINT)
+    score = Column(INTEGER)
+    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    logger.critical("DATABASE_URL environment variable not set. Exiting.")
-    sys.exit(1)
+class Phase2Result(Base):
+    __tablename__ = 'phase2_results'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    analysis_date = Column(DATE, primary_key=True)
+    catalyst_score = Column(INTEGER)
+    relative_strength_score = Column(INTEGER)
+    energy_compression_score = Column(INTEGER)
+    total_score = Column(INTEGER)
+    is_qualified = Column(Boolean)
 
-# Logika ponawiania połączenia z bazą danych przy starcie aplikacji
-engine = None
-RETRY_COUNT = 5
-RETRY_DELAY = 5
-for i in range(RETRY_COUNT):
-    try:
-        engine = create_engine(DATABASE_URL)
-        with engine.connect():
-            logger.info("Successfully connected to the database.")
-            break
-    except OperationalError as e:
-        logger.warning(f"Database connection failed (attempt {i+1}/{RETRY_COUNT}): {e}. Retrying in {RETRY_DELAY}s...")
-        time.sleep(RETRY_DELAY)
+class TradingSignal(Base):
+    __tablename__ = 'trading_signals'
+    id = Column(INTEGER, primary_key=True, autoincrement=True)
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
+    generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+    status = Column(VARCHAR(50), default='PENDING') 
+    entry_price = Column(NUMERIC(12, 2), nullable=True)
+    stop_loss = Column(NUMERIC(12, 2), nullable=True)
+    take_profit = Column(NUMERIC(12, 2), nullable=True)
+    risk_reward_ratio = Column(NUMERIC(5, 2), nullable=True)
+    signal_candle_timestamp = Column(PG_TIMESTAMP(timezone=True), nullable=True)
+    entry_zone_bottom = Column(NUMERIC(12, 2), nullable=True)
+    entry_zone_top = Column(NUMERIC(12, 2), nullable=True)
+    notes = Column(TEXT, nullable=True)
+    
+    # OSTATECZNA POPRAWKA: Definicja częściowego indeksu unikalnego na poziomie modelu
+    __table_args__ = (
+        Index(
+            'uq_active_pending_ticker',  # Nazwa indeksu
+            'ticker',
+            unique=True,
+            postgresql_where=status.in_(['ACTIVE', 'PENDING'])
+        ),
+    )
 
-if not engine:
-    logger.critical("Could not connect to the database after multiple retries. Exiting.")
-    sys.exit(1)
+class SystemControl(Base):
+    __tablename__ = 'system_control'
+    key = Column(VARCHAR(50), primary_key=True)
+    value = Column(TEXT)
+    updated_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base = declarative_base()
-
-# Funkcja do dostarczania sesji bazy danych do endpointów
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+class AIAnalysisResult(Base):
+    __tablename__ = 'ai_analysis_results'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    analysis_data = Column(JSONB)
+    last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
