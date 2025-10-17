@@ -8,15 +8,17 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# --- KRYTYCZNA ZMIANA: Importujemy `models` z API, aby Worker mógł tworzyć tabele ---
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'api', 'src')))
+# --- OSTATECZNA POPRAWKA: Prawidłowe dodanie ścieżki do projektu ---
+# Ta zmiana pozwala Workerowi znaleźć katalog 'api' i zaimportować z niego modele.
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, project_root)
 from api import models
 
-from .analysis import phase1_scanner, phase2_engine, phase3_sniper, on_demand_analyzer, utils
-from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
-from .data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .data_ingestion.data_initializer import initialize_database_if_empty
-from .database import get_db_session, engine
+from src.analysis import phase1_scanner, phase2_engine, phase3_sniper, on_demand_analyzer, utils
+from src.config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
+from src.data_ingestion.alpha_vantage_client import AlphaVantageClient
+from src.data_ingestion.data_initializer import initialize_database_if_empty
+from src.database import get_db_session, engine
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
@@ -33,7 +35,6 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 
 
 def handle_on_demand_requests(session):
-    # Ta funkcja pozostaje bez zmian
     ticker_to_analyze = utils.get_system_control_value(session, 'on_demand_request')
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
         logger.info(f"On-demand request received for: {ticker_to_analyze}.")
@@ -74,7 +75,6 @@ def handle_on_demand_requests(session):
 
 
 def run_full_analysis_cycle():
-    # Ta funkcja pozostaje bez zmian
     global current_state
     session = get_db_session()
     if utils.get_system_control_value(session, 'worker_status') == 'RUNNING':
@@ -121,14 +121,13 @@ def main_loop():
     global current_state
     logger.info("Worker started. Initializing...")
     
-    # --- KRYTYCZNA ZMIANA: Tworzenie tabel PRZED rozpoczęciem inicjalizacji danych ---
     try:
         logger.info("Worker is taking responsibility for creating database tables...")
         models.Base.metadata.create_all(bind=engine)
         logger.info("Database tables created/verified successfully by the Worker.")
     except Exception as e:
         logger.critical(f"FATAL: Worker failed to create database tables: {e}", exc_info=True)
-        sys.exit(1) # Zatrzymujemy workera, jeśli nie może utworzyć tabel
+        sys.exit(1)
         
     with get_db_session() as session:
         initialize_database_if_empty(session, api_client)
