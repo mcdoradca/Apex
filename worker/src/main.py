@@ -8,11 +8,14 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# --- NOWA SEKCJA: Importy do tworzenia tabel ---
-# Importujemy 'Base' z modeli API, aby mieć dostęp do wszystkich definicji tabel
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'api', 'src')))
-from models import Base
-# --- KONIEC NOWEJ SEKCJI ---
+# ==============================================================================
+# KRYTYCZNA POPRAWKA (GWARANCJA NAPRAWY BŁĘDU IMPORTU):
+# Używamy importu względnego (z kropką na początku: ".models"), aby mieć 100%
+# pewności, że importujemy plik 'models.py' z TEGO SAMEGO katalogu ('worker/src'),
+# a nie z jakiegokolwiek innego miejsca w projekcie (np. z 'api/src').
+# To jest ostateczne rozwiązanie błędu 'ImportError'.
+# ==============================================================================
+from .models import Base
 
 from .analysis import phase1_scanner, phase2_engine, phase3_sniper, ai_agents, utils
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
@@ -75,7 +78,6 @@ def run_full_analysis_cycle():
         current_state = "RUNNING"
         utils.update_system_control(session, 'worker_status', 'RUNNING')
         utils.update_system_control(session, 'scan_log', '')
-        # Usunięto czyszczenie tabel, które mogłoby powodować problemy przy restarcie
         session.execute(text("UPDATE trading_signals SET status = 'EXPIRED' WHERE status = 'ACTIVE'"))
         session.commit()
         logger.info("Old active signals marked as expired.")
@@ -112,16 +114,13 @@ def main_loop():
     global current_state
     logger.info("Worker started. Initializing...")
 
-    # --- NOWA SEKCJA: Zapewnienie istnienia tabel PRZED startem workera ---
     try:
         logger.info("Verifying database tables...")
         Base.metadata.create_all(bind=engine)
         logger.info("Database tables verified/created successfully.")
     except Exception as e:
         logger.critical(f"FATAL: Could not create database tables. Worker cannot start. Error: {e}", exc_info=True)
-        # Wychodzimy z aplikacji, jeśli nie możemy nawet stworzyć tabel
         sys.exit(1)
-    # --- KONIEC NOWEJ SEKCJI ---
     
     with get_db_session() as session:
         initialize_database_if_empty(session, api_client)
