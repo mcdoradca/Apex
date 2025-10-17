@@ -3,7 +3,7 @@ from sqlalchemy import (
     Boolean, INTEGER, TEXT, ForeignKey, Index
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP, JSONB
-from sqlalchemy.sql import func, text
+from sqlalchemy.sql import func
 from .database import Base
 
 class Company(Base):
@@ -24,44 +24,38 @@ class Phase1Candidate(Base):
     score = Column(INTEGER)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
-# Poprawiona tabela dla Fazy 2
 class Phase2Result(Base):
     __tablename__ = 'phase2_results'
     ticker = Column(VARCHAR(50), primary_key=True)
     analysis_date = Column(DATE, primary_key=True)
     catalyst_score = Column(INTEGER)
-    relative_strength_score = Column(INTEGER) # Dodana brakująca kolumna
-    energy_compression_score = Column(INTEGER) # Dodana brakująca kolumna
+    relative_strength_score = Column(INTEGER)
+    energy_compression_score = Column(INTEGER)
     total_score = Column(INTEGER)
     is_qualified = Column(Boolean)
 
 class TradingSignal(Base):
     __tablename__ = 'trading_signals'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
-    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE')) # Usunięto unique=True
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
-    status = Column(VARCHAR(50), default='PENDING') # Zmieniono default na PENDING/ACTIVE, EXECUTED, CANCELLED, DELETED, PENDING
-    entry_price = Column(NUMERIC(12, 2))
-    stop_loss = Column(NUMERIC(12, 2))
-    take_profit = Column(NUMERIC(12, 2))
-    risk_reward_ratio = Column(NUMERIC(5, 2))
-    signal_candle_timestamp = Column(PG_TIMESTAMP(timezone=True), nullable=True) # Może być null dla PENDING
-    
-    # DODANO: Pola dla strefy wejścia (monitorowanie)
+    status = Column(VARCHAR(50), default='PENDING') 
+    entry_price = Column(NUMERIC(12, 2), nullable=True)
+    stop_loss = Column(NUMERIC(12, 2), nullable=True)
+    take_profit = Column(NUMERIC(12, 2), nullable=True)
+    risk_reward_ratio = Column(NUMERIC(5, 2), nullable=True)
+    signal_candle_timestamp = Column(PG_TIMESTAMP(timezone=True), nullable=True)
     entry_zone_bottom = Column(NUMERIC(12, 2), nullable=True)
     entry_zone_top = Column(NUMERIC(12, 2), nullable=True)
+    notes = Column(TEXT, nullable=True)
     
-    notes = Column(TEXT)
-
-    # KRYTYCZNA POPRAWKA: Definicja częściowego indeksu unikalnego
-    # Zapewnia, że może istnieć tylko jeden sygnał 'ACTIVE' lub 'PENDING' dla danego tickera,
-    # jednocześnie pozwalając na archiwizację wielu sygnałów historycznych (np. EXECUTED, CANCELLED).
+    # OSTATECZNA POPRAWKA: Definicja częściowego indeksu unikalnego na poziomie modelu
     __table_args__ = (
         Index(
-            'uq_active_pending_ticker',
+            'uq_active_pending_ticker',  # Nazwa indeksu
             'ticker',
             unique=True,
-            postgresql_where=text("status IN ('ACTIVE', 'PENDING')")
+            postgresql_where=status.in_(['ACTIVE', 'PENDING'])
         ),
     )
 
@@ -71,14 +65,8 @@ class SystemControl(Base):
     value = Column(TEXT)
     updated_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
-class OnDemandAnalysisResult(Base):
-    __tablename__ = 'on_demand_results'
-    ticker = Column(VARCHAR(50), primary_key=True)
-    analysis_data = Column(JSONB)
-    last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
-
-class Phase3OnDemandResult(Base):
-    __tablename__ = 'phase3_on_demand_results'
+class AIAnalysisResult(Base):
+    __tablename__ = 'ai_analysis_results'
     ticker = Column(VARCHAR(50), primary_key=True)
     analysis_data = Column(JSONB)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
