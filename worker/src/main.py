@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Zmiana importów
+# --- NOWA SEKCJA: Importy do tworzenia tabel ---
+# Importujemy 'Base' z modeli API, aby mieć dostęp do wszystkich definicji tabel
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'api', 'src')))
+from models import Base
+# --- KONIEC NOWEJ SEKCJI ---
+
 from .analysis import phase1_scanner, phase2_engine, phase3_sniper, ai_agents, utils
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -33,10 +38,8 @@ def handle_ai_analysis_request(session):
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
         logger.info(f"AI analysis request received for: {ticker_to_analyze}.")
-        # Oznacz jako przetwarzany, aby frontend wiedział, że praca trwa
-        utils.set_system_control_value(session, 'ai_analysis_request', 'PROCESSING')
+        utils.update_system_control(session, 'ai_analysis_request', 'PROCESSING')
         
-        # Zapisz tymczasowy wynik, aby dać znać UI, że analiza się rozpoczęła
         temp_result = {"status": "PROCESSING", "message": "Rozpoczynanie analizy przez agentów AI..."}
         stmt_temp = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
         session.execute(stmt_temp, {'ticker': ticker_to_analyze, 'data': json.dumps(temp_result)})
@@ -72,11 +75,10 @@ def run_full_analysis_cycle():
         current_state = "RUNNING"
         utils.update_system_control(session, 'worker_status', 'RUNNING')
         utils.update_system_control(session, 'scan_log', '')
-        session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date < NOW() - INTERVAL '1 day'"))
-        session.execute(text("DELETE FROM phase2_results WHERE analysis_date < NOW() - INTERVAL '1 day'"))
+        # Usunięto czyszczenie tabel, które mogłoby powodować problemy przy restarcie
         session.execute(text("UPDATE trading_signals SET status = 'EXPIRED' WHERE status = 'ACTIVE'"))
         session.commit()
-        logger.info("Old data cleared successfully.")
+        logger.info("Old active signals marked as expired.")
         
         utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
         
@@ -109,6 +111,17 @@ def run_full_analysis_cycle():
 def main_loop():
     global current_state
     logger.info("Worker started. Initializing...")
+
+    # --- NOWA SEKCJA: Zapewnienie istnienia tabel PRZED startem workera ---
+    try:
+        logger.info("Verifying database tables...")
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables verified/created successfully.")
+    except Exception as e:
+        logger.critical(f"FATAL: Could not create database tables. Worker cannot start. Error: {e}", exc_info=True)
+        # Wychodzimy z aplikacji, jeśli nie możemy nawet stworzyć tabel
+        sys.exit(1)
+    # --- KONIEC NOWEJ SEKCJI ---
     
     with get_db_session() as session:
         initialize_database_if_empty(session, api_client)
@@ -151,3 +164,4 @@ if __name__ == "__main__":
         main_loop()
     else:
         logger.critical("Worker cannot start because database connection was not established.")
+
