@@ -1,16 +1,16 @@
-# Ten plik jest identyczny jak w usłudze API, aby zapewnić spójność.
 import os
 import time
 import logging
 import sys
 from sqlalchemy import create_engine
+# ZMIANA: Dodajemy niezbędne importy
+from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Konfiguracja loggera
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -18,7 +18,6 @@ if not DATABASE_URL:
     logger.critical("DATABASE_URL environment variable not set. Exiting.")
     sys.exit(1)
 
-# Logika ponawiania połączenia z bazą danych przy starcie aplikacji
 engine = None
 RETRY_COUNT = 5
 RETRY_DELAY = 5
@@ -34,11 +33,12 @@ for i in range(RETRY_COUNT):
 
 if not engine:
     logger.critical("Could not connect to the database after multiple retries.")
-    # Nie wychodzimy z sys.exit(1), aby dać głównej pętli szansę na reakcję
     pass
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# ZMIANA: Definiujemy 'Base', aby modele mogły z niego korzystać
+Base = declarative_base()
+
 def get_db_session():
     return SessionLocal()
-
