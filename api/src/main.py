@@ -10,118 +10,88 @@ from fastapi.middleware.cors import CORSMiddleware as AllowAllCORSMiddleware
 
 from . import crud, models, schemas
 from .database import get_db, engine, SessionLocal
-# Import klienta Alpha Vantage, aby API mogło pobierać ceny na żywo
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'worker', 'src')))
 from data_ingestion.alpha_vantage_client import AlphaVantageClient
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-# --- INICJALIZACJA KLIENTA API ---
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
-if not API_KEY:
-    logger.warning("ALPHAVANTAGE_API_KEY not found for live price endpoint. Endpoint will be disabled.")
-    api_client = None
-else:
-    api_client = AlphaVantageClient(api_key=API_KEY)
+api_client = AlphaVantageClient(api_key=API_KEY) if API_KEY else None
 
-# --- KRYTYCZNA ZMIANA: Usunięto automatyczne tworzenie tabel ---
-# Od teraz Worker jest jedynym odpowiedzialnym za schemat bazy danych.
-# Usunięto blok `models.Base.metadata.create_all(bind=engine)`.
+try:
+    models.Base.metadata.create_all(bind=engine)
+    logger.info("Database tables verified/created successfully.")
+except Exception as e:
+    logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
+    sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.0.0")
+app = FastAPI(title="APEX Predator API", version="2.1.0")
 
 app.add_middleware(
-    AllowAllCORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    AllowAllCORSMiddleware, allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
 )
 
 @app.on_event("startup")
 async def startup_event():
-    """Weryfikuje i ustawia początkowe wartości w tabeli system_control."""
     db = SessionLocal()
     try:
-        # Ten kod jest bezpieczny, ponieważ nie modyfikuje schematu, a jedynie dane
         initial_values = {
             'worker_status': 'IDLE', 'worker_command': 'NONE', 'current_phase': 'NONE',
             'scan_progress_processed': '0', 'scan_progress_total': '0',
             'scan_log': 'Czekam na rozpoczęcie skanowania...',
             'last_heartbeat': datetime.now(timezone.utc).isoformat(),
-            'on_demand_request': 'NONE',
-            'phase3_on_demand_request': 'NONE',
+            'ai_analysis_request': 'NONE',
             'system_alert': 'NONE'
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
                 crud.set_system_control_value(db, key, value)
         logger.info("Initial system control values verified.")
-    except Exception as e:
-        logger.error(f"Could not initialize system_control values: {e}", exc_info=True)
     finally:
         db.close()
 
-# --- Endpointy (bez zmian) ---
+# --- ENDPOINTY ZWIĄZANE Z FAZAMI ANALIZY ---
 
 @app.get("/api/v1/candidates/phase1", response_model=List[schemas.Phase1Candidate])
 def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
     return crud.get_phase1_candidates(db)
 
-@app.delete("/api/v1/candidates/phase1/{ticker}", status_code=204)
-def delete_phase1_candidate_endpoint(ticker: str, db: Session = Depends(get_db)):
-    crud.delete_phase1_candidate(db, ticker.strip().upper())
-    return Response(status_code=204)
-
 @app.get("/api/v1/results/phase2", response_model=List[schemas.Phase2Result])
 def get_phase2_results_endpoint(db: Session = Depends(get_db)):
     return crud.get_phase2_results(db)
 
-@app.delete("/api/v1/results/phase2/{ticker}", status_code=204)
-def delete_phase2_result_endpoint(ticker: str, db: Session = Depends(get_db)):
-    crud.delete_phase2_result(db, ticker.strip().upper())
-    return Response(status_code=204)
-
 @app.get("/api/v1/signals/phase3", response_model=List[schemas.TradingSignal])
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
-    return crud.get_active_and_pending_signals(db)
+    return crud.get_active_pending_and_watchlist_signals(db)
 
-@app.delete("/api/v1/signals/phase3/{signal_id}", status_code=204)
-def delete_phase3_signal_endpoint(signal_id: int, db: Session = Depends(get_db)):
-    if not crud.delete_trading_signal(db, signal_id):
-        raise HTTPException(status_code=404, detail="Signal not found.")
-    return Response(status_code=204)
+# --- ENDPOINTY ZBIORCZE I NA ŻĄDANIE ---
 
 @app.get("/api/v1/details/{ticker}", response_model=schemas.ConsolidatedTickerDetails)
 def get_consolidated_details(ticker: str, db: Session = Depends(get_db)):
     return crud.get_consolidated_details(db, ticker.strip().upper())
 
-@app.post("/api/v1/analysis/on-demand", status_code=202)
-def request_on_demand_analysis(request: schemas.OnDemandRequest, db: Session = Depends(get_db)):
+# --- NOWE ENDPOINTY DLA ANALIZY AI ---
+@app.post("/api/v1/ai-analysis/request", status_code=202)
+def request_ai_analysis(request: schemas.OnDemandRequest, db: Session = Depends(get_db)):
     ticker = request.ticker.strip().upper()
-    crud.set_system_control_value(db, key="on_demand_request", value=ticker)
-    return {"message": f"Analysis request for {ticker} accepted."}
+    crud.set_system_control_value(db, key="ai_analysis_request", value=ticker)
+    return {"message": f"AI analysis request for {ticker} accepted."}
 
-@app.post("/api/v1/analysis/phase3-on-demand", status_code=202)
-def request_phase3_on_demand_analysis(request: schemas.OnDemandRequest, db: Session = Depends(get_db)):
-    ticker = request.ticker.strip().upper()
-    crud.set_system_control_value(db, key="phase3_on_demand_request", value=ticker)
-    return {"message": f"Phase 3 on-demand analysis for {ticker} accepted."}
+@app.get("/api/v1/ai-analysis/result/{ticker}", response_model=Optional[schemas.AIAnalysisResult])
+def get_ai_analysis_result(ticker: str, db: Session = Depends(get_db)):
+    result = crud.get_ai_analysis_result(db, ticker.strip().upper())
+    if not result:
+        raise HTTPException(status_code=404, detail="Analysis not found or not ready.")
+    return result
 
-@app.get("/api/v1/analysis/on-demand/result/{ticker}")
-def get_on_demand_result(ticker: str, db: Session = Depends(get_db)):
-    analysis_result = crud.get_on_demand_result(db, ticker.strip().upper())
-    if not analysis_result:
-        return Response(status_code=204)
-    return analysis_result
+# --- NOWY ENDPOINT DLA WATCHLIST ---
+@app.post("/api/v1/watchlist/{ticker}", status_code=201)
+def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
+    return crud.add_to_watchlist(db, ticker.strip().upper())
 
-@app.get("/api/v1/analysis/phase3-on-demand/result/{ticker}")
-def get_phase3_on_demand_result(ticker: str, db: Session = Depends(get_db)):
-    analysis_result = crud.get_phase3_on_demand_result(db, ticker.strip().upper())
-    if not analysis_result:
-        return Response(status_code=204)
-    return analysis_result
+# --- ENDPOINTY KONTROLI I STATUSU ---
 
 @app.post("/api/v1/worker/control/{action}", status_code=202)
 def control_worker(action: str, db: Session = Depends(get_db)):
@@ -130,8 +100,8 @@ def control_worker(action: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid action.")
     command = allowed_actions[action]
     crud.set_system_control_value(db, "worker_command", command)
-    logger.info(f"Command '{action}' ({command}) sent to worker.")
     return {"message": f"Command '{action}' sent to worker."}
+
 
 @app.get("/api/v1/worker/status", response_model=schemas.WorkerStatus)
 def get_worker_status(db: Session = Depends(get_db)):
@@ -158,30 +128,3 @@ def get_system_alert(db: Session = Depends(get_db)):
         crud.set_system_control_value(db, "system_alert", "NONE")
         return schemas.SystemAlert(message=alert_message)
     return schemas.SystemAlert(message="NONE")
-
-@app.get("/api/v1/live-prices", response_model=List[schemas.LivePrice])
-def get_live_prices(tickers: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    if not api_client:
-        raise HTTPException(status_code=503, detail="Live price service is not available (API key missing).")
-    if not tickers:
-        return []
-    
-    ticker_list = [t.strip().upper() for t in tickers.split(',')]
-    if not ticker_list:
-        return []
-
-    try:
-        from worker.src.analysis.phase1_scanner import _parse_bulk_quotes_csv
-        bulk_data_csv = api_client.get_bulk_quotes(ticker_list)
-        if not bulk_data_csv:
-            return []
-            
-        parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
-        prices = []
-        for ticker, data in parsed_data.items():
-            if data['price'] is not None:
-                prices.append(schemas.LivePrice(ticker=ticker, price=data['price']))
-        return prices
-    except Exception as e:
-        logger.error(f"Error fetching live prices: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to fetch live prices.")
