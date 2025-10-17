@@ -1,6 +1,33 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime, date
-from typing import List, Optional
+from typing import List, Optional, Any
+
+# ==============================================================================
+# KRYTYCZNA POPRAWKA: Dodanie brakującego schematu odpowiedzi dla zlecenia analizy AI.
+# To jest ostateczne rozwiązanie błędu 'AttributeError'.
+# ==============================================================================
+class AIAnalysisRequestResponse(BaseModel):
+    message: str
+    ticker: str
+
+class OnDemandRequest(BaseModel):
+    ticker: str
+
+class Progress(BaseModel):
+    processed: int
+    total: int
+
+class WorkerStatus(BaseModel):
+    status: str
+    phase: str
+    progress: Progress
+    last_heartbeat_utc: str # Zmieniono na string, aby uniknąć problemów z deserializacją
+    log: str
+
+class SystemAlert(BaseModel):
+    message: str
+
+# --- Schematy Wyników Analiz ---
 
 class Phase1Candidate(BaseModel):
     ticker: str
@@ -9,6 +36,7 @@ class Phase1Candidate(BaseModel):
     volume: Optional[int] = None
     score: int
     analysis_date: datetime
+
     model_config = ConfigDict(from_attributes=True)
 
 class Phase2Result(BaseModel):
@@ -19,21 +47,8 @@ class Phase2Result(BaseModel):
     energy_compression_score: int
     total_score: int
     is_qualified: bool
+
     model_config = ConfigDict(from_attributes=True)
-
-class Progress(BaseModel):
-    processed: int
-    total: int
-
-class WorkerStatus(BaseModel):
-    status: str
-    phase: str
-    progress: Progress
-    last_heartbeat_utc: datetime
-    log: str
-
-class OnDemandRequest(BaseModel):
-    ticker: str
 
 class TradingSignal(BaseModel):
     id: int
@@ -45,30 +60,15 @@ class TradingSignal(BaseModel):
     take_profit: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
     signal_candle_timestamp: Optional[datetime] = None
-    entry_zone_bottom: Optional[float] = None 
+    entry_zone_bottom: Optional[float] = None
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
+
     model_config = ConfigDict(from_attributes=True)
-    
-class LivePrice(BaseModel):
-    ticker: str
-    price: float
 
-# NOWY SCHEMAT: Wynik analizy AI
 class AIAnalysisResult(BaseModel):
-    ticker: str
-    overall_score: int
-    max_score: int
-    recommendation: str
-    agents: dict
-    analysis_timestamp_utc: datetime
-
-class ConsolidatedTickerDetails(BaseModel):
-    ticker: str
-    phase1_data: Optional[Phase1Candidate] = None
-    phase2_data: Optional[Phase2Result] = None
-    phase3_signal: Optional[TradingSignal] = None
-    ai_analysis: Optional[AIAnalysisResult] = None
+    # Pydantic automatycznie zwaliduje, czy 'analysis_data' to słownik (JSON)
+    analysis_data: dict
     
-class SystemAlert(BaseModel):
-    message: str
+    model_config = ConfigDict(from_attributes=True)
+
