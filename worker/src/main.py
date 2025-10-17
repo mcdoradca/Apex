@@ -9,19 +9,18 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 # ==============================================================================
-# KRYTYCZNA POPRAWKA (GWARANCJA NAPRAWY BŁĘDU IMPORTU):
-# Używamy importu względnego (z kropką na początku: ".models"), aby mieć 100%
-# pewności, że importujemy plik 'models.py' z TEGO SAMEGO katalogu ('worker/src'),
-# a nie z jakiegokolwiek innego miejsca w projekcie (np. z 'api/src').
-# To jest ostateczne rozwiązanie błędu 'ImportError'.
+# OSTATECZNA POPRAWKA: Importowanie z lokalnych plików Workera
+# Kropka w ".models" i ".database" gwarantuje, że Worker używa WŁASNYCH
+# plików, a nie plików z katalogu API, co rozwiązuje błąd ImportError.
 # ==============================================================================
 from .models import Base
+from .database import get_db_session, engine
 
 from .analysis import phase1_scanner, phase2_engine, phase3_sniper, ai_agents, utils
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .data_ingestion.data_initializer import initialize_database_if_empty
-from .database import get_db_session, engine
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
@@ -113,23 +112,22 @@ def run_full_analysis_cycle():
 def main_loop():
     global current_state
     logger.info("Worker started. Initializing...")
-
-    try:
-        logger.info("Verifying database tables...")
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database tables verified/created successfully.")
-    except Exception as e:
-        logger.critical(f"FATAL: Could not create database tables. Worker cannot start. Error: {e}", exc_info=True)
-        sys.exit(1)
     
     with get_db_session() as session:
+        # Ten blok kodu zapewnia, że wszystkie tabele zdefiniowane w models.py istnieją.
+        logger.info("Verifying database tables for Worker...")
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables verified.")
+
         initialize_database_if_empty(session, api_client)
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
+    
     schedule.every(15).minutes.do(lambda: phase3_sniper.monitor_pending_signals(get_db_session(), api_client))
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Pending signals monitor scheduled every 15 minutes.")
+
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
