@@ -67,6 +67,26 @@ def run_full_analysis_cycle():
     global current_state
     session = get_db_session()
 
+    # ==================================================================
+    #  ZALECENIE INSPEKCJI: Czyszczenie tabel przed nowym cyklem
+    #  To zapobiega błędom logicznym (F1 < F2), gdy cykl jest uruchamiany
+    #  wielokrotnie w ciągu jednego dnia.
+    # ==================================================================
+    try:
+        logger.info("Cleaning tables before new analysis cycle...")
+        # Czyści dzisiejsze wyniki Fazy 2, aby uniknąć "starych" danych
+        session.execute(text("DELETE FROM phase2_results WHERE analysis_date = CURRENT_DATE;"))
+        # Czyści dzisiejszych kandydatów Fazy 1 (używamy >= bo to timestamp)
+        session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date >= CURRENT_DATE;"))
+        session.commit()
+        logger.info("Daily tables cleaned. Proceeding with analysis.")
+    except Exception as e:
+        logger.error(f"Could not clean tables before run: {e}", exc_info=True)
+        session.rollback()
+        # Można rozważyć zatrzymanie cyklu, jeśli czyszczenie się nie powiedzie
+        # raise e 
+    # ==================================================================
+
     if utils.get_system_control_value(session, 'worker_status') == 'RUNNING':
         logger.warning("Analysis cycle already in progress. Skipping scheduled run.")
         session.close()
@@ -161,4 +181,3 @@ if __name__ == "__main__":
         main_loop()
     else:
         logger.critical("Worker cannot start because database connection was not established.")
-
