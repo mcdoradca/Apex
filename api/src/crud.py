@@ -17,8 +17,6 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
     if not latest_date_obj:
         return []
     
-    # SQLAlchemy v2 może zwracać datę z dokładnością do mikrosekund, PostgreSQL niekoniecznie.
-    # Upewniamy się, że porównujemy daty w spójny sposób.
     candidates_from_db = db.query(models.Phase1Candidate).filter(
         func.date_trunc('second', models.Phase1Candidate.analysis_date) == func.date_trunc('second', latest_date_obj)
     ).all()
@@ -119,3 +117,4 @@ def set_system_control_value(db: Session, key: str, value: str):
 def get_ai_analysis_result(db: Session, ticker: str) -> Optional[Dict[str, Any]]:
     result = db.query(models.AIAnalysisResult).filter(models.AIAnalysisResult.ticker == ticker).first()
     return result.analysis_data if result else None
+
