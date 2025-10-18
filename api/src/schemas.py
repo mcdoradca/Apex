@@ -63,23 +63,27 @@ class TradingSignal(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 # ==================================================================
-#  OSTATECZNA POPRAWKA (2.0)
-#  Ten schemat pasuje teraz do nowej, poprawnej struktury zwracanej
-#  przez plik 'worker/src/analysis/ai_agents.py'.
+#  POPRAWKA BŁĘDU 500 (Wersja 3.0)
+#  Wszystkie pola oprócz 'status' są teraz opcjonalne (`Optional[...]`).
+#  To pozwala na poprawną walidację obiektów tymczasowych
+#  (np. {"status": "PROCESSING", "message": "..."})
+#  oraz obiektów błędu ({"status": "ERROR", "message": "..."}).
 # ==================================================================
 class AIAnalysisResult(BaseModel):
-    # Schemat dla statusu "DONE"
+    # Jedyne pole wymagane w każdym stanie (PROCESSING, ERROR, DONE)
     status: str
-    ticker: str
-    overall_score: int                 # ZMIANA: z str na int
-    max_score: int                     # ZMIANA: dodane pole
-    final_score_percent: int
-    recommendation: str
-    recommendation_details: str
-    agents: dict                       # ZMIANA: z List[Any] na dict
-    analysis_timestamp_utc: str
-
+    
     # Pola dla statusu "PROCESSING" lub "ERROR"
     message: Optional[str] = None 
-    
+
+    # Pola dla statusu "DONE"
+    ticker: Optional[str] = None
+    overall_score: Optional[int] = None
+    max_score: Optional[int] = None
+    final_score_percent: Optional[int] = None
+    recommendation: Optional[str] = None
+    recommendation_details: Optional[str] = None
+    agents: Optional[dict] = None
+    analysis_timestamp_utc: Optional[str] = None
+
     model_config = ConfigDict(from_attributes=True)
