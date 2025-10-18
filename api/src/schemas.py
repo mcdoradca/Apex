@@ -49,17 +49,13 @@ class Phase2Result(BaseModel):
 class TradingSignal(BaseModel):
     id: int
     ticker: str
-    # =================================================================
-    # KRYTYCZNA POPRAWKA: Zmiana typu daty na 'str'
-    # To zapobiega błędom serializacji, które powodują awarię API (Błąd 500).
-    # =================================================================
     generation_date: str
     status: str
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
-    signal_candle_timestamp: Optional[str] = None # Zmieniono na str
+    signal_candle_timestamp: Optional[str] = None
     entry_zone_bottom: Optional[float] = None
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
@@ -67,19 +63,20 @@ class TradingSignal(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 # ==================================================================
-#  POPRAWKA BŁĘDU 500 (ResponseValidationError)
-#  Zmieniono ten model, aby pasował do "płaskiej" struktury JSON
-#  zwracanej przez worker/ai_agents.py i oczekiwanej przez index.html
+#  OSTATECZNA POPRAWKA (2.0)
+#  Ten schemat pasuje teraz do nowej, poprawnej struktury zwracanej
+#  przez plik 'worker/src/analysis/ai_agents.py'.
 # ==================================================================
 class AIAnalysisResult(BaseModel):
-    # Schemat dla udanej analizy (status: "DONE")
+    # Schemat dla statusu "DONE"
     status: str
     ticker: str
-    overall_score: str
+    overall_score: int                 # ZMIANA: z str na int
+    max_score: int                     # ZMIANA: dodane pole
     final_score_percent: int
     recommendation: str
     recommendation_details: str
-    agents: List[Any]  # Można tu zdefiniować dokładniejszy schemat Agenta
+    agents: dict                       # ZMIANA: z List[Any] na dict
     analysis_timestamp_utc: str
 
     # Pola dla statusu "PROCESSING" lub "ERROR"
