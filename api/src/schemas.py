@@ -66,8 +66,23 @@ class TradingSignal(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+# ==================================================================
+#  POPRAWKA BŁĘDU 500 (ResponseValidationError)
+#  Zmieniono ten model, aby pasował do "płaskiej" struktury JSON
+#  zwracanej przez worker/ai_agents.py i oczekiwanej przez index.html
+# ==================================================================
 class AIAnalysisResult(BaseModel):
-    analysis_data: dict
+    # Schemat dla udanej analizy (status: "DONE")
+    status: str
+    ticker: str
+    overall_score: str
+    final_score_percent: int
+    recommendation: str
+    recommendation_details: str
+    agents: List[Any]  # Można tu zdefiniować dokładniejszy schemat Agenta
+    analysis_timestamp_utc: str
+
+    # Pola dla statusu "PROCESSING" lub "ERROR"
+    message: Optional[str] = None 
     
     model_config = ConfigDict(from_attributes=True)
-
