@@ -199,19 +199,19 @@
                 phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
                 phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
                 phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
-                buyModal: { 
-                    backdrop: document.getElementById('buy-modal'), 
-                    tickerSpan: document.getElementById('buy-modal-ticker'), 
-                    quantityInput: document.getElementById('buy-quantity'), 
+                buyModal: {
+                    backdrop: document.getElementById('buy-modal'),
+                    tickerSpan: document.getElementById('buy-modal-ticker'),
+                    quantityInput: document.getElementById('buy-quantity'),
                     priceInput: document.getElementById('buy-price'),
                     cancelBtn: document.getElementById('buy-cancel-btn'),
                     confirmBtn: document.getElementById('buy-confirm-btn')
                 },
-                sellModal: { 
-                    backdrop: document.getElementById('sell-modal'), 
-                    tickerSpan: document.getElementById('sell-modal-ticker'), 
-                    maxQuantitySpan: document.getElementById('sell-max-quantity'), 
-                    quantityInput: document.getElementById('sell-quantity'), 
+                sellModal: {
+                    backdrop: document.getElementById('sell-modal'),
+                    tickerSpan: document.getElementById('sell-modal-ticker'),
+                    maxQuantitySpan: document.getElementById('sell-max-quantity'),
+                    quantityInput: document.getElementById('sell-quantity'),
                     priceInput: document.getElementById('sell-price'),
                     cancelBtn: document.getElementById('sell-cancel-btn'),
                     confirmBtn: document.getElementById('sell-confirm-btn')
@@ -279,7 +279,7 @@
             // === POPRAWKA WYŚWIETLANIA CENY (Styl Yahoo Finance) ===
             const renderQuoteBox = (quoteData) => {
                  if (!quoteData || !quoteData.symbol) {
-                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych.</div>`;
+                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych dla ${quoteData?.symbol || 'tickera'}.</div>`;
                 }
 
                 try {
@@ -291,7 +291,8 @@
                     // Ustalanie statusu UI
                     let statusText = 'Rynek Zamknięty';
                     let statusClass = 'bg-gray-600';
-                    let mainPrice, mainChangeHtml, subPriceHtml = ''; // Dodatkowa linia (jak w Yahoo)
+                    let mainPrice = null; // Zmieniono inicjalizację na null
+                    let mainChangeHtml = '', subPriceHtml = ''; // Dodatkowa linia (jak w Yahoo)
 
                     const formatChange = (change, percent) => {
                         if (change == null || percent == null) return '';
@@ -305,16 +306,12 @@
                                 <span class="font-semibold">${changeNum.toFixed(2)} (${percentNum.toFixed(2)}%)</span>
                             </div>`;
                     };
-                    
+
                     if (status === 'pre-market' || status === 'post-market') {
                         statusText = status === 'pre-market' ? 'Pre-Market' : 'After-Market';
                         statusClass = status === 'pre-market' ? 'bg-yellow-600' : 'bg-blue-600';
-                        
-                        // Cena główna = cena extended
-                        mainPrice = extended.price;
+                        mainPrice = extended.price; // Główna cena = extended
                         mainChangeHtml = formatChange(extended.change, extended.change_percent);
-
-                        // Cena pod spodem = cena z sesji regularnej
                         if (regular.price != null) {
                              subPriceHtml = `
                                 <div class="flex items-end gap-2 mt-1">
@@ -323,29 +320,19 @@
                                     <span class="text-sm text-gray-500 mb-0.5">At Close</span>
                                 </div>`;
                         }
-                        
-                    } else if (status === 'open' || status === 'regular') { // 'open' lub 'regular'
+                    } else if (status === 'open' || status === 'regular') {
                         statusText = 'Rynek Otwarty';
                         statusClass = 'bg-green-600';
-                        
-                        // Cena główna = cena z sesji
-                        mainPrice = livePrice; // Używamy 'live_price'
+                        mainPrice = livePrice; // Używamy 'live_price' jako głównej
                         mainChangeHtml = formatChange(regular.change, regular.change_percent);
-                        
-                        // Cena pod spodem = poprzednie zamknięcie
                          if (regular.price != null) { // 'regular.price' trzyma 'previous close'
                             subPriceHtml = `<p class="text-sm text-gray-500 mt-1">Poprz. zamkn.: ${regular.price.toFixed(2)}</p>`;
                          }
-
                     } else { // closed lub unknown
                         statusText = 'Rynek Zamknięty';
                         statusClass = 'bg-gray-600';
-                        
-                        // Cena główna = cena zamknięcia
-                        mainPrice = regular.price;
+                        mainPrice = regular.price; // Główna cena = zamknięcie
                         mainChangeHtml = formatChange(regular.change, regular.change_percent);
-                        
-                        // Cena pod spodem = cena z after-market (jeśli jest)
                         if (extended.price != null) {
                             subPriceHtml = `
                                 <div class="flex items-end gap-2 mt-1">
@@ -356,13 +343,21 @@
                         }
                     }
 
-                    if (mainPrice == null) {
-                         // Fallback, jeśli główna cena jest pusta
-                         mainPrice = livePrice || regular.price || extended.price;
-                         if (mainPrice == null) throw new Error("Brak jakiejkolwiek ceny do wyświetlenia.");
+                    // --- POCZĄTEK POPRAWKI ---
+                    // Sprawdzamy, czy *jakakolwiek* cena została znaleziona
+                    const displayPrice = mainPrice ?? livePrice ?? regular.price ?? extended.price;
+
+                    if (displayPrice == null) {
+                        // Zwracamy komunikat zamiast rzucać błąd
+                        logger.warn(`renderQuoteBox: Brak dostępnych danych cenowych dla ${quoteData.symbol}.`);
+                        return `<div class="bg-yellow-900/20 border border-yellow-500/30 p-4 rounded-lg text-sm text-yellow-400 text-center">Brak dostępnych danych cenowych dla ${quoteData.symbol} w tej chwili.</div>`;
                     }
-                    
-                    // Renderowanie
+                    // Jeśli mainPrice było null, ale znaleźliśmy fallback w displayPrice, użyjmy go
+                    if (mainPrice == null) mainPrice = displayPrice;
+                    // --- KONIEC POPRAWKI ---
+
+
+                    // Renderowanie - używamy mainPrice, które teraz wiemy, że nie jest null
                     return `
                         <div class="flex flex-wrap justify-between items-start gap-4">
                             <div>
@@ -388,10 +383,12 @@
                         </div>`;
 
                 } catch (e) {
-                    logger.error("Błąd renderowania quoteBox:", e, { quoteData });
-                    return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center">Błąd parsowania danych cenowych: ${e.message}</div>`;
+                    // Ten blok 'catch' teraz powinien być rzadziej wywoływany z powodu braku ceny
+                    logger.error("Błąd renderowania quoteBox (catch block):", e, { quoteData });
+                    return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center">Błąd renderowania danych cenowych: ${e.message}</div>`;
                 }
             };
+
 
             const renderers = {
                 loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
@@ -423,7 +420,7 @@
                     return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Taktycznego', 'crosshair', agents.tactical_setup)}</div></div>`;
                 },
                 dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3><p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p></div></div><h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3><div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div></div>`,
-                
+
                 // NOWY: Renderer Portfela
                 portfolio: (holdings, quotes) => {
                     let totalPortfolioValue = 0;
@@ -433,11 +430,11 @@
                         let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
                         let priceClass = 'text-gray-400';
                         // ZMIANA: Używamy nowego obiektu 'live_price'
-                        if (quote && quote.live_price) {
+                        if (quote && quote.live_price != null) { // Sprawdzamy null
                             try {
                                 currentPrice = parseFloat(quote.live_price);
-                                // Używamy zmiany z sesji regularnej do kolorowania
-                                dayChangePercent = parseFloat(quote.regular_session.change_percent || '0');
+                                // Używamy zmiany z sesji regularnej do kolorowania (jeśli dostępna)
+                                dayChangePercent = parseFloat(quote.regular_session?.change_percent || '0');
                                 priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                                 currentValue = h.quantity * currentPrice;
                                 const costBasis = h.quantity * h.average_buy_price;
@@ -447,12 +444,12 @@
                             } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
                         }
                         const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
-                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400">${h.ticker}</td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
+                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400">${h.ticker}</td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${currentPrice != null ? currentPrice.toFixed(2) : '---'}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
                     }).join('');
                     const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
                     return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th><th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th><th scope="col" class="p-3 text-right">Akcja</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
                 },
-                
+
                 // NOWY: Renderer Historii Transakcji
                 transactions: (transactions) => {
                      const rows = transactions.map(t => {
@@ -467,7 +464,7 @@
             console.log("Renderers defined.");
 
             // --- GŁÓWNE FUNKCJE KONTROLI APLIKACJI ---
-            
+
             function updateDashboardUI(statusData) {
                 if (state.currentViewTicker || !document.getElementById('dashboard-view')) return;
                 const ui_dash = {
@@ -644,30 +641,30 @@
             // NOWA: Funkcja odświeżania cen w portfelu
             async function pollPortfolioQuotes() {
                  if (state.currentViewTicker) { // Jeśli jesteśmy w widoku analizy, zatrzymaj
-                    state.activePortfolioPolling = null; 
-                    return; 
+                    state.activePortfolioPolling = null;
+                    return;
                  }
                  const portfolioTickers = state.portfolio.map(h => h.ticker);
-                 if (portfolioTickers.length === 0) { 
-                    state.activePortfolioPolling = null; 
-                    return; 
+                 if (portfolioTickers.length === 0) {
+                    state.activePortfolioPolling = null;
+                    return;
                  }
-                 
+
                  logger.info(`Odświeżanie cen dla portfela: ${portfolioTickers.join(', ')}`);
                  let quotesUpdated = false;
                  try {
                      // Używamy Promise.all, aby przyspieszyć pobieranie
                      const quotePromises = portfolioTickers.map(ticker => api.getLiveQuote(ticker));
                      const quoteResults = await Promise.all(quotePromises);
-                     
+
                      quoteResults.forEach((quoteData, index) => {
                          const ticker = portfolioTickers[index];
-                         if (quoteData) { 
-                             state.liveQuotes[ticker] = quoteData; 
-                             quotesUpdated = true; 
+                         if (quoteData) {
+                             state.liveQuotes[ticker] = quoteData;
+                             quotesUpdated = true;
                          } else {
                              // Zachowaj stare dane, jeśli nowe się nie powiodły, lub usuń
-                             // delete state.liveQuotes[ticker]; 
+                             // delete state.liveQuotes[ticker];
                              // quotesUpdated = true;
                          }
                      });
@@ -681,8 +678,8 @@
                  } finally {
                       if (!state.currentViewTicker) { // Kontynuuj tylko jeśli nadal jesteśmy w widoku portfela
                            state.activePortfolioPolling = setTimeout(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
-                      } else { 
-                           state.activePortfolioPolling = null; 
+                      } else {
+                           state.activePortfolioPolling = null;
                       }
                  }
             }
@@ -777,7 +774,7 @@
                      state.currentViewTicker = null;
                 }
             }
-            
+
             // --- Funkcje Obsługi Modali ---
             function showBuyModal(ticker) {
                 ui.buyModal.tickerSpan.textContent = ticker;
@@ -788,24 +785,24 @@
                 ui.buyModal.quantityInput.focus();
             }
             function hideBuyModal() { ui.buyModal.backdrop.classList.add('hidden'); }
-            
+
             async function handleBuyConfirm() {
                  const ticker = ui.buyModal.confirmBtn.dataset.ticker;
                  const quantity = parseInt(ui.buyModal.quantityInput.value, 10);
                  const price = parseFloat(ui.buyModal.priceInput.value);
                  if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
-                     alert("Proszę wprowadzić poprawną ilość i cenę."); 
-                     return; 
+                     alert("Proszę wprowadzić poprawną ilość i cenę."); // Użycie alert() - do poprawy w przyszłości
+                     return;
                  }
                  ui.buyModal.confirmBtn.disabled = true; ui.buyModal.confirmBtn.textContent = "Przetwarzanie...";
                  try {
                     await api.buyStock({ ticker, quantity, price_per_share: price });
                     hideBuyModal();
                     showPortfolio(); // Odśwież widok portfela
-                } catch (e) { alert(`Błąd zakupu: ${e.message}`);
+                } catch (e) { alert(`Błąd zakupu: ${e.message}`); // Użycie alert()
                 } finally { ui.buyModal.confirmBtn.disabled = false; ui.buyModal.confirmBtn.textContent = "Inwestuj"; }
             }
-            
+
             function showSellModal(ticker, maxQuantity) {
                  ui.sellModal.tickerSpan.textContent = ticker;
                  ui.sellModal.maxQuantitySpan.textContent = maxQuantity;
@@ -818,30 +815,30 @@
                  ui.sellModal.quantityInput.focus();
             }
             function hideSellModal() { ui.sellModal.backdrop.classList.add('hidden'); }
-            
+
             async function handleSellConfirm() {
                  const ticker = ui.sellModal.confirmBtn.dataset.ticker;
                  const maxQuantity = parseInt(ui.sellModal.confirmBtn.dataset.maxQuantity, 10);
                  const quantity = parseInt(ui.sellModal.quantityInput.value, 10);
                  const price = parseFloat(ui.sellModal.priceInput.value);
                  if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
-                     alert("Proszę wprowadzić poprawną ilość i cenę."); 
-                     return; 
+                     alert("Proszę wprowadzić poprawną ilość i cenę."); // Użycie alert()
+                     return;
                  }
-                  if (quantity > maxQuantity) { 
-                      alert(`Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`); 
-                      return; 
+                  if (quantity > maxQuantity) {
+                      alert(`Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`); // Użycie alert()
+                      return;
                   }
                  ui.sellModal.confirmBtn.disabled = true; ui.sellModal.confirmBtn.textContent = "Przetwarzanie...";
                  try {
                      await api.sellStock({ ticker, quantity, price_per_share: price });
                      hideSellModal();
                      await showPortfolio(); // Odśwież widok portfela
-                 } catch (e) { alert(`Błąd sprzedaży: ${e.message}`);
+                 } catch (e) { alert(`Błąd sprzedaży: ${e.message}`); // Użycie alert()
                  } finally { ui.sellModal.confirmBtn.disabled = false; ui.sellModal.confirmBtn.textContent = "Realizuj"; }
             }
             console.log("Modal functions defined.");
-            
+
             // --- Handlery Zdarzeń (Dodawane od razu) ---
             ui.tickerInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
@@ -911,13 +908,13 @@
                     catch(e) { logger.error(`Błąd kontroli workera (${action}):`, e); }
                 });
             });
-            
+
             // Listenery dla Modali
             ui.buyModal.cancelBtn.addEventListener('click', hideBuyModal);
             ui.buyModal.confirmBtn.addEventListener('click', handleBuyConfirm);
             ui.sellModal.cancelBtn.addEventListener('click', hideSellModal);
             ui.sellModal.confirmBtn.addEventListener('click', handleSellConfirm);
-            
+
             console.log("Event listeners added.");
 
             // --- INICJALIZACJA ---
@@ -951,19 +948,20 @@
             const intervalId = setInterval(async () => {
                 logger.info("Sprawdzanie statusu API...");
                 try {
-                    const statusData = await api.getWorkerStatus();
-                    if (statusData && statusData.status) {
-                        logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
+                    // Używamy prostego HEAD request do sprawdzenia dostępności API
+                    const response = await fetch(API_BASE_URL + '/', { method: 'HEAD' });
+                    if (response.ok) {
+                        logger.info("API OK (HEAD request successful), czyszczenie interwału i odblokowanie logowania.");
                         clearInterval(intervalId);
                         ui.loginStatusText.textContent = 'System gotowy.';
                         ui.loginButton.disabled = false;
                         ui.loginButton.textContent = 'Wejdź do Aplikacji';
                     } else {
-                         logger.warn("API zwróciło 200 OK, ale nieprawidłowe dane:", statusData);
-                         ui.loginStatusText.textContent = 'Problem z odp. API...';
+                         logger.warn(`API zwróciło status ${response.status} dla HEAD request.`);
+                         ui.loginStatusText.textContent = `Problem z odp. API (${response.status})...`;
                     }
                 } catch (e) {
-                    logger.error("Błąd podczas sprawdzania statusu API:", e.message);
+                    logger.error("Błąd sieci podczas sprawdzania statusu API:", e.message);
                     ui.loginStatusText.textContent = 'Backend nie gotowy...';
                 }
             }, 3000);
@@ -973,4 +971,3 @@
     </script>
     </body>
 </html>
-
