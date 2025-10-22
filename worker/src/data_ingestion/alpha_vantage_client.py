@@ -1,220 +1,233 @@
-import os
 import time
-import schedule
+import requests
 import logging
-import sys
 import json
-from datetime import datetime, timezone
-from dotenv import load_dotenv
-from sqlalchemy import text
+from collections import deque
+from io import StringIO
+import csv
+# POPRAWIONY IMPORT: Zamiast '.models' używamy '..models' (jeden poziom wyżej)
+from ..models import Base 
 
-from .models import Base
-from .database import get_db_session, engine
-
-from .analysis import phase1_scanner, phase2_engine, phase3_sniper, ai_agents, utils
-from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
-from .data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .data_ingestion.data_initializer import initialize_database_if_empty
-
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
+class AlphaVantageClient:
+    BASE_URL = "https://www.alphavantage.co/query"
 
-if not API_KEY:
-    logger.critical("ALPHAVANTAGE_API_KEY environment variable not set. Exiting.")
-    sys.exit(1)
+    def __init__(self, api_key: str, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+        if not api_key:
+            raise ValueError("API key cannot be empty.")
+        self.api_key = api_key
+        self.retries = retries
+        self.backoff_factor = backoff_factor
+        self.requests_per_minute = requests_per_minute
+        self.request_interval = 60.0 / requests_per_minute
+        self.request_timestamps = deque()
 
-current_state = "IDLE"
-api_client = AlphaVantageClient(api_key=API_KEY)
-
-def handle_ai_analysis_request(session):
-    """Sprawdza i wykonuje nową analizę AI na żądanie."""
-    ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
-    if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
-        logger.info(f"AI analysis request received for: {ticker_to_analyze}.")
-        # 1. Natychmiast ustawiamy flagę na PROCESSING, aby API wiedziało, że zaczęliśmy
-        utils.update_system_control(session, 'ai_analysis_request', 'PROCESSING')
+    def _rate_limiter(self):
+        while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
+            self.request_timestamps.popleft()
         
-        # 2. Natychmiast zapisujemy status PROCESSING do tabeli wyników
-        processing_result = {"status": "PROCESSING", "message": "Rozpoczynanie analizy przez agentów AI...", "ticker": ticker_to_analyze}
-        stmt_processing = text("""
-            INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) 
-            VALUES (:ticker, :data, NOW()) 
-            ON CONFLICT (ticker) DO UPDATE SET 
-                analysis_data = EXCLUDED.analysis_data, 
-                last_updated = NOW();
-        """)
-        try:
-            session.execute(stmt_processing, {'ticker': ticker_to_analyze, 'data': json.dumps(processing_result)})
-            session.commit()
-            logger.info(f"Set initial PROCESSING status for {ticker_to_analyze} analysis.")
-        except Exception as e:
-            logger.error(f"Error setting initial PROCESSING status for {ticker_to_analyze}: {e}", exc_info=True)
-            session.rollback()
-            # Ustawiamy flagę z powrotem na NONE, aby umożliwić ponowne zlecenie
-            utils.update_system_control(session, 'ai_analysis_request', 'NONE')
-            return # Przerywamy, jeśli nie udało się zapisać statusu
-
-        # 3. Teraz dopiero uruchamiamy właściwą analizę w tle (jeśli to możliwe) lub blokująco
-        try:
-            results = ai_agents.run_ai_analysis(ticker_to_analyze, api_client)
-            # Używamy UPDATE zamiast INSERT ON CONFLICT, bo rekord już istnieje
-            stmt_done = text("""
-                UPDATE ai_analysis_results 
-                SET analysis_data = :data, last_updated = NOW() 
-                WHERE ticker = :ticker;
-            """)
-            session.execute(stmt_done, {'ticker': ticker_to_analyze, 'data': json.dumps(results)})
-            session.commit()
-            logger.info(f"Successfully saved AI analysis for {ticker_to_analyze}.")
-        except Exception as e:
-            logger.error(f"Error during AI analysis for {ticker_to_analyze}: {e}", exc_info=True)
-            error_result = {"status": "ERROR", "message": str(e), "ticker": ticker_to_analyze}
-            # Używamy UPDATE zamiast INSERT ON CONFLICT
-            stmt_err = text("""
-                UPDATE ai_analysis_results 
-                SET analysis_data = :data, last_updated = NOW() 
-                WHERE ticker = :ticker;
-            """)
-            session.execute(stmt_err, {'ticker': ticker_to_analyze, 'data': json.dumps(error_result)})
-            session.commit()
-        finally:
-             # 4. Na koniec czyścimy flagę żądania
-             utils.update_system_control(session, 'ai_analysis_request', 'NONE')
-
-
-def run_full_analysis_cycle():
-    global current_state
-    session = get_db_session()
-    try:
-        logger.info("Cleaning tables before new analysis cycle...")
-        session.execute(text("DELETE FROM phase2_results WHERE analysis_date = CURRENT_DATE;"))
-        session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date >= CURRENT_DATE;"))
-        session.commit()
-        logger.info("Daily tables cleaned. Proceeding with analysis.")
-    except Exception as e:
-        logger.error(f"Could not clean tables before run: {e}", exc_info=True)
-        session.rollback()
- 
-    if utils.get_system_control_value(session, 'worker_status') == 'RUNNING':
-        logger.warning("Analysis cycle already in progress. Skipping scheduled run.")
-        session.close()
-        return
-
-    try:
-        logger.info("Starting full analysis cycle...")
-        current_state = "RUNNING"
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
-        utils.update_system_control(session, 'scan_log', '')
-        # UWAGA: Potencjalnie ryzykowna operacja, jeśli sygnały mają być długoterminowe
-        # Rozważ zmianę logiki, jeśli sygnały mają przetrwać dłużej niż jeden cykl
-        # session.execute(text("UPDATE trading_signals SET status = 'EXPIRED' WHERE status = 'ACTIVE'"))
-        # session.commit()
-        # logger.info("Old active signals marked as expired.") 
-        # Na razie zakomentowane, aby uniknąć niechcianego wygaszania
+        if len(self.request_timestamps) >= self.requests_per_minute:
+            time_to_wait = 60 - (time.monotonic() - self.request_timestamps[0])
+            if time_to_wait > 0:
+                logger.warning(f"Rate limit reached. Sleeping for {time_to_wait:.2f} seconds.")
+                time.sleep(time_to_wait)
         
-        utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
-        
-        utils.update_system_control(session, 'current_phase', 'PHASE_1')
-        candidate_tickers = phase1_scanner.run_scan(session, lambda: current_state, api_client)
-        if not candidate_tickers:
-            logger.warning("Phase 1 found no candidates. Halting cycle.") # Zmieniono na warning
-            utils.append_scan_log(session, "Faza 1 nie znalazła kandydatów. Zakończono cykl.")
-            # Nie rzucamy wyjątku, aby cykl mógł się normalnie zakończyć
-        else:
-            utils.update_system_control(session, 'current_phase', 'PHASE_2')
-            qualified_tickers = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
-            if not qualified_tickers:
-                logger.warning("Phase 2 qualified no stocks. Halting cycle.") # Zmieniono na warning
-                utils.append_scan_log(session, "Faza 2 nie zakwalifikowała spółek. Zakończono cykl.")
-                 # Nie rzucamy wyjątku
-            else:
-                utils.update_system_control(session, 'current_phase', 'PHASE_3')
-                phase3_sniper.run_tactical_planning(session, qualified_tickers, lambda: current_state, api_client)
-
-        utils.append_scan_log(session, "Cykl analizy zakończony.") # Zmieniono komunikat
-    except Exception as e:
-        logger.error(f"An error occurred during the analysis: {e}", exc_info=True)
-        utils.update_system_control(session, 'worker_status', 'ERROR')
-        utils.append_scan_log(session, f"BŁĄD KRYTYCZNY podczas cyklu: {e}")
-    finally:
-        current_state = "IDLE"
-        utils.update_system_control(session, 'worker_status', 'IDLE')
-        utils.update_system_control(session, 'current_phase', 'NONE')
-        utils.update_system_control(session, 'scan_progress_processed', '0')
-        utils.update_system_control(session, 'scan_progress_total', '0')
-        session.close() # Zamknięcie sesji w bloku finally
-
-def main_loop():
-    global current_state
-    logger.info("Worker started. Initializing...")
-    
-    # Inicjalizacja poza pętlą
-    try:
-        with get_db_session() as session:
-            logger.info("Verifying database tables for Worker...")
-            Base.metadata.create_all(bind=engine)
-            logger.info("Database tables verified.")
-            initialize_database_if_empty(session, api_client)
-            # Ustawienie początkowych wartości kontrolnych
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'worker_command', 'NONE')
-            utils.update_system_control(session, 'ai_analysis_request', 'NONE')
-            utils.update_system_control(session, 'current_phase', 'NONE')
-            utils.update_system_control(session, 'system_alert', 'NONE')
-            utils.report_heartbeat(session)
-    except Exception as init_error:
-        logger.critical(f"FATAL: Error during worker initialization: {init_error}", exc_info=True)
-        # Rozważ wyjście z aplikacji, jeśli inicjalizacja zawiedzie
-        # sys.exit(1) 
-        pass # Lub kontynuuj, jeśli błąd nie jest krytyczny
-
-    # Konfiguracja harmonogramu
-    schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
-    # Monitorowanie wejść co minutę
-    schedule.every(1).minute.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
-    
-    logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 1 minute.")
-
-    # Główna pętla
-    while True:
-        session = None # Resetuj sesję na początku każdej iteracji
-        try:
-            session = get_db_session() # Otwórz nową sesję
-            
-            command_triggered_run, new_state = utils.check_for_commands(session, current_state)
-            current_state = new_state
-
-            if command_triggered_run:
-                # Uruchomienie cyklu w odpowiedzi na komendę
-                run_full_analysis_cycle() # Ta funkcja zarządza własną sesją
-                session.close() # Zamknij sesję pętli, bo cykl użył swojej
-                session = None # Oznacz sesję jako zamkniętą
-            else:
-                # Normalne operacje pętli
-                if current_state != "PAUSED":
-                    handle_ai_analysis_request(session)
-                    schedule.run_pending()
+        if self.request_timestamps:
+            time_since_last = time.monotonic() - self.request_timestamps[-1]
+            if time_since_last < self.request_interval:
+                time.sleep(self.request_interval - time_since_last)
                 
-                utils.report_heartbeat(session)
+        self.request_timestamps.append(time.monotonic())
 
-        except Exception as loop_error:
-            logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
-            if session:
-                session.rollback() # Wycofaj zmiany, jeśli wystąpił błąd w tej sesji
-        finally:
-            if session:
-                 session.close() # Zawsze zamykaj sesję na końcu iteracji pętli
+
+    def _make_request(self, params: dict):
+        self._rate_limiter()
+        params['apikey'] = self.api_key
         
-        time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
+        for attempt in range(self.retries):
+            try:
+                response = requests.get(self.BASE_URL, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
+                if not data or "Error Message" in data or "Information" in data:
+                    logger.warning(f"API returned an error or empty data for {request_identifier}: {data}")
+                    if "premium" in str(data).lower():
+                         logger.error(f"API call for {request_identifier} failed due to premium limit. Waiting longer.")
+                         time.sleep(20)
+                    return None
+                return data
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+                request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
+                logger.error(f"Request failed for {request_identifier} (attempt {attempt + 1}/{self.retries}): {e}")
+                if attempt < self.retries - 1:
+                    time.sleep(self.backoff_factor * (2 ** attempt))
+        return None
 
-if __name__ == "__main__":
-    if engine:
-        main_loop()
-    else:
-        logger.critical("Worker cannot start because database connection was not established.")
+    def get_market_status(self):
+        """Pobiera aktualny status rynku z dedykowanego endpointu."""
+        params = {"function": "MARKET_STATUS"}
+        return self._make_request(params)
+
+    def _parse_bulk_quotes_csv(self, csv_text: str) -> dict:
+        """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
+        if not csv_text or "symbol" not in csv_text:
+            logger.warning("[DIAGNOSTYKA] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'.")
+            return {}
+        
+        csv_file = StringIO(csv_text)
+        reader = csv.DictReader(csv_file)
+        
+        data_dict = {}
+        for row in reader:
+            ticker = row.get('symbol')
+            if not ticker:
+                continue
+            
+            data_dict[ticker] = {
+                'price': row.get('price'), # 'price' to 'latest trade'
+                'close': row.get('close'), # To pole jest mylące, będziemy używać 'previous close'
+                'volume': row.get('volume'),
+                'change_percent': row.get('change_percent'),
+                'change': row.get('change'),
+                'previous close': row.get('previous close'), # Prawidłowe pole dla zamknięcia z poprzedniego dnia
+                'extended_hours_price': row.get('extended_hours_price'),
+                'extended_hours_change': row.get('extended_hours_change'),
+                'extended_hours_change_percent': row.get('extended_hours_change_percent')
+            }
+        return data_dict
+
+    def get_bulk_quotes(self, symbols: list[str]):
+        self._rate_limiter()
+        params = {
+            "function": "REALTIME_BULK_QUOTES",
+            "symbol": ",".join(symbols),
+            "datatype": "csv",
+            "apikey": self.api_key
+        }
+        for attempt in range(self.retries):
+            try:
+                response = requests.get(self.BASE_URL, params=params, timeout=30)
+                response.raise_for_status()
+                text_response = response.text
+                if "Error Message" in text_response or "Invalid API call" in text_response:
+                    logger.error(f"Bulk quotes API returned an error: {text_response[:200]}")
+                    return None
+                return self._parse_bulk_quotes_csv(text_response)
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Bulk quotes request failed (attempt {attempt + 1}/{self.retries}): {e}")
+                if attempt < self.retries - 1:
+                    time.sleep(self.backoff_factor * (2 ** attempt))
+        return None
+    
+    def get_company_overview(self, symbol: str):
+        params = {"function": "OVERVIEW", "symbol": symbol}
+        return self._make_request(params)
+
+    def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
+        params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
+        return self._make_request(params)
+        
+    def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True):
+        params = {
+            "function": "TIME_SERIES_INTRADAY", 
+            "symbol": symbol, 
+            "interval": interval, 
+            "outputsize": outputsize,
+            "extended_hours": "true" if extended_hours else "false"
+        }
+        return self._make_request(params)
+
+    def get_atr(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ATR", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_rsi(self, symbol: str, time_period: int = 9, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "RSI", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
+        return self._make_request(params)
+        
+    def get_stoch(self, symbol: str, interval: str = 'daily'):
+        params = {"function": "STOCH", "symbol": symbol, "interval": interval}
+        return self._make_request(params)
+
+    def get_adx(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ADX", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_macd(self, symbol: str, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "MACD", "symbol": symbol, "interval": interval, "series_type": series_type}
+        return self._make_request(params)
+        
+    def get_bollinger_bands(self, symbol: str, time_period: int = 20, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "BBANDS", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
+        return self._make_request(params)
+        
+    def get_news_sentiment(self, ticker: str, limit: int = 50):
+        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)}
+        return self._make_request(params)
+
+    @staticmethod
+    def _safe_float(value) -> float | None:
+        if value is None:
+            return None
+        try:
+            if isinstance(value, str):
+                value = value.replace(',', '').replace('%', '')
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+    
+    def get_live_quote_details(self, symbol: str) -> dict:
+        """
+        Pobiera pełne dane "live" (REALTIME_BULK_QUOTES) oraz status rynku,
+        zwracając ustandaryzowany słownik w stylu Yahoo Finance.
+        """
+        us_market_status = "closed"
+        try:
+            status_data = self.get_market_status()
+            if status_data and status_data.get('markets'):
+                us_market = next((m for m in status_data['markets'] if m.get('region') == 'United States'), None)
+                if us_market:
+                    us_market_status = us_market.get('current_status', 'closed').lower()
+        except Exception as e:
+            logger.warning(f"Nie można pobrać statusu rynku dla {symbol}: {e}. Przyjęto 'closed'.")
+
+        raw_data = self.get_bulk_quotes([symbol])
+        
+        if not raw_data or symbol not in raw_data:
+            logger.error(f"Brak danych live (REALTIME_BULK_QUOTES) dla {symbol}")
+            return {
+                "symbol": symbol, "market_status": us_market_status,
+                "regular_session": {}, "extended_session": {}, "live_price": None
+            }
+            
+        ticker_data = raw_data[symbol]
+
+        regular_close_price = self._safe_float(ticker_data.get('previous close')) 
+        
+        response = {
+            "symbol": symbol,
+            "market_status": us_market_status,
+            "regular_session": {
+                "price": regular_close_price,
+                "change": self._safe_float(ticker_data.get('change')),
+                "change_percent": self._safe_float(ticker_data.get('change_percent'))
+            },
+            "extended_session": {
+                "price": self._safe_float(ticker_data.get('extended_hours_price')),
+                "change": self._safe_float(ticker_data.get('extended_hours_change')),
+                "change_percent": self._safe_float(ticker_data.get('extended_hours_change_percent'))
+            },
+            "live_price": self._safe_float(ticker_data.get('price')) # To jest 'latest trade'
+        }
+        
+        if us_market_status in ["pre-market", "post-market"] and response["extended_session"]["price"] is not None:
+             response["live_price"] = response["extended_session"]["price"]
+        elif us_market_status == "regular":
+             response["live_price"] = self._safe_float(ticker_data.get('price'))
+        elif us_market_status == "closed":
+             response["live_price"] = response["extended_session"]["price"] or response["regular_session"]["price"]
+        
+        return response
 
