@@ -9,30 +9,7 @@ from .utils import append_scan_log, update_scan_progress, safe_float
 
 logger = logging.getLogger(__name__)
 
-def _parse_bulk_quotes_csv(csv_text: str) -> dict:
-    """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
-    # Modyfikacja 4: Logowanie na początku funkcji
-    logger.info(f"[DIAGNOSTYKA] Otrzymano CSV do parsowania (pierwsze 200 znaków): {csv_text[:200]}")
-    if not csv_text or "symbol" not in csv_text:
-        logger.warning("[DIAGNOSTYKA] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'.")
-        return {}
-    
-    csv_file = StringIO(csv_text)
-    reader = csv.DictReader(csv_file)
-    
-    data_dict = {}
-    for row in reader:
-        ticker = row.get('symbol')
-        if not ticker:
-            continue
-        
-        # Poprawka: Odczyt ceny z 'close'
-        data_dict[ticker] = {
-            'price': safe_float(row.get('close')),
-            'volume': safe_float(row.get('volume')),
-            'change_percent': safe_float(row.get('change_percent'))
-        }
-    return data_dict
+# USUNIĘTA: Funkcja _parse_bulk_quotes_csv (przeniesiona do alpha_vantage_client)
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
@@ -69,17 +46,11 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     for i in range(0, total_tickers, chunk_size):
         chunk = all_tickers[i:i + chunk_size]
         try:
-            bulk_data_csv = api_client.get_bulk_quotes(chunk)
-            if not bulk_data_csv:
-                # Modyfikacja 3: Logowanie pustej odpowiedzi CSV
-                logger.warning(f"[DIAGNOSTYKA] Nie otrzymano danych CSV dla chunka zaczynającego się od {chunk[0]}.")
-                continue
-
-            parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
-
-            # Modyfikacja 2: Logowanie pustego wyniku parsowania
+            # ZMIANA: get_bulk_quotes zwraca teraz SŁOWNIK, a nie CSV
+            parsed_data = api_client.get_bulk_quotes(chunk)
+            
             if not parsed_data:
-                logger.warning(f"[DIAGNOSTYKA] Parsowanie danych dla chunka {chunk[0]} zwróciło pusty wynik.")
+                logger.warning(f"[DIAGNOSTYKA] Nie otrzymano sparsowanych danych dla chunka zaczynającego się od {chunk[0]}.")
                 continue
 
             for ticker in chunk:
@@ -87,7 +58,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 if not data:
                     continue
 
-                price = data.get('price')
+                # ZMIANA: Odczytujemy ceny ze słownika (klient już je sparsował)
+                # Używamy pola 'close' jako ceny EOD, a 'price' jako ceny live
+                price = data.get('price') # Używamy ceny 'live' do filtrowania
                 volume = data.get('volume')
                 change_percent = data.get('change_percent')
 
@@ -97,29 +70,29 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 if price is None:
                     is_ok = False
                     reasons.append("Invalid Price (None)")
-                elif not (Phase1Config.MIN_PRICE <= price <= Phase1Config.MAX_PRICE):
+                elif not (Phase1Config.MIN_PRICE <= safe_float(price) <= Phase1Config.MAX_PRICE):
                     is_ok = False
-                    reasons.append(f"Price {price:.2f} out of range")
+                    reasons.append(f"Price {price} out of range")
 
                 if volume is None:
                     is_ok = False
                     reasons.append("Invalid Volume (None)")
-                elif volume < Phase1Config.MIN_VOLUME:
+                elif safe_float(volume) < Phase1Config.MIN_VOLUME:
                     is_ok = False
-                    reasons.append(f"Volume {int(volume)} < {Phase1Config.MIN_VOLUME}")
+                    reasons.append(f"Volume {volume} < {Phase1Config.MIN_VOLUME}")
 
                 if change_percent is None:
                     is_ok = False
-                elif change_percent < Phase1Config.MIN_DAY_CHANGE_PERCENT:
+                elif safe_float(change_percent) < Phase1Config.MIN_DAY_CHANGE_PERCENT:
                     is_ok = False
-                    reasons.append(f"Change {change_percent:.2f}% < {Phase1Config.MIN_DAY_CHANGE_PERCENT}%")
+                    reasons.append(f"Change {change_percent}% < {Phase1Config.MIN_DAY_CHANGE_PERCENT}%")
 
                 if is_ok:
                     pre_candidates.append({
                         'ticker': ticker,
-                        'price': price,
-                        'volume': volume,
-                        'change_percent': change_percent
+                        'price': safe_float(price),
+                        'volume': int(safe_float(volume)),
+                        'change_percent': safe_float(change_percent)
                     })
                 elif detailed_logs_count < max_detailed_logs:
                     logger.info(f"[DIAGNOSTYKA] Odrzucono {ticker}: {'; '.join(reasons)}")
@@ -232,3 +205,4 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             session.rollback()
     
     return [c['ticker'] for c in final_candidates]
+
