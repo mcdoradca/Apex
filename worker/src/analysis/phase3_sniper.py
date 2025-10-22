@@ -222,13 +222,9 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     Ulepszony monitor, który sprawdza WSZYSTKIE sygnały Fazy 3 (PENDING i ACTIVE)
     pod kątem osiągnięcia ceny wejścia w czasie rzeczywistym.
     """
-    market_info = get_market_status_and_time(api_client)
+    # ZMIANA: get_market_status_and_time jest teraz częścią get_live_quote_details
+    # Sprawdzimy status ręcznie po pierwszym zapytaniu
     
-    # ZMIANA: Monitor działa w trakcie sesji, pre-market i after-market.
-    if market_info["status"] == "MARKET_CLOSED":
-        logger.info(f"Market is {market_info['status']}. Skipping Entry Trigger Monitor.")
-        return
-        
     logger.info("Running Real-Time Entry Trigger Monitor for all Phase 3 signals...")
     
     all_signals_rows = session.execute(text("""
@@ -243,6 +239,7 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     tickers_to_monitor = [row.ticker for row in all_signals_rows]
     logger.info(f"Monitoring {len(tickers_to_monitor)} tickers: {', '.join(tickers_to_monitor)}")
     
+    first_run = True
     for signal_row in all_signals_rows:
         try:
             ticker = signal_row.ticker
@@ -251,12 +248,24 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
             if entry_price_target is None:
                 continue
 
-            quote_data = api_client.get_global_quote(ticker)
-            if not quote_data or '05. price' not in quote_data:
+            # ZMIANA: Używamy nowej, poprawnej funkcji
+            quote_data = api_client.get_live_quote_details(ticker)
+            
+            if first_run:
+                # Sprawdź status rynku tylko raz, przy pierwszym tickerze
+                market_status = quote_data.get("market_status", "closed")
+                if market_status == "closed":
+                     logger.info(f"Market is {market_status}. Skipping Entry Trigger Monitor.")
+                     return # Przerwij całą pętlę monitorowania
+                first_run = False
+
+            if not quote_data or "live_price" not in quote_data:
                 logger.warning(f"Could not get current price for {ticker} during monitoring.")
                 continue
             
-            current_price = safe_float(quote_data['05. price'])
+            # ZMIANA: Używamy pola 'live_price'
+            current_price = quote_data['live_price']
+            
             if current_price is None:
                 continue
 
