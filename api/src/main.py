@@ -207,14 +207,21 @@ def get_ai_analysis_result(ticker: str, db: Session = Depends(get_db)):
     return analysis_result
 
 # Endpoint do pobierania ceny
-@app.get("/api/v1/quote/{ticker}", response_model=Optional[Dict[str, Any]])
+# ZMIANA: Zwracamy nowy, bogaty model LiveQuoteDetails
+@app.get("/api/v1/quote/{ticker}", response_model=schemas.LiveQuoteDetails)
 def get_live_quote(ticker: str):
     ticker = ticker.strip().upper()
     try:
-        quote_data = api_av_client.get_global_quote(ticker)
-        if not quote_data:
-            logger.warning(f"No quote data received from Alpha Vantage for {ticker}.")
-            return None
+        # ZMIANA: Wywołujemy nową, poprawną funkcję
+        quote_data = api_av_client.get_live_quote_details(ticker)
+        
+        if not quote_data or quote_data.get("live_price") is None:
+            logger.warning(f"No valid quote data received from Alpha Vantage for {ticker}.")
+            # Zwracamy pusty obiekt zgodny ze schematem, aby uniknąć błędu 500
+            return schemas.LiveQuoteDetails(
+                symbol=ticker, market_status="unknown",
+                regular_session={}, extended_session={}, live_price=None
+            )
         return quote_data
     except Exception as e:
         logger.error(f"Error fetching live quote for {ticker}: {e}", exc_info=True)
@@ -273,3 +280,4 @@ def get_system_alert(db: Session = Depends(get_db)):
               return schemas.SystemAlert(message=alert_message)
 
     return schemas.SystemAlert(message="NONE")
+
