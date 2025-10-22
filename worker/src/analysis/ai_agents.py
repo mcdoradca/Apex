@@ -195,12 +195,15 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     """Uruchamia wszystkich agentów AI i agreguje ich wyniki."""
     logger.info(f"Running full AI analysis for {ticker}...")
     
-    quote_data = api_client.get_global_quote(ticker)
-    # ==================================================================
-    #  POPRAWKA KRYTYCZNA: Przekazanie `api_client` do funkcji
-    # ==================================================================
-    market_info = get_market_status_and_time(api_client)
-    # ==================================================================
+    # ZMIANA: Używamy nowej, poprawnej funkcji
+    quote_data = api_client.get_live_quote_details(ticker)
+    
+    # ZMIANA: Informacje o rynku są już w 'quote_data'
+    market_info = {
+        "status": quote_data.get("market_status"),
+        "time_ny": "N/A", # Możemy to dodać do get_live_quote_details, jeśli potrzebne
+        "date_ny": "N/A" # Jak wyżej
+    }
     
     momentum_results = _run_momentum_agent(ticker, api_client)
     volatility_results = _run_volatility_agent(ticker, api_client)
@@ -215,7 +218,7 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     final_score_percent = (total_score / total_max_score) * 100 if total_max_score > 0 else 0
     
     if final_score_percent >= 75 and tactical_results['score'] > 0:
-        recommendation = "BARDZO SILNY KANDYDAT DO KUPNA"
+        recommendation = "BARDZO SILNY KANDDAT DO KUPNA"
         recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach i posiada prawidłowy setup taktyczny."
     elif final_score_percent >= 60:
         recommendation = "SILNY KANDYDAT DO OBSERWACJI"
@@ -230,6 +233,7 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     return {
         "status": "DONE",
         "ticker": ticker,
+        # ZMIANA: Przekazujemy nową, bogatą strukturę danych
         "quote_data": quote_data,
         "market_info": market_info,
         "overall_score": total_score,
