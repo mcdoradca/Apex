@@ -276,28 +276,33 @@
             console.log("Full API object defined.");
 
             // --- Renderowanie i Widoki ---
-            // === POPRAWKA WYŚWIETLANIA CENY (Styl Yahoo Finance) ===
+            // === POPRAWKA WYŚWIETLANIA CENY + LOGOWANIE DIAGNOSTYCZNE ===
             const renderQuoteBox = (quoteData) => {
+                 // Sprawdzenie na wejściu
                  if (!quoteData || !quoteData.symbol) {
-                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych dla ${quoteData?.symbol || 'tickera'}.</div>`;
+                    logger.warn("renderQuoteBox otrzymał puste lub nieprawidłowe dane:", quoteData);
+                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Otrzymano niekompletne dane cenowe.</div>`;
                 }
 
                 try {
                     const status = quoteData.market_status || "closed";
                     const regular = quoteData.regular_session || {};
                     const extended = quoteData.extended_session || {};
-                    const livePrice = quoteData.live_price; // Zawsze najbardziej aktualna cena
+                    const livePrice = quoteData.live_price; // Może być null
 
                     // Ustalanie statusu UI
                     let statusText = 'Rynek Zamknięty';
                     let statusClass = 'bg-gray-600';
                     let mainPrice = null; // Zmieniono inicjalizację na null
-                    let mainChangeHtml = '', subPriceHtml = ''; // Dodatkowa linia (jak w Yahoo)
+                    let mainChangeHtml = '', subPriceHtml = '';
 
                     const formatChange = (change, percent) => {
+                        // Sprawdzamy null/undefined explicite
                         if (change == null || percent == null) return '';
                         const changeNum = parseFloat(change);
                         const percentNum = parseFloat(percent);
+                        // Dodatkowe sprawdzenie NaN po parsowaniu
+                        if (isNaN(changeNum) || isNaN(percentNum)) return '';
                         const changeClass = changeNum >= 0 ? 'text-green-500' : 'text-red-500';
                         const changeIcon = changeNum >= 0 ? 'trending-up' : 'trending-down';
                         return `
@@ -307,10 +312,11 @@
                             </div>`;
                     };
 
+                    // Logika wyboru ceny głównej i dodatkowej
                     if (status === 'pre-market' || status === 'post-market') {
                         statusText = status === 'pre-market' ? 'Pre-Market' : 'After-Market';
                         statusClass = status === 'pre-market' ? 'bg-yellow-600' : 'bg-blue-600';
-                        mainPrice = extended.price; // Główna cena = extended
+                        mainPrice = extended.price; // Może być null
                         mainChangeHtml = formatChange(extended.change, extended.change_percent);
                         if (regular.price != null) {
                              subPriceHtml = `
@@ -323,15 +329,15 @@
                     } else if (status === 'open' || status === 'regular') {
                         statusText = 'Rynek Otwarty';
                         statusClass = 'bg-green-600';
-                        mainPrice = livePrice; // Używamy 'live_price' jako głównej
+                        mainPrice = livePrice; // Może być null
                         mainChangeHtml = formatChange(regular.change, regular.change_percent);
-                         if (regular.price != null) { // 'regular.price' trzyma 'previous close'
+                         if (regular.price != null) {
                             subPriceHtml = `<p class="text-sm text-gray-500 mt-1">Poprz. zamkn.: ${regular.price.toFixed(2)}</p>`;
                          }
                     } else { // closed lub unknown
                         statusText = 'Rynek Zamknięty';
                         statusClass = 'bg-gray-600';
-                        mainPrice = regular.price; // Główna cena = zamknięcie
+                        mainPrice = regular.price; // Może być null (previous close)
                         mainChangeHtml = formatChange(regular.change, regular.change_percent);
                         if (extended.price != null) {
                             subPriceHtml = `
@@ -343,27 +349,24 @@
                         }
                     }
 
-                    // --- POCZĄTEK POPRAWKI ---
-                    // Sprawdzamy, czy *jakakolwiek* cena została znaleziona
-                    const displayPrice = mainPrice ?? livePrice ?? regular.price ?? extended.price;
+                    // --- ULEPSZONY FALLBACK + LOGOWANIE ---
+                    // Szukamy pierwszej dostępnej ceny w preferowanej kolejności
+                    const displayPrice = mainPrice ?? livePrice ?? extended.price ?? regular.price;
 
                     if (displayPrice == null) {
-                        // Zwracamy komunikat zamiast rzucać błąd
-                        logger.warn(`renderQuoteBox: Brak dostępnych danych cenowych dla ${quoteData.symbol}.`);
-                        return `<div class="bg-yellow-900/20 border border-yellow-500/30 p-4 rounded-lg text-sm text-yellow-400 text-center">Brak dostępnych danych cenowych dla ${quoteData.symbol} w tej chwili.</div>`;
+                        // Jeśli ŻADNA cena nie jest dostępna, logujemy otrzymane dane i zwracamy komunikat
+                        logger.error(`renderQuoteBox: Nie można znaleźć żadnej ceny do wyświetlenia dla ${quoteData.symbol}. Otrzymane dane:`, JSON.parse(JSON.stringify(quoteData))); // Logujemy kopię obiektu
+                        return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center"><i data-lucide="alert-triangle" class="w-5 h-5 inline mr-2"></i>Błąd: Brak jakichkolwiek danych cenowych od dostawcy dla ${quoteData.symbol}.</div>`;
                     }
-                    // Jeśli mainPrice było null, ale znaleźliśmy fallback w displayPrice, użyjmy go
-                    if (mainPrice == null) mainPrice = displayPrice;
-                    // --- KONIEC POPRAWKI ---
+                    // --- KONIEC ULEPSZONEGO FALLBACKA ---
 
-
-                    // Renderowanie - używamy mainPrice, które teraz wiemy, że nie jest null
+                    // Renderowanie - używamy displayPrice, które *musi* mieć wartość
                     return `
                         <div class="flex flex-wrap justify-between items-start gap-4">
                             <div>
                                 <!-- Główna cena -->
                                 <div class="flex items-end gap-3">
-                                    <span class="text-4xl font-bold text-white">${mainPrice.toFixed(2)}</span>
+                                    <span class="text-4xl font-bold text-white">${displayPrice.toFixed(2)}</span>
                                     <div class="mb-1">${mainChangeHtml || ''}</div>
                                 </div>
                                 <!-- Cena pod spodem (Yahoo style) -->
@@ -377,15 +380,13 @@
                                     </span>
                                     ${statusText}
                                 </span>
-                                <!-- TODO: Zaktualizować get_live_quote_details, aby zwracało czas -->
                                 <p class="text-xs text-gray-500 mt-1">Dane (live) ${new Date().toLocaleTimeString()}</p>
                             </div>
                         </div>`;
 
                 } catch (e) {
-                    // Ten blok 'catch' teraz powinien być rzadziej wywoływany z powodu braku ceny
-                    logger.error("Błąd renderowania quoteBox (catch block):", e, { quoteData });
-                    return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center">Błąd renderowania danych cenowych: ${e.message}</div>`;
+                    logger.error(`renderQuoteBox: Nieoczekiwany błąd renderowania dla ${quoteData?.symbol}:`, e, { quoteData });
+                    return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center"><i data-lucide="alert-circle" class="w-5 h-5 inline mr-2"></i>Wystąpił wewnętrzny błąd podczas wyświetlania ceny.</div>`;
                 }
             };
 
@@ -406,7 +407,6 @@
                     if (data.status === 'PROCESSING') return renderers.loading(data.message || `Analiza ${ticker} w toku...`);
                     if (data.status === 'ERROR') return `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Analizy ${ticker}</h2><p>${data.message}</p></div>`;
                     if (data.status !== 'DONE') return `<div class="text-yellow-400">Nieoczekiwany status: ${data.status}</div>`;
-                    // ZMIANA: market_info nie jest już potrzebne, wszystko jest w quote_data
                     const { overall_score = 0, max_score = 1, recommendation = "Brak", agents = {}, quote_data = null } = data;
                     const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
                     let rec_color = "bg-gray-500";
@@ -703,7 +703,6 @@
                 if (state.currentViewTicker !== ticker) { state.activeQuotePolling = null; return; }
                 try {
                     const quoteData = await api.getLiveQuote(ticker);
-                    // ZMIANA: market_info nie jest już potrzebne, wszystko jest w quoteData
                     const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
                     if (quoteBoxPlaceholder) {
                         quoteBoxPlaceholder.innerHTML = renderQuoteBox(quoteData);
@@ -737,7 +736,6 @@
                 try {
                     const data = await api.getAIAnalysisResult(ticker);
                     state.currentAnalysisData = data;
-                    // ZMIANA: renderAI... używa teraz nowego formatu quote_data
                     ui.mainContent.innerHTML = renderers.aiAnalysisDetails(ticker, data);
                     lucide.createIcons();
                     if (data.status === 'PROCESSING') {
@@ -971,3 +969,4 @@
     </script>
     </body>
 </html>
+
