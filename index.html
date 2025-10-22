@@ -263,6 +263,7 @@
                 getPhase3Signals: () => apiRequest('/api/v1/signals/phase3'),
                 requestAIAnalysis: (ticker) => apiRequest('/api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
                 getAIAnalysisResult: (ticker) => apiRequest(`/api/v1/ai-analysis/result/${ticker}`),
+                // ZMIANA: getLiveQuote zwraca teraz nowy, bogaty obiekt
                 getLiveQuote: (ticker) => apiRequest(`/api/v1/quote/${ticker}`),
                 addToWatchlist: (ticker) => apiRequest(`/api/v1/watchlist/${ticker}`, { method: 'POST' }),
                 getSystemAlert: () => apiRequest('/api/v1/system/alert'),
@@ -275,47 +276,103 @@
             console.log("Full API object defined.");
 
             // --- Renderowanie i Widoki ---
-            // === POPRAWKA WYŚWIETLANIA CENY ===
-            const renderQuoteBox = (quote, market) => {
-                 if (!quote || Object.keys(quote).length === 0) {
-                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych (Global Quote).</div>`;
+            // === POPRAWKA WYŚWIETLANIA CENY (Styl Yahoo Finance) ===
+            const renderQuoteBox = (quoteData) => {
+                 if (!quoteData || !quoteData.symbol) {
+                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych.</div>`;
                 }
-                 const safeMarket = market || { status: 'UNKNOWN', time_ny: 'N/A', date_ny: 'N/A' };
-                try {
-                    const cleanedQuote = Object.fromEntries(
-                        Object.entries(quote).map(([key, value]) => [key.substring(key.indexOf('.') + 2), value])
-                    );
-                    const price = parseFloat(cleanedQuote['price']);
-                    const change = parseFloat(cleanedQuote['change']);
-                    const changePercentStr = cleanedQuote['change percent'];
-                    const changePercent = parseFloat(changePercentStr ? changePercentStr.replace('%', '') : '0');
-                    const prevClose = parseFloat(cleanedQuote['previous close']);
 
-                    if (isNaN(price) || isNaN(change) || isNaN(changePercent) || isNaN(prevClose)) throw new Error(`Nieprawidłowe dane liczbowe w quote.`);
-                    
-                    const isPositive = change >= 0;
-                    const changeClass = isPositive ? 'text-green-500' : 'text-red-500';
-                    const changeIcon = isPositive ? 'trending-up' : 'trending-down';
-                    
+                try {
+                    const status = quoteData.market_status || "closed";
+                    const regular = quoteData.regular_session || {};
+                    const extended = quoteData.extended_session || {};
+                    const livePrice = quoteData.live_price; // Zawsze najbardziej aktualna cena
+
+                    // Ustalanie statusu UI
                     let statusText = 'Rynek Zamknięty';
                     let statusClass = 'bg-gray-600';
-                    if (safeMarket.status === 'MARKET_OPEN') { statusText = 'Rynek Otwarty'; statusClass = 'bg-green-600'; }
-                    else if (safeMarket.status === 'PRE_MARKET') { statusText = 'Pre-Market'; statusClass = 'bg-yellow-600'; }
-                    else if (safeMarket.status === 'AFTER_MARKET') { statusText = 'After-Market'; statusClass = 'bg-blue-600'; }
-                    else if (safeMarket.status === 'UNKNOWN') { statusText = 'Status Nieznany'; statusClass = 'bg-purple-600'; }
+                    let mainPrice, mainChangeHtml, subPriceHtml = ''; // Dodatkowa linia (jak w Yahoo)
+
+                    const formatChange = (change, percent) => {
+                        if (change == null || percent == null) return '';
+                        const changeNum = parseFloat(change);
+                        const percentNum = parseFloat(percent);
+                        const changeClass = changeNum >= 0 ? 'text-green-500' : 'text-red-500';
+                        const changeIcon = changeNum >= 0 ? 'trending-up' : 'trending-down';
+                        return `
+                            <div class="${changeClass} flex items-center gap-1">
+                                <i data-lucide="${changeIcon}" class="w-5 h-5"></i>
+                                <span class="font-semibold">${changeNum.toFixed(2)} (${percentNum.toFixed(2)}%)</span>
+                            </div>`;
+                    };
                     
-                    // Nowy, bardziej przejrzysty layout
+                    if (status === 'pre-market' || status === 'post-market') {
+                        statusText = status === 'pre-market' ? 'Pre-Market' : 'After-Market';
+                        statusClass = status === 'pre-market' ? 'bg-yellow-600' : 'bg-blue-600';
+                        
+                        // Cena główna = cena extended
+                        mainPrice = extended.price;
+                        mainChangeHtml = formatChange(extended.change, extended.change_percent);
+
+                        // Cena pod spodem = cena z sesji regularnej
+                        if (regular.price != null) {
+                             subPriceHtml = `
+                                <div class="flex items-end gap-2 mt-1">
+                                    <span class="text-lg font-semibold text-gray-500">${regular.price.toFixed(2)}</span>
+                                    <div class="text-sm mb-0.5">${formatChange(regular.change, regular.change_percent)}</div>
+                                    <span class="text-sm text-gray-500 mb-0.5">At Close</span>
+                                </div>`;
+                        }
+                        
+                    } else if (status === 'open' || status === 'regular') { // 'open' lub 'regular'
+                        statusText = 'Rynek Otwarty';
+                        statusClass = 'bg-green-600';
+                        
+                        // Cena główna = cena z sesji
+                        mainPrice = livePrice; // Używamy 'live_price'
+                        mainChangeHtml = formatChange(regular.change, regular.change_percent);
+                        
+                        // Cena pod spodem = poprzednie zamknięcie
+                         if (regular.price != null) { // 'regular.price' trzyma 'previous close'
+                            subPriceHtml = `<p class="text-sm text-gray-500 mt-1">Poprz. zamkn.: ${regular.price.toFixed(2)}</p>`;
+                         }
+
+                    } else { // closed lub unknown
+                        statusText = 'Rynek Zamknięty';
+                        statusClass = 'bg-gray-600';
+                        
+                        // Cena główna = cena zamknięcia
+                        mainPrice = regular.price;
+                        mainChangeHtml = formatChange(regular.change, regular.change_percent);
+                        
+                        // Cena pod spodem = cena z after-market (jeśli jest)
+                        if (extended.price != null) {
+                            subPriceHtml = `
+                                <div class="flex items-end gap-2 mt-1">
+                                    <span class="text-lg font-semibold text-gray-400">${extended.price.toFixed(2)}</span>
+                                    <div class="text-sm mb-0.5">${formatChange(extended.change, extended.change_percent)}</div>
+                                    <span class="text-sm text-gray-500 mb-0.5">After-Hours</span>
+                                </div>`;
+                        }
+                    }
+
+                    if (mainPrice == null) {
+                         // Fallback, jeśli główna cena jest pusta
+                         mainPrice = livePrice || regular.price || extended.price;
+                         if (mainPrice == null) throw new Error("Brak jakiejkolwiek ceny do wyświetlenia.");
+                    }
+                    
+                    // Renderowanie
                     return `
                         <div class="flex flex-wrap justify-between items-start gap-4">
                             <div>
+                                <!-- Główna cena -->
                                 <div class="flex items-end gap-3">
-                                    <span class="text-4xl font-bold text-white">${price.toFixed(2)}</span>
-                                    <div class="${changeClass} flex items-center gap-1 mb-1">
-                                        <i data-lucide="${changeIcon}" class="w-5 h-5"></i>
-                                        <span class="font-semibold">${change.toFixed(2)} (${changePercent.toFixed(2)}%)</span>
-                                    </div>
+                                    <span class="text-4xl font-bold text-white">${mainPrice.toFixed(2)}</span>
+                                    <div class="mb-1">${mainChangeHtml || ''}</div>
                                 </div>
-                                <p class="text-sm text-gray-500 mt-1">Poprz. zamkn.: ${prevClose.toFixed(2)}</p>
+                                <!-- Cena pod spodem (Yahoo style) -->
+                                ${subPriceHtml}
                             </div>
                             <div class="text-right">
                                 <span class="flex items-center justify-end gap-2 text-sm font-semibold text-gray-300">
@@ -325,12 +382,13 @@
                                     </span>
                                     ${statusText}
                                 </span>
-                                <p class="text-xs text-gray-500 mt-1">Dane na ${safeMarket.date_ny} ${safeMarket.time_ny}</p>
+                                <!-- TODO: Zaktualizować get_live_quote_details, aby zwracało czas -->
+                                <p class="text-xs text-gray-500 mt-1">Dane (live) ${new Date().toLocaleTimeString()}</p>
                             </div>
                         </div>`;
 
                 } catch (e) {
-                    logger.error("Błąd renderowania quoteBox:", e, { quote, market: safeMarket });
+                    logger.error("Błąd renderowania quoteBox:", e, { quoteData });
                     return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center">Błąd parsowania danych cenowych: ${e.message}</div>`;
                 }
             };
@@ -351,17 +409,18 @@
                     if (data.status === 'PROCESSING') return renderers.loading(data.message || `Analiza ${ticker} w toku...`);
                     if (data.status === 'ERROR') return `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Analizy ${ticker}</h2><p>${data.message}</p></div>`;
                     if (data.status !== 'DONE') return `<div class="text-yellow-400">Nieoczekiwany status: ${data.status}</div>`;
-                    const { overall_score = 0, max_score = 1, recommendation = "Brak", agents = {}, quote_data = null, market_info = null } = data;
+                    // ZMIANA: market_info nie jest już potrzebne, wszystko jest w quote_data
+                    const { overall_score = 0, max_score = 1, recommendation = "Brak", agents = {}, quote_data = null } = data;
                     const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
                     let rec_color = "bg-gray-500";
-                    if (recommendation === "BARDZO SILNY KANDYDAT DO KUPNA") rec_color = "bg-green-500";
+                    if (recommendation === "BARDZO SILNY KANDDAT DO KUPNA") rec_color = "bg-green-500";
                     else if (recommendation === "SILNY KANDYDAT DO OBSERWACJI") rec_color = "bg-sky-500";
                     else if (recommendation === "INTERESUJĄCY KANDYDAT") rec_color = "bg-yellow-500";
                     const createAgentCard = (agentName, icon, agentData) => {
                          if (!agentData) return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg text-gray-500">Brak danych dla Agenta: ${agentName}</div>`;
                          return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg"><h4 class="font-bold text-gray-300 mb-3 flex items-center"><i data-lucide="${icon}" class="w-5 h-5 mr-2 text-sky-400"></i>Agent: ${agentName} <span class="ml-auto text-xs font-mono bg-gray-700 px-2 py-1 rounded-md">${agentData.score ?? '?'}/${agentData.max_score ?? '?'}</span></h4><p class="text-sm text-gray-400 mb-3">${agentData.summary ?? 'Brak podsumowania.'}</p><div class="text-xs space-y-1 border-t border-gray-700 pt-2">${agentData.details && Object.keys(agentData.details).length > 0 ? Object.entries(agentData.details).map(([key, value]) => `<div class="flex justify-between"><span class="text-gray-500">${key}:</span><span class="font-mono text-gray-300">${value}</span></div>`).join('') : '<p class="text-gray-500">Brak szczegółów.</p>'}</div></div>`;
                     };
-                    return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data, market_info)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Taktycznego', 'crosshair', agents.tactical_setup)}</div></div>`;
+                    return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Taktycznego', 'crosshair', agents.tactical_setup)}</div></div>`;
                 },
                 dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3><p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p></div></div><h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3><div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div></div>`,
                 
@@ -373,10 +432,12 @@
                         const quote = quotes[h.ticker];
                         let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
                         let priceClass = 'text-gray-400';
-                        if (quote && quote['05. price']) {
+                        // ZMIANA: Używamy nowego obiektu 'live_price'
+                        if (quote && quote.live_price) {
                             try {
-                                currentPrice = parseFloat(quote['05. price']);
-                                dayChangePercent = parseFloat(quote['10. change percent'] ? quote['10. change percent'].replace('%', '') : '0');
+                                currentPrice = parseFloat(quote.live_price);
+                                // Używamy zmiany z sesji regularnej do kolorowania
+                                dayChangePercent = parseFloat(quote.regular_session.change_percent || '0');
                                 priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                                 currentValue = h.quantity * currentPrice;
                                 const costBasis = h.quantity * h.average_buy_price;
@@ -645,10 +706,10 @@
                 if (state.currentViewTicker !== ticker) { state.activeQuotePolling = null; return; }
                 try {
                     const quoteData = await api.getLiveQuote(ticker);
-                    const marketInfo = state.currentAnalysisData?.market_info;
+                    // ZMIANA: market_info nie jest już potrzebne, wszystko jest w quoteData
                     const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
                     if (quoteBoxPlaceholder) {
-                        quoteBoxPlaceholder.innerHTML = renderQuoteBox(quoteData, marketInfo);
+                        quoteBoxPlaceholder.innerHTML = renderQuoteBox(quoteData);
                         lucide.createIcons();
                     }
                 } catch (e) {
@@ -679,6 +740,7 @@
                 try {
                     const data = await api.getAIAnalysisResult(ticker);
                     state.currentAnalysisData = data;
+                    // ZMIANA: renderAI... używa teraz nowego formatu quote_data
                     ui.mainContent.innerHTML = renderers.aiAnalysisDetails(ticker, data);
                     lucide.createIcons();
                     if (data.status === 'PROCESSING') {
@@ -911,3 +973,4 @@
     </script>
     </body>
 </html>
+
