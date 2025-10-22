@@ -3,7 +3,6 @@ import requests
 import logging
 import json
 from collections import deque
-# NOWE IMPORTY
 from io import StringIO
 import csv
 
@@ -49,7 +48,6 @@ class AlphaVantageClient:
                 response = requests.get(self.BASE_URL, params=params, timeout=30)
                 response.raise_for_status()
                 data = response.json()
-                # Zmiana logowania na bardziej szczegółowe
                 request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
                 if not data or "Error Message" in data or "Information" in data:
                     logger.warning(f"API returned an error or empty data for {request_identifier}: {data}")
@@ -70,7 +68,6 @@ class AlphaVantageClient:
         params = {"function": "MARKET_STATUS"}
         return self._make_request(params)
 
-    # NOWA: Prywatna funkcja do parsowania CSV (przeniesiona z phase1_scanner)
     def _parse_bulk_quotes_csv(self, csv_text: str) -> dict:
         """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
         if not csv_text or "symbol" not in csv_text:
@@ -86,15 +83,13 @@ class AlphaVantageClient:
             if not ticker:
                 continue
             
-            # Zbieramy wszystkie dane, nie tylko te używane przez F1
             data_dict[ticker] = {
                 'price': row.get('price'), # 'price' to 'latest trade'
-                'close': row.get('close'), # 'close' w tym kontekście to 'previous close'
+                'close': row.get('close'), # To pole jest mylące, będziemy używać 'previous close'
                 'volume': row.get('volume'),
                 'change_percent': row.get('change_percent'),
                 'change': row.get('change'),
-                'previous close': row.get('previous close'), # Dodatkowe pole dla pewności
-                # Pola, które mogą, ale nie muszą istnieć:
+                'previous close': row.get('previous close'), # Prawidłowe pole dla zamknięcia z poprzedniego dnia
                 'extended_hours_price': row.get('extended_hours_price'),
                 'extended_hours_change': row.get('extended_hours_change'),
                 'extended_hours_change_percent': row.get('extended_hours_change_percent')
@@ -117,7 +112,6 @@ class AlphaVantageClient:
                 if "Error Message" in text_response or "Invalid API call" in text_response:
                     logger.error(f"Bulk quotes API returned an error: {text_response[:200]}")
                     return None
-                # ZMIANA: Zwracamy przetworzony słownik, a nie surowy tekst
                 return self._parse_bulk_quotes_csv(text_response)
             except requests.exceptions.RequestException as e:
                 logger.error(f"Bulk quotes request failed (attempt {attempt + 1}/{self.retries}): {e}")
@@ -182,16 +176,12 @@ class AlphaVantageClient:
         except (ValueError, TypeError):
             return None
     
-    # USUNIĘTA: Funkcja _get_latest_intraday_price (używała błędnego endpointu TIME_SERIES_INTRADAY)
-
-    # ZASTĄPIONA: Funkcja get_global_quote została zastąpiona przez get_live_quote_details
     def get_live_quote_details(self, symbol: str) -> dict:
         """
         Pobiera pełne dane "live" (REALTIME_BULK_QUOTES) oraz status rynku,
         zwracając ustandaryzowany słownik w stylu Yahoo Finance.
         """
-        # 1. Pobierz Status Rynku
-        us_market_status = "closed" # Bezpieczny domyślny
+        us_market_status = "closed"
         try:
             status_data = self.get_market_status()
             if status_data and status_data.get('markets'):
@@ -201,12 +191,10 @@ class AlphaVantageClient:
         except Exception as e:
             logger.warning(f"Nie można pobrać statusu rynku dla {symbol}: {e}. Przyjęto 'closed'.")
 
-        # 2. Pobierz Dane Czasu Rzeczywistego
         raw_data = self.get_bulk_quotes([symbol])
         
         if not raw_data or symbol not in raw_data:
             logger.error(f"Brak danych live (REALTIME_BULK_QUOTES) dla {symbol}")
-            # Zwracamy pustą strukturę, aby uniknąć błędów wyższego rzędu
             return {
                 "symbol": symbol, "market_status": us_market_status,
                 "regular_session": {}, "extended_session": {}, "live_price": None
@@ -214,9 +202,12 @@ class AlphaVantageClient:
             
         ticker_data = raw_data[symbol]
 
-        # 3. Zbuduj nowy, bogaty obiekt odpowiedzi
-        # Używamy pola 'close' z BULK_QUOTES jako 'previous close' sesji regularnej
-        regular_close_price = self._safe_float(ticker_data.get('close')) 
+        # ==================================================================
+        #  KOREKTA BŁĘDU
+        #  Poprzednio używałem 'ticker_data.get('close')', który jest nieprawidłowy lub pusty.
+        #  Poprawne pole dla ceny zamknięcia poprzedniego dnia to 'previous close'.
+        # ==================================================================
+        regular_close_price = self._safe_float(ticker_data.get('previous close')) 
         
         response = {
             "symbol": symbol,
@@ -234,17 +225,12 @@ class AlphaVantageClient:
             "live_price": self._safe_float(ticker_data.get('price')) # To jest 'latest trade'
         }
         
-        # 4. Ustalenie "live_price" w zależności od statusu (zgodnie z logiką AV)
-        # 'price' z REALTIME_BULK_QUOTES jest już ceną "live" (regular lub extended)
-        # Ale dla spójności UI (jak w Yahoo), 'live_price' powinno odzwierciedlać to, co użytkownik widzi jako główne
-        
         if us_market_status in ["pre-market", "post-market"] and response["extended_session"]["price"] is not None:
              response["live_price"] = response["extended_session"]["price"]
         elif us_market_status == "regular":
-             response["live_price"] = self._safe_float(ticker_data.get('price')) # Cena z sesji
+             response["live_price"] = self._safe_float(ticker_data.get('price'))
         elif us_market_status == "closed":
-             # Po zamknięciu, "live" cena to ostatnia cena z after-market, lub cena zamknięcia
+             # KOREKTA BŁĘDU: Poprzednio response["regular_session"]["price"] było None
              response["live_price"] = response["extended_session"]["price"] or response["regular_session"]["price"]
         
         return response
-
