@@ -1,297 +1,241 @@
+import time
+import requests
 import logging
-import sys
+import json
+from collections import deque
 import os
-# ZMIANA: Dodano Response z fastapi
-from fastapi import FastAPI, Depends, HTTPException, Response, Query
-from sqlalchemy import text
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from datetime import datetime, timezone
-from typing import List, Optional, Any, Dict
+from dotenv import load_dotenv
+from io import StringIO
+import csv
 
-from . import crud, models, schemas
-from .database import get_db, engine, SessionLocal
-from .alpha_vantage_client import AlphaVantageClient
+load_dotenv()
 
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-try:
-    models.Base.metadata.create_all(bind=engine)
-    logger.info("Database tables verified/created successfully.")
-except Exception as e:
-    logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
-    sys.exit(1)
+API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
+if not API_KEY:
+    logger.warning("ALPHAVANTAGE_API_KEY not found in environment for API's client.")
 
-app = FastAPI(title="APEX Predator API", version="2.3.1") # Wersja z poprawką HEAD
+# USUNIĘTO BŁĘDNĄ LINIĘ: from .alpha_vantage_client import AlphaVantageClient
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"], # Upewnijmy się, że HEAD jest dozwolony (choć * zwykle to załatwia)
-    allow_headers=["*"],
-)
+class AlphaVantageClient:
+    BASE_URL = "https://www.alphavantage.co/query"
 
-api_av_client = AlphaVantageClient()
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+        if not api_key:
+            logger.warning("API key is missing for AlphaVantageClient instance in API.")
+        self.api_key = api_key
+        self.retries = retries
+        self.backoff_factor = backoff_factor
+        self.requests_per_minute = requests_per_minute
+        self.request_interval = 60.0 / requests_per_minute
+        self.request_timestamps = deque()
 
+    def _rate_limiter(self):
+        if not self.api_key:
+             return
+        while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
+            self.request_timestamps.popleft()
+        if len(self.request_timestamps) >= self.requests_per_minute:
+            time_to_wait = 60 - (time.monotonic() - self.request_timestamps[0])
+            if time_to_wait > 0:
+                logger.warning(f"Rate limit reached. Sleeping for {time_to_wait:.2f} seconds.")
+                time.sleep(time_to_wait)
+        if self.request_timestamps:
+            time_since_last = time.monotonic() - self.request_timestamps[-1]
+            if time_since_last < self.request_interval:
+                time.sleep(self.request_interval - time_since_last)
+        self.request_timestamps.append(time.monotonic())
 
-# Poprawiony endpoint główny, obsługuje GET i HEAD
-@app.get("/", summary="Root endpoint confirming API is running")
-def read_root_get():
-    """Podstawowy endpoint GET potwierdzający działanie API."""
-    return {"status": "APEX Predator API is running"}
-
-# ==========================================================
-# === POPRAWKA INSPEKCYJNA (Crash Loop - próba 2) ===
-# Dodano obsługę metody HEAD dla ścieżki głównej '/',
-# aby zapobiec potencjalnym restartom przez mechanizmy Render,
-# które mogą testować tę metodę.
-# ==========================================================
-@app.head("/", summary="Health check endpoint for HEAD requests")
-async def read_root_head():
-    """Podstawowy endpoint HEAD zwracający pustą odpowiedź 200 OK."""
-    # Metoda HEAD powinna zwracać tylko nagłówki, bez ciała odpowiedzi.
-    # Używamy pustej odpowiedzi Response z kodem 200.
-    return Response(status_code=200)
-# ==========================================================
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Weryfikuje i ustawia początkowe wartości w tabeli system_control."""
-    db = SessionLocal()
-    try:
-        initial_values = {
-            'worker_status': 'IDLE', 'worker_command': 'NONE', 'current_phase': 'NONE',
-            'scan_progress_processed': '0', 'scan_progress_total': '0',
-            'scan_log': 'Czekam na rozpoczęcie skanowania...',
-            'last_heartbeat': datetime.now(timezone.utc).isoformat(),
-            'ai_analysis_request': 'NONE',
-            'system_alert': 'NONE'
-        }
-        for key, value in initial_values.items():
-            if crud.get_system_control_value(db, key) is None:
-                crud.set_system_control_value(db, key, value)
-        logger.info("Initial system control values verified.")
-        if not api_av_client.api_key:
-             logger.warning("ALPHAVANTAGE_API_KEY environment variable is not set. The /quote endpoint will not work.")
-
-    except Exception as e:
-        logger.error(f"Could not initialize system_control values: {e}", exc_info=True)
-    finally:
-        db.close()
-
-# --- ENDPOINTY PORTFELA I TRANSAKCJI ---
-# (Reszta endpointów bez zmian)
-@app.post("/api/v1/portfolio/buy", response_model=schemas.PortfolioHolding, status_code=201)
-def buy_stock(buy_request: schemas.BuyRequest, db: Session = Depends(get_db)):
-    try:
-        logger.info(f"Otrzymano zlecenie zakupu: {buy_request.quantity} akcji {buy_request.ticker} po {buy_request.price_per_share}")
-        holding = crud.record_buy_transaction(db, buy_request)
-        logger.info(f"Zakup {buy_request.ticker} przetworzony. Nowy stan portfela: {holding.quantity} akcji, średnia cena: {holding.average_buy_price}")
-        return holding
-    except ValueError as ve:
-        logger.warning(f"Błąd walidacji przy zakupie {buy_request.ticker}: {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        logger.error(f"Nieoczekiwany błąd serwera przy zakupie {buy_request.ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas przetwarzania zakupu.")
-
-@app.post("/api/v1/portfolio/sell", response_model=Optional[schemas.PortfolioHolding], status_code=200)
-def sell_stock(sell_request: schemas.SellRequest, db: Session = Depends(get_db)):
-    try:
-        logger.info(f"Otrzymano zlecenie sprzedaży: {sell_request.quantity} akcji {sell_request.ticker} po {sell_request.price_per_share}")
-        updated_holding = crud.record_sell_transaction(db, sell_request)
-        if updated_holding:
-            logger.info(f"Sprzedaż częściowa {sell_request.ticker} przetworzona. Pozostało: {updated_holding.quantity} akcji.")
-            return updated_holding
-        else:
-            logger.info(f"Sprzedaż całkowita {sell_request.ticker} przetworzona. Pozycja zamknięta.")
+    def _make_request(self, params: dict):
+        if not self.api_key:
+            logger.error("Cannot make Alpha Vantage request: API key is missing.")
             return None
-    except ValueError as ve:
-        logger.warning(f"Błąd walidacji przy sprzedaży {sell_request.ticker}: {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        logger.error(f"Nieoczekiwany błąd serwera przy sprzedaży {sell_request.ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas przetwarzania sprzedaży.")
+        self._rate_limiter()
+        params['apikey'] = self.api_key
+        for attempt in range(self.retries):
+            try:
+                response = requests.get(self.BASE_URL, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
+                if not data or "Error Message" in data or "Information" in data:
+                    logger.warning(f"API returned an error or empty data for {request_identifier}: {data}")
+                    if "premium" in str(data).lower():
+                         logger.error(f"API call for {request_identifier} failed due to premium limit. Waiting longer.")
+                         time.sleep(20)
+                    return None
+                return data
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+                request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
+                logger.error(f"Request failed for {request_identifier} (attempt {attempt + 1}/{self.retries}): {e}")
+                if attempt < self.retries - 1:
+                    time.sleep(self.backoff_factor * (2 ** attempt))
+        return None
 
-@app.get("/api/v1/portfolio", response_model=List[schemas.PortfolioHolding])
-def get_portfolio(db: Session = Depends(get_db)):
-    logger.info("Pobieranie aktualnego stanu portfela.")
-    holdings = crud.get_portfolio_holdings(db)
-    return holdings
+    def get_market_status(self):
+        """Pobiera aktualny status rynku z dedykowanego endpointu."""
+        params = {"function": "MARKET_STATUS"}
+        return self._make_request(params)
 
-@app.get("/api/v1/transactions", response_model=List[schemas.TransactionHistory])
-def get_transactions(limit: int = Query(100, ge=1, le=1000, description="Liczba ostatnich transakcji do pobrania"), db: Session = Depends(get_db)):
-    logger.info(f"Pobieranie historii ostatnich {limit} transakcji.")
-    transactions = crud.get_transaction_history(db, limit=limit)
-    return transactions
-
-# --- ENDPOINTY ZWIĄZANE Z FAZAMI ANALIZY ---
-
-@app.get("/api/v1/candidates/phase1", response_model=List[schemas.Phase1Candidate])
-def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
-    return crud.get_phase1_candidates(db)
-
-@app.get("/api/v1/results/phase2", response_model=List[schemas.Phase2Result])
-def get_phase2_results_endpoint(db: Session = Depends(get_db)):
-    return crud.get_phase2_results(db)
-
-@app.get("/api/v1/signals/phase3", response_model=List[schemas.TradingSignal])
-def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
-    return crud.get_active_and_pending_signals(db)
-
-@app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
-def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
-    try:
-        stmt = text("""
-            INSERT INTO trading_signals (ticker, generation_date, status, notes)
-            VALUES (:ticker, NOW(), 'PENDING', 'Ręcznie dodany do obserwowanych')
-            ON CONFLICT (ticker) WHERE status IN ('ACTIVE', 'PENDING')
-            DO UPDATE SET
-                notes = 'Ręcznie dodany do obserwowanych (ponownie)'
-            RETURNING *;
-        """)
-        params = [{'ticker': ticker.strip().upper()}]
-        result_proxy = db.execute(stmt, params)
-        result = result_proxy.fetchone()
-        db.commit()
-
-        if not result:
-            existing = db.query(models.TradingSignal).filter(
-                models.TradingSignal.ticker == ticker.strip().upper(),
-                models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
-            ).first()
-            if not existing:
-                 raise HTTPException(status_code=500, detail="Nie można było utworzyć ani pobrać sygnału po konflikcie.")
-            result_dict = {c.name: getattr(existing, c.name) for c in existing.__table__.columns}
-        else:
-            result_dict = dict(result._mapping)
-
-        result_dict['generation_date'] = result_dict['generation_date'].isoformat()
-        if result_dict.get('signal_candle_timestamp'):
-            result_dict['signal_candle_timestamp'] = result_dict['signal_candle_timestamp'].isoformat()
-        return result_dict
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Błąd podczas dodawania do watchlist ({ticker}): {e}", exc_info=True)
-        if "foreign key constraint" in str(e):
-             raise HTTPException(status_code=400, detail=f"Ticker {ticker} nie istnieje w bazie danych 'companies'.")
-        raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
-
-
-# --- ENDPOINTY ANALIZY AI NA ŻĄDANIE ---
-
-@app.post("/api/v1/ai-analysis/request", status_code=202, response_model=schemas.AIAnalysisRequestResponse)
-def request_ai_analysis(request: schemas.OnDemandRequest, db: Session = Depends(get_db)):
-    ticker = request.ticker.strip().upper()
-    try:
-        # JUŻ NIE USUWAMY WYNIKU TUTAJ
-        # crud.delete_ai_analysis_result(db, ticker) 
+    def _parse_bulk_quotes_csv(self, csv_text: str) -> dict:
+        """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
+        if not csv_text or "symbol" not in csv_text:
+            logger.warning("[DIAGNOSTYKA] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'.")
+            return {}
         
-        # Tylko ustawiamy flagę dla workera
-        crud.set_system_control_value(db, key="ai_analysis_request", value=ticker)
-        logger.info(f"AI analysis request for {ticker} has been sent to the worker.")
-        return {"message": f"Analiza AI dla {ticker} została zlecona.", "ticker": ticker}
-    except Exception as e:
-        logger.error(f"Error processing AI analysis request for {ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania analizy.")
-
-
-@app.get("/api/v1/ai-analysis/result/{ticker}", response_model=schemas.AIAnalysisResult)
-def get_ai_analysis_result(ticker: str, db: Session = Depends(get_db)):
-    analysis_result = crud.get_ai_analysis_result(db, ticker.strip().upper())
-    if not analysis_result:
-        # Dodatkowe sprawdzenie flagi, aby dać bardziej informatywną odpowiedź
-        current_request_flag = crud.get_system_control_value(db, "ai_analysis_request")
-        if current_request_flag == ticker.strip().upper() or current_request_flag == 'PROCESSING':
-             # Jeśli flaga jest ustawiona LUB trwa przetwarzanie, zwracamy 200 z info o przetwarzaniu
-             return {"status": "PROCESSING", "message": "Analiza AI jest w toku lub została właśnie zlecona..."}
-        # W przeciwnym razie, faktycznie nie ma danych ani żądania - 404
-        raise HTTPException(status_code=404, detail="Nie znaleziono wyniku analizy AI dla tego tickera ani nie jest ona przetwarzana.")
+        csv_file = StringIO(csv_text)
+        reader = csv.DictReader(csv_file)
         
-    # Jeśli wynik istnieje, zwracamy go
-    return analysis_result
+        data_dict = {}
+        for row in reader:
+            ticker = row.get('symbol')
+            if not ticker:
+                continue
+            
+            data_dict[ticker] = {
+                'price': row.get('price'),
+                'close': row.get('close'), # To pole jest mylące, będziemy używać 'previous close'
+                'volume': row.get('volume'),
+                'change_percent': row.get('change_percent'),
+                'change': row.get('change'),
+                'previous close': row.get('previous close'), # Prawidłowe pole dla zamknięcia z poprzedniego dnia
+                'extended_hours_price': row.get('extended_hours_price'),
+                'extended_hours_change': row.get('extended_hours_change'),
+                'extended_hours_change_percent': row.get('extended_hours_change_percent')
+            }
+        return data_dict
 
-
-# Endpoint do pobierania ceny
-@app.get("/api/v1/quote/{ticker}", response_model=schemas.LiveQuoteDetails)
-def get_live_quote(ticker: str):
-    ticker = ticker.strip().upper()
-    try:
-        quote_data = api_av_client.get_live_quote_details(ticker)
-        
-        if not quote_data or quote_data.get("live_price") is None:
-            logger.warning(f"No valid quote data received from Alpha Vantage for {ticker}.")
-            # Zwracamy pusty obiekt zgodny ze schematem, aby uniknąć błędu 500
-            return schemas.LiveQuoteDetails(
-                symbol=ticker, market_status="unknown",
-                regular_session=schemas.LiveQuoteSession(), 
-                extended_session=schemas.LiveQuoteSession(), 
-                live_price=None
-            )
-        # Upewnij się, że zwracany obiekt jest zgodny ze schematem Pydantic
-        return schemas.LiveQuoteDetails(**quote_data)
-    except Exception as e:
-        logger.error(f"Error fetching live quote for {ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail=f"Błąd podczas pobierania ceny z Alpha Vantage: {e}")
-
-
-# --- ENDPOINTY KONTROLI I STATUSU ---
-
-@app.post("/api/v1/worker/control/{action}", status_code=202)
-def control_worker(action: str, db: Session = Depends(get_db)):
-    allowed_actions = {"start": "START_REQUESTED", "pause": "PAUSE_REQUESTED", "resume": "RESUME_REQUESTED"}
-    if action not in allowed_actions:
-        raise HTTPException(status_code=400, detail="Invalid action.")
-    command = allowed_actions[action]
-    try:
-        # Przy starcie czyścimy flagę AI, aby nie blokowała cyklu
-        if action == "start":
-            crud.set_system_control_value(db, "ai_analysis_request", 'NONE')
-        crud.set_system_control_value(db, "worker_command", command)
-        logger.info(f"Command '{action}' ({command}) sent to worker.")
-        return {"message": f"Command '{action}' sent to worker."}
-    except Exception as e:
-        logger.error(f"Error sending command {action} to worker: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas wysyłania komendy.")
-
-
-@app.get("/api/v1/worker/status", response_model=schemas.WorkerStatus)
-def get_worker_status(db: Session = Depends(get_db)):
-    """Pobiera aktualny status workera."""
-    try:
-        status_data = {
-            "status": crud.get_system_control_value(db, "worker_status") or "UNKNOWN",
-            "phase": crud.get_system_control_value(db, "current_phase") or "NONE",
-            "progress": {
-                "processed": int(crud.get_system_control_value(db, "scan_progress_processed") or 0),
-                "total": int(crud.get_system_control_value(db, "scan_progress_total") or 1) # Unikamy dzielenia przez zero
-            },
-            "last_heartbeat_utc": crud.get_system_control_value(db, "last_heartbeat") or "Never",
-            "log": crud.get_system_control_value(db, "scan_log") or ""
+    def get_bulk_quotes(self, symbols: list[str]):
+        if not self.api_key: return None # Dodatkowe zabezpieczenie
+        self._rate_limiter()
+        params = {
+            "function": "REALTIME_BULK_QUOTES",
+            "symbol": ",".join(symbols),
+            "datatype": "csv",
+            "apikey": self.api_key
         }
-        return schemas.WorkerStatus(**status_data)
-    except Exception as e:
-        logger.error(f"Error fetching worker status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Nie można pobrać statusu workera.")
+        for attempt in range(self.retries):
+            try:
+                response = requests.get(self.BASE_URL, params=params, timeout=30)
+                response.raise_for_status()
+                text_response = response.text
+                if "Error Message" in text_response or "Invalid API call" in text_response:
+                    logger.error(f"Bulk quotes API returned an error: {text_response[:200]}")
+                    return None
+                return self._parse_bulk_quotes_csv(text_response)
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Bulk quotes request failed (attempt {attempt + 1}/{self.retries}): {e}")
+                if attempt < self.retries - 1:
+                    time.sleep(self.backoff_factor * (2 ** attempt))
+        return None
 
-@app.get("/api/v1/system/alert", response_model=schemas.SystemAlert)
-def get_system_alert(db: Session = Depends(get_db)):
-    """Pobiera i czyści globalny alert systemowy."""
-    alert_message = crud.get_system_control_value(db, "system_alert")
+    def get_company_overview(self, symbol: str):
+        params = {"function": "OVERVIEW", "symbol": symbol}
+        return self._make_request(params)
 
-    if alert_message and alert_message != 'NONE':
-         try:
-            # Ustawiamy alert na NONE tylko jeśli go pobraliśmy
-            crud.set_system_control_value(db, "system_alert", "NONE")
-            return schemas.SystemAlert(message=alert_message)
-         except Exception as e:
-              logger.error(f"Error clearing system alert: {e}", exc_info=True)
-              # W razie błędu czyszczenia, nadal zwracamy wiadomość
-              return schemas.SystemAlert(message=alert_message)
+    def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
+        params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
+        return self._make_request(params)
 
-    # Jeśli nie było alertu, zwracamy NONE
-    return schemas.SystemAlert(message="NONE")
+    def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True):
+        params = {
+            "function": "TIME_SERIES_INTRADAY",
+            "symbol": symbol,
+            "interval": interval,
+            "outputsize": outputsize,
+            "extended_hours": "true" if extended_hours else "false"
+        }
+        return self._make_request(params)
+
+    def get_atr(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ATR", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_rsi(self, symbol: str, time_period: int = 9, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "RSI", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
+        return self._make_request(params)
+
+    def get_stoch(self, symbol: str, interval: str = 'daily'):
+        params = {"function": "STOCH", "symbol": symbol, "interval": interval}
+        return self._make_request(params)
+
+    def get_adx(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ADX", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_macd(self, symbol: str, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "MACD", "symbol": symbol, "interval": interval, "series_type": series_type}
+        return self._make_request(params)
+
+    def get_bollinger_bands(self, symbol: str, time_period: int = 20, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "BBANDS", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
+        return self._make_request(params)
+
+    def get_news_sentiment(self, ticker: str, limit: int = 50):
+        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)}
+        return self._make_request(params)
+
+    @staticmethod
+    def _safe_float(value) -> float | None:
+        if value is None: return None
+        try:
+            if isinstance(value, str):
+                value = value.replace(',', '').replace('%', '')
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+    
+    def get_live_quote_details(self, symbol: str) -> dict:
+        """
+        Pobiera pełne dane "live" (REALTIME_BULK_QUOTES) oraz status rynku,
+        zwracając ustandaryzowany słownik w stylu Yahoo Finance.
+        """
+        us_market_status = "closed"
+        try:
+            status_data = self.get_market_status()
+            if status_data and status_data.get('markets'):
+                us_market = next((m for m in status_data['markets'] if m.get('region') == 'United States'), None)
+                if us_market:
+                    us_market_status = us_market.get('current_status', 'closed').lower()
+        except Exception as e:
+            logger.warning(f"Nie można pobrać statusu rynku dla {symbol}: {e}. Przyjęto 'closed'.")
+
+        raw_data = self.get_bulk_quotes([symbol])
+        
+        if not raw_data or symbol not in raw_data:
+            logger.error(f"Brak danych live (REALTIME_BULK_QUOTES) dla {symbol}")
+            return {
+                "symbol": symbol, "market_status": us_market_status,
+                "regular_session": {}, "extended_session": {}, "live_price": None
+            }
+            
+        ticker_data = raw_data[symbol]
+
+        regular_close_price = self._safe_float(ticker_data.get('previous close'))
+        
+        response = {
+            "symbol": symbol,
+            "market_status": us_market_status,
+            "regular_session": {
+                "price": regular_close_price,
+                "change": self._safe_float(ticker_data.get('change')),
+                "change_percent": self._safe_float(ticker_data.get('change_percent'))
+            },
+            "extended_session": {
+                "price": self._safe_float(ticker_data.get('extended_hours_price')),
+                "change": self._safe_float(ticker_data.get('extended_hours_change')),
+                "change_percent": self._safe_float(ticker_data.get('extended_hours_change_percent'))
+            },
+            "live_price": self._safe_float(ticker_data.get('price')) 
+        }
+        
+        if us_market_status in ["pre-market", "post-market"] and response["extended_session"]["price"] is not None:
+             response["live_price"] = response["extended_session"]["price"]
+        elif us_market_status == "regular":
+             response["live_price"] = self._safe_float(ticker_data.get('price'))
+        elif us_market_status == "closed":
+             response["live_price"] = response["extended_session"]["price"] or response["regular_session"]["price"]
+        
+        return response
 
