@@ -50,6 +50,20 @@ class TransactionHistory(TransactionHistoryBase):
 # === Pozostałe, istniejące schematy (bez zmian) ===
 # ==========================================================
 
+# NOWA: Definicja dla nowego, bogatego obiektu ceny
+class LiveQuoteSession(BaseModel):
+    price: Optional[float] = None
+    change: Optional[float] = None
+    change_percent: Optional[float] = None
+
+class LiveQuoteDetails(BaseModel):
+    symbol: str
+    market_status: str
+    regular_session: LiveQuoteSession
+    extended_session: LiveQuoteSession
+    live_price: Optional[float] = None
+
+
 class AIAnalysisRequestResponse(BaseModel):
     message: str
     ticker: str
@@ -119,7 +133,8 @@ class AIAnalysisResult(BaseModel):
 
     # Pola dla statusu "DONE"
     ticker: Optional[str] = None
-    quote_data: Optional[Dict[str, Any]] = None # Zmieniono na Dict[str, Any]
+    # ZMIANA: quote_data będzie teraz naszą nową, bogatą strukturą
+    quote_data: Optional[Dict[str, Any]] = None # Pozostawiamy jako Dict dla elastyczności
     market_info: Optional[Dict[str, Any]] = None # Zmieniono na Dict[str, Any]
     overall_score: Optional[int] = None
     max_score: Optional[int] = None
@@ -130,3 +145,4 @@ class AIAnalysisResult(BaseModel):
     analysis_timestamp_utc: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
