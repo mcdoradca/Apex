@@ -43,7 +43,10 @@ def _update_price_cache_for_ticker(session: Session, ticker: str, quote_data: Di
     try:
         data_to_cache = {
             'ticker': ticker,
-            'quote_data': json.dumps(quote_data),
+            # === POPRAWKA 1 (Worker) ===
+            # Usunięto json.dumps(). Zapisujemy bezpośrednio słownik (dict).
+            # Baza (JSONB) sama zajmie się serializacją.
+            'quote_data': quote_data, # ZAMIAST: json.dumps(quote_data),
             'last_updated': datetime.now(timezone.utc)
         }
         stmt = pg_insert(LivePriceCache).values(data_to_cache)
@@ -289,7 +292,7 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
         chunk_size = 50
         for i in range(0, len(unique_tickers), chunk_size):
             chunk = unique_tickers[i:i+chunk_size]
-            logger.debug(f"Fetching price chunk: {', '.join(chunk)}")
+            logger.debug(f"Fetching price chunk: {','.join(chunk)}")
             try:
                 for ticker in chunk:
                     time.sleep(0.4)
@@ -299,7 +302,9 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
                             fetch_count += 1
                             prices_to_cache.append({
                                 'ticker': ticker,
-                                'quote_data': json.dumps(quote_data),
+                                # === POPRAWKA 2 (Worker) ===
+                                # Usunięto json.dumps(). Zapisujemy bezpośrednio słownik (dict).
+                                'quote_data': quote_data, # ZAMIAST: json.dumps(quote_data),
                                 'last_updated': datetime.now(timezone.utc)
                             })
                         else: logger.warning(f"Failed to fetch valid quote_data for cache ({ticker}). API Response: {quote_data}")
