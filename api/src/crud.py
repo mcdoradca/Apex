@@ -1,11 +1,10 @@
+import json
 from sqlalchemy.orm import Session
 from sqlalchemy import text, desc, func, update, delete
 from . import models, schemas
 from typing import Optional, Any, Dict, List
 from datetime import date, datetime, timezone
 import logging
-# Dodano import json, ponieważ w oryginalnej wersji API musiał parsać dane z JSONB
-import json 
 # Używamy Decimal do precyzyjnych obliczeń finansowych
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -292,20 +291,9 @@ def set_system_control_value(db: Session, key: str, value: str):
 def get_ai_analysis_result(db: Session, ticker: str) -> Optional[Dict[str, Any]]:
     """Pobiera wynik analizy AI jako słownik Python."""
     try:
-        # analysis_data jest typu JSONB, ale Worker ZAPISUJE go jako string JSON
+        # analysis_data jest typu JSONB, SQLAlchemy >1.4 zwraca go jako dict
         result = db.query(models.AIAnalysisResult.analysis_data).filter(models.AIAnalysisResult.ticker == ticker).first()
-        
-        if result and isinstance(result[0], str):
-            # PRZYWRÓCONO: Wymagane jest parowanie JSON, jeśli Worker zapisuje jako string
-            try:
-                return json.loads(result[0])
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to decode JSON from AI analysis result for {ticker}: {e}")
-                return None
-        
-        # Jeśli to już jest dict (np. PostgreSQL z JSONB), po prostu zwróć
         return result[0] if result else None
-        
     except Exception as e:
          logger.error(f"Error getting AI analysis result for {ticker}: {e}")
          raise
@@ -325,8 +313,7 @@ def delete_ai_analysis_result(db: Session, ticker: str):
         # ale logujemy, żeby wiedzieć o problemie.
 
 
-# === PRZYWRÓCONA FUNKCJA do czytania cen z cache (Z PARSOWANIEM JSON) ===
-
+# === POPRAWKA BŁĘDU #5: Nowa funkcja do czytania cen z cache ===
 def get_live_price_from_cache(db: Session, ticker: str) -> Optional[Dict[str, Any]]:
     """
     Pobiera najnowsze dane cenowe (jako dict) z tabeli cache.
@@ -335,20 +322,25 @@ def get_live_price_from_cache(db: Session, ticker: str) -> Optional[Dict[str, An
     try:
         result = db.query(models.LivePriceCache.quote_data).filter(models.LivePriceCache.ticker == ticker).first()
         
-        if result:
-            cached_data = result[0]
-            if isinstance(cached_data, str):
-                # PRZYWRÓCONO: Jeśli Worker zapisuje string, API musi go sparować
-                try:
-                    return json.loads(cached_data)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to decode JSON from live price cache for {ticker}: {e}")
-                    return None
+        if not result:
+            return None
             
-            # Jeśli to już jest dict (PostgreSQL JSONB z automatu), po prostu zwróć
-            return cached_data
-
-        return None
+        cached_data = result[0]
+        
+        # DODANA LOGIKA: Obsługa przypadków, gdy z bazy dostajemy string zamiast dict (np. błąd workera)
+        # Błąd 'TypeError: src.schemas.LiveQuoteDetails() argument after ** must be a mapping, not str'
+        if isinstance(cached_data, str):
+            try:
+                # Jeśli to string, spróbuj parsować jako JSON
+                return json.loads(cached_data)
+            except json.JSONDecodeError as json_e:
+                logger.error(f"Failed to decode JSON string from cache for {ticker}: {json_e}")
+                # Jeśli parsowanie zawiedzie, zwracamy None, aby frontend obsłużył błąd 404
+                return None
+        
+        # Jeśli dane są już słownikiem (poprawne zachowanie JSONB)
+        return cached_data
+        
     except Exception as e:
         logger.error(f"Error getting live price from cache for {ticker}: {e}")
         # Rzucamy błąd, aby endpoint API wiedział o problemie
