@@ -3,230 +3,225 @@ import requests
 import logging
 import json
 from collections import deque
-import os # Dodano import os
-from dotenv import load_dotenv # Dodano import dotenv
+import os
+from dotenv import load_dotenv
 from io import StringIO
 import csv
+# POPRAWKA BŁĘDU #3: Dodanie importów do obsługi czasu
+from datetime import datetime
+import pytz
 # Zmieniono ścieżkę importu, aby pasowała do struktury workera
-from ..models import Base
+# Usunięto import Base, bo nie jest tu potrzebny
+# from ..models import Base
 
-load_dotenv() # Dodano wywołanie load_dotenv
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Dodano pobieranie API_KEY specyficznie dla workera
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 if not API_KEY:
-    # Zmieniono na warning, bo worker może mieć klucz w innym miejscu? Lepiej jednak, żeby był.
     logger.warning("ALPHAVANTAGE_API_KEY not found in environment for Worker's client.")
 
 
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    # Używamy API_KEY zdefiniowanego wyżej jako domyślny
     def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
-            # Zmieniono na warning, bo może być dostarczony później? Ale lepiej ostrzec.
             logger.warning("API key is missing or empty for AlphaVantageClient instance in Worker.")
-            # raise ValueError("API key cannot be empty.") # Usunięto rzucanie błędem, aby worker mógł potencjalnie działać dalej lub pobrać klucz inaczej
         self.api_key = api_key
         self.retries = retries
         self.backoff_factor = backoff_factor
-        self.requests_per_minute = requests_per_minute
-        self.request_interval = 60.0 / requests_per_minute
+        # Dostosowanie limitu, aby zostawić margines (np. 140 zamiast 150)
+        self.requests_per_minute = requests_per_minute - 10
+        self.request_interval = 60.0 / self.requests_per_minute if self.requests_per_minute > 0 else 0.5 # Minimalny odstęp
         self.request_timestamps = deque()
 
     def _rate_limiter(self):
-        # Sprawdzenie api_key na początku
+        """Implementuje mechanizm ograniczania zapytań API."""
         if not self.api_key:
              logger.warning("Rate limiting skipped: API key is missing.")
-             return # Nie rób nic jeśli nie ma klucza
-        # Reszta logiki bez zmian
-        while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
+             return
+        now = time.monotonic()
+        # Usuń stare znaczniki czasu (starsze niż 60 sekund)
+        while self.request_timestamps and (now - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
+        # Sprawdź, czy osiągnięto limit
         if len(self.request_timestamps) >= self.requests_per_minute:
-            time_to_wait = 60 - (time.monotonic() - self.request_timestamps[0])
+            time_since_oldest = now - self.request_timestamps[0]
+            time_to_wait = 60.1 - time_since_oldest # Dodano mały margines
             if time_to_wait > 0:
-                logger.warning(f"Rate limit reached. Sleeping for {time_to_wait:.2f} seconds.")
+                logger.warning(f"Rate limit approx. reached ({len(self.request_timestamps)} reqs). Sleeping for {time_to_wait:.2f} seconds.")
                 time.sleep(time_to_wait)
-        # Poprawka: Czekaj tylko jeśli są jakieś timestampy i czas od ostatniego jest za krótki
+                # Po odczekaniu, zaktualizuj 'now' i ponownie usuń stare znaczniki
+                now = time.monotonic()
+                while self.request_timestamps and (now - self.request_timestamps[0] > 60):
+                     self.request_timestamps.popleft()
+        # Sprawdź minimalny odstęp między zapytaniami
         if self.request_timestamps:
-            time_since_last = time.monotonic() - self.request_timestamps[-1]
+            time_since_last = now - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
-                 # Dodano mały margines, żeby uniknąć zbyt dokładnego trafienia w limit
-                 sleep_duration = self.request_interval - time_since_last + 0.01
+                 sleep_duration = self.request_interval - time_since_last
                  logger.debug(f"Throttling request. Sleeping for {sleep_duration:.3f} seconds.")
                  time.sleep(sleep_duration)
+        # Dodaj nowy znacznik czasu
         self.request_timestamps.append(time.monotonic())
 
 
     def _make_request(self, params: dict, is_fallback: bool = False):
+        """Wykonuje zapytanie do API Alpha Vantage z obsługą błędów i ponowień."""
         if not self.api_key:
-            # Dla fallbacku tylko ostrzegamy, dla normalnego błąd
             log_func = logger.warning if is_fallback else logger.error
             log_func("Cannot make Alpha Vantage request: API key is missing.")
             return None
 
-        # Używamy _rate_limiter() tylko dla głównych zapytań
         if not is_fallback:
             self._rate_limiter()
 
         params['apikey'] = self.api_key
         request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
-        max_retries = 1 if is_fallback else self.retries # Mniej prób dla fallbacku
+        max_retries = 1 if is_fallback else self.retries
 
         for attempt in range(max_retries):
             try:
-                # Logowanie poziomu DEBUG dla zwykłych zapytań, INFO dla fallbacku (żeby go widzieć)
                 log_level = logging.INFO if is_fallback else logging.DEBUG
                 logger.log(log_level, f"Making AV request for {request_identifier} (Attempt {attempt+1}/{max_retries}). Function: {params.get('function')}")
 
-                response = requests.get(self.BASE_URL, params=params, timeout=15 if is_fallback else 30) # Krótszy timeout dla fallbacku
-                response.raise_for_status() # Sprawdza błędy HTTP (4xx, 5xx)
+                response = requests.get(self.BASE_URL, params=params, timeout=15 if is_fallback else 30)
+                response.raise_for_status()
 
                 # --- Obsługa CSV ---
                 if params.get('datatype') == 'csv':
                     text_response = response.text
-                    # Sprawdzenie czy odpowiedź nie jest pusta lub nie jest HTMLem błędu
                     if not text_response or text_response.strip().startswith('<'):
                          logger.error(f"Alpha Vantage API returned empty or non-CSV response for {request_identifier}. Response: {text_response[:200]}")
                          return None
-                    # Sprawdzenie typowych błędów w treści CSV
                     if "Error Message" in text_response or "Invalid API call" in text_response:
                         logger.error(f"Alpha Vantage API returned an error (CSV): {text_response[:200]}")
-                        # Dodatkowe opóźnienie przy błędach API, nawet w CSV
                         if "premium" in text_response.lower() and not is_fallback:
                             logger.error(f"CSV API call for {request_identifier} failed due to premium limit. Waiting longer.")
                             time.sleep(20)
                         return None
-                    return text_response # Zwracamy tekst CSV
+                    return text_response
 
                 # --- Obsługa JSON ---
                 data = response.json()
-                # Sprawdzenie czy odpowiedź nie jest pusta lub nie zawiera typowych błędów AV
                 if not data or "Error Message" in data or "Information" in data:
-                    log_func = logger.warning if is_fallback else logger.error
-                    log_func(f"API returned an error or empty data for {request_identifier}: {data}")
-                    if "premium" in str(data).lower() and not is_fallback:
-                         logger.error(f"API call for {request_identifier} failed due to premium limit. Waiting longer.")
-                         time.sleep(20)
-                    return None
-                return data # Zwracamy sparsowany JSON
+                    # Sprawdzenie komunikatu o limicie zapytań
+                    info_msg = str(data.get("Information", "")).lower()
+                    if "premium" in info_msg or "call frequency" in info_msg:
+                         logger.error(f"API call limit reached for {request_identifier}: {data.get('Information')}. Waiting significantly longer.")
+                         time.sleep(60) # Czekamy minutę przy problemach z limitem
+                         # Kontynuujemy pętlę ponowień po odczekaniu
+                         continue
+                    else:
+                        # Inny błąd lub puste dane
+                        log_func = logger.warning if is_fallback else logger.error
+                        log_func(f"API returned an error or empty data for {request_identifier}: {data}")
+                        return None # Zwracamy None przy innych błędach
+
+                return data
 
             except requests.exceptions.HTTPError as http_err:
-                 # Błąd HTTP (np. 404, 500, 429)
                  log_func = logger.warning if is_fallback else logger.error
                  log_func(f"HTTP error occurred for {request_identifier} (Attempt {attempt + 1}/{max_retries}): {http_err} - Status: {http_err.response.status_code}")
-                 # Można dodać specyficzną obsługę 429 (Too Many Requests) jeśli potrzebne
+                 # Dodatkowa obsługa 429 (Too Many Requests) - chociaż AV rzadko go używa
+                 if http_err.response.status_code == 429:
+                     logger.warning(f"Received HTTP 429 (Too Many Requests) for {request_identifier}. Waiting...")
+                     time.sleep(15) # Dodatkowe czekanie
 
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-                # Inne błędy sieciowe, timeouty, błędy parsowania JSON
                  log_func = logger.warning if is_fallback else logger.error
                  log_func(f"Request failed for {request_identifier} (attempt {attempt + 1}/{max_retries}): {e}")
 
-            # Czekanie przed ponowieniem (tylko jeśli to nie ostatnia próba)
             if attempt < max_retries - 1:
                 sleep_time = self.backoff_factor * (2 ** attempt)
                 logger.info(f"Retrying request for {request_identifier} in {sleep_time:.2f} seconds...")
                 time.sleep(sleep_time)
 
-        # Jeśli pętla się zakończyła bez sukcesu
         logger.error(f"Request failed for {request_identifier} after {max_retries} attempts.")
         return None
 
-    def get_market_status(self):
-        """Pobiera aktualny status rynku z dedykowanego endpointu."""
-        params = {"function": "MARKET_STATUS"}
-        return self._make_request(params)
+    # USUNIĘTO funkcję get_market_status(), ponieważ polegamy na czasie
 
     def _parse_bulk_quotes_csv(self, csv_text: str) -> dict:
         """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
-        if not csv_text or "symbol" not in csv_text.lower(): # Sprawdzamy case-insensitive
+        if not csv_text or "symbol" not in csv_text.lower():
             logger.warning("[CSV PARSER] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'. Treść: %s", csv_text[:200])
             return {}
 
         csv_file = StringIO(csv_text)
         try:
             reader = csv.DictReader(csv_file)
-            # Sprawdzenie czy nagłówki istnieją
             if not reader.fieldnames:
                  logger.warning("[CSV PARSER] CSV nie zawiera nagłówków.")
                  return {}
 
-            # Normalizacja nagłówków (małe litery, zamiana spacji na podkreślniki)
             normalized_fieldnames = [name.lower().strip().replace(' ', '_') for name in reader.fieldnames]
             logger.debug(f"[CSV PARSER] Normalized headers: {normalized_fieldnames}")
-            # Przypisanie znormalizowanych nagłówków do czytnika
             reader.fieldnames = normalized_fieldnames
 
             data_dict = {}
             row_count = 0
             for row in reader:
                 row_count += 1
-                ticker = row.get('symbol') # Klucz 'symbol' jest już znormalizowany
+                ticker = row.get('symbol')
                 if not ticker:
                     logger.warning(f"[CSV PARSER] Row {row_count} has no 'symbol'. Skipping row: {row}")
                     continue
 
-                # Klucze, których *oczekujemy* po normalizacji i poprawkach
-                expected_keys_after_fix = ['symbol', 'price', 'previous_close', 'extended_hours_quote', 'close'] # Dodano 'close' do sprawdzanych
-                # Sprawdzamy czy klucze istnieją i czy wartości nie są puste
-                missing_keys_in_row = [key for key in expected_keys_after_fix if row.get(key) is None or str(row.get(key)).strip() == ""]
+                # Klucze, których *oczekujemy* po normalizacji
+                expected_keys = ['symbol', 'price', 'previous_close', 'extended_hours_quote', 'close', 'change', 'change_percent', 'extended_hours_change', 'extended_hours_change_percent', 'latest_trading_day']
+                missing_keys_in_row = [key for key in expected_keys if row.get(key) is None or str(row.get(key)).strip() == ""]
 
-                # Ostrzeżenie tylko jeśli brakuje *cen* (price, previous_close, extended_hours_quote, close)
                 missing_prices = [k for k in ['price', 'previous_close', 'extended_hours_quote', 'close'] if k in missing_keys_in_row]
                 if missing_prices:
-                    # Zmieniono poziom logowania na DEBUG, żeby nie zaśmiecać przy normalnych pustych polach (np. extended w regular)
                     logger.debug(f"[CSV PARSER] Ticker {ticker} - Row {row_count} has missing/empty PRICE values for keys: {missing_prices}. Row content: {row}")
 
-                # Zapisujemy cały wiersz (z znormalizowanymi kluczami) do słownika
                 data_dict[ticker] = row
 
             if not data_dict:
                  logger.warning("[CSV PARSER] Parsowanie CSV zakończone, ale nie znaleziono żadnych danych tickerów.")
             return data_dict
         except csv.Error as csv_err:
-             # Błędy specyficzne dla parsowania CSV
              logger.error(f"[CSV PARSER] Błąd podczas parsowania CSV: {csv_err}. Treść CSV (początek): {csv_text[:500]}")
              return {}
         except Exception as e:
-             # Inne, nieoczekiwane błędy
              logger.error(f"[CSV PARSER] Nieoczekiwany błąd podczas parsowania CSV: {e}. Treść CSV (początek): {csv_text[:500]}", exc_info=True)
              return {}
 
     def get_bulk_quotes(self, symbols: list[str]):
         """Pobiera dane BULK_QUOTES w formacie CSV i parsuje je."""
-        # Dodatkowe sprawdzenie klucza przed wywołaniem
         if not self.api_key:
             logger.error("Cannot get bulk quotes: API key is missing.")
             return None
-        params = {
-            "function": "REALTIME_BULK_QUOTES",
-            "symbol": ",".join(symbols),
-            "datatype": "csv"
-            # api_key zostanie dodany przez _make_request
-        }
-        csv_text = self._make_request(params) # _make_request obsłuży logowanie błędów API
-        if csv_text is None:
-             # Logowanie błędu pobrania danych już w _make_request
-             # logger.error(f"Nie udało się pobrać danych bulk quotes (CSV) dla: {','.join(symbols)}")
-             return None # Zwracamy None jeśli pobranie się nie powiodło
-
-        # Parsujemy otrzymany tekst CSV
-        parsed_data = self._parse_bulk_quotes_csv(csv_text)
-        # _parse_bulk_quotes_csv obsłuży logowanie błędów parsowania
-        return parsed_data # Zwracamy sparsowany słownik (może być pusty)
+        # Ogranicz liczbę symboli na zapytanie (np. do 100)
+        chunk_size = 100
+        all_parsed_data = {}
+        for i in range(0, len(symbols), chunk_size):
+             chunk = symbols[i:i + chunk_size]
+             logger.debug(f"Fetching bulk quotes for chunk: {','.join(chunk)}")
+             params = {
+                 "function": "REALTIME_BULK_QUOTES",
+                 "symbol": ",".join(chunk),
+                 "datatype": "csv"
+             }
+             csv_text = self._make_request(params)
+             if csv_text:
+                 parsed_chunk = self._parse_bulk_quotes_csv(csv_text)
+                 all_parsed_data.update(parsed_chunk)
+             else:
+                 logger.warning(f"Failed to fetch bulk quotes for chunk starting with {chunk[0]}.")
+                 # Można dodać logikę ponowienia dla chunka, ale na razie pomijamy
+        return all_parsed_data
 
 
     def get_global_quote_json(self, symbol: str):
         """Pobiera dane GLOBAL_QUOTE w formacie JSON (używane jako fallback)."""
-        # Dodatkowe sprawdzenie klucza
         if not self.api_key:
             logger.warning("Cannot get global quote (fallback): API key is missing.")
             return None
         params = {"function": "GLOBAL_QUOTE", "symbol": symbol}
-        # Używamy flagi is_fallback=True
         return self._make_request(params, is_fallback=True)
 
     # --- Pozostałe metody pobierania danych (bez zmian logiki, tylko _make_request) ---
@@ -251,6 +246,11 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_rsi(self, symbol: str, time_period: int = 9, interval: str = 'daily', series_type: str = 'close'):
+        # Dodano walidację interwału dla RSI
+        valid_rsi_intervals = ['1min', '5min', '15min', '30min', '60min', 'daily', 'weekly', 'monthly']
+        if interval not in valid_rsi_intervals:
+            logger.error(f"Invalid interval '{interval}' for RSI. Using 'daily'.")
+            interval = 'daily'
         params = {"function": "RSI", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
         return self._make_request(params)
 
@@ -279,171 +279,178 @@ class AlphaVantageClient:
     def _safe_float(value) -> float | None:
         """Bezpiecznie konwertuje wartość na float."""
         if value is None: return None
-        # Obsługa int/float bezpośrednio
         if isinstance(value, (int, float)): return float(value)
-        # Obsługa stringów
         if isinstance(value, str):
-            # Czyszczenie stringa
             cleaned_value = value.strip().replace(',', '').replace('%', '')
-            # Sprawdzenie czy pusty lub znane wartości nieliczbowe
             if not cleaned_value or cleaned_value.lower() in ['n/a', 'none', '-']: return None
-            # Próba konwersji
             try: return float(cleaned_value)
             except (ValueError, TypeError):
                 logger.debug(f"[_safe_float] Could not convert cleaned string '{cleaned_value}' to float.")
                 return None
-        # Próba konwersji innych typów (mało prawdopodobne, ale dla bezpieczeństwa)
         try: return float(value)
         except (ValueError, TypeError):
              logger.debug(f"[_safe_float] Could not convert value '{value}' (type: {type(value)}) to float.")
              return None
 
 
+    # === POPRAWKA BŁĘDU #3: Przepisanie funkcji get_live_quote_details ===
+    # Rezygnujemy z endpointu MARKET_STATUS na rzecz ręcznego sprawdzania czasu.
     def get_live_quote_details(self, symbol: str) -> dict:
         """
-        Pobiera dane live z POPRAWIONĄ LOGIKĄ FALLBACKU dla otwartego rynku.
-        Używa pola 'close' z CSV jako źródła latest_trade price.
+        Pobiera dane live i SAMODZIELNIE określa status rynku na podstawie
+        aktualnego czasu w strefie US/Eastern.
+        Zwraca ujednolicony słownik z danymi.
         """
         logger.info(f"[DIAG] Rozpoczynanie get_live_quote_details dla {symbol}")
-        us_market_status = "unknown"
-        # --- Pobieranie Statusu Rynku ---
+
+        # --- Ustalanie Statusu Rynku na podstawie czasu ---
         try:
-            status_data = self.get_market_status() # Używa _make_request
-            if status_data and status_data.get('markets'):
-                us_market = next((m for m in status_data['markets'] if m.get('region') == 'United States'), None)
-                if us_market: us_market_status = us_market.get('current_status', 'unknown').lower()
-                logger.info(f"[DIAG] Ustalony status rynku USA dla {symbol}: {us_market_status}")
+            tz = pytz.timezone('US/Eastern')
+            now_ny = datetime.now(tz)
+            time_ny_str = now_ny.strftime('%H:%M:%S ET')
+            date_ny_str = now_ny.strftime('%Y-%m-%d')
+            time_ny_H = now_ny.hour
+            time_ny_M = now_ny.minute
+
+            # Logika statusu (uwzględnia handel przed i posesyjny)
+            # Pre-Market: 4:00 - 9:29 ET
+            if (time_ny_H >= 4 and time_ny_H < 9) or (time_ny_H == 9 and time_ny_M < 30):
+                us_market_status = "PRE_MARKET"
+            # Regular Session: 9:30 - 15:59 ET
+            elif (time_ny_H == 9 and time_ny_M >= 30) or (time_ny_H > 9 and time_ny_H < 16):
+                us_market_status = "REGULAR"
+            # Post-Market: 16:00 - 19:59 ET
+            elif (time_ny_H >= 16 and time_ny_H < 20):
+                 us_market_status = "POST_MARKET"
+            # Closed: Poza tymi godzinami
             else:
-                logger.warning(f"[DIAG] Brak 'markets' w odpowiedzi statusu dla {symbol}. Odpowiedź: {status_data}")
+                us_market_status = "CLOSED"
+
+            logger.info(f"[DIAG] Ustalony status rynku (wg czasu) dla {symbol}: {us_market_status} (Czas NY: {time_ny_str})")
+
         except Exception as e:
-            # Błędy w get_market_status są już logowane w _make_request
-            logger.error(f"[DIAG] Nie udało się ustalić statusu rynku dla {symbol}: {e}", exc_info=False)
-            us_market_status = "unknown" # Ustawiamy na unknown w razie błędu
+            logger.error(f"[DIAG] Nie udało się ustalić czasu NY: {e}", exc_info=False)
+            us_market_status = "UNKNOWN"
+            time_ny_str = "N/A"
+            date_ny_str = "N/A"
+
+        # --- Inicjalizacja odpowiedzi ---
+        response = {
+            "symbol": symbol,
+            "market_status_internal": us_market_status, # Używamy _internal dla jasności
+            "time_ny": time_ny_str,
+            "date_ny": date_ny_str,
+            "regular_session": {"price": None, "change": None, "change_percent": None},
+            "extended_session": {"price": None, "change": None, "change_percent": None},
+            "live_price": None
+        }
+        trigger_fallback = False # Czy potrzebujemy fallbacku do JSON?
 
         # --- Etap 1: Próba pobrania danych z BULK_QUOTES (CSV) ---
-        raw_data_csv = self.get_bulk_quotes([symbol]) # Używa _make_request i _parse_bulk_quotes_csv
-        determined_live_price = None # Zmienna na ostateczną cenę
-        trigger_fallback = False # Flaga do uruchomienia fallbacku
-        response = { # Szkielet odpowiedzi
-            "symbol": symbol, "market_status": us_market_status,
-            "regular_session": {}, "extended_session": {}, "live_price": None
-        }
+        raw_data_csv = self.get_bulk_quotes([symbol])
 
-        # --- Zmienne na ceny z CSV (inicjowane jako None) ---
-        regular_close_price_csv = None
-        extended_price_csv = None
-        latest_trade_price_csv = None # Cena z pola 'close' w CSV
-
-        # --- Przetwarzanie danych z CSV (jeśli dostępne) ---
         if raw_data_csv and symbol in raw_data_csv:
-            ticker_data = raw_data_csv[symbol] # Słownik z danymi dla tickera
+            ticker_data = raw_data_csv[symbol]
             logger.debug(f"[DIAG] Surowe dane dla {symbol} z CSV po normalizacji: {ticker_data}")
 
-            # Odczytujemy ceny z poprawnymi kluczami, używając _safe_float
+            # Odczytujemy wszystkie potrzebne pola z CSV
             regular_close_price_csv = self._safe_float(ticker_data.get('previous_close'))
             extended_price_csv = self._safe_float(ticker_data.get('extended_hours_quote'))
-            latest_trade_price_csv = self._safe_float(ticker_data.get('close')) # Używamy 'close'
+            latest_trade_price_csv = self._safe_float(ticker_data.get('close'))
+            regular_change_csv = self._safe_float(ticker_data.get('change'))
+            regular_change_percent_csv = self._safe_float(ticker_data.get('change_percent'))
+            extended_change_csv = self._safe_float(ticker_data.get('extended_hours_change'))
+            extended_change_percent_csv = self._safe_float(ticker_data.get('extended_hours_change_percent'))
+            latest_trading_day_csv = ticker_data.get('latest_trading_day') # Zachowujemy jako string
 
-            # Odczytujemy zmiany (niezależnie od cen)
-            regular_change = self._safe_float(ticker_data.get('change'))
-            regular_change_percent = self._safe_float(ticker_data.get('change_percent'))
-            extended_change = self._safe_float(ticker_data.get('extended_hours_change'))
-            extended_change_percent = self._safe_float(ticker_data.get('extended_hours_change_percent'))
+            logger.info(f"[DIAG-CSV] {symbol} - Ceny po konwersji: regular_close={regular_close_price_csv}, extended={extended_price_csv}, latest_trade={latest_trade_price_csv}")
 
-            logger.info(f"[DIAG-CSV] {symbol} - Ceny po konwersji: regular_close={regular_close_price_csv}, extended_price={extended_price_csv}, latest_trade={latest_trade_price_csv}")
+            # Wypełniamy pola odpowiedzi danymi z CSV
+            response["regular_session"] = {"price": regular_close_price_csv, "change": regular_change_csv, "change_percent": regular_change_percent_csv}
+            response["extended_session"] = {"price": extended_price_csv, "change": extended_change_csv, "change_percent": extended_change_percent_csv}
 
-            # Wypełnienie sesji w odpowiedzi danymi z CSV (nawet jeśli ceny są None)
-            response["regular_session"] = {"price": regular_close_price_csv, "change": regular_change, "change_percent": regular_change_percent}
-            response["extended_session"] = {"price": extended_price_csv, "change": extended_change, "change_percent": extended_change_percent}
-
-            # --- Logika Wyboru Ceny na Podstawie Danych CSV i Statusu Rynku ---
-            # (Używa cen * _csv odczytanych wyżej)
-            if us_market_status in ["pre-market", "post-market"]:
+            # --- Logika Wyboru Ceny Live na podstawie NASZEGO Statusu Rynku ---
+            if us_market_status in ["PRE_MARKET", "POST_MARKET"]:
                 if extended_price_csv is not None:
-                    determined_live_price = extended_price_csv
-                    logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny extended z CSV: {determined_live_price}")
+                    response["live_price"] = extended_price_csv
+                    logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny extended z CSV: {response['live_price']}")
                 else:
                     logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak extended_price z CSV. Uruchamiam fallback.")
                     trigger_fallback = True
 
-            elif us_market_status == "regular" or us_market_status == "open":
+            elif us_market_status == "REGULAR":
                 if latest_trade_price_csv is not None:
-                    determined_live_price = latest_trade_price_csv
-                    logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny latest trade ('close') z CSV: {determined_live_price}")
+                    response["live_price"] = latest_trade_price_csv
+                    logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny latest trade ('close') z CSV: {response['live_price']}")
                 else:
                     logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak latest_trade_price ('close') z CSV. Uruchamiam fallback.")
                     trigger_fallback = True
 
-            elif us_market_status == "closed":
-                 determined_live_price = extended_price_csv if extended_price_csv is not None else regular_close_price_csv
+            elif us_market_status == "CLOSED":
+                 # Dla CLOSED priorytet ma extended, potem regular close
+                 response["live_price"] = extended_price_csv if extended_price_csv is not None else regular_close_price_csv
                  log_source = "extended (CSV)" if extended_price_csv is not None else "regular_close (CSV)"
-                 logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny closed ({log_source}): {determined_live_price}")
-                 if determined_live_price is None:
+                 logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny closed ({log_source}): {response['live_price']}")
+                 if response["live_price"] is None:
                       logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak ceny extended i regular_close z CSV. Uruchamiam fallback.")
                       trigger_fallback = True
-
-            else: # unknown status
-                 logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Nieznany status rynku. Próba ustalenia ceny z CSV, potem fallback.")
-                 determined_live_price = latest_trade_price_csv if latest_trade_price_csv is not None else \
-                                          extended_price_csv if extended_price_csv is not None else \
-                                          regular_close_price_csv
-                 if determined_live_price is None:
-                      logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak jakiejkolwiek ceny z CSV. Uruchamiam fallback.")
-                      trigger_fallback = True
-                 else:
-                      logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny fallback z CSV: {determined_live_price}")
-
-            # Jeśli cena została ustalona z CSV, przypisz ją do odpowiedzi
-            if determined_live_price is not None:
-                response["live_price"] = determined_live_price
+            else: # UNKNOWN status
+                 logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Nieznany status rynku (błąd czasu?). Uruchamiam fallback.")
+                 trigger_fallback = True
 
         else: # Jeśli w ogóle nie było danych CSV dla tickera
-            logger.error(f"[DIAG-CSV] Brak danych bulk quotes (CSV) dla {symbol} po parsowaniu.")
+            logger.error(f"[DIAG-CSV] Brak danych bulk quotes (CSV) dla {symbol} po parsowaniu lub zapytanie API nie powiodło się.")
             trigger_fallback = True # Musimy spróbować fallbacku
 
-        # --- Etap 2: Fallback do GLOBAL_QUOTE (JSON), jeśli trigger_fallback jest True ---
+        # --- Etap 2: Fallback do GLOBAL_QUOTE (JSON), jeśli potrzebny ---
         if trigger_fallback:
             logger.warning(f"[DIAG-FALLBACK] Uruchamianie fallbacku do GLOBAL_QUOTE dla {symbol}...")
-            global_quote_data = self.get_global_quote_json(symbol) # Używa _make_request(is_fallback=True)
-
-            if global_quote_data:
-                 logger.info(f"[DIAG-FALLBACK] Odpowiedź z GLOBAL_QUOTE dla {symbol}: {json.dumps(global_quote_data)}")
-            # else: Błąd pobrania już zalogowany w _make_request
+            global_quote_data = self.get_global_quote_json(symbol)
 
             if global_quote_data and "Global Quote" in global_quote_data:
-                quote = global_quote_data["Global Quote"]
-                fallback_price = self._safe_float(quote.get('05. price'))
+                 quote = global_quote_data["Global Quote"]
+                 logger.info(f"[DIAG-FALLBACK] Odpowiedź z GLOBAL_QUOTE dla {symbol}: {json.dumps(quote)}")
 
-                if fallback_price is not None:
-                    # Jeśli cena z CSV była None LUB jesteśmy w sesji regularnej/open a CSV nie dało ceny live
-                    # (drugi warunek jest ważny, żeby nie nadpisać ceny extended z CSV ceną z GLOBAL_QUOTE)
-                    if response["live_price"] is None or (us_market_status in ["regular", "open"] and latest_trade_price_csv is None):
-                         response["live_price"] = fallback_price
-                         logger.info(f"[DIAG-FALLBACK] {symbol} - Użyto ceny fallback z GLOBAL_QUOTE: {fallback_price}")
-                    else:
-                         logger.warning(f"[DIAG-FALLBACK] {symbol} - Cena została już ustalona z CSV ({response['live_price']}), ignoruję fallback_price ({fallback_price}).")
+                 fallback_price = self._safe_float(quote.get('05. price'))
+                 fallback_prev_close = self._safe_float(quote.get('08. previous close'))
+                 fallback_change = self._safe_float(quote.get('09. change'))
+                 fallback_change_percent_str = quote.get('10. change percent', '').replace('%', '')
+                 fallback_change_percent = self._safe_float(fallback_change_percent_str)
+                 fallback_latest_day = quote.get('07. latest trading day') # String YYYY-MM-DD
 
-                    # Uzupełnianie danych sesji z GLOBAL_QUOTE, jeśli brakowało ich w CSV
-                    if response["regular_session"].get("price") is None: response["regular_session"]["price"] = self._safe_float(quote.get('08. previous close'))
-                    if response["regular_session"].get("change") is None: response["regular_session"]["change"] = self._safe_float(quote.get('09. change'))
-                    if response["regular_session"].get("change_percent") is None:
-                         change_percent_str = quote.get('10. change percent', '').replace('%', '')
-                         response["regular_session"]["change_percent"] = self._safe_float(change_percent_str)
-                else:
-                    logger.error(f"[DIAG-FALLBACK] {symbol} - GLOBAL_QUOTE nie zwrócił poprawnej ceny ('05. price' był: {quote.get('05. price')}).")
-            # else: Błąd formatu odpowiedzi już zalogowany w _make_request
+                 # Używamy ceny z fallbacku tylko jeśli cena live jest nadal None
+                 if response["live_price"] is None and fallback_price is not None:
+                      # Sprawdzenie: Czy fallback_price jest z dzisiaj (jeśli rynek był otwarty)?
+                      # Jeśli rynek jest REGULAR, a data fallbacku nie jest dzisiejsza, to coś jest nie tak.
+                      if us_market_status == "REGULAR" and fallback_latest_day != date_ny_str:
+                          logger.warning(f"[DIAG-FALLBACK] {symbol} - Cena z GLOBAL_QUOTE ({fallback_price}) pochodzi z {fallback_latest_day}, a nie z dzisiaj ({date_ny_str}). Może być nieaktualna.")
+                          # Można zdecydować, czy mimo to jej użyć. Na razie używamy.
+                      response["live_price"] = fallback_price
+                      logger.info(f"[DIAG-FALLBACK] {symbol} - Użyto ceny fallback z GLOBAL_QUOTE: {fallback_price}")
 
-        # --- Ostateczność: Jeśli nadal nie ma ceny live, użyj previous close z CSV (jeśli jest) ---
-        if response["live_price"] is None and regular_close_price_csv is not None:
-             response["live_price"] = regular_close_price_csv
-             logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak ceny live z CSV i GLOBAL_QUOTE. Użyto ceny previous_close z CSV: {regular_close_price_csv} jako ostateczność.")
+                 # Uzupełniamy dane sesji regularnej, jeśli brakowało ich w CSV lub CSV zawiodło
+                 if response["regular_session"]["price"] is None: response["regular_session"]["price"] = fallback_prev_close
+                 if response["regular_session"]["change"] is None: response["regular_session"]["change"] = fallback_change
+                 if response["regular_session"]["change_percent"] is None: response["regular_session"]["change_percent"] = fallback_change_percent
 
+                 # GLOBAL_QUOTE nie ma danych extended, więc nie uzupełniamy response["extended_session"]
+            else:
+                 logger.error(f"[DIAG-FALLBACK] {symbol} - Nie otrzymano poprawnych danych z GLOBAL_QUOTE.")
 
-        # --- Ostatnie logowanie przed zwróceniem ---
+        # --- Ostateczność: Jeśli nadal nie ma ceny live, użyj previous close (z CSV lub fallbacku) ---
         if response["live_price"] is None:
-             logger.error(f"[DIAG-FINAL] {symbol} - Końcowa wartość live_price to NADAL None po CSV, fallbacku i ostateczności! Zwracany obiekt: {response}")
+            final_fallback_price = response["regular_session"].get("price") # price to previous close
+            if final_fallback_price is not None:
+                 response["live_price"] = final_fallback_price
+                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak ceny live z CSV/JSON. Użyto ceny previous_close: {final_fallback_price} jako ostateczność.")
+            else:
+                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak jakiejkolwiek ceny (live, previous_close) do użycia!")
+
+        # --- Końcowe logowanie ---
+        if response["live_price"] is None:
+             logger.error(f"[DIAG-FINAL] {symbol} - Końcowa wartość live_price to NADAL None! Zwracany obiekt: {response}")
         else:
-            # Używamy formatowania f-string dla ceny
-            logger.info(f"[DIAG-FINAL] {symbol} - Zakończono get_live_quote_details. Finalna live_price: {response['live_price']:.4f}. Status: {us_market_status}") # Dodano formatowanie
+            logger.info(f"[DIAG-FINAL] {symbol} - Zakończono get_live_quote_details. Finalna live_price: {response['live_price']:.4f}. Status: {us_market_status}")
 
         return response
+
