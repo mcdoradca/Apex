@@ -1,397 +1,466 @@
-import os
 import time
-import schedule
+import requests
 import logging
-import sys
 import json
-from datetime import datetime, timezone
+from collections import deque
+import os
 from dotenv import load_dotenv
-from sqlalchemy import text, insert, update, func
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
-from sqlalchemy.sql import bindparam
-from typing import List, Optional, Dict, Any # Dodano Dict, Any
-
-from .models import Base, Company, Phase1Candidate, Phase2Result, TradingSignal, PortfolioHolding, LivePriceCache
-from .database import get_db_session, engine
-
-from .analysis import phase1_scanner, phase2_engine, phase3_sniper, ai_agents, utils
-from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
-from .data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .data_ingestion.data_initializer import initialize_database_if_empty
-
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
-logger = logging.getLogger(__name__)
+from io import StringIO
+import csv
+from datetime import datetime
+import pytz
+from typing import Dict, Any, List, Tuple # Dodano Tuple
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
-
 if not API_KEY:
-    logger.critical("ALPHAVANTAGE_API_KEY environment variable not set for Worker. Exiting.")
-    sys.exit(1)
+    logger.warning("ALPHAVANTAGE_API_KEY not found in environment for Worker's client.")
 
-current_state = "IDLE"
-api_client = AlphaVantageClient(api_key=API_KEY)
 
-# === NOWA FUNKCJA POMOCNICZA ===
-def _update_price_cache_for_ticker(session: Session, ticker: str, quote_data: Dict[str, Any]):
-    """Pomocnicza funkcja do zapisu/aktualizacji cache dla pojedynczego tickera."""
-    if not ticker or not quote_data or quote_data.get("live_price") is None:
-        logger.warning(f"[_update_price_cache] Invalid data provided for ticker '{ticker}'. Skipping cache update.")
-        return
-    try:
-        data_to_cache = {
-            'ticker': ticker,
-            # === POPRAWKA 1 (Worker) ===
-            # Usunięto json.dumps(). Zapisujemy bezpośrednio słownik (dict).
-            # Baza (JSONB) sama zajmie się serializacją.
-            'quote_data': quote_data, # ZAMIAST: json.dumps(quote_data),
-            'last_updated': datetime.now(timezone.utc)
-        }
-        stmt = pg_insert(LivePriceCache).values(data_to_cache)
-        update_dict = {
-            LivePriceCache.quote_data: stmt.excluded.quote_data,
-            LivePriceCache.last_updated: stmt.excluded.last_updated
-        }
-        final_stmt = stmt.on_conflict_do_update(
-            index_elements=[LivePriceCache.ticker],
-            set_=update_dict
-        )
-        session.execute(final_stmt)
-        session.commit()
-        logger.info(f"[_update_price_cache] Successfully updated cache for {ticker}.")
-    except Exception as e:
-        logger.error(f"[_update_price_cache] Error updating cache for {ticker}: {e}", exc_info=True)
-        session.rollback()
-# === KONIEC NOWEJ FUNKCJI ===
+class AlphaVantageClient:
+    BASE_URL = "https://www.alphavantage.co/query"
 
-# --- Funkcja obsługi analizy AI na żądanie (ZMIENIONA) ---
-def handle_ai_analysis_request(session: Session):
-    """Sprawdza, wykonuje analizę AI i **natychmiast zapisuje cenę do cache**."""
-    ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
-    if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
-        logger.info(f"AI analysis request received for: {ticker_to_analyze}.")
-        utils.update_system_control(session, 'ai_analysis_request', 'PROCESSING')
-        session.commit()
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+        if not api_key:
+            logger.warning("API key is missing or empty for AlphaVantageClient instance in Worker.")
+        self.api_key = api_key
+        self.retries = retries
+        self.backoff_factor = backoff_factor
+        # Dostosowanie limitu, aby zostawić margines (np. 140 zamiast 150)
+        self.requests_per_minute = requests_per_minute - 10
+        self.request_interval = 60.0 / self.requests_per_minute if self.requests_per_minute > 0 else 0.5 # Minimalny odstęp
+        self.request_timestamps = deque()
 
-        temp_result = {"status": "PROCESSING", "message": "Rozpoczynanie analizy przez agentów AI..."}
-        stmt_temp = text("""
-            INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated)
-            VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET
-            analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
-        """)
-        try:
-            session.execute(stmt_temp, {'ticker': ticker_to_analyze, 'data': json.dumps(temp_result)})
-            session.commit()
-        except Exception as e_temp:
-             logger.error(f"Failed to set PROCESSING status for AI analysis ({ticker_to_analyze}): {e_temp}", exc_info=True)
-             session.rollback()
-             utils.update_system_control(session, 'ai_analysis_request', 'NONE')
-             try: session.commit()
-             except Exception as e_commit_reset: logger.error(f"Failed commit AI req status reset: {e_commit_reset}"); session.rollback()
+    def _rate_limiter(self):
+        """Implementuje mechanizm ograniczania zapytań API."""
+        if not self.api_key:
+             logger.warning("Rate limiting skipped: API key is missing.")
              return
+        now = time.monotonic()
+        # Usuń stare znaczniki czasu (starsze niż 60 sekund)
+        while self.request_timestamps and (now - self.request_timestamps[0] > 60):
+            self.request_timestamps.popleft()
+        # Sprawdź, czy osiągnięto limit
+        if len(self.request_timestamps) >= self.requests_per_minute:
+            time_since_oldest = now - self.request_timestamps[0]
+            time_to_wait = 60.1 - time_since_oldest # Dodano mały margines
+            if time_to_wait > 0:
+                logger.warning(f"Rate limit approx. reached ({len(self.request_timestamps)} reqs). Sleeping for {time_to_wait:.2f} seconds.")
+                time.sleep(time_to_wait)
+                # Po odczekaniu, zaktualizuj 'now' i ponownie usuń stare znaczniki
+                now = time.monotonic()
+                while self.request_timestamps and (now - self.request_timestamps[0] > 60):
+                     self.request_timestamps.popleft()
+        # Sprawdź minimalny odstęp między zapytaniami
+        if self.request_timestamps:
+            time_since_last = now - self.request_timestamps[-1]
+            if time_since_last < self.request_interval:
+                 sleep_duration = self.request_interval - time_since_last
+                 logger.debug(f"Throttling request. Sleeping for {sleep_duration:.3f} seconds.")
+                 time.sleep(sleep_duration)
+        # Dodaj nowy znacznik czasu
+        self.request_timestamps.append(time.monotonic())
 
-        # --- GŁÓWNA ZMIANA LOGIKI ---
-        analysis_result_data: Optional[Dict[str, Any]] = None
-        initial_quote_data: Optional[Dict[str, Any]] = None
+
+    def _make_request(self, params: dict, is_fallback: bool = False):
+        """Wykonuje zapytanie do API Alpha Vantage z obsługą błędów i ponowień."""
+        if not self.api_key:
+            log_func = logger.warning if is_fallback else logger.error
+            log_func("Cannot make Alpha Vantage request: API key is missing.")
+            return None
+
+        if not is_fallback:
+            self._rate_limiter()
+
+        params['apikey'] = self.api_key
+        request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
+        max_retries = 1 if is_fallback else self.retries
+
+        for attempt in range(max_retries):
+            try:
+                log_level = logging.INFO if is_fallback else logging.DEBUG
+                logger.log(log_level, f"Making AV request for {request_identifier} (Attempt {attempt+1}/{max_retries}). Function: {params.get('function')}")
+
+                response = requests.get(self.BASE_URL, params=params, timeout=15 if is_fallback else 30)
+                response.raise_for_status()
+
+                # --- Obsługa CSV ---
+                if params.get('datatype') == 'csv':
+                    text_response = response.text
+                    if not text_response or text_response.strip().startswith('<'):
+                         logger.error(f"Alpha Vantage API returned empty or non-CSV response for {request_identifier}. Response: {text_response[:200]}")
+                         return None
+                    if "Error Message" in text_response or "Invalid API call" in text_response:
+                        logger.error(f"Alpha Vantage API returned an error (CSV): {text_response[:200]}")
+                        if "premium" in text_response.lower() and not is_fallback:
+                            logger.error(f"CSV API call for {request_identifier} failed due to premium limit. Waiting longer.")
+                            time.sleep(20)
+                        return None
+                    return text_response
+
+                # --- Obsługa JSON ---
+                data = response.json()
+                if not data or "Error Message" in data or "Information" in data:
+                    # Sprawdzenie komunikatu o limicie zapytań
+                    info_msg = str(data.get("Information", "")).lower()
+                    if "premium" in info_msg or "call frequency" in info_msg:
+                         logger.error(f"API call limit reached for {request_identifier}: {data.get('Information')}. Waiting significantly longer.")
+                         time.sleep(60) # Czekamy minutę przy problemach z limitem
+                         # Kontynuujemy pętlę ponowień po odczekaniu
+                         continue
+                    else:
+                        # Inny błąd lub puste dane
+                        log_func = logger.warning if is_fallback else logger.error
+                        log_func(f"API returned an error or empty data for {request_identifier}: {data}")
+                        return None # Zwracamy None przy innych błędach
+
+                return data
+
+            except requests.exceptions.HTTPError as http_err:
+                 log_func = logger.warning if is_fallback else logger.error
+                 log_func(f"HTTP error occurred for {request_identifier} (Attempt {attempt + 1}/{max_retries}): {http_err} - Status: {http_err.response.status_code}")
+                 # Dodatkowa obsługa 429 (Too Many Requests) - chociaż AV rzadko go używa
+                 if http_err.response.status_code == 429:
+                     logger.warning(f"Received HTTP 429 (Too Many Requests) for {request_identifier}. Waiting...")
+                     time.sleep(15) # Dodatkowe czekanie
+
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+                 log_func = logger.warning if is_fallback else logger.error
+                 log_func(f"Request failed for {request_identifier} (attempt {attempt + 1}/{max_retries}): {e}")
+
+            if attempt < max_retries - 1:
+                sleep_time = self.backoff_factor * (2 ** attempt)
+                logger.info(f"Retrying request for {request_identifier} in {sleep_time:.2f} seconds...")
+                time.sleep(sleep_time)
+
+        logger.error(f"Request failed for {request_identifier} after {max_retries} attempts.")
+        return None
+
+    def _parse_bulk_quotes_csv(self, csv_text: str) -> dict:
+        """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
+        if not csv_text or "symbol" not in csv_text.lower():
+            logger.warning("[CSV PARSER] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'. Treść: %s", csv_text[:200])
+            return {}
+
+        csv_file = StringIO(csv_text)
         try:
-            # Uruchamiamy analizę - oczekujemy, że zwróci dict
-            analysis_result_data = ai_agents.run_ai_analysis(ticker_to_analyze, api_client)
+            reader = csv.DictReader(csv_file)
+            if not reader.fieldnames:
+                 logger.warning("[CSV PARSER] CSV nie zawiera nagłówków.")
+                 return {}
 
-            # Sprawdzamy, czy analiza się powiodła i czy zawiera quote_data
-            if analysis_result_data and analysis_result_data.get("status") == "DONE":
-                initial_quote_data = analysis_result_data.get("quote_data") # Wyciągamy quote_data z wyniku
-                if initial_quote_data:
-                    # **Natychmiast zapisujemy cenę do cache**
-                    logger.info(f"Analysis DONE for {ticker_to_analyze}. Immediately caching fetched price data.")
-                    _update_price_cache_for_ticker(session, ticker_to_analyze, initial_quote_data)
-                    # UWAGA: _update_price_cache_for_ticker zarządza własnym commitem/rollbackiem
-                else:
-                    logger.warning(f"AI analysis result for {ticker_to_analyze} is DONE but missing 'quote_data'. Cache not updated immediately.")
+            normalized_fieldnames = [name.lower().strip().replace(' ', '_') for name in reader.fieldnames]
+            logger.debug(f"[CSV PARSER] Normalized headers: {normalized_fieldnames}")
+            reader.fieldnames = normalized_fieldnames
 
-                # Zapisujemy wynik analizy AI (teraz już z pewnością mamy cenę w cache)
-                stmt = text("""
-                    INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated)
-                    VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET
-                    analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
-                """)
-                session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(analysis_result_data)})
-                session.commit()
-                logger.info(f"Successfully saved AI analysis for {ticker_to_analyze} (price cached).")
-            elif analysis_result_data: # Jeśli status nie jest DONE, zapiszmy to co mamy (np. ERROR)
-                 stmt_other = text("""
-                    INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated)
-                    VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET
-                    analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
-                 """)
-                 session.execute(stmt_other, {'ticker': ticker_to_analyze, 'data': json.dumps(analysis_result_data)})
-                 session.commit()
-                 logger.warning(f"Saved AI analysis result with status '{analysis_result_data.get('status')}' for {ticker_to_analyze}.")
+            data_dict = {}
+            row_count = 0
+            for row in reader:
+                row_count += 1
+                ticker = row.get('symbol')
+                if not ticker:
+                    logger.warning(f"[CSV PARSER] Row {row_count} has no 'symbol'. Skipping row: {row}")
+                    continue
+
+                # Klucze, których *oczekujemy* po normalizacji
+                expected_keys = ['symbol', 'price', 'previous_close', 'extended_hours_quote', 'close', 'change', 'change_percent', 'extended_hours_change', 'extended_hours_change_percent', 'latest_trading_day']
+                missing_keys_in_row = [key for key in expected_keys if row.get(key) is None or str(row.get(key)).strip() == ""]
+
+                missing_prices = [k for k in ['price', 'previous_close', 'extended_hours_quote', 'close'] if k in missing_keys_in_row]
+                if missing_prices:
+                    logger.debug(f"[CSV PARSER] Ticker {ticker} - Row {row_count} has missing/empty PRICE values for keys: {missing_prices}. Row content: {row}")
+
+                data_dict[ticker] = row
+
+            if not data_dict:
+                 logger.warning("[CSV PARSER] Parsowanie CSV zakończone, ale nie znaleziono żadnych danych tickerów.")
+            return data_dict
+        except csv.Error as csv_err:
+             logger.error(f"[CSV PARSER] Błąd podczas parsowania CSV: {csv_err}. Treść CSV (początek): {csv_text[:500]}")
+             return {}
+        except Exception as e:
+             logger.error(f"[CSV PARSER] Nieoczekiwany błąd podczas parsowania CSV: {e}. Treść CSV (początek): {csv_text[:500]}", exc_info=True)
+             return {}
+
+    def get_bulk_quotes(self, symbols: list[str]):
+        """Pobiera dane BULK_QUOTES w formacie CSV i parsuje je."""
+        if not self.api_key:
+            logger.error("Cannot get bulk quotes: API key is missing.")
+            return None
+        # Ogranicz liczbę symboli na zapytanie (np. do 100)
+        chunk_size = 100
+        all_parsed_data = {}
+        for i in range(0, len(symbols), chunk_size):
+             chunk = symbols[i:i + chunk_size]
+             logger.debug(f"Fetching bulk quotes for chunk: {','.join(chunk)}")
+             params = {
+                 "function": "REALTIME_BULK_QUOTES",
+                 "symbol": ",".join(chunk),
+                 "datatype": "csv"
+             }
+             csv_text = self._make_request(params)
+             if csv_text:
+                 parsed_chunk = self._parse_bulk_quotes_csv(csv_text)
+                 all_parsed_data.update(parsed_chunk)
+             else:
+                 logger.warning(f"Failed to fetch bulk quotes for chunk starting with {chunk[0]}.")
+                 # Można dodać logikę ponowienia dla chunka, ale na razie pomijamy
+        return all_parsed_data
+
+
+    def get_global_quote_json(self, symbol: str):
+        """Pobiera dane GLOBAL_QUOTE w formacie JSON (używane jako fallback)."""
+        if not self.api_key:
+            logger.warning("Cannot get global quote (fallback): API key is missing.")
+            return None
+        params = {"function": "GLOBAL_QUOTE", "symbol": symbol}
+        return self._make_request(params, is_fallback=True)
+
+    # --- Pozostałe metody pobierania danych (bez zmian logiki, tylko _make_request) ---
+
+    def get_company_overview(self, symbol: str):
+        params = {"function": "OVERVIEW", "symbol": symbol}
+        return self._make_request(params)
+
+    def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
+        params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
+        return self._make_request(params)
+
+    def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True):
+        params = {
+            "function": "TIME_SERIES_INTRADAY", "symbol": symbol, "interval": interval,
+            "outputsize": outputsize, "extended_hours": "true" if extended_hours else "false"
+        }
+        return self._make_request(params)
+
+    def get_atr(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ATR", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_rsi(self, symbol: str, time_period: int = 9, interval: str = 'daily', series_type: str = 'close'):
+        # Dodano walidację interwału dla RSI
+        valid_rsi_intervals = ['1min', '5min', '15min', '30min', '60min', 'daily', 'weekly', 'monthly']
+        if interval not in valid_rsi_intervals:
+            logger.error(f"Invalid interval '{interval}' for RSI. Using 'daily'.")
+            interval = 'daily'
+        params = {"function": "RSI", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
+        return self._make_request(params)
+
+    def get_stoch(self, symbol: str, interval: str = 'daily'):
+        params = {"function": "STOCH", "symbol": symbol, "interval": interval}
+        return self._make_request(params)
+
+    def get_adx(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
+        params = {"function": "ADX", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
+        return self._make_request(params)
+
+    def get_macd(self, symbol: str, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "MACD", "symbol": symbol, "interval": interval, "series_type": series_type}
+        return self._make_request(params)
+
+    def get_bollinger_bands(self, symbol: str, time_period: int = 20, interval: str = 'daily', series_type: str = 'close'):
+        params = {"function": "BBANDS", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
+        return self._make_request(params)
+
+    def get_news_sentiment(self, ticker: str, limit: int = 50):
+        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)}
+        return self._make_request(params)
+
+
+    @staticmethod
+    def _safe_float(value) -> float | None:
+        """Bezpiecznie konwertuje wartość na float."""
+        if value is None: return None
+        if isinstance(value, (int, float)): return float(value)
+        if isinstance(value, str):
+            cleaned_value = value.strip().replace(',', '').replace('%', '')
+            if not cleaned_value or cleaned_value.lower() in ['n/a', 'none', '-']: return None
+            try: return float(cleaned_value)
+            except (ValueError, TypeError):
+                logger.debug(f"[_safe_float] Could not convert cleaned string '{cleaned_value}' to float.")
+                return None
+        try: return float(value)
+        except (ValueError, TypeError):
+             logger.debug(f"[_safe_float] Could not convert value '{value}' (type: {type(value)}) to float.")
+             return None
+
+    @staticmethod
+    def _get_market_status_info() -> Tuple[str, str, str]:
+        """Statyczna funkcja określająca status rynku na podstawie czasu NY."""
+        try:
+            tz = pytz.timezone('US/Eastern')
+            now_ny = datetime.now(tz)
+            time_ny_str = now_ny.strftime('%H:%M:%S ET')
+            date_ny_str = now_ny.strftime('%Y-%m-%d')
+            time_ny_H = now_ny.hour
+            time_ny_M = now_ny.minute
+
+            # Logika statusu (uwzględnia handel przed i posesyjny)
+            # Pre-Market: 4:00 - 9:29 ET
+            if (time_ny_H >= 4 and time_ny_H < 9) or (time_ny_H == 9 and time_ny_M < 30):
+                us_market_status = "PRE_MARKET"
+            # Regular Session: 9:30 - 15:59 ET
+            elif (time_ny_H == 9 and time_ny_M >= 30) or (time_ny_H > 9 and time_ny_H < 16):
+                us_market_status = "REGULAR"
+            # Post-Market: 16:00 - 19:59 ET
+            elif (time_ny_H >= 16 and time_ny_H < 20):
+                 us_market_status = "POST_MARKET"
+            # Closed: Poza tymi godzinami
             else:
-                 raise ValueError("ai_agents.run_ai_analysis returned None or empty data.")
+                us_market_status = "CLOSED"
+            
+            return us_market_status, time_ny_str, date_ny_str
 
         except Exception as e:
-            logger.error(f"Error during AI analysis execution or saving for {ticker_to_analyze}: {e}", exc_info=True)
-            # Zapisz status błędu (jeśli analiza nie zwróciła już błędu)
-            if not analysis_result_data or analysis_result_data.get("status") != "ERROR":
-                error_result = {"status": "ERROR", "message": f"Błąd wykonania analizy: {str(e)}", "ticker": ticker_to_analyze}
-                stmt_err = text("""
-                    INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated)
-                    VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET
-                    analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
-                """)
-                try:
-                    session.execute(stmt_err, {'ticker': ticker_to_analyze, 'data': json.dumps(error_result)})
-                    session.commit()
-                except Exception as e_err_save:
-                     logger.error(f"Failed to save ERROR status for AI analysis ({ticker_to_analyze}): {e_err_save}")
-                     session.rollback()
-        finally:
-             # Niezależnie od wyniku, resetujemy zlecenie
-             utils.update_system_control(session, 'ai_analysis_request', 'NONE')
-             try: session.commit()
-             except Exception as e_commit_final: logger.error(f"Failed commit final AI req status reset: {e_commit_final}"); session.rollback()
-             # Usunięto stąd wywołanie cache_live_prices z force=True - robimy to wcześniej
-        # --- KONIEC GŁÓWNEJ ZMIANY LOGIKI ---
+            logger.error(f"[DIAG] Nie udało się ustalić czasu NY: {e}", exc_info=False)
+            return "UNKNOWN", "N/A", "N/A"
 
+    # === POPRAWIONA I UNIWERSALNA FUNKCJA POBIERANIA CEN LIVE ===
+    # Teraz akceptuje LISTĘ symboli i zwraca słownik gotowy do cachowania.
+    def get_live_quote_details_bulk(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Pobiera dane live dla LISTY tickerów, określa status rynku
+        i zwraca ujednolicony słownik wyników gotowy do cachowania (ticker -> quote_data).
+        """
+        if not symbols:
+            return {}
 
-# --- Funkcja głównego cyklu analizy (bez zmian) ---
-def run_full_analysis_cycle():
-    """Uruchamia pełny cykl analizy: czyszczenie, Faza 1, Faza 2, Faza 3 (EOD)."""
-    global current_state
-    session = get_db_session()
-    try:
-        current_worker_status = utils.get_system_control_value(session, 'worker_status')
-        if current_worker_status == 'RUNNING':
-            logger.warning("Analysis cycle already in progress. Skipping scheduled/command run.")
-            session.close()
-            return
+        logger.info(f"[DIAG] Rozpoczynanie get_live_quote_details_bulk dla {len(symbols)} tickerów.")
 
-        logger.info("Starting full analysis cycle...")
-        current_state = "RUNNING"
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
-        utils.clear_scan_log(session)
-        utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
+        # --- Ustalanie Statusu Rynku na podstawie czasu (tylko raz) ---
+        us_market_status, time_ny_str, date_ny_str = self._get_market_status_info()
+        logger.info(f"[DIAG] Ustalony status rynku (wg czasu): {us_market_status} (Czas NY: {time_ny_str})")
+        
+        # --- Etap 1: Próba pobrania danych z BULK_QUOTES (CSV) ---
+        raw_data_csv = self.get_bulk_quotes(symbols) # Zwraca słownik {ticker: {csv_data}}
 
-        logger.info("Cleaning daily tables before new analysis cycle...")
-        session.execute(text("DELETE FROM phase2_results WHERE analysis_date = CURRENT_DATE;"))
-        session.execute(text("DELETE FROM phase1_candidates WHERE DATE(analysis_date) = CURRENT_DATE;"))
-        session.execute(text("UPDATE trading_signals SET status = 'EXPIRED' WHERE status IN ('ACTIVE', 'TRIGGERED')"))
-        session.commit()
-        logger.info("Daily tables cleaned and old signals marked as expired.")
-        utils.append_scan_log(session, "Wyczyszczono tabele dzienne i oznaczono stare sygnały jako EXPIRED.")
+        results = {}
 
-        # --- Faza 1 ---
-        utils.update_system_control(session, 'current_phase', 'PHASE_1')
-        utils.append_scan_log(session, "Uruchamianie Fazy 1: Skaner Momentum...")
-        candidate_tickers = phase1_scanner.run_scan(session, lambda: current_state, api_client)
-        if not candidate_tickers:
-            logger.warning("Phase 1 found no candidates. Analysis cycle finished early.")
-            utils.append_scan_log(session, "Faza 1 nie znalazła kandydatów. Zakończono cykl.")
-            raise Exception("Phase 1 found no candidates.")
+        for symbol in symbols:
+            response = {
+                "symbol": symbol,
+                "market_status_internal": us_market_status,
+                "time_ny": time_ny_str,
+                "date_ny": date_ny_str,
+                "regular_session": {"price": None, "change": None, "change_percent": None},
+                "extended_session": {"price": None, "change": None, "change_percent": None},
+                "live_price": None,
+                "actual_close_price": None # Dodano dla jasności (faktyczna cena zamknięcia)
+            }
+            trigger_fallback = False
 
-        # --- Faza 2 ---
-        utils.update_system_control(session, 'current_phase', 'PHASE_2')
-        utils.append_scan_log(session, f"Uruchamianie Fazy 2: Analiza Jakościowa dla {len(candidate_tickers)} kandydatów...")
-        qualified_tickers = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
-        if not qualified_tickers:
-            logger.warning("Phase 2 qualified no stocks. Analysis cycle finished early.")
-            utils.append_scan_log(session, "Faza 2 nie zakwalifikowała żadnej spółki. Zakończono cykl.")
-            raise Exception("Phase 2 qualified no stocks.")
+            if raw_data_csv and symbol in raw_data_csv:
+                ticker_data = raw_data_csv[symbol]
 
-        # --- Faza 3 (EOD Scan) ---
-        utils.update_system_control(session, 'current_phase', 'PHASE_3')
-        utils.append_scan_log(session, f"Uruchamianie Fazy 3: Skaner Taktyczny EOD dla {len(qualified_tickers)} spółek...")
-        phase3_sniper.run_tactical_planning(session, qualified_tickers, lambda: current_state, api_client)
+                # Odczytujemy wszystkie potrzebne pola z CSV
+                regular_close_price_csv = self._safe_float(ticker_data.get('previous_close')) # Zawsze previous_close
+                extended_price_csv = self._safe_float(ticker_data.get('extended_hours_quote'))
+                latest_trade_price_csv = self._safe_float(ticker_data.get('close'))
+                
+                # Zmiana: latest_trade_price_csv to faktyczna cena zamknięcia sesji regularnej
+                # Jeśli rynek jest zamknięty, to "latest_trade_price_csv" jest ceną zamknięcia.
+                actual_close_price_csv = latest_trade_price_csv
+                
+                regular_change_csv = self._safe_float(ticker_data.get('change'))
+                regular_change_percent_csv = self._safe_float(ticker_data.get('change_percent'))
+                extended_change_csv = self._safe_float(ticker_data.get('extended_hours_change'))
+                extended_change_percent_csv = self._safe_float(ticker_data.get('extended_hours_change_percent'))
+                # latest_trading_day_csv = ticker_data.get('latest_trading_day') # Niepotrzebne, data jest z NY
 
-        utils.append_scan_log(session, "Pełny cykl analizy zakończony pomyślnie.")
-        logger.info("Full analysis cycle completed successfully.")
+                # Wypełniamy pola odpowiedzi danymi z CSV
+                response["regular_session"] = {"price": regular_close_price_csv, "change": regular_change_csv, "change_percent": regular_change_percent_csv}
+                response["extended_session"] = {"price": extended_price_csv, "change": extended_change_csv, "change_percent": extended_change_percent_csv}
+                response["actual_close_price"] = actual_close_price_csv
+                
+                # --- Logika Wyboru Ceny Live na podstawie NASZEGO Statusu Rynku ---
+                if us_market_status in ["PRE_MARKET", "POST_MARKET"]:
+                    if extended_price_csv is not None:
+                        response["live_price"] = extended_price_csv
+                        logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny extended.")
+                    else:
+                        logger.debug(f"[DIAG-CSV] {symbol} - Brak extended_price z CSV. Uruchamiam fallback.")
+                        trigger_fallback = True
 
-    except Exception as e:
-        if "Phase 1 found no candidates" not in str(e) and "Phase 2 qualified no stocks" not in str(e):
-            logger.error(f"An error occurred during the analysis cycle: {e}", exc_info=True)
-            try:
-                utils.update_system_control(session, 'worker_status', 'ERROR')
-                utils.append_scan_log(session, f"BŁĄD KRYTYCZNY CYKLU: {e}")
-                session.commit()
-            except Exception as e_log:
-                 logger.error(f"Failed to log critical cycle error to DB: {e_log}")
-                 session.rollback()
-        else:
-            logger.info(f"Analysis cycle ended normally: {e}")
-            try:
-                utils.update_system_control(session, 'worker_status', 'IDLE')
-                session.commit()
-            except Exception as e_idle:
-                 logger.error(f"Failed to ensure IDLE status after early cycle end: {e_idle}")
-                 session.rollback()
+                elif us_market_status == "REGULAR":
+                    if latest_trade_price_csv is not None:
+                        response["live_price"] = latest_trade_price_csv
+                        logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny latest trade ('close').")
+                    else:
+                        logger.debug(f"[DIAG-CSV] {symbol} - Brak latest_trade_price ('close') z CSV. Uruchamiam fallback.")
+                        trigger_fallback = True
 
-    finally:
-        current_state = "IDLE"
-        try:
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE')
-            utils.update_system_control(session, 'scan_progress_processed', '0')
-            utils.update_system_control(session, 'scan_progress_total', '0')
-            session.commit()
-        except Exception as e_final:
-            logger.error(f"Failed to reset worker status after cycle: {e_final}")
-            session.rollback()
-        finally:
-             session.close()
+                elif us_market_status == "CLOSED":
+                     # Dla CLOSED priorytet ma extended, potem faktyczne zamknięcie
+                     final_price = extended_price_csv if extended_price_csv is not None else actual_close_price_csv
+                     response["live_price"] = final_price
+                     logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny closed ({'extended' if extended_price_csv is not None else 'actual_close'}).")
+                     if response["live_price"] is None:
+                          logger.debug(f"[DIAG-CSV] {symbol} - Brak ceny extended i actual_close z CSV. Uruchamiam fallback.")
+                          trigger_fallback = True
+                else: # UNKNOWN status
+                     logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Nieznany status. Uruchamiam fallback.")
+                     trigger_fallback = True
 
+            else: # Jeśli w ogóle nie było danych CSV dla tickera
+                logger.debug(f"[DIAG-CSV] Brak danych bulk quotes (CSV) dla {symbol}.")
+                trigger_fallback = True # Musimy spróbować fallbacku
 
-# --- Funkcja buforowania cen (teraz bez argumentu tickers_to_force_cache) ---
-def cache_live_prices(session: Session, api_client: AlphaVantageClient):
-    """
-    Pobiera listę istotnych tickerów i aktualizuje ich ceny w 'live_price_cache'.
-    """
-    try:
-        current_worker_status = utils.get_system_control_value(session, 'worker_status')
-        if current_worker_status == 'RUNNING':
-            logger.debug("Regular price caching skipped: Main analysis cycle is running.")
-            return
-        if current_state == 'PAUSED':
-            logger.debug("Regular price caching skipped: Worker is PAUSED.")
-            return
+            # --- Etap 2: Fallback do GLOBAL_QUOTE (JSON), jeśli potrzebny ---
+            if trigger_fallback:
+                logger.debug(f"[DIAG-FALLBACK] Uruchamianie fallbacku do GLOBAL_QUOTE dla {symbol}...")
+                global_quote_data = self.get_global_quote_json(symbol)
 
-    except Exception as e_status_check:
-        logger.error(f"Error checking worker status before caching prices: {e_status_check}")
-        pass
+                if global_quote_data and "Global Quote" in global_quote_data:
+                     quote = global_quote_data["Global Quote"]
 
-    logger.info("Running live price caching cycle...")
-    try:
-        # 1. Zbierz tickery (bez zmian)
-        try: tickers_p1 = [r.ticker for r in session.query(Phase1Candidate.ticker).filter(func.date(Phase1Candidate.analysis_date) == func.current_date()).distinct()]; logger.debug(f"Tickers from Phase1: {tickers_p1}")
-        except Exception as e_p1: logger.error(f"Error fetching tickers from Phase1: {e_p1}"); tickers_p1 = []
-        try: tickers_p2 = [r.ticker for r in session.query(Phase2Result.ticker).filter(Phase2Result.analysis_date == func.current_date()).distinct()]; logger.debug(f"Tickers from Phase2: {tickers_p2}")
-        except Exception as e_p2: logger.error(f"Error fetching tickers from Phase2: {e_p2}"); tickers_p2 = []
-        try: tickers_p3 = [r.ticker for r in session.query(TradingSignal.ticker).filter(TradingSignal.status.in_(['ACTIVE', 'PENDING', 'TRIGGERED'])).distinct()]; logger.debug(f"Tickers from Phase3: {tickers_p3}")
-        except Exception as e_p3: logger.error(f"Error fetching tickers from Phase3: {e_p3}"); tickers_p3 = []
-        try: tickers_pf = [r.ticker for r in session.query(PortfolioHolding.ticker).distinct()]; logger.debug(f"Tickers from Portfolio: {tickers_pf}")
-        except Exception as e_pf: logger.error(f"Error fetching tickers from Portfolio: {e_pf}"); tickers_pf = []
-        unique_tickers_raw = list(set(tickers_p1 + tickers_p2 + tickers_p3 + tickers_pf))
+                     fallback_price = self._safe_float(quote.get('05. price'))
+                     fallback_prev_close = self._safe_float(quote.get('08. previous close'))
+                     fallback_change = self._safe_float(quote.get('09. change'))
+                     fallback_change_percent_str = quote.get('10. change percent', '').replace('%', '')
+                     fallback_change_percent = self._safe_float(fallback_change_percent_str)
+                     # GLOBAL_QUOTE nie ma danych extended ani actual_close, więc nie aktualizujemy tych pól.
 
-        # Filtrowanie (bez zmian)
-        valid_tickers = []
-        for ticker in unique_tickers_raw:
-            if isinstance(ticker, str) and ticker.isupper() and 1 <= len(ticker) <= 5 and ticker != "STRING": valid_tickers.append(ticker)
-            elif ticker: logger.warning(f"Invalid ticker format found during cache collection: '{ticker}' (type: {type(ticker)}). Skipping.")
-        unique_tickers = sorted(valid_tickers)
+                     # Używamy ceny z fallbacku tylko jeśli cena live jest nadal None
+                     if response["live_price"] is None and fallback_price is not None:
+                          response["live_price"] = fallback_price
+                          logger.debug(f"[DIAG-FALLBACK] {symbol} - Użyto ceny fallback z GLOBAL_QUOTE: {fallback_price}")
 
-        if not unique_tickers:
-            logger.info("No valid relevant tickers found to cache prices for.")
-            return
+                     # Uzupełniamy dane sesji regularnej, jeśli brakowało ich w CSV lub CSV zawiodło
+                     if response["regular_session"]["price"] is None: response["regular_session"]["price"] = fallback_prev_close
+                     if response["regular_session"]["change"] is None: response["regular_session"]["change"] = fallback_change
+                     if response["regular_session"]["change_percent"] is None: response["regular_session"]["change_percent"] = fallback_change_percent
 
-        logger.info(f"Regularly caching prices for {len(unique_tickers)} unique valid tickers: {', '.join(unique_tickers)}")
+                else:
+                     logger.debug(f"[DIAG-FALLBACK] {symbol} - Nie otrzymano poprawnych danych z GLOBAL_QUOTE.")
 
-        # 2. Pobierz ceny (bez zmian)
-        prices_to_cache = []
-        fetch_count = 0
-        chunk_size = 50
-        for i in range(0, len(unique_tickers), chunk_size):
-            chunk = unique_tickers[i:i+chunk_size]
-            logger.debug(f"Fetching price chunk: {','.join(chunk)}")
-            try:
-                for ticker in chunk:
-                    time.sleep(0.4)
-                    try:
-                        quote_data = api_client.get_live_quote_details(ticker)
-                        if quote_data and quote_data.get("live_price") is not None:
-                            fetch_count += 1
-                            prices_to_cache.append({
-                                'ticker': ticker,
-                                # === POPRAWKA 2 (Worker) ===
-                                # Usunięto json.dumps(). Zapisujemy bezpośrednio słownik (dict).
-                                'quote_data': quote_data, # ZAMIAST: json.dumps(quote_data),
-                                'last_updated': datetime.now(timezone.utc)
-                            })
-                        else: logger.warning(f"Failed to fetch valid quote_data for cache ({ticker}). API Response: {quote_data}")
-                    except Exception as e_ticker: logger.error(f"Exception while fetching price for cache ({ticker}): {e_ticker}", exc_info=False)
-            except Exception as e_chunk: logger.error(f"Error processing price fetch chunk: {e_chunk}", exc_info=True)
+            # --- Ostateczność: Jeśli nadal nie ma ceny live, użyj previous close ---
+            if response["live_price"] is None:
+                final_fallback_price = response["regular_session"].get("price") # price to previous close
+                if final_fallback_price is not None:
+                     response["live_price"] = final_fallback_price
+                     logger.warning(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak ceny live. Użyto ceny previous_close: {final_fallback_price} jako ostateczność.")
+                else:
+                     logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak jakiejkolwiek ceny (live, previous_close) do użycia!")
 
-        if not prices_to_cache:
-            logger.warning("No prices were successfully fetched to cache in this cycle.")
-            return
+            # --- Końcowe logowanie i zapis wyniku ---
+            if response["live_price"] is None:
+                 logger.error(f"[DIAG-FINAL] {symbol} - Końcowa wartość live_price to NADAL None!")
+            else:
+                logger.debug(f"[DIAG-FINAL] {symbol} - Finalna live_price: {response['live_price']:.4f}.")
 
-        # 3. Zapisz/Zaktualizuj ceny w bazie (UPSERT - bez zmian)
-        stmt = pg_insert(LivePriceCache).values(prices_to_cache)
-        update_dict = { LivePriceCache.quote_data: stmt.excluded.quote_data, LivePriceCache.last_updated: stmt.excluded.last_updated }
-        final_stmt = stmt.on_conflict_do_update( index_elements=[LivePriceCache.ticker], set_=update_dict )
-        session.execute(final_stmt)
-        session.commit()
-        logger.info(f"Successfully regularly cached {fetch_count}/{len(unique_tickers)} prices using UPSERT.")
+            results[symbol] = response
+            
+        return results
 
-    except Exception as e:
-        logger.error(f"Error during price caching cycle: {e}", exc_info=True)
-        session.rollback()
-
-
-# --- Główna pętla workera (bez zmian) ---
-def main_loop():
-    """Główna pętla workera."""
-    global current_state
-    logger.info("Worker starting up...")
-    time.sleep(10)
-
-    session = get_db_session()
-    try:
-        logger.info("Verifying database schema for Worker...")
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database schema verified/created by Worker.")
-        initialize_database_if_empty(session, api_client)
-        utils.update_system_control(session, 'worker_status', 'IDLE')
-        utils.update_system_control(session, 'worker_command', 'NONE')
-        utils.update_system_control(session, 'ai_analysis_request', 'NONE')
-        utils.update_system_control(session, 'current_phase', 'NONE')
-        utils.update_system_control(session, 'system_alert', 'NONE')
-        utils.report_heartbeat(session)
-        session.commit()
-        logger.info("Worker status initialized to IDLE.")
-    except Exception as e_init:
-        logger.critical(f"FATAL: Error during worker initialization: {e_init}", exc_info=True)
-        session.rollback(); session.close(); sys.exit(1)
-    finally: session.close()
-
-    # Harmonogram zadań
-    schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
-    schedule.every(30).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
-    schedule.every(30).seconds.do(lambda: cache_live_prices(get_db_session(), api_client)) # Regularne cachowanie
-
-    logger.info(f"Scheduled full analysis job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 30 seconds.")
-    logger.info("Live Price Caching scheduled every 30 seconds.")
-    logger.info("Worker initialization complete. Entering main loop.")
-
-    # Główna pętla
-    while True:
-        session = get_db_session()
-        try:
-            command_triggered_run, new_state = utils.check_for_commands(session, current_state)
-            current_state = new_state
-            if command_triggered_run:
-                run_full_analysis_cycle()
-                current_state_from_db = utils.get_system_control_value(session, 'worker_status')
-                current_state = current_state_from_db if current_state_from_db else "IDLE"
-            if current_state != "PAUSED":
-                handle_ai_analysis_request(session) # Ta funkcja zarządza własnym commitem/rollbackiem
-                schedule.run_pending()
-            utils.report_heartbeat(session)
-            session.commit() # Commit heartbeatu
-        except Exception as loop_error:
-            logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
-            try: session.rollback()
-            except Exception as rb_err: logger.error(f"Error during rollback in main loop: {rb_err}")
-        finally:
-             try: session.close()
-             except Exception as close_err: logger.error(f"Error closing session in main loop: {close_err}")
-        time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
-
-if __name__ == "__main__":
-    if engine:
-        try: main_loop()
-        except KeyboardInterrupt: logger.info("Worker stopped manually.")
-        except Exception as main_e: logger.critical(f"Critical unhandled error caused worker exit: {main_e}", exc_info=True); sys.exit(1)
-    else: logger.critical("Worker cannot start: DB connection failed during init."); sys.exit(1)
-
+    # --- Zmienić nazwę starej funkcji pojedynczego pobierania na wrapper ---
+    def get_live_quote_details(self, symbol: str) -> Dict[str, Any]:
+        """
+        Wrapper dla pojedynczego tickera.
+        Zachowuje oryginalną sygnaturę dla kompatybilności wstecznej (np. w AI Agents).
+        """
+        results = self.get_live_quote_details_bulk([symbol])
+        return results.get(symbol, {})
+    # --- Koniec zmian ---
