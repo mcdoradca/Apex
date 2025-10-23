@@ -8,9 +8,9 @@ from dotenv import load_dotenv
 from io import StringIO
 import csv
 # POPRAWKA BŁĘDU #3: Dodanie importów do obsługi czasu
-from datetime import datetime
+from datetime import datetime, time as dt_time # Dodano import time
 import pytz
-from typing import Dict, Any, List, Tuple # Upewniamy się, że Tuple i List są zaimportowane (były już w wersji historycznej)
+from typing import Dict, Any, List, Tuple 
 
 load_dotenv()
 
@@ -305,20 +305,23 @@ class AlphaVantageClient:
             now_ny = datetime.now(tz)
             time_ny_str = now_ny.strftime('%H:%M:%S ET')
             date_ny_str = now_ny.strftime('%Y-%m-%d')
-            time_ny_H = now_ny.hour
-            time_ny_M = now_ny.minute
+            # Używamy obiektu time dla precyzji
+            current_time = now_ny.time()
 
-            # Logika statusu (uwzględnia handel przed i posesyjny)
-            # Pre-Market: 4:00 - 9:29 ET
-            if (time_ny_H >= 4 and time_ny_H < 9) or (time_ny_H == 9 and time_ny_M < 30):
+            # Definicja zakresów czasowych (w ET)
+            # 4:00 AM ET - 9:30 AM ET (Pre-Market)
+            PRE_MARKET_START = dt_time(4, 0)
+            REGULAR_START = dt_time(9, 30)
+            REGULAR_END = dt_time(16, 0)
+            POST_MARKET_END = dt_time(20, 0)
+
+            # Logika statusu
+            if current_time >= PRE_MARKET_START and current_time < REGULAR_START:
                 us_market_status = "PRE_MARKET"
-            # Regular Session: 9:30 - 15:59 ET
-            elif (time_ny_H == 9 and time_ny_M >= 30) or (time_ny_H > 9 and time_ny_H < 16):
+            elif current_time >= REGULAR_START and current_time < REGULAR_END:
                 us_market_status = "REGULAR"
-            # Post-Market: 16:00 - 19:59 ET
-            elif (time_ny_H >= 16 and time_ny_H < 20):
+            elif current_time >= REGULAR_END and current_time < POST_MARKET_END:
                  us_market_status = "POST_MARKET"
-            # Closed: Poza tymi godzinami
             else:
                 us_market_status = "CLOSED"
 
