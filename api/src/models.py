@@ -40,7 +40,7 @@ class TradingSignal(Base):
     id = Column(INTEGER, primary_key=True, autoincrement=True)
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
-    status = Column(VARCHAR(50), default='PENDING')
+    status = Column(VARCHAR(50), default='PENDING') # PENDING, ACTIVE, TRIGGERED, EXPIRED, CANCELLED
     entry_price = Column(NUMERIC(12, 2), nullable=True)
     stop_loss = Column(NUMERIC(12, 2), nullable=True)
     take_profit = Column(NUMERIC(12, 2), nullable=True)
@@ -52,10 +52,11 @@ class TradingSignal(Base):
 
     __table_args__ = (
         Index(
-            'uq_active_pending_ticker',
+            'uq_active_pending_trigger_ticker', # Zmieniono nazwę indeksu dla jasności
             'ticker',
             unique=True,
-            postgresql_where=status.in_(['ACTIVE', 'PENDING'])
+            # Dodano TRIGGERED do warunku, aby zapobiec duplikatom przed wygaśnięciem
+            postgresql_where=text("status IN ('ACTIVE', 'PENDING', 'TRIGGERED')") # Poprawiony syntax dla postgresql_where
         ),
     )
 
@@ -72,12 +73,12 @@ class AIAnalysisResult(Base):
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
-# === DODANE NOWE MODELE DLA PORTFELA I HISTORII TRANSAKCJI ===
+# === MODELE DLA PORTFELA I HISTORII TRANSAKCJI ===
+# (Te modele są teraz spójne z worker/src/models.py)
 
 class PortfolioHolding(Base):
     """
     Tabela przechowująca aktualnie otwarte pozycje w portfelu.
-    Każdy wiersz reprezentuje *całkowitą* pozycję w danym tickerze.
     """
     __tablename__ = 'portfolio_holdings'
 
@@ -94,14 +95,25 @@ class TransactionHistory(Base):
     __tablename__ = 'transaction_history'
 
     id = Column(INTEGER, primary_key=True, autoincrement=True)
-    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='SET NULL'), nullable=True, comment="Ticker (może być NULL, jeśli spółka zostanie usunięta)") # Używamy SET NULL zamiast CASCADE
-    transaction_type = Column(VARCHAR(10), nullable=False, comment="'BUY' lub 'SELL'") # Typ transakcji
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='SET NULL'), nullable=True, comment="Ticker (może być NULL, jeśli spółka zostanie usunięta)")
+    transaction_type = Column(VARCHAR(10), nullable=False, comment="'BUY' lub 'SELL'")
     quantity = Column(INTEGER, nullable=False, comment="Liczba akcji w tej konkretnej transakcji")
     price_per_share = Column(NUMERIC(12, 4), nullable=False, comment="Cena za akcję w tej transakcji")
     transaction_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), comment="Data i czas wykonania transakcji")
-    # Dodatkowe pola, które mogą być przydatne przy wyświetlaniu historii:
-    related_portfolio_ticker = Column(VARCHAR(50), nullable=True, comment="Opcjonalne powiązanie z pozycją w portfelu (na przyszłość)")
-    # Pole na zysk/stratę dla transakcji sprzedaży - obliczane przy zapisie
     profit_loss_usd = Column(NUMERIC(14, 2), nullable=True, comment="Zrealizowany zysk/strata w USD dla transakcji sprzedaży")
 
-# === KONIEC DODANYCH MODELI ===
+
+# === POPRAWKA BŁĘDU #5: Dodanie tabeli cache dla cen ===
+
+class LivePriceCache(Base):
+    """
+    Tabela przechowująca najnowsze dane cenowe, aktualizowana przez Workera.
+    Serwis API czyta tylko z tej tabeli, aby chronić klucz API.
+    """
+    __tablename__ = 'live_price_cache'
+
+    ticker = Column(VARCHAR(50), primary_key=True)
+    # Przechowujemy cały obiekt JSON zwrócony przez get_live_quote_details
+    quote_data = Column(JSONB)
+    last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
