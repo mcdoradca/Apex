@@ -4,6 +4,8 @@ from . import models, schemas
 from typing import Optional, Any, Dict, List
 from datetime import date, datetime, timezone
 import logging
+# Dodajemy import json do obsługi deserializacji
+import json
 # Używamy Decimal do precyzyjnych obliczeń finansowych
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -292,7 +294,24 @@ def get_ai_analysis_result(db: Session, ticker: str) -> Optional[Dict[str, Any]]
     try:
         # analysis_data jest typu JSONB, SQLAlchemy >1.4 zwraca go jako dict
         result = db.query(models.AIAnalysisResult.analysis_data).filter(models.AIAnalysisResult.ticker == ticker).first()
-        return result[0] if result else None
+        
+        if not result:
+            return None
+        
+        data = result[0]
+        
+        # === DODATKOWA POPRAWKA ODPORNOŚCI (API/CRUD) ===
+        # Na wypadek, gdyby dane AI również były zapisane jako string
+        if isinstance(data, str):
+            logger.warning(f"AI Analysis data for {ticker} was stored as string. Attempting JSON load.")
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to decode cached string AI Analysis data for {ticker}.")
+                return None
+        
+        return data
+        
     except Exception as e:
          logger.error(f"Error getting AI analysis result for {ticker}: {e}")
          raise
@@ -313,6 +332,7 @@ def delete_ai_analysis_result(db: Session, ticker: str):
 
 
 # === POPRAWKA BŁĘDU #5: Nowa funkcja do czytania cen z cache ===
+# === POPRAWKA BŁĘDU (TypeError): Dodano odporność na dane typu string ===
 
 def get_live_price_from_cache(db: Session, ticker: str) -> Optional[Dict[str, Any]]:
     """
@@ -321,8 +341,28 @@ def get_live_price_from_cache(db: Session, ticker: str) -> Optional[Dict[str, An
     """
     try:
         result = db.query(models.LivePriceCache.quote_data).filter(models.LivePriceCache.ticker == ticker).first()
-        # quote_data jest typu JSONB, SQLAlchemy zwraca go jako dict
-        return result[0] if result else None
+        
+        if not result:
+            return None
+            
+        data = result[0]
+        
+        # === POCZĄTEK POPRAWKI (API) ===
+        # Jeśli dane z bazy są stringiem (z powodu błędu zapisu),
+        # spróbuj je sparsować jako JSON.
+        if isinstance(data, str):
+            logger.warning(f"Cache data for {ticker} was stored as string. Attempting JSON load.")
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to decode cached string data for {ticker}.")
+                return None
+        # === KONIEC POPRAWKI (API) ===
+            
+        # SQLAlchemy (jeśli dane są poprawnie zapisane jako JSONB) 
+        # automatycznie zwróci 'data' jako dict.
+        return data
+        
     except Exception as e:
         logger.error(f"Error getting live price from cache for {ticker}: {e}")
         # Rzucamy błąd, aby endpoint API wiedział o problemie
