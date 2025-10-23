@@ -64,6 +64,37 @@ def _update_price_cache_for_ticker(session: Session, ticker: str, quote_data: Di
         session.rollback()
 # === KONIEC PRZYWRÓCONEJ FUNKCJI ===
 
+
+# === NOWA FUNKCJA DLA KROKU 1 ===
+def handle_high_frequency_cache(session: Session, api_client: AlphaVantageClient):
+    """
+    Szybka pętla (uruchamiana co ~5s) do odświeżania ceny
+    tylko dla aktywnie oglądanego tickera w widoku AI.
+    """
+    active_ticker = None
+    try:
+        # 1. Sprawdź, czy jakiś ticker jest aktywnie oglądany
+        # Używamy get_system_control_value, który nie robi commita
+        active_ticker = utils.get_system_control_value(session, 'ai_analysis_request')
+
+        # 2. Działaj tylko jeśli ticker jest ustawiony (nie 'NONE' i nie 'PROCESSING')
+        if active_ticker and active_ticker not in ['NONE', 'PROCESSING']:
+            logger.info(f"[HF-CACHE] Aktywnie oglądany ticker: {active_ticker}. Uruchamianie szybkiego odświeżania.")
+            
+            # 3. Pobierz najnowszą cenę
+            quote_data = api_client.get_live_quote_details(active_ticker)
+            
+            # 4. Zaktualizuj cache
+            # Używamy funkcji _update_price_cache_for_ticker, która zarządza własnym commitem/rollbackiem.
+            _update_price_cache_for_ticker(session, active_ticker, quote_data)
+            
+    except Exception as e:
+        # Logujemy błąd, ale nie zatrzymujemy głównej pętli workera
+        logger.error(f"[HF-CACHE] Błąd podczas szybkiego buforowania dla {active_ticker or 'N/A'}: {e}", exc_info=False)
+        # Wycofujemy, jeśli błąd wystąpił przed wywołaniem _update_price_cache_for_ticker
+        session.rollback()
+
+
 # --- Funkcja obsługi analizy AI na żądanie (bez zmian) ---
 def handle_ai_analysis_request(session: Session):
     """Sprawdza, wykonuje analizę AI i **natychmiast zapisuje cenę do cache**."""
@@ -327,7 +358,7 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
         session.rollback()
 
 
-# --- Główna pętla workera (bez zmian) ---
+# --- Główna pętla workera (MODYFIKACJA) ---
 def main_loop():
     """Główna pętla workera."""
     global current_state
@@ -373,9 +404,20 @@ def main_loop():
                 run_full_analysis_cycle()
                 current_state_from_db = utils.get_system_control_value(session, 'worker_status')
                 current_state = current_state_from_db if current_state_from_db else "IDLE"
+            
+            # === POCZĄTEK MODYFIKACJI KROKU 1 ===
             if current_state != "PAUSED":
+                # 1. Obsługa zlecenia analizy (AI Request)
                 handle_ai_analysis_request(session) # Ta funkcja zarządza własnym commitem/rollbackiem
+                
+                # 2. NOWA FUNKCJA: Szybkie buforowanie dla aktywnego tickera AI
+                # Ta funkcja jest wywoływana co 5 sekund (zgodnie z pętlą)
+                handle_high_frequency_cache(session, api_client) # Zarządza własnym commitem/rollbackiem
+
+                # 3. Obsługa zadań cyklicznych (główna analiza, F3, Portfel)
                 schedule.run_pending()
+            # === KONIEC MODYFIKACJI KROKU 1 ===
+
             utils.report_heartbeat(session)
             session.commit() # Commit heartbeatu
         except Exception as loop_error:
