@@ -66,7 +66,7 @@ def _update_price_cache_for_ticker(session: Session, ticker: str, quote_data: Di
 # === KONIEC PRZYWRÓCONEJ FUNKCJI ===
 
 
-# === FUNKCJA DLA KROKU 1 ===
+# === FUNKCJA DLA KROKU 1 (ZMODYFIKOWANA) ===
 def handle_high_frequency_cache(session: Session, api_client: AlphaVantageClient):
     """
     Szybka pętla (uruchamiana co ~5s) do odświeżania ceny
@@ -74,34 +74,39 @@ def handle_high_frequency_cache(session: Session, api_client: AlphaVantageClient
     """
     active_ticker = None
     try:
-        # 1. Sprawdź, czy jakiś ticker jest aktywnie oglądany
-        # Używamy get_system_control_value, który nie robi commita
-        active_ticker = utils.get_system_control_value(session, 'ai_analysis_request')
+        # === MODYFIKACJA 1: Czytamy nowy, trwały klucz ===
+        active_ticker = utils.get_system_control_value(session, 'active_ai_ticker')
 
-        # 2. Działaj tylko jeśli ticker jest ustawiony (nie 'NONE' i nie 'PROCESSING')
-        if active_ticker and active_ticker not in ['NONE', 'PROCESSING']:
+        # 2. Działaj tylko jeśli ticker jest ustawiony (nie 'NONE')
+        # (Nie musimy sprawdzać 'PROCESSING', bo to osobny klucz)
+        if active_ticker and active_ticker != 'NONE':
             logger.debug(f"[HF-CACHE] Aktywnie oglądany ticker: {active_ticker}. Uruchamianie szybkiego odświeżania.")
             
             # 3. Pobierz najnowszą cenę
             quote_data = api_client.get_live_quote_details(active_ticker)
             
             # 4. Zaktualizuj cache
-            # Używamy funkcji _update_price_cache_for_ticker, która zarządza własnym commitem/rollbackiem.
             _update_price_cache_for_ticker(session, active_ticker, quote_data)
             
     except Exception as e:
-        # Logujemy błąd, ale nie zatrzymujemy głównej pętli workera
         logger.error(f"[HF-CACHE] Błąd podczas szybkiego buforowania dla {active_ticker or 'N/A'}: {e}", exc_info=False)
-        # Wycofujemy, jeśli błąd wystąpił przed wywołaniem _update_price_cache_for_ticker
         session.rollback()
 
 
-# --- Funkcja obsługi analizy AI na żądanie (bez zmian) ---
+# --- Funkcja obsługi analizy AI na żądanie (ZMODYFIKOWANA) ---
 def handle_ai_analysis_request(session: Session):
-    """Sprawdza, wykonuje analizę AI i **natychmiast zapisuje cenę do cache**."""
+    """
+    Sprawdza, wykonuje analizę AI, ustawia klucz 'active_ai_ticker'
+    i **natychmiast zapisuje cenę do cache**.
+    """
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
         logger.info(f"AI analysis request received for: {ticker_to_analyze}.")
+
+        # === MODYFIKACJA 2: Ustawiamy nowy klucz HF oraz klucz zlecenia ===
+        # 1. Ustawiamy nowy ticker dla pętli HF (aby odświeżanie zaczęło się NATYCHMIAST)
+        utils.update_system_control(session, 'active_ai_ticker', ticker_to_analyze)
+        # 2. Ustawiamy status zlecenia na 'PROCESSING'
         utils.update_system_control(session, 'ai_analysis_request', 'PROCESSING')
         session.commit()
 
@@ -112,46 +117,41 @@ def handle_ai_analysis_request(session: Session):
             analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
         """)
         try:
-            # Używamy json.dumps, bo analysis_data jest TEXT/JSONB i potrzebuje stringa
             session.execute(stmt_temp, {'ticker': ticker_to_analyze, 'data': json.dumps(temp_result)})
             session.commit()
         except Exception as e_temp:
              logger.error(f"Failed to set PROCESSING status for AI analysis ({ticker_to_analyze}): {e_temp}", exc_info=True)
              session.rollback()
+             # Wycofujemy OBA klucze w razie błędu
              utils.update_system_control(session, 'ai_analysis_request', 'NONE')
+             utils.update_system_control(session, 'active_ai_ticker', 'NONE') # Resetujemy też klucz HF
              try: session.commit()
              except Exception as e_commit_reset: logger.error(f"Failed commit AI req status reset: {e_commit_reset}"); session.rollback()
              return
 
-        # --- GŁÓWNA LOGIKA ---
+        # --- GŁÓWNA LOGIKA (bez zmian) ---
         analysis_result_data: Optional[Dict[str, Any]] = None
         initial_quote_data: Optional[Dict[str, Any]] = None
         try:
-            # Uruchamiamy analizę - oczekujemy, że zwróci dict
             analysis_result_data = ai_agents.run_ai_analysis(ticker_to_analyze, api_client)
 
-            # Sprawdzamy, czy analiza się powiodła i czy zawiera quote_data
             if analysis_result_data and analysis_result_data.get("status") == "DONE":
-                initial_quote_data = analysis_result_data.get("quote_data") # Wyciągamy quote_data z wyniku
+                initial_quote_data = analysis_result_data.get("quote_data") 
                 if initial_quote_data:
-                    # **Natychmiast zapisujemy cenę do cache**
                     logger.info(f"Analysis DONE for {ticker_to_analyze}. Immediately caching fetched price data.")
                     _update_price_cache_for_ticker(session, ticker_to_analyze, initial_quote_data)
-                    # UWAGA: _update_price_cache_for_ticker zarządza własnym commitem/rollbackiem
                 else:
                     logger.warning(f"AI analysis result for {ticker_to_analyze} is DONE but missing 'quote_data'. Cache not updated immediately.")
 
-                # Zapisujemy wynik analizy AI
                 stmt = text("""
                     INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated)
                     VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET
                     analysis_data = EXCLUDED.analysis_data, last_updated = NOW();
                 """)
-                # Używamy json.dumps, bo analysis_data jest TEXT/JSONB i potrzebuje stringa
                 session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(analysis_result_data)})
                 session.commit()
                 logger.info(f"Successfully saved AI analysis for {ticker_to_analyze} (price cached).")
-            elif analysis_result_data: # Jeśli status nie jest DONE, zapiszmy to co mamy (np. ERROR)
+            elif analysis_result_data: 
                  stmt_other = text("""
                     INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated)
                     VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET
@@ -165,7 +165,6 @@ def handle_ai_analysis_request(session: Session):
 
         except Exception as e:
             logger.error(f"Error during AI analysis execution or saving for {ticker_to_analyze}: {e}", exc_info=True)
-            # Zapisz status błędu (jeśli analiza nie zwróciła już błędu)
             if not analysis_result_data or analysis_result_data.get("status") != "ERROR":
                 error_result = {"status": "ERROR", "message": f"Błąd wykonania analizy: {str(e)}", "ticker": ticker_to_analyze}
                 stmt_err = text("""
@@ -180,7 +179,8 @@ def handle_ai_analysis_request(session: Session):
                      logger.error(f"Failed to save ERROR status for AI analysis ({ticker_to_analyze}): {e_err_save}")
                      session.rollback()
         finally:
-             # Niezależnie od wyniku, resetujemy zlecenie
+             # === MODYFIKACJA 2 (FINALLY): Resetujemy TYLKO klucz zlecenia ===
+             # Pozostawiamy 'active_ai_ticker' ustawiony, aby pętla HF działała dalej
              utils.update_system_control(session, 'ai_analysis_request', 'NONE')
              try: session.commit()
              except Exception as e_commit_final: logger.error(f"Failed commit final AI req status reset: {e_commit_final}"); session.rollback()
@@ -300,15 +300,12 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
         try: tickers_pf = [r.ticker for r in session.query(PortfolioHolding.ticker).distinct()]; logger.debug(f"[CACHE] Tickery z Portfela: {tickers_pf}")
         except Exception as e_pf: logger.error(f"Error fetching tickers from Portfolio: {e_pf}"); tickers_pf = []
         
-        # Łączymy listy
         unique_tickers_raw = list(set(tickers_p3 + tickers_pf))
 
-        # 2. MODYFIKACJA: Unikanie konfliktów z pętlą HF
-        # Pobieramy ticker, który jest aktywnie oglądany
-        active_ticker_hf = utils.get_system_control_value(session, 'ai_analysis_request')
-        if active_ticker_hf and active_ticker_hf not in ['NONE', 'PROCESSING']:
+        # === MODYFIKACJA 4: Unikanie konfliktów z pętlą HF (nowy klucz) ===
+        active_ticker_hf = utils.get_system_control_value(session, 'active_ai_ticker')
+        if active_ticker_hf and active_ticker_hf != 'NONE':
             if active_ticker_hf in unique_tickers_raw:
-                # Jeśli jest na naszej liście, usuwamy go
                 unique_tickers_raw.remove(active_ticker_hf)
                 logger.info(f"[CACHE] Pomijanie {active_ticker_hf} w pętli głównej (obsługiwane przez HF-CACHE).")
 
@@ -334,7 +331,7 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
             logger.debug(f"[CACHE] Przetwarzanie bloku: {', '.join(chunk)}")
             try:
                 for ticker in chunk:
-                    time.sleep(0.4) # Zachowujemy rate limiting
+                    time.sleep(0.4) 
                     try:
                         quote_data = api_client.get_live_quote_details(ticker) 
                         if quote_data and quote_data.get("live_price") is not None:
@@ -383,9 +380,11 @@ def main_loop():
         utils.update_system_control(session, 'ai_analysis_request', 'NONE')
         utils.update_system_control(session, 'current_phase', 'NONE')
         utils.update_system_control(session, 'system_alert', 'NONE')
+        # === MODYFIKACJA 3: Inicjalizacja nowego klucza ===
+        utils.update_system_control(session, 'active_ai_ticker', 'NONE') 
         utils.report_heartbeat(session)
         session.commit()
-        logger.info("Worker status initialized to IDLE.")
+        logger.info("Worker status initialized to IDLE (and active_ai_ticker set to NONE).")
     except Exception as e_init:
         logger.critical(f"FATAL: Error during worker initialization: {e_init}", exc_info=True)
         session.rollback(); session.close(); sys.exit(1)
@@ -395,12 +394,10 @@ def main_loop():
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     schedule.every(30).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     
-    # === MODYFIKACJA KROKU 2: Zmiana harmonogramu ===
     schedule.every(15).seconds.do(lambda: cache_live_prices(get_db_session(), api_client)) # Regularne cachowanie
 
     logger.info(f"Scheduled full analysis job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Real-Time Entry Trigger Monitor scheduled every 30 seconds.")
-    # === MODYFIKACJA KROKU 2: Aktualizacja logu ===
     logger.info("Live Price Caching scheduled every 15 seconds (F3 + Portfolio only).")
     logger.info("Worker initialization complete. Entering main loop.")
 
