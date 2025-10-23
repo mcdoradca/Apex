@@ -7,8 +7,10 @@ import json
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 # POPRAWKA BŁĘDU #5: Import potrzebny do UPSERT w cache
-from sqlalchemy import text, insert, update
+from sqlalchemy import text, insert, update, func # Dodano func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+# POPRAWKA BŁĘDU: Dodano import 'Session' dla type hinting
+from sqlalchemy.orm import Session
 
 # POPRAWKA BŁĘDU #5 i #6: Upewniamy się, że importujemy WSZYSTKIE modele
 # Dodano LivePriceCache
@@ -34,7 +36,7 @@ if not API_KEY:
 current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
-def handle_ai_analysis_request(session):
+def handle_ai_analysis_request(session: Session): # Dodano type hint Session tutaj też
     """Sprawdza i wykonuje nową analizę AI na żądanie."""
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
     # Sprawdzamy, czy jest zlecenie i nie jest to 'NONE' ani 'PROCESSING'
@@ -206,7 +208,7 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
             logger.debug("Price caching skipped: Main analysis cycle is running.") # Zmieniono na DEBUG
             return
         # Sprawdźmy też, czy nie jest PAUSED
-        if current_state == 'PAUSED':
+        if current_state == 'PAUSED': # Używamy globalnego stanu
             logger.debug("Price caching skipped: Worker is PAUSED.")
             return
 
@@ -252,6 +254,7 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
                             fetch_count += 1
                             prices_to_cache.append({
                                 'ticker': ticker,
+                                # Zapisujemy cały obiekt quote_data jako JSON string
                                 'quote_data': json.dumps(quote_data),
                                 'last_updated': datetime.now(timezone.utc)
                             })
@@ -328,11 +331,12 @@ def main_loop():
 
     # Konfiguracja harmonogramu zadań
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
-    schedule.every(1).minute.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
+    # Zmieniono interwał monitora na 30 sekund dla szybszej reakcji
+    schedule.every(30).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     schedule.every(30).seconds.do(lambda: cache_live_prices(get_db_session(), api_client))
 
     logger.info(f"Scheduled full analysis job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 1 minute.")
+    logger.info("Real-Time Entry Trigger Monitor scheduled every 30 seconds.") # Zaktualizowano log
     logger.info("Live Price Caching scheduled every 30 seconds.")
     logger.info("Worker initialization complete. Entering main loop.")
 
@@ -349,7 +353,9 @@ def main_loop():
                 # run_full_analysis_cycle zarządza własną sesją i statusem
                 run_full_analysis_cycle()
                 # Po zakończeniu cyklu, odświeżamy stan globalny
-                current_state = utils.get_system_control_value(session, 'worker_status') or "IDLE"
+                current_state_from_db = utils.get_system_control_value(session, 'worker_status')
+                current_state = current_state_from_db if current_state_from_db else "IDLE"
+
 
             # Wykonywanie zadań tylko jeśli worker nie jest wstrzymany
             if current_state != "PAUSED":
