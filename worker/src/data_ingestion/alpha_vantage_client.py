@@ -342,7 +342,7 @@ class AlphaVantageClient:
             "regular_session": {"price": None, "change": None, "change_percent": None},
             "extended_session": {"price": None, "change": None, "change_percent": None},
             "live_price": None,
-            "actual_close_price": None # Dodajemy to pole dla spójności i frontendu
+            "actual_close_price": None # Użyjemy tego pola, aby przechować `close` z CSV
         }
         trigger_fallback = False # Czy potrzebujemy fallbacku do JSON?
 
@@ -354,9 +354,9 @@ class AlphaVantageClient:
             logger.debug(f"[DIAG] Surowe dane dla {symbol} z CSV po normalizacji: {ticker_data}")
 
             # Odczytujemy wszystkie potrzebne pola z CSV
-            regular_close_price_csv = self._safe_float(ticker_data.get('previous_close'))
-            extended_price_csv = self._safe_float(ticker_data.get('extended_hours_quote'))
-            latest_trade_price_csv = self._safe_float(ticker_data.get('close')) # Faktyczna cena zamknięcia
+            regular_close_price_csv = self._safe_float(ticker_data.get('previous_close')) # Poprzednie zamknięcie (1.71)
+            extended_price_csv = self._safe_float(ticker_data.get('extended_hours_quote')) # Cena extended (1.79)
+            latest_trade_price_csv = self._safe_float(ticker_data.get('close')) # Faktyczna cena zamknięcia (1.76)
             
             response["actual_close_price"] = latest_trade_price_csv # Zapisujemy faktyczną cenę zamknięcia
             
@@ -368,8 +368,18 @@ class AlphaVantageClient:
 
             logger.info(f"[DIAG-CSV] {symbol} - Ceny po konwersji: previous_close={regular_close_price_csv}, extended={extended_price_csv}, actual_close={latest_trade_price_csv}")
 
+            # === POCZĄTEK POPRAWKI BŁĘDU (Cena "At Close") ===
             # Wypełniamy pola odpowiedzi danymi z CSV
-            response["regular_session"] = {"price": regular_close_price_csv, "change": regular_change_csv, "change_percent": regular_change_percent_csv}
+            # Używamy 'latest_trade_price_csv' (1.76) jako 'price' dla sesji regularnej,
+            # ponieważ to jest cena "At Close", którą chcemy widzieć.
+            response["regular_session"] = {
+                "price": latest_trade_price_csv, # POPRAWKA: Używamy 'close' (1.76)
+                "change": regular_change_csv, 
+                "change_percent": regular_change_percent_csv
+            }
+            # 'previous_close' (1.71) nie jest już bezpośrednio używane w 'regular_session.price'
+            # === KONIEC POPRAWKI BŁĘDU ===
+            
             response["extended_session"] = {"price": extended_price_csv, "change": extended_change_csv, "change_percent": extended_change_percent_csv}
 
             # --- Logika Wyboru Ceny Live na podstawie NASZEGO Statusu Rynku ---
@@ -382,6 +392,8 @@ class AlphaVantageClient:
                     trigger_fallback = True
 
             elif us_market_status == "REGULAR":
+                # Używamy `latest_trade_price_csv` (pole 'close' z CSV), ponieważ w trakcie sesji
+                # jest ono aktualizowane na żywo i jest dokładniejsze niż `price` z GLOBAL_QUOTE.
                 if latest_trade_price_csv is not None:
                     response["live_price"] = latest_trade_price_csv
                     logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny latest trade ('close') z CSV: {response['live_price']}")
@@ -424,32 +436,34 @@ class AlphaVantageClient:
 
                  # Używamy ceny z fallbacku tylko jeśli cena live jest nadal None
                  if response["live_price"] is None and fallback_price is not None:
-                      # Sprawdzenie: Czy fallback_price jest z dzisiaj (jeśli rynek był otwarty)?
                       if us_market_status == "REGULAR" and fallback_latest_day != date_ny_str:
                           logger.warning(f"[DIAG-FALLBACK] {symbol} - Cena z GLOBAL_QUOTE ({fallback_price}) pochodzi z {fallback_latest_day}, a nie z dzisiaj ({date_ny_str}). Może być nieaktualna.")
                       response["live_price"] = fallback_price
                       logger.info(f"[DIAG-FALLBACK] {symbol} - Użyto ceny fallback z GLOBAL_QUOTE: {fallback_price}")
 
+                 # === POCZĄTEK POPRAWKI BŁĘDU (Fallback "At Close") ===
                  # Uzupełniamy dane sesji regularnej, jeśli brakowało ich w CSV lub CSV zawiodło
-                 if response["regular_session"]["price"] is None: response["regular_session"]["price"] = fallback_prev_close
+                 if response["regular_session"]["price"] is None: 
+                     response["regular_session"]["price"] = fallback_price # POPRAWKA: Używamy '05. price'
+                 # === KONIEC POPRAWKI BŁĘDU ===
+                 
                  if response["regular_session"]["change"] is None: response["regular_session"]["change"] = fallback_change
                  if response["regular_session"]["change_percent"] is None: response["regular_session"]["change_percent"] = fallback_change_percent
                  
-                 # Uzupełniamy actual_close_price, jeśli jest brakiem i mamy cenę z fallbacku
                  if response["actual_close_price"] is None: response["actual_close_price"] = fallback_price
 
-                 # GLOBAL_QUOTE nie ma danych extended, więc nie uzupełniamy response["extended_session"]
             else:
                  logger.error(f"[DIAG-FALLBACK] {symbol} - Nie otrzymano poprawnych danych z GLOBAL_QUOTE.")
 
         # --- Ostateczność: Jeśli nadal nie ma ceny live, użyj previous close (z CSV lub fallbacku) ---
         if response["live_price"] is None:
-            final_fallback_price = response["regular_session"].get("price") # price to previous close
+            # === POPRAWKA BŁĘDU: Używamy ceny z 'regular_session' (która jest teraz poprawna) ===
+            final_fallback_price = response["regular_session"].get("price") # price to teraz actual close
             if final_fallback_price is not None:
                  response["live_price"] = final_fallback_price
-                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak ceny live z CSV/JSON. Użyto ceny previous_close: {final_fallback_price} jako ostateczność.")
+                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak ceny live z CSV/JSON. Użyto ceny 'actual_close': {final_fallback_price} jako ostateczność.")
             else:
-                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak jakiejkolwiek ceny (live, previous_close) do użycia!")
+                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak jakiejkolwiek ceny (live, actual_close) do użycia!")
 
         # --- Końcowe logowanie ---
         if response["live_price"] is None:
