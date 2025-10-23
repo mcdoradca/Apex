@@ -100,4 +100,3 @@ class LivePriceCache(Base):
     ticker = Column(VARCHAR(50), primary_key=True)
     quote_data = Column(JSONB, nullable=False)
     last_updated = Column(PG_TIMESTAMP(timezone=True), nullable=False, index=True)
-
