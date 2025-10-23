@@ -9,7 +9,8 @@ from io import StringIO
 import csv
 from datetime import datetime
 import pytz
-from typing import Dict, Any, List, Tuple # Dodano Tuple
+# POPRAWKA BŁĘDU: Dodanie brakujących importów z typing
+from typing import Dict, Any, List, Tuple 
 
 load_dotenv()
 
@@ -389,7 +390,7 @@ class AlphaVantageClient:
                         response["live_price"] = latest_trade_price_csv
                         logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny latest trade ('close').")
                     else:
-                        logger.debug(f"[DIAG-CSV] {symbol} - Brak latest_trade_price ('close') z CSV. Uruchamiam fallback.")
+                        logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak latest_trade_price ('close') z CSV. Uruchamiam fallback.")
                         trigger_fallback = True
 
                 elif us_market_status == "CLOSED":
@@ -398,7 +399,7 @@ class AlphaVantageClient:
                      response["live_price"] = final_price
                      logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny closed ({'extended' if extended_price_csv is not None else 'actual_close'}).")
                      if response["live_price"] is None:
-                          logger.debug(f"[DIAG-CSV] {symbol} - Brak ceny extended i actual_close z CSV. Uruchamiam fallback.")
+                          logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak ceny extended i actual_close z CSV. Uruchamiam fallback.")
                           trigger_fallback = True
                 else: # UNKNOWN status
                      logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Nieznany status. Uruchamiam fallback.")
