@@ -58,14 +58,15 @@ def _update_price_cache_for_ticker(session: Session, ticker: str, quote_data: Di
         )
         session.execute(final_stmt)
         session.commit()
-        logger.info(f"[_update_price_cache] Successfully updated cache for {ticker}.")
+        # Zmieniono logowanie z INFO na DEBUG, aby nie zaśmiecać logów w pętli HF
+        logger.debug(f"[_update_price_cache] Successfully updated cache for {ticker}.")
     except Exception as e:
         logger.error(f"[_update_price_cache] Error updating cache for {ticker}: {e}", exc_info=True)
         session.rollback()
 # === KONIEC PRZYWRÓCONEJ FUNKCJI ===
 
 
-# === NOWA FUNKCJA DLA KROKU 1 ===
+# === FUNKCJA DLA KROKU 1 ===
 def handle_high_frequency_cache(session: Session, api_client: AlphaVantageClient):
     """
     Szybka pętla (uruchamiana co ~5s) do odświeżania ceny
@@ -79,7 +80,7 @@ def handle_high_frequency_cache(session: Session, api_client: AlphaVantageClient
 
         # 2. Działaj tylko jeśli ticker jest ustawiony (nie 'NONE' i nie 'PROCESSING')
         if active_ticker and active_ticker not in ['NONE', 'PROCESSING']:
-            logger.info(f"[HF-CACHE] Aktywnie oglądany ticker: {active_ticker}. Uruchamianie szybkiego odświeżania.")
+            logger.debug(f"[HF-CACHE] Aktywnie oglądany ticker: {active_ticker}. Uruchamianie szybkiego odświeżania.")
             
             # 3. Pobierz najnowszą cenę
             quote_data = api_client.get_live_quote_details(active_ticker)
@@ -272,10 +273,11 @@ def run_full_analysis_cycle():
              session.close()
 
 
-# --- PRZYWRÓCONA FUNKCJA buforowania cen (ORYGINALNA, NIEZOPTYMALIZOWANA) ---
+# --- MODYFIKACJA KROKU 2: Zmiana logiki `cache_live_prices` ---
 def cache_live_prices(session: Session, api_client: AlphaVantageClient):
     """
-    Pobiera listę istotnych tickerów i aktualizuje ich ceny w 'live_price_cache'.
+    Pobiera listę istotnych tickerów (TYLKO F3 i Portfel)
+    i aktualizuje ich ceny w 'live_price_cache' co 15 sekund.
     """
     try:
         current_worker_status = utils.get_system_control_value(session, 'worker_status')
@@ -290,20 +292,27 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
         logger.error(f"Error checking worker status before caching prices: {e_status_check}")
         pass
 
-    logger.info("Running live price caching cycle...")
+    logger.info("[CACHE] Uruchamianie pętli buforowania (F3 + Portfel)...")
     try:
-        # 1. Zbierz tickery (bez zmian)
-        try: tickers_p1 = [r.ticker for r in session.query(Phase1Candidate.ticker).filter(func.date(Phase1Candidate.analysis_date) == func.current_date()).distinct()]; logger.debug(f"Tickers from Phase1: {tickers_p1}")
-        except Exception as e_p1: logger.error(f"Error fetching tickers from Phase1: {e_p1}"); tickers_p1 = []
-        try: tickers_p2 = [r.ticker for r in session.query(Phase2Result.ticker).filter(Phase2Result.analysis_date == func.current_date()).distinct()]; logger.debug(f"Tickers from Phase2: {tickers_p2}")
-        except Exception as e_p2: logger.error(f"Error fetching tickers from Phase2: {e_p2}"); tickers_p2 = []
-        try: tickers_p3 = [r.ticker for r in session.query(TradingSignal.ticker).filter(TradingSignal.status.in_(['ACTIVE', 'PENDING', 'TRIGGERED'])).distinct()]; logger.debug(f"Tickers from Phase3: {tickers_p3}")
+        # 1. Zbierz tickery (TYLKO F3 i Portfel)
+        try: tickers_p3 = [r.ticker for r in session.query(TradingSignal.ticker).filter(TradingSignal.status.in_(['ACTIVE', 'PENDING', 'TRIGGERED'])).distinct()]; logger.debug(f"[CACHE] Tickery z Fazy 3: {tickers_p3}")
         except Exception as e_p3: logger.error(f"Error fetching tickers from Phase3: {e_p3}"); tickers_p3 = []
-        try: tickers_pf = [r.ticker for r in session.query(PortfolioHolding.ticker).distinct()]; logger.debug(f"Tickers from Portfolio: {tickers_pf}")
+        try: tickers_pf = [r.ticker for r in session.query(PortfolioHolding.ticker).distinct()]; logger.debug(f"[CACHE] Tickery z Portfela: {tickers_pf}")
         except Exception as e_pf: logger.error(f"Error fetching tickers from Portfolio: {e_pf}"); tickers_pf = []
-        unique_tickers_raw = list(set(tickers_p1 + tickers_p2 + tickers_p3 + tickers_pf))
+        
+        # Łączymy listy
+        unique_tickers_raw = list(set(tickers_p3 + tickers_pf))
 
-        # Filtrowanie (bez zmian)
+        # 2. MODYFIKACJA: Unikanie konfliktów z pętlą HF
+        # Pobieramy ticker, który jest aktywnie oglądany
+        active_ticker_hf = utils.get_system_control_value(session, 'ai_analysis_request')
+        if active_ticker_hf and active_ticker_hf not in ['NONE', 'PROCESSING']:
+            if active_ticker_hf in unique_tickers_raw:
+                # Jeśli jest na naszej liście, usuwamy go
+                unique_tickers_raw.remove(active_ticker_hf)
+                logger.info(f"[CACHE] Pomijanie {active_ticker_hf} w pętli głównej (obsługiwane przez HF-CACHE).")
+
+        # 3. Filtrowanie (bez zmian)
         valid_tickers = []
         for ticker in unique_tickers_raw:
             if isinstance(ticker, str) and ticker.isupper() and 1 <= len(ticker) <= 5 and ticker != "STRING": valid_tickers.append(ticker)
@@ -311,54 +320,52 @@ def cache_live_prices(session: Session, api_client: AlphaVantageClient):
         unique_tickers = sorted(valid_tickers)
 
         if not unique_tickers:
-            logger.info("No valid relevant tickers found to cache prices for.")
+            logger.info("[CACHE] Brak ważnych tickerów (F3/Portfel) do zbuforowania.")
             return
 
-        logger.info(f"Regularly caching prices for {len(unique_tickers)} unique valid tickers: {', '.join(unique_tickers)}")
+        logger.info(f"[CACHE] Buforowanie cen dla {len(unique_tickers)} tickerów (F3/Portfel): {', '.join(unique_tickers)}")
 
-        # 2. Pobierz ceny (PRZYWRÓCONO: N zapytań zamiast BULK)
+        # 4. Pobierz ceny (N zapytań - bez zmian)
         prices_to_cache = []
         fetch_count = 0
-        chunk_size = 50 # Używamy małych chunków, aby nie przeciążać AV
+        chunk_size = 50 
         for i in range(0, len(unique_tickers), chunk_size):
             chunk = unique_tickers[i:i+chunk_size]
-            logger.debug(f"Fetching price chunk: {', '.join(chunk)}")
+            logger.debug(f"[CACHE] Przetwarzanie bloku: {', '.join(chunk)}")
             try:
                 for ticker in chunk:
-                    time.sleep(0.4)
+                    time.sleep(0.4) # Zachowujemy rate limiting
                     try:
-                        # PRZYWRÓCONO: Wywołanie funkcji pojedynczego pobierania
                         quote_data = api_client.get_live_quote_details(ticker) 
                         if quote_data and quote_data.get("live_price") is not None:
                             fetch_count += 1
                             prices_to_cache.append({
                                 'ticker': ticker,
-                                # PRZYWRÓCONO: json.dumps() do zapisu w bazie
                                 'quote_data': json.dumps(quote_data),
                                 'last_updated': datetime.now(timezone.utc)
                             })
-                        else: logger.warning(f"Failed to fetch valid quote_data for cache ({ticker}). API Response: {quote_data}")
-                    except Exception as e_ticker: logger.error(f"Exception while fetching price for cache ({ticker}): {e_ticker}", exc_info=False)
-            except Exception as e_chunk: logger.error(f"Error processing price fetch chunk: {e_chunk}", exc_info=True)
+                        else: logger.warning(f"[CACHE] Nie udało się pobrać danych dla {ticker}. Odpowiedź: {quote_data}")
+                    except Exception as e_ticker: logger.error(f"[CACHE] Wyjątek podczas pobierania ceny dla {ticker}: {e_ticker}", exc_info=False)
+            except Exception as e_chunk: logger.error(f"[CACHE] Błąd przetwarzania bloku cen: {e_chunk}", exc_info=True)
 
         if not prices_to_cache:
-            logger.warning("No prices were successfully fetched to cache in this cycle.")
+            logger.warning("[CACHE] Nie udało się pobrać żadnych cen w tym cyklu.")
             return
 
-        # 3. Zapisz/Zaktualizuj ceny w bazie (UPSERT - bez zmian)
+        # 5. Zapisz/Zaktualizuj ceny w bazie (UPSERT - bez zmian)
         stmt = pg_insert(LivePriceCache).values(prices_to_cache)
         update_dict = { LivePriceCache.quote_data: stmt.excluded.quote_data, LivePriceCache.last_updated: stmt.excluded.last_updated }
         final_stmt = stmt.on_conflict_do_update( index_elements=[LivePriceCache.ticker], set_=update_dict )
         session.execute(final_stmt)
         session.commit()
-        logger.info(f"Successfully regularly cached {fetch_count}/{len(unique_tickers)} prices using UPSERT.")
+        logger.info(f"[CACHE] Pomyślnie zbuforowano {fetch_count}/{len(unique_tickers)} cen (F3/Portfel).")
 
     except Exception as e:
-        logger.error(f"Error during price caching cycle: {e}", exc_info=True)
+        logger.error(f"Błąd w głównej pętli buforowania cen: {e}", exc_info=True)
         session.rollback()
 
 
-# --- Główna pętla workera (MODYFIKACJA) ---
+# --- Główna pętla workera (MODYFIKACJA KROKU 2) ---
 def main_loop():
     """Główna pętla workera."""
     global current_state
@@ -387,11 +394,14 @@ def main_loop():
     # Harmonogram zadań
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     schedule.every(30).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
-    schedule.every(30).seconds.do(lambda: cache_live_prices(get_db_session(), api_client)) # Regularne cachowanie
+    
+    # === MODYFIKACJA KROKU 2: Zmiana harmonogramu ===
+    schedule.every(15).seconds.do(lambda: cache_live_prices(get_db_session(), api_client)) # Regularne cachowanie
 
     logger.info(f"Scheduled full analysis job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Real-Time Entry Trigger Monitor scheduled every 30 seconds.")
-    logger.info("Live Price Caching scheduled every 30 seconds.")
+    # === MODYFIKACJA KROKU 2: Aktualizacja logu ===
+    logger.info("Live Price Caching scheduled every 15 seconds (F3 + Portfolio only).")
     logger.info("Worker initialization complete. Entering main loop.")
 
     # Główna pętla
@@ -405,18 +415,15 @@ def main_loop():
                 current_state_from_db = utils.get_system_control_value(session, 'worker_status')
                 current_state = current_state_from_db if current_state_from_db else "IDLE"
             
-            # === POCZĄTEK MODYFIKACJI KROKU 1 ===
             if current_state != "PAUSED":
                 # 1. Obsługa zlecenia analizy (AI Request)
-                handle_ai_analysis_request(session) # Ta funkcja zarządza własnym commitem/rollbackiem
+                handle_ai_analysis_request(session) 
                 
                 # 2. NOWA FUNKCJA: Szybkie buforowanie dla aktywnego tickera AI
-                # Ta funkcja jest wywoływana co 5 sekund (zgodnie z pętlą)
-                handle_high_frequency_cache(session, api_client) # Zarządza własnym commitem/rollbackiem
+                handle_high_frequency_cache(session, api_client) 
 
                 # 3. Obsługa zadań cyklicznych (główna analiza, F3, Portfel)
                 schedule.run_pending()
-            # === KONIEC MODYFIKACJI KROKU 1 ===
 
             utils.report_heartbeat(session)
             session.commit() # Commit heartbeatu
