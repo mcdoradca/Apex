@@ -7,12 +7,9 @@ import os
 from dotenv import load_dotenv
 from io import StringIO
 import csv
-# POPRAWKA BŁĘDU #3: Dodanie importów do obsługi czasu
 from datetime import datetime
 import pytz
-# Zmieniono ścieżkę importu, aby pasowała do struktury workera
-# Usunięto import Base, bo nie jest tu potrzebny
-# from ..models import Base
+from typing import Dict, Any, List, Tuple # Dodano Tuple
 
 load_dotenv()
 
@@ -141,8 +138,6 @@ class AlphaVantageClient:
 
         logger.error(f"Request failed for {request_identifier} after {max_retries} attempts.")
         return None
-
-    # USUNIĘTO funkcję get_market_status(), ponieważ polegamy na czasie
 
     def _parse_bulk_quotes_csv(self, csv_text: str) -> dict:
         """Przetwarza odpowiedź CSV z BULK_QUOTES na słownik danych."""
@@ -292,18 +287,9 @@ class AlphaVantageClient:
              logger.debug(f"[_safe_float] Could not convert value '{value}' (type: {type(value)}) to float.")
              return None
 
-
-    # === POPRAWKA BŁĘDU #3: Przepisanie funkcji get_live_quote_details ===
-    # Rezygnujemy z endpointu MARKET_STATUS na rzecz ręcznego sprawdzania czasu.
-    def get_live_quote_details(self, symbol: str) -> dict:
-        """
-        Pobiera dane live i SAMODZIELNIE określa status rynku na podstawie
-        aktualnego czasu w strefie US/Eastern.
-        Zwraca ujednolicony słownik z danymi.
-        """
-        logger.info(f"[DIAG] Rozpoczynanie get_live_quote_details dla {symbol}")
-
-        # --- Ustalanie Statusu Rynku na podstawie czasu ---
+    @staticmethod
+    def _get_market_status_info() -> Tuple[str, str, str]:
+        """Statyczna funkcja określająca status rynku na podstawie czasu NY."""
         try:
             tz = pytz.timezone('US/Eastern')
             now_ny = datetime.now(tz)
@@ -325,132 +311,156 @@ class AlphaVantageClient:
             # Closed: Poza tymi godzinami
             else:
                 us_market_status = "CLOSED"
-
-            logger.info(f"[DIAG] Ustalony status rynku (wg czasu) dla {symbol}: {us_market_status} (Czas NY: {time_ny_str})")
+            
+            return us_market_status, time_ny_str, date_ny_str
 
         except Exception as e:
             logger.error(f"[DIAG] Nie udało się ustalić czasu NY: {e}", exc_info=False)
-            us_market_status = "UNKNOWN"
-            time_ny_str = "N/A"
-            date_ny_str = "N/A"
+            return "UNKNOWN", "N/A", "N/A"
 
-        # --- Inicjalizacja odpowiedzi ---
-        response = {
-            "symbol": symbol,
-            "market_status_internal": us_market_status, # Używamy _internal dla jasności
-            "time_ny": time_ny_str,
-            "date_ny": date_ny_str,
-            "regular_session": {"price": None, "change": None, "change_percent": None},
-            "extended_session": {"price": None, "change": None, "change_percent": None},
-            "live_price": None
-        }
-        trigger_fallback = False # Czy potrzebujemy fallbacku do JSON?
+    # === POPRAWIONA I UNIWERSALNA FUNKCJA POBIERANIA CEN LIVE ===
+    # Teraz akceptuje LISTĘ symboli i zwraca słownik gotowy do cachowania.
+    def get_live_quote_details_bulk(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Pobiera dane live dla LISTY tickerów, określa status rynku
+        i zwraca ujednolicony słownik wyników gotowy do cachowania (ticker -> quote_data).
+        """
+        if not symbols:
+            return {}
 
+        logger.info(f"[DIAG] Rozpoczynanie get_live_quote_details_bulk dla {len(symbols)} tickerów.")
+
+        # --- Ustalanie Statusu Rynku na podstawie czasu (tylko raz) ---
+        us_market_status, time_ny_str, date_ny_str = self._get_market_status_info()
+        logger.info(f"[DIAG] Ustalony status rynku (wg czasu): {us_market_status} (Czas NY: {time_ny_str})")
+        
         # --- Etap 1: Próba pobrania danych z BULK_QUOTES (CSV) ---
-        raw_data_csv = self.get_bulk_quotes([symbol])
+        raw_data_csv = self.get_bulk_quotes(symbols) # Zwraca słownik {ticker: {csv_data}}
 
-        if raw_data_csv and symbol in raw_data_csv:
-            ticker_data = raw_data_csv[symbol]
-            logger.debug(f"[DIAG] Surowe dane dla {symbol} z CSV po normalizacji: {ticker_data}")
+        results = {}
 
-            # Odczytujemy wszystkie potrzebne pola z CSV
-            regular_close_price_csv = self._safe_float(ticker_data.get('previous_close'))
-            extended_price_csv = self._safe_float(ticker_data.get('extended_hours_quote'))
-            latest_trade_price_csv = self._safe_float(ticker_data.get('close'))
-            regular_change_csv = self._safe_float(ticker_data.get('change'))
-            regular_change_percent_csv = self._safe_float(ticker_data.get('change_percent'))
-            extended_change_csv = self._safe_float(ticker_data.get('extended_hours_change'))
-            extended_change_percent_csv = self._safe_float(ticker_data.get('extended_hours_change_percent'))
-            latest_trading_day_csv = ticker_data.get('latest_trading_day') # Zachowujemy jako string
+        for symbol in symbols:
+            response = {
+                "symbol": symbol,
+                "market_status_internal": us_market_status,
+                "time_ny": time_ny_str,
+                "date_ny": date_ny_str,
+                "regular_session": {"price": None, "change": None, "change_percent": None},
+                "extended_session": {"price": None, "change": None, "change_percent": None},
+                "live_price": None,
+                "actual_close_price": None # Dodano dla jasności (faktyczna cena zamknięcia)
+            }
+            trigger_fallback = False
 
-            logger.info(f"[DIAG-CSV] {symbol} - Ceny po konwersji: regular_close={regular_close_price_csv}, extended={extended_price_csv}, latest_trade={latest_trade_price_csv}")
+            if raw_data_csv and symbol in raw_data_csv:
+                ticker_data = raw_data_csv[symbol]
 
-            # Wypełniamy pola odpowiedzi danymi z CSV
-            response["regular_session"] = {"price": regular_close_price_csv, "change": regular_change_csv, "change_percent": regular_change_percent_csv}
-            response["extended_session"] = {"price": extended_price_csv, "change": extended_change_csv, "change_percent": extended_change_percent_csv}
+                # Odczytujemy wszystkie potrzebne pola z CSV
+                regular_close_price_csv = self._safe_float(ticker_data.get('previous_close')) # Zawsze previous_close
+                extended_price_csv = self._safe_float(ticker_data.get('extended_hours_quote'))
+                latest_trade_price_csv = self._safe_float(ticker_data.get('close'))
+                
+                # Zmiana: latest_trade_price_csv to faktyczna cena zamknięcia sesji regularnej
+                # Jeśli rynek jest zamknięty, to "latest_trade_price_csv" jest ceną zamknięcia.
+                actual_close_price_csv = latest_trade_price_csv
+                
+                regular_change_csv = self._safe_float(ticker_data.get('change'))
+                regular_change_percent_csv = self._safe_float(ticker_data.get('change_percent'))
+                extended_change_csv = self._safe_float(ticker_data.get('extended_hours_change'))
+                extended_change_percent_csv = self._safe_float(ticker_data.get('extended_hours_change_percent'))
+                # latest_trading_day_csv = ticker_data.get('latest_trading_day') # Niepotrzebne, data jest z NY
 
-            # --- Logika Wyboru Ceny Live na podstawie NASZEGO Statusu Rynku ---
-            if us_market_status in ["PRE_MARKET", "POST_MARKET"]:
-                if extended_price_csv is not None:
-                    response["live_price"] = extended_price_csv
-                    logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny extended z CSV: {response['live_price']}")
+                # Wypełniamy pola odpowiedzi danymi z CSV
+                response["regular_session"] = {"price": regular_close_price_csv, "change": regular_change_csv, "change_percent": regular_change_percent_csv}
+                response["extended_session"] = {"price": extended_price_csv, "change": extended_change_csv, "change_percent": extended_change_percent_csv}
+                response["actual_close_price"] = actual_close_price_csv
+                
+                # --- Logika Wyboru Ceny Live na podstawie NASZEGO Statusu Rynku ---
+                if us_market_status in ["PRE_MARKET", "POST_MARKET"]:
+                    if extended_price_csv is not None:
+                        response["live_price"] = extended_price_csv
+                        logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny extended.")
+                    else:
+                        logger.debug(f"[DIAG-CSV] {symbol} - Brak extended_price z CSV. Uruchamiam fallback.")
+                        trigger_fallback = True
+
+                elif us_market_status == "REGULAR":
+                    if latest_trade_price_csv is not None:
+                        response["live_price"] = latest_trade_price_csv
+                        logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny latest trade ('close').")
+                    else:
+                        logger.debug(f"[DIAG-CSV] {symbol} - Brak latest_trade_price ('close') z CSV. Uruchamiam fallback.")
+                        trigger_fallback = True
+
+                elif us_market_status == "CLOSED":
+                     # Dla CLOSED priorytet ma extended, potem faktyczne zamknięcie
+                     final_price = extended_price_csv if extended_price_csv is not None else actual_close_price_csv
+                     response["live_price"] = final_price
+                     logger.debug(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny closed ({'extended' if extended_price_csv is not None else 'actual_close'}).")
+                     if response["live_price"] is None:
+                          logger.debug(f"[DIAG-CSV] {symbol} - Brak ceny extended i actual_close z CSV. Uruchamiam fallback.")
+                          trigger_fallback = True
+                else: # UNKNOWN status
+                     logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Nieznany status. Uruchamiam fallback.")
+                     trigger_fallback = True
+
+            else: # Jeśli w ogóle nie było danych CSV dla tickera
+                logger.debug(f"[DIAG-CSV] Brak danych bulk quotes (CSV) dla {symbol}.")
+                trigger_fallback = True # Musimy spróbować fallbacku
+
+            # --- Etap 2: Fallback do GLOBAL_QUOTE (JSON), jeśli potrzebny ---
+            if trigger_fallback:
+                logger.debug(f"[DIAG-FALLBACK] Uruchamianie fallbacku do GLOBAL_QUOTE dla {symbol}...")
+                global_quote_data = self.get_global_quote_json(symbol)
+
+                if global_quote_data and "Global Quote" in global_quote_data:
+                     quote = global_quote_data["Global Quote"]
+
+                     fallback_price = self._safe_float(quote.get('05. price'))
+                     fallback_prev_close = self._safe_float(quote.get('08. previous close'))
+                     fallback_change = self._safe_float(quote.get('09. change'))
+                     fallback_change_percent_str = quote.get('10. change percent', '').replace('%', '')
+                     fallback_change_percent = self._safe_float(fallback_change_percent_str)
+                     # GLOBAL_QUOTE nie ma danych extended ani actual_close, więc nie aktualizujemy tych pól.
+
+                     # Używamy ceny z fallbacku tylko jeśli cena live jest nadal None
+                     if response["live_price"] is None and fallback_price is not None:
+                          response["live_price"] = fallback_price
+                          logger.debug(f"[DIAG-FALLBACK] {symbol} - Użyto ceny fallback z GLOBAL_QUOTE: {fallback_price}")
+
+                     # Uzupełniamy dane sesji regularnej, jeśli brakowało ich w CSV lub CSV zawiodło
+                     if response["regular_session"]["price"] is None: response["regular_session"]["price"] = fallback_prev_close
+                     if response["regular_session"]["change"] is None: response["regular_session"]["change"] = fallback_change
+                     if response["regular_session"]["change_percent"] is None: response["regular_session"]["change_percent"] = fallback_change_percent
+
                 else:
-                    logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak extended_price z CSV. Uruchamiam fallback.")
-                    trigger_fallback = True
+                     logger.debug(f"[DIAG-FALLBACK] {symbol} - Nie otrzymano poprawnych danych z GLOBAL_QUOTE.")
 
-            elif us_market_status == "REGULAR":
-                if latest_trade_price_csv is not None:
-                    response["live_price"] = latest_trade_price_csv
-                    logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny latest trade ('close') z CSV: {response['live_price']}")
+            # --- Ostateczność: Jeśli nadal nie ma ceny live, użyj previous close ---
+            if response["live_price"] is None:
+                final_fallback_price = response["regular_session"].get("price") # price to previous close
+                if final_fallback_price is not None:
+                     response["live_price"] = final_fallback_price
+                     logger.warning(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak ceny live. Użyto ceny previous_close: {final_fallback_price} jako ostateczność.")
                 else:
-                    logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak latest_trade_price ('close') z CSV. Uruchamiam fallback.")
-                    trigger_fallback = True
+                     logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak jakiejkolwiek ceny (live, previous_close) do użycia!")
 
-            elif us_market_status == "CLOSED":
-                 # Dla CLOSED priorytet ma extended, potem regular close
-                 response["live_price"] = extended_price_csv if extended_price_csv is not None else regular_close_price_csv
-                 log_source = "extended (CSV)" if extended_price_csv is not None else "regular_close (CSV)"
-                 logger.info(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Użyto ceny closed ({log_source}): {response['live_price']}")
-                 if response["live_price"] is None:
-                      logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Brak ceny extended i regular_close z CSV. Uruchamiam fallback.")
-                      trigger_fallback = True
-            else: # UNKNOWN status
-                 logger.warning(f"[DIAG-CSV] {symbol} (Status: {us_market_status}) - Nieznany status rynku (błąd czasu?). Uruchamiam fallback.")
-                 trigger_fallback = True
-
-        else: # Jeśli w ogóle nie było danych CSV dla tickera
-            logger.error(f"[DIAG-CSV] Brak danych bulk quotes (CSV) dla {symbol} po parsowaniu lub zapytanie API nie powiodło się.")
-            trigger_fallback = True # Musimy spróbować fallbacku
-
-        # --- Etap 2: Fallback do GLOBAL_QUOTE (JSON), jeśli potrzebny ---
-        if trigger_fallback:
-            logger.warning(f"[DIAG-FALLBACK] Uruchamianie fallbacku do GLOBAL_QUOTE dla {symbol}...")
-            global_quote_data = self.get_global_quote_json(symbol)
-
-            if global_quote_data and "Global Quote" in global_quote_data:
-                 quote = global_quote_data["Global Quote"]
-                 logger.info(f"[DIAG-FALLBACK] Odpowiedź z GLOBAL_QUOTE dla {symbol}: {json.dumps(quote)}")
-
-                 fallback_price = self._safe_float(quote.get('05. price'))
-                 fallback_prev_close = self._safe_float(quote.get('08. previous close'))
-                 fallback_change = self._safe_float(quote.get('09. change'))
-                 fallback_change_percent_str = quote.get('10. change percent', '').replace('%', '')
-                 fallback_change_percent = self._safe_float(fallback_change_percent_str)
-                 fallback_latest_day = quote.get('07. latest trading day') # String YYYY-MM-DD
-
-                 # Używamy ceny z fallbacku tylko jeśli cena live jest nadal None
-                 if response["live_price"] is None and fallback_price is not None:
-                      # Sprawdzenie: Czy fallback_price jest z dzisiaj (jeśli rynek był otwarty)?
-                      # Jeśli rynek jest REGULAR, a data fallbacku nie jest dzisiejsza, to coś jest nie tak.
-                      if us_market_status == "REGULAR" and fallback_latest_day != date_ny_str:
-                          logger.warning(f"[DIAG-FALLBACK] {symbol} - Cena z GLOBAL_QUOTE ({fallback_price}) pochodzi z {fallback_latest_day}, a nie z dzisiaj ({date_ny_str}). Może być nieaktualna.")
-                          # Można zdecydować, czy mimo to jej użyć. Na razie używamy.
-                      response["live_price"] = fallback_price
-                      logger.info(f"[DIAG-FALLBACK] {symbol} - Użyto ceny fallback z GLOBAL_QUOTE: {fallback_price}")
-
-                 # Uzupełniamy dane sesji regularnej, jeśli brakowało ich w CSV lub CSV zawiodło
-                 if response["regular_session"]["price"] is None: response["regular_session"]["price"] = fallback_prev_close
-                 if response["regular_session"]["change"] is None: response["regular_session"]["change"] = fallback_change
-                 if response["regular_session"]["change_percent"] is None: response["regular_session"]["change_percent"] = fallback_change_percent
-
-                 # GLOBAL_QUOTE nie ma danych extended, więc nie uzupełniamy response["extended_session"]
+            # --- Końcowe logowanie i zapis wyniku ---
+            if response["live_price"] is None:
+                 logger.error(f"[DIAG-FINAL] {symbol} - Końcowa wartość live_price to NADAL None!")
             else:
-                 logger.error(f"[DIAG-FALLBACK] {symbol} - Nie otrzymano poprawnych danych z GLOBAL_QUOTE.")
+                logger.debug(f"[DIAG-FINAL] {symbol} - Finalna live_price: {response['live_price']:.4f}.")
 
-        # --- Ostateczność: Jeśli nadal nie ma ceny live, użyj previous close (z CSV lub fallbacku) ---
-        if response["live_price"] is None:
-            final_fallback_price = response["regular_session"].get("price") # price to previous close
-            if final_fallback_price is not None:
-                 response["live_price"] = final_fallback_price
-                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak ceny live z CSV/JSON. Użyto ceny previous_close: {final_fallback_price} jako ostateczność.")
-            else:
-                 logger.error(f"[DIAG-FINAL-FALLBACK] {symbol} - Brak jakiejkolwiek ceny (live, previous_close) do użycia!")
+            results[symbol] = response
+            
+        return results
 
-        # --- Końcowe logowanie ---
-        if response["live_price"] is None:
-             logger.error(f"[DIAG-FINAL] {symbol} - Końcowa wartość live_price to NADAL None! Zwracany obiekt: {response}")
-        else:
-            logger.info(f"[DIAG-FINAL] {symbol} - Zakończono get_live_quote_details. Finalna live_price: {response['live_price']:.4f}. Status: {us_market_status}")
-
-        return response
-
+    # --- Zmienić nazwę starej funkcji pojedynczego pobierania na wrapper ---
+    def get_live_quote_details(self, symbol: str) -> Dict[str, Any]:
+        """
+        Wrapper dla pojedynczego tickera.
+        Zachowuje oryginalną sygnaturę dla kompatybilności wstecznej (np. w AI Agents).
+        """
+        results = self.get_live_quote_details_bulk([symbol])
+        return results.get(symbol, {})
+    # --- Koniec zmian ---
