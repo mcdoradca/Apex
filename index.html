@@ -285,7 +285,8 @@
                 }
 
                 try {
-                    const status = quoteData.market_status || "closed";
+                    // UWAGA: Używamy aliasu 'market_status', który odnosi się do 'market_status_internal'
+                    const status = quoteData.market_status || "closed"; // Używamy aliasu zdefiniowanego w Pydantic
                     const regular = quoteData.regular_session || {};
                     const extended = quoteData.extended_session || {};
                     const livePrice = quoteData.live_price; // Może być null
@@ -293,7 +294,7 @@
                     // Ustalanie statusu UI
                     let statusText = 'Rynek Zamknięty';
                     let statusClass = 'bg-gray-600';
-                    let mainPrice = null; // Zmieniono inicjalizację na null
+                    let mainPrice = null;
                     let mainChangeHtml = '', subPriceHtml = '';
 
                     const formatChange = (change, percent) => {
@@ -312,12 +313,14 @@
                             </div>`;
                     };
 
-                    // Logika wyboru ceny głównej i dodatkowej
+                    // === POCZĄTEK POPRAWIONEJ LOGIKI WYŚWIETLANIA ===
                     if (status === 'pre-market' || status === 'post-market') {
                         statusText = status === 'pre-market' ? 'Pre-Market' : 'After-Market';
                         statusClass = status === 'pre-market' ? 'bg-yellow-600' : 'bg-blue-600';
-                        mainPrice = extended.price; // Może być null
+                        // Główna cena: cena extended hours
+                        mainPrice = extended.price;
                         mainChangeHtml = formatChange(extended.change, extended.change_percent);
+                        // Cena pod spodem: cena regularnego zamknięcia
                         if (regular.price != null) {
                              subPriceHtml = `
                                 <div class="flex items-end gap-2 mt-1">
@@ -329,33 +332,40 @@
                     } else if (status === 'open' || status === 'regular') {
                         statusText = 'Rynek Otwarty';
                         statusClass = 'bg-green-600';
-                        mainPrice = livePrice; // Może być null
+                        // Główna cena: cena live
+                        mainPrice = livePrice;
                         mainChangeHtml = formatChange(regular.change, regular.change_percent);
+                        // Cena pod spodem: poprzednie zamknięcie
                          if (regular.price != null) {
                             subPriceHtml = `<p class="text-sm text-gray-500 mt-1">Poprz. zamkn.: ${regular.price.toFixed(2)}</p>`;
                          }
                     } else { // closed lub unknown
                         statusText = 'Rynek Zamknięty';
                         statusClass = 'bg-gray-600';
-                        mainPrice = regular.price; // Może być null (previous close)
-                        mainChangeHtml = formatChange(regular.change, regular.change_percent);
-                        if (extended.price != null) {
+                        // Główna cena: cena extended hours (jeśli jest), inaczej cena regularnego zamknięcia
+                        mainPrice = extended.price ?? regular.price;
+                        // Zmiana: Jeśli główna cena to extended, pokazujemy zmianę extended. Jeśli to regular, pokazujemy zmianę regular.
+                        mainChangeHtml = (extended.price != null)
+                            ? formatChange(extended.change, extended.change_percent)
+                            : formatChange(regular.change, regular.change_percent);
+                        // Cena pod spodem: Jeśli główna to extended, pokazujemy regular close. Jeśli główna to regular (bo nie ma extended), nie pokazujemy nic pod spodem.
+                        if (extended.price != null && regular.price != null) {
                             subPriceHtml = `
                                 <div class="flex items-end gap-2 mt-1">
-                                    <span class="text-lg font-semibold text-gray-400">${extended.price.toFixed(2)}</span>
-                                    <div class="text-sm mb-0.5">${formatChange(extended.change, extended.change_percent)}</div>
-                                    <span class="text-sm text-gray-500 mb-0.5">After-Hours</span>
+                                    <span class="text-lg font-semibold text-gray-500">${regular.price.toFixed(2)}</span>
+                                    <div class="text-sm mb-0.5">${formatChange(regular.change, regular.change_percent)}</div>
+                                    <span class="text-sm text-gray-500 mb-0.5">At Close</span>
                                 </div>`;
                         }
                     }
+                    // === KONIEC POPRAWIONEJ LOGIKI WYŚWIETLANIA ===
 
                     // --- ULEPSZONY FALLBACK + LOGOWANIE ---
                     // Szukamy pierwszej dostępnej ceny w preferowanej kolejności
                     const displayPrice = mainPrice ?? livePrice ?? extended.price ?? regular.price;
 
                     if (displayPrice == null) {
-                        // Jeśli ŻADNA cena nie jest dostępna, logujemy otrzymane dane i zwracamy komunikat
-                        logger.error(`renderQuoteBox: Nie można znaleźć żadnej ceny do wyświetlenia dla ${quoteData.symbol}. Otrzymane dane:`, JSON.parse(JSON.stringify(quoteData))); // Logujemy kopię obiektu
+                        logger.error(`renderQuoteBox: Nie można znaleźć żadnej ceny do wyświetlenia dla ${quoteData.symbol}. Otrzymane dane:`, JSON.parse(JSON.stringify(quoteData)));
                         return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center"><i data-lucide="alert-triangle" class="w-5 h-5 inline mr-2"></i>Błąd: Brak jakichkolwiek danych cenowych od dostawcy dla ${quoteData.symbol}.</div>`;
                     }
                     // --- KONIEC ULEPSZONEGO FALLBACKA ---
@@ -399,7 +409,9 @@
                     let statusClass, statusText, icon;
                     if (s.status === 'ACTIVE') { statusClass = 'text-green-400'; statusText = 'AKTYWNY'; icon = 'zap';}
                     else if (s.status === 'PENDING') { statusClass = 'text-yellow-400'; statusText = 'OCZEKUJĄCY'; icon = 'hourglass'; }
-                    else { statusClass = 'text-gray-500'; statusText = s.status.toUpperCase(); icon = 'help-circle'; }
+                    // Dodano obsługę TRIGGERED
+                    else if (s.status === 'TRIGGERED') { statusClass = 'text-blue-400'; statusText = 'WYZWOLONY'; icon = 'check-circle'; }
+                    else { statusClass = 'text-gray-500'; statusText = s.status.toUpperCase(); icon = 'help-circle'; } // Reszta bez zmian
                     return `<div data-ticker="${s.ticker}" class="candidate-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
                 }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
@@ -789,7 +801,8 @@
                  const quantity = parseInt(ui.buyModal.quantityInput.value, 10);
                  const price = parseFloat(ui.buyModal.priceInput.value);
                  if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
-                     alert("Proszę wprowadzić poprawną ilość i cenę."); // Użycie alert() - do poprawy w przyszłości
+                     // Zastąpienie alert()
+                     displaySystemAlert("Proszę wprowadzić poprawną ilość i cenę.");
                      return;
                  }
                  ui.buyModal.confirmBtn.disabled = true; ui.buyModal.confirmBtn.textContent = "Przetwarzanie...";
@@ -797,8 +810,10 @@
                     await api.buyStock({ ticker, quantity, price_per_share: price });
                     hideBuyModal();
                     showPortfolio(); // Odśwież widok portfela
-                } catch (e) { alert(`Błąd zakupu: ${e.message}`); // Użycie alert()
-                } finally { ui.buyModal.confirmBtn.disabled = false; ui.buyModal.confirmBtn.textContent = "Inwestuj"; }
+                } catch (e) {
+                    // Zastąpienie alert()
+                    displaySystemAlert(`Błąd zakupu: ${e.message}`);
+                 } finally { ui.buyModal.confirmBtn.disabled = false; ui.buyModal.confirmBtn.textContent = "Inwestuj"; }
             }
 
             function showSellModal(ticker, maxQuantity) {
@@ -820,11 +835,13 @@
                  const quantity = parseInt(ui.sellModal.quantityInput.value, 10);
                  const price = parseFloat(ui.sellModal.priceInput.value);
                  if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
-                     alert("Proszę wprowadzić poprawną ilość i cenę."); // Użycie alert()
+                     // Zastąpienie alert()
+                     displaySystemAlert("Proszę wprowadzić poprawną ilość i cenę.");
                      return;
                  }
                   if (quantity > maxQuantity) {
-                      alert(`Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`); // Użycie alert()
+                      // Zastąpienie alert()
+                      displaySystemAlert(`Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`);
                       return;
                   }
                  ui.sellModal.confirmBtn.disabled = true; ui.sellModal.confirmBtn.textContent = "Przetwarzanie...";
@@ -832,7 +849,9 @@
                      await api.sellStock({ ticker, quantity, price_per_share: price });
                      hideSellModal();
                      await showPortfolio(); // Odśwież widok portfela
-                 } catch (e) { alert(`Błąd sprzedaży: ${e.message}`); // Użycie alert()
+                 } catch (e) {
+                     // Zastąpienie alert()
+                     displaySystemAlert(`Błąd sprzedaży: ${e.message}`);
                  } finally { ui.sellModal.confirmBtn.disabled = false; ui.sellModal.confirmBtn.textContent = "Realizuj"; }
             }
             console.log("Modal functions defined.");
@@ -969,4 +988,3 @@
     </script>
     </body>
 </html>
-
