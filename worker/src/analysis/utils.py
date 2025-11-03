@@ -1,83 +1,13 @@
 import logging
-import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
 import pytz
+# Importy dla Pandas, których potrzebujemy do obliczeń
+import pandas as pd
+from pandas import Series as pd_Series
 
 logger = logging.getLogger(__name__)
-
-# === NOWE FUNKCJE KROK 1: Lokalna analityka (oszczędzanie API) ===
-
-def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Standaryzuje nazwy kolumn i konwertuje na typy numeryczne."""
-    if df.empty:
-        return df
-    
-    # Sprawdź, czy kolumny już są w formacie '1. open'
-    if any(col.endswith('. open') for col in df.columns):
-        try:
-             df.columns = [col.split('. ')[-1] for col in df.columns]
-        except Exception as e:
-            logger.error(f"Error standardizing columns: {e}. Columns: {df.columns}")
-    
-    # Kopiujemy, aby uniknąć SettingWithCopyWarning
-    df_copy = df.copy()
-    
-    # Konwertuj kluczowe kolumny na numeryczne
-    for col in ['open', 'high', 'low', 'close', 'volume']:
-        if col in df_copy.columns:
-            df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
-            
-    df_copy.sort_index(inplace=True)
-    return df_copy
-
-def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Oblicza Average True Range (ATR) lokalnie."""
-    if df.empty or len(df) < period:
-        return pd.Series(dtype=float)
-        
-    high_low = df['high'] - df['low']
-    high_close = (df['high'] - df['close'].shift()).abs()
-    low_close = (df['low'] - df['close'].shift()).abs()
-    
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    # Używamy ewm (Exponential Weighted Moving Average) do obliczenia ATR
-    atr = tr.ewm(span=period, adjust=False, min_periods=period).mean()
-    return atr
-
-def calculate_rsi(df: pd.DataFrame, period: int = 9) -> pd.Series:
-    """Oblicza Relative Strength Index (RSI) lokalnie."""
-    if df.empty or len(df) < period + 1:
-        return pd.Series(dtype=float)
-
-    delta = df['close'].diff(1)
-    
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-
-    # Używamy ewm do wygładzenia
-    avg_gain = gain.ewm(span=period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(span=period, adjust=False, min_periods=period).mean()
-
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def calculate_bbands(df: pd.DataFrame, period: int = 20, std_dev: int = 2) -> (pd.Series, pd.Series, pd.Series):
-    """Oblicza Wstęgi Bollingera (BBands) lokalnie."""
-    if df.empty or len(df) < period:
-        return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
-
-    middle_band = df['close'].rolling(window=period).mean()
-    rolling_std = df['close'].rolling(window=period).std()
-    
-    upper_band = middle_band + (rolling_std * std_dev)
-    lower_band = middle_band - (rolling_std * std_dev)
-    
-    return upper_band, middle_band, lower_band
-
-# === ISTNIEJĄCE FUNKCJE (bez zmian) ===
 
 def get_market_status_and_time(api_client) -> dict:
     """
@@ -206,7 +136,7 @@ def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]
 
 def report_heartbeat(session: Session):
     """Raportuje 'życie' workera do bazy danych."""
-    update_system_control(session, 'last_heartheart', datetime.now(timezone.utc).isoformat())
+    update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
 def safe_float(value) -> float | None:
     """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
@@ -238,3 +168,79 @@ def get_performance(data: dict, days: int) -> float | None:
     except (IndexError, KeyError, TypeError) as e:
         logger.warning(f"Could not calculate performance: {e}")
         return None
+
+# --- NARZĘDZIA DO OPTYMALIZACJI API ---
+
+def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Standaryzuje nazwy kolumn z API ('1. open' -> 'open') i konwertuje na typy numeryczne."""
+    if df.empty:
+        return df
+    
+    # Sprawdź, czy kolumny już są w poprawnym formacie
+    if 'open' in df.columns and 'close' in df.columns:
+        return df # Już przetworzone
+
+    try:
+        df.columns = [col.split('. ')[-1] for col in df.columns]
+    except Exception as e:
+        logger.error(f"Error standardizing columns (might already be standard): {e}. Columns: {df.columns}")
+        # Kontynuujmy, próbując konwertować
+    
+    # Konwertuj kluczowe kolumny na numeryczne
+    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df.sort_index(inplace=True) # Upewnij się, że dane są posortowane od najstarszych do najnowszych
+    return df
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
+    """Oblicza ATR (Average True Range) na podstawie DataFrame OHLC."""
+    if df.empty or len(df) < period:
+        return pd.Series(dtype=float)
+    
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['close'].shift()).abs()
+    
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    # Używamy EMA (ewm) do wygładzenia TR, co jest standardem dla ATR
+    atr = tr.ewm(span=period, adjust=False).mean()
+    return atr
+
+def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
+    """Oblicza RSI (Relative Strength Index)."""
+    if series.empty or len(series) < period:
+        return pd.Series(dtype=float)
+        
+    delta = series.diff(1)
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> tuple:
+    """Oblicza Bollinger Bands (Środkowa, Górna, Dolna) oraz Szerokość Wstęgi (BBW)."""
+    if series.empty or len(series) < period:
+        return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
+
+    middle_band = series.rolling(window=period).mean()
+    std_dev = series.rolling(window=period).std()
+    
+    upper_band = middle_band + (std_dev * num_std)
+    lower_band = middle_band - (std_dev * num_std)
+    
+    # Oblicz BBW (Szerokość Wstęg Bollingera) jako procent środkowej wstęgi
+    bbw = (upper_band - lower_band) / middle_band
+    
+    return middle_band, upper_band, lower_band, bbw
+
+# --- POPRAWKA: Dodanie brakującej funkcji ---
+def calculate_ema(series: pd_Series, period: int) -> pd_Series:
+    """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
+    if series.empty or len(series) < period:
+        return pd.Series(dtype=float)
+    return series.ewm(span=period, adjust=False).mean()
+
