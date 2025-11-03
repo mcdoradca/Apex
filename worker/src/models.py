@@ -1,4 +1,4 @@
-rom sqlalchemy import (
+from sqlalchemy import (
     Column, String, VARCHAR, TIMESTAMP, NUMERIC, BIGINT, DATE,
     Boolean, INTEGER, TEXT, ForeignKey, Index, func, UniqueConstraint # Dodano func i UniqueConstraint
 )
@@ -92,3 +92,4 @@ class ProcessedNews(Base):
     )
 
 # === KONIEC NOWEGO MODELU ===
+
