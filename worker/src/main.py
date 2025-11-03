@@ -93,12 +93,15 @@ def run_full_analysis_cycle():
             raise Exception("Phase 1 found no candidates. Halting cycle.")
 
         utils.update_system_control(session, 'current_phase', 'PHASE_2')
-        qualified_tickers = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
-        if not qualified_tickers:
+        # KROK 5 ZMIANA: Zmieniono nazwę zmiennej z `qualified_tickers` na `qualified_data`
+        qualified_data = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
+        # KROK 5 ZMIANA: Zaktualizowano warunek sprawdzający
+        if not qualified_data:
             raise Exception("Phase 2 qualified no stocks. Halting cycle.")
 
         utils.update_system_control(session, 'current_phase', 'PHASE_3')
-        phase3_sniper.run_tactical_planning(session, qualified_tickers, lambda: current_state, api_client)
+        # KROK 5 ZMIANA: Przekazujemy `qualified_data` (zamiast `qualified_tickers`) do Fazy 3
+        phase3_sniper.run_tactical_planning(session, qualified_data, lambda: current_state, api_client)
 
         utils.append_scan_log(session, "Cykl analizy zakończony pomyślnie.")
     except Exception as e:
@@ -165,4 +168,3 @@ if __name__ == "__main__":
         main_loop()
     else:
         logger.critical("Worker cannot start because database connection was not established.")
-
