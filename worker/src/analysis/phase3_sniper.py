@@ -1,15 +1,16 @@
 import logging
 import time
 import pandas as pd
+# KROK 7 ZMIANA: Dodajemy importy do parsowania CSV
+import csv
+from io import StringIO
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pandas import Series as pd_Series
-# KROK 4 ZMIANA: Importujemy typowanie dla nowych danych
 from typing import List, Tuple
 
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
-# KROK 4 ZMIANA: Importujemy nasze funkcje z utils
 from .utils import (
     update_scan_progress, append_scan_log, safe_float, 
     update_system_control, get_market_status_and_time,
@@ -19,14 +20,37 @@ from ..config import Phase3Config
 
 logger = logging.getLogger(__name__)
 
-# KROK 4 ZMIANA: Usunięto lokalne definicje `calculate_ema` i `standardize_df_columns`
-# Będziemy używać tych z utils.py
+# KROK 7 ZMIANA: Dodajemy parser CSV (skopiowany z phase1_scanner.py dla spójności)
+def _parse_bulk_quotes_csv(csv_text: str) -> dict:
+    """Przetwarza odpowiedź CSV z REALTIME_BULK_QUOTES na słownik danych."""
+    if not csv_text or "symbol" not in csv_text:
+        logger.warning("[Monitor F3] Otrzymane dane CSV (Bulk Quotes) są puste lub nieprawidłowe.")
+        return {}
+    
+    csv_file = StringIO(csv_text)
+    reader = csv.DictReader(csv_file)
+    
+    data_dict = {}
+    for row in reader:
+        ticker = row.get('symbol')
+        if not ticker:
+            continue
+        
+        # Endpoint REALTIME_BULK_QUOTES używa 'close' jako aktualnej ceny
+        data_dict[ticker] = {
+            'price': safe_float(row.get('close')),
+            'volume': safe_float(row.get('volume')),
+        }
+    return data_dict
+
+
+# --- SEKCJA SKANERA NOCNEGO (EOD) ---
+# (Ta część jest już zoptymalizowana i pozostaje bez zmian)
 
 def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, breakout_atr_multiplier=1.0) -> dict | None:
-    """Szuka wybicia ponad konsolidację na wykresie dziennym."""
+    # ... (bez zmian) ...
     try:
         if len(daily_df) < min_consolidation_days + 2: return None
-        # Obliczanie ATR (potrzebne do sprawdzenia konsolidacji i siły wybicia)
         high_low = daily_df['high'] - daily_df['low']
         high_close = (daily_df['high'] - daily_df['close'].shift()).abs()
         low_close = (daily_df['low'] - daily_df['close'].shift()).abs()
@@ -34,17 +58,14 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
         atr = calculate_ema(tr, 14) # Używamy funkcji z utils
         current_atr = atr.iloc[-1]
         if current_atr == 0: return None
-        
         consolidation_df = daily_df.iloc[-(min_consolidation_days + 1):-1]
         consolidation_high = consolidation_df['high'].max()
         consolidation_low = consolidation_df['low'].min()
         consolidation_range = consolidation_high - consolidation_low
         is_consolidating = consolidation_range < (2 * atr.iloc[-2]) # Sprawdź, czy zakres jest mniejszy niż 2x ATR
-        
         latest_candle = daily_df.iloc[-1]
         is_breakout = latest_candle['close'] > consolidation_high
         is_strong_breakout = latest_candle['close'] > (consolidation_high + breakout_atr_multiplier * current_atr)
-
         if is_consolidating and is_breakout and is_strong_breakout:
             logger.info(f"Breakout setup found for {daily_df.index[-1]}")
             return {
@@ -60,33 +81,25 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
         return None
 
 def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
-    """Szuka odbicia od rosnącej EMA na wykresie dziennym."""
+    # ... (bez zmian) ...
     try:
         if len(daily_df) < ema_period + 3: return None
         daily_df['ema'] = calculate_ema(daily_df['close'], ema_period) # Używamy funkcji z utils
-        
         is_ema_rising = daily_df['ema'].iloc[-1] > daily_df['ema'].iloc[-2] > daily_df['ema'].iloc[-3]
-        
         latest_candle = daily_df.iloc[-1]
         prev_candle = daily_df.iloc[-2]
         latest_ema = daily_df['ema'].iloc[-1]
-        
-        # Sprawdź, czy 1 lub 2 ostatnie świece dotknęły EMA (z lekkim buforem 1%)
         touched_ema = (prev_candle['low'] <= daily_df['ema'].iloc[-2] * 1.01) or \
                       (latest_candle['open'] <= latest_ema * 1.01)
-                      
         closed_above_ema = latest_candle['close'] > latest_ema
         is_bullish_candle = latest_candle['close'] > latest_candle['open']
-
         if is_ema_rising and touched_ema and closed_above_ema and is_bullish_candle:
              logger.info(f"EMA Bounce setup found for {daily_df.index[-1]}")
-             # Oblicz ATR do ustawienia S/L
              high_low = daily_df['high'] - daily_df['low']
              high_close = (daily_df['high'] - daily_df['close'].shift()).abs()
              low_close = (daily_df['low'] - daily_df['close'].shift()).abs()
              tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
              atr = calculate_ema(tr, 14).iloc[-1]
-
              return {
                  "setup_type": "EMA_BOUNCE",
                  "entry_price": latest_candle['high'] + 0.01,
@@ -99,27 +112,15 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
         logger.error(f"Error in _find_ema_bounce_setup: {e}")
         return None
 
-# KROK 4 ZMIANA: Funkcja przyjmuje `daily_df` i nie potrzebuje `api_client`
 def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
-    """
-    Analizuje dostarczony DataFrame (z Fazy 2) w poszukiwaniu setupów EOD.
-    Nie wykonuje już żadnych wywołań API.
-    """
-    
-    # KROK 4 ZMIANA: Usuwamy wszystkie wywołania API i przetwarzanie DataFrame.
-    # Zakładamy, że `daily_df` jest już gotowy (co jest prawdą).
-    
+    # ... (bez zmian) ...
     if daily_df.empty or len(daily_df) < 21:
          return {"signal": False, "reason": "Niewystarczająca historia danych dziennych (otrzymana z Fazy 2)."}
-
     current_price = daily_df['close'].iloc[-1]
-    
-    # Sprawdź setup #1: Breakout
     breakout_setup = _find_breakout_setup(daily_df)
     if breakout_setup:
         risk = breakout_setup['entry_price'] - breakout_setup['stop_loss']
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (Breakout)."}
-        
         take_profit = breakout_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
         return {
             "signal": True, "status": "ACTIVE",
@@ -130,13 +131,10 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
             "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
             "notes": f"Setup EOD (AKTYWNY): Wybicie z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}."
         }
-        
-    # Sprawdź setup #2: EMA Bounce
     ema_bounce_setup = _find_ema_bounce_setup(daily_df)
     if ema_bounce_setup:
         risk = ema_bounce_setup['entry_price'] - ema_bounce_setup['stop_loss']
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (EMA Bounce)."}
-        
         take_profit = ema_bounce_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
         return {
             "signal": True, "status": "ACTIVE",
@@ -147,13 +145,10 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
             "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
             "notes": f"Setup EOD (AKTYWNY): Odbicie od rosnącej EMA{Phase3Config.EMA_PERIOD}. EMA={ema_bounce_setup['ema_value']:.2f}."
         }
-
-    # Sprawdź setup #3: Strefa Fibonacciego (jako PENDING)
     impulse_result = _find_impulse_and_fib_zone(daily_df)
     if impulse_result:
         is_in_zone = impulse_result["entry_zone_bottom"] <= current_price <= impulse_result["entry_zone_top"]
         if is_in_zone:
-            # Dla PENDING, TP to szczyt impulsu
             take_profit = float(impulse_result['impulse_high'])
             return {
                 "signal": True, "status": "PENDING",
@@ -165,22 +160,16 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
             }
         else:
              return {"signal": False, "reason": f"Fib: Cena ({current_price:.2f}) poza strefą."}
-
     return {"signal": False, "reason": "Brak setupu EOD (Fib/Breakout/EMA Bounce)."}
 
-# KROK 4 ZMIANA: Funkcja przyjmuje `qualified_data` zamiast `qualified_tickers`
 def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.DataFrame]], get_current_state, api_client: AlphaVantageClient):
-    """Główna funkcja dla SKANERA NOCNEGO."""
+    # ... (bez zmian) ...
     logger.info("Running Phase 3: End-of-Day Tactical Planning...")
     append_scan_log(session, "Faza 3: Skanowanie EOD w poszukiwaniu setupów...")
     successful_setups = 0
-    
-    # KROK 4 ZMIANA: Iterujemy po nowych danych
     for ticker, daily_df in qualified_data:
         try:
-            # KROK 4 ZMIANA: Przekazujemy DataFrame; usuwamy `api_client`
             trade_setup = find_end_of_day_setup(ticker, daily_df)
-            
             if trade_setup.get("signal"):
                 successful_setups += 1
                 stmt = text("""
@@ -233,21 +222,21 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
     append_scan_log(session, f"Faza 3 (Skaner EOD) zakończona. Znaleziono {successful_setups} setupów.")
 
 
+# --- SEKCJA MONITORA CZASU RZECZYWISTEGO ---
+# (Ta sekcja została zoptymalizowana pod kątem zapytań blokowych)
+
 def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     """
-    Ulepszony monitor, który sprawdza WSZYSTKIE sygnały Fazy 3 (PENDING i ACTIVE)
-    pod kątem osiągnięcia ceny wejścia w czasie rzeczywistym.
-    
-    (Ta funkcja pozostaje bez zmian w tym kroku - nadal wymaga `api_client` do `get_global_quote`)
+    Zoptymalizowany monitor, który używa JEDNEGO zapytania blokowego do sprawdzenia
+    WSZYSTKICH sygnałów Fazy 3 (PENDING i ACTIVE) pod kątem osiągnięcia ceny wejścia.
     """
     market_info = get_market_status_and_time(api_client)
     
-    # ZMIANA: Monitor działa w trakcie sesji, pre-market i after-market.
     if market_info["status"] == "MARKET_CLOSED":
-        logger.info(f"Market is {market_info['status']}. Skipping Entry Trigger Monitor.")
+        # logger.info(f"Market is {market_info['status']}. Skipping Entry Trigger Monitor.") # Mniej "hałasu" w logach
         return
         
-    logger.info("Running Real-Time Entry Trigger Monitor for all Phase 3 signals...")
+    logger.info("Running Real-Time Entry Trigger Monitor (Optimized)...")
     
     all_signals_rows = session.execute(text("""
         SELECT id, ticker, status, entry_price, entry_zone_bottom 
@@ -259,45 +248,57 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
         return
 
     tickers_to_monitor = [row.ticker for row in all_signals_rows]
-    logger.info(f"Monitoring {len(tickers_to_monitor)} tickers: {', '.join(tickers_to_monitor)}")
+    logger.info(f"Monitoring {len(tickers_to_monitor)} tickers using 1 bulk request.")
     
-    for signal_row in all_signals_rows:
-        try:
+    try:
+        # KROK 7 ZMIANA: Jedno zapytanie API zamiast pętli
+        bulk_data_csv = api_client.get_bulk_quotes(tickers_to_monitor)
+        if not bulk_data_csv:
+            logger.warning("Could not get bulk quote data for monitoring.")
+            return
+
+        parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
+        if not parsed_data:
+            logger.warning("Failed to parse bulk quote data.")
+            return
+
+        # Teraz iterujemy po sygnałach i sprawdzamy ceny z pobranych danych
+        for signal_row in all_signals_rows:
             ticker = signal_row.ticker
             entry_price_target = signal_row.entry_price if signal_row.entry_price is not None else signal_row.entry_zone_bottom
             
             if entry_price_target is None:
                 continue
 
-            quote_data = api_client.get_global_quote(ticker)
-            if not quote_data or '05. price' not in quote_data:
-                logger.warning(f"Could not get current price for {ticker} during monitoring.")
+            # KROK 7 ZMIANA: Pobieramy dane z `parsed_data` zamiast z API
+            quote_data_from_bulk = parsed_data.get(ticker)
+            if not quote_data_from_bulk:
+                logger.warning(f"No price data for {ticker} in bulk response.")
                 continue
             
-            current_price = safe_float(quote_data['05. price'])
+            # KROK 7 ZMIANA: Klucz to 'price' (z 'close' w CSV)
+            current_price = quote_data_from_bulk.get('price')
             if current_price is None:
                 continue
 
-            # GŁÓWNY WARUNEK: Czy aktualna cena jest na poziomie wejścia lub niżej?
+            # GŁÓWNY WARUNEK (bez zmian): Czy aktualna cena jest na poziomie wejścia lub niżej?
             if current_price <= float(entry_price_target):
                 logger.info(f"TRIGGER! {ticker} current price ({current_price}) is at or below entry price ({entry_price_target}).")
                 
                 # Jeśli sygnał był PENDING, promuj go na ACTIVE
                 if signal_row.status == 'PENDING':
                     logger.info(f"Promoting signal for {ticker} from PENDING to ACTIVE.")
-                    # Tutaj logika aktywacji (np. obliczenie SL/TP dla Fib), jeśli jest potrzebna
-                    # Na ten moment, po prostu zmieniamy status, zakładając, że plan jest już kompletny
                     update_stmt = text("UPDATE trading_signals SET status = 'ACTIVE' WHERE id = :signal_id")
                     session.execute(update_stmt, {'signal_id': signal_row.id})
-                    session.commit()
+                    session.commit() # Commitujemy od razu zmianę statusu
                     
                 # Zawsze generuj alert, gdy cena jest w strefie wejścia
                 alert_msg = f"ALARM CENOWY: {ticker} ({current_price:.2f}) osiągnął strefę wejścia!"
                 update_system_control(session, 'system_alert', alert_msg)
         
-        except Exception as e:
-            logger.error(f"Error monitoring signal for {signal_row.ticker}: {e}", exc_info=True)
-            session.rollback()
+    except Exception as e:
+        logger.error(f"Error during bulk monitoring: {e}", exc_info=True)
+        session.rollback()
 
 
 def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
@@ -326,3 +327,4 @@ def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
     except Exception as e:
         logger.error(f"Error in _find_impulse_and_fib_zone: {e}", exc_info=True)
         return None
+
