@@ -5,51 +5,42 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pandas import Series as pd_Series
+# KROK 4 ZMIANA: Importujemy typowanie dla nowych danych
+from typing import List, Tuple
 
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .utils import update_scan_progress, append_scan_log, safe_float, update_system_control, get_market_status_and_time
+# KROK 4 ZMIANA: Importujemy nasze funkcje z utils
+from .utils import (
+    update_scan_progress, append_scan_log, safe_float, 
+    update_system_control, get_market_status_and_time,
+    calculate_ema, standardize_df_columns
+)
 from ..config import Phase3Config
 
 logger = logging.getLogger(__name__)
 
-# ... (funkcje _find_breakout_setup, _find_ema_bounce_setup, find_end_of_day_setup pozostają bez zmian) ...
-def calculate_ema(series: pd_Series, period: int) -> pd_Series:
-    """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
-    return series.ewm(span=period, adjust=False).mean()
-
-def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Standaryzuje nazwy kolumn i konwertuje na typy numeryczne."""
-    if df.empty:
-        return df
-    if all(col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close', 'dividend amount', 'split coefficient'] for col in df.columns):
-         df = df.copy()
-    else:
-        try:
-             df.columns = [col.split('. ')[-1] for col in df.columns]
-        except Exception as e:
-            logger.error(f"Error standardizing columns (might already be standard): {e}. Columns: {df.columns}")
-            df = df.copy()
-    for col in ['open', 'high', 'low', 'close', 'volume']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    return df
+# KROK 4 ZMIANA: Usunięto lokalne definicje `calculate_ema` i `standardize_df_columns`
+# Będziemy używać tych z utils.py
 
 def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, breakout_atr_multiplier=1.0) -> dict | None:
     """Szuka wybicia ponad konsolidację na wykresie dziennym."""
     try:
         if len(daily_df) < min_consolidation_days + 2: return None
+        # Obliczanie ATR (potrzebne do sprawdzenia konsolidacji i siły wybicia)
         high_low = daily_df['high'] - daily_df['low']
         high_close = (daily_df['high'] - daily_df['close'].shift()).abs()
         low_close = (daily_df['low'] - daily_df['close'].shift()).abs()
         tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        atr = calculate_ema(tr, 14)
+        atr = calculate_ema(tr, 14) # Używamy funkcji z utils
         current_atr = atr.iloc[-1]
         if current_atr == 0: return None
+        
         consolidation_df = daily_df.iloc[-(min_consolidation_days + 1):-1]
         consolidation_high = consolidation_df['high'].max()
         consolidation_low = consolidation_df['low'].min()
         consolidation_range = consolidation_high - consolidation_low
-        is_consolidating = consolidation_range < (2 * atr.iloc[-2])
+        is_consolidating = consolidation_range < (2 * atr.iloc[-2]) # Sprawdź, czy zakres jest mniejszy niż 2x ATR
+        
         latest_candle = daily_df.iloc[-1]
         is_breakout = latest_candle['close'] > consolidation_high
         is_strong_breakout = latest_candle['close'] > (consolidation_high + breakout_atr_multiplier * current_atr)
@@ -59,7 +50,7 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
             return {
                 "setup_type": "BREAKOUT",
                 "entry_price": latest_candle['high'] + 0.01,
-                "stop_loss": consolidation_high - (0.5 * current_atr),
+                "stop_loss": consolidation_high - (0.5 * current_atr), # S/L pod poziomem wybicia
                 "consolidation_high": consolidation_high,
                 "atr": current_atr
             }
@@ -72,18 +63,24 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
     """Szuka odbicia od rosnącej EMA na wykresie dziennym."""
     try:
         if len(daily_df) < ema_period + 3: return None
-        daily_df['ema'] = calculate_ema(daily_df['close'], ema_period)
+        daily_df['ema'] = calculate_ema(daily_df['close'], ema_period) # Używamy funkcji z utils
+        
         is_ema_rising = daily_df['ema'].iloc[-1] > daily_df['ema'].iloc[-2] > daily_df['ema'].iloc[-3]
+        
         latest_candle = daily_df.iloc[-1]
         prev_candle = daily_df.iloc[-2]
         latest_ema = daily_df['ema'].iloc[-1]
+        
+        # Sprawdź, czy 1 lub 2 ostatnie świece dotknęły EMA (z lekkim buforem 1%)
         touched_ema = (prev_candle['low'] <= daily_df['ema'].iloc[-2] * 1.01) or \
                       (latest_candle['open'] <= latest_ema * 1.01)
+                      
         closed_above_ema = latest_candle['close'] > latest_ema
         is_bullish_candle = latest_candle['close'] > latest_candle['open']
 
         if is_ema_rising and touched_ema and closed_above_ema and is_bullish_candle:
              logger.info(f"EMA Bounce setup found for {daily_df.index[-1]}")
+             # Oblicz ATR do ustawienia S/L
              high_low = daily_df['high'] - daily_df['low']
              high_close = (daily_df['high'] - daily_df['close'].shift()).abs()
              low_close = (daily_df['low'] - daily_df['close'].shift()).abs()
@@ -93,7 +90,7 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
              return {
                  "setup_type": "EMA_BOUNCE",
                  "entry_price": latest_candle['high'] + 0.01,
-                 "stop_loss": latest_candle['low'] - (0.5 * atr),
+                 "stop_loss": latest_candle['low'] - (0.5 * atr), # S/L pod świecą sygnałową
                  "ema_value": latest_ema,
                  "atr": atr
              }
@@ -102,20 +99,27 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
         logger.error(f"Error in _find_ema_bounce_setup: {e}")
         return None
 
-def find_end_of_day_setup(ticker: str, api_client: AlphaVantageClient) -> dict:
-    daily_data_raw = api_client.get_daily_adjusted(ticker, 'compact')
-    if not daily_data_raw or 'Time Series (Daily)' not in daily_data_raw:
-        return {"signal": False, "reason": "Brak danych dziennych."}
-    daily_df = pd.DataFrame.from_dict(daily_data_raw['Time Series (Daily)'], orient='index')
-    daily_df = standardize_df_columns(daily_df)
-    daily_df.sort_index(inplace=True)
+# KROK 4 ZMIANA: Funkcja przyjmuje `daily_df` i nie potrzebuje `api_client`
+def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
+    """
+    Analizuje dostarczony DataFrame (z Fazy 2) w poszukiwaniu setupów EOD.
+    Nie wykonuje już żadnych wywołań API.
+    """
+    
+    # KROK 4 ZMIANA: Usuwamy wszystkie wywołania API i przetwarzanie DataFrame.
+    # Zakładamy, że `daily_df` jest już gotowy (co jest prawdą).
+    
     if daily_df.empty or len(daily_df) < 21:
-         return {"signal": False, "reason": "Niewystarczająca historia danych dziennych."}
+         return {"signal": False, "reason": "Niewystarczająca historia danych dziennych (otrzymana z Fazy 2)."}
+
     current_price = daily_df['close'].iloc[-1]
+    
+    # Sprawdź setup #1: Breakout
     breakout_setup = _find_breakout_setup(daily_df)
     if breakout_setup:
         risk = breakout_setup['entry_price'] - breakout_setup['stop_loss']
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (Breakout)."}
+        
         take_profit = breakout_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
         return {
             "signal": True, "status": "ACTIVE",
@@ -126,10 +130,13 @@ def find_end_of_day_setup(ticker: str, api_client: AlphaVantageClient) -> dict:
             "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
             "notes": f"Setup EOD (AKTYWNY): Wybicie z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}."
         }
+        
+    # Sprawdź setup #2: EMA Bounce
     ema_bounce_setup = _find_ema_bounce_setup(daily_df)
     if ema_bounce_setup:
         risk = ema_bounce_setup['entry_price'] - ema_bounce_setup['stop_loss']
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (EMA Bounce)."}
+        
         take_profit = ema_bounce_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
         return {
             "signal": True, "status": "ACTIVE",
@@ -140,10 +147,13 @@ def find_end_of_day_setup(ticker: str, api_client: AlphaVantageClient) -> dict:
             "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
             "notes": f"Setup EOD (AKTYWNY): Odbicie od rosnącej EMA{Phase3Config.EMA_PERIOD}. EMA={ema_bounce_setup['ema_value']:.2f}."
         }
+
+    # Sprawdź setup #3: Strefa Fibonacciego (jako PENDING)
     impulse_result = _find_impulse_and_fib_zone(daily_df)
     if impulse_result:
         is_in_zone = impulse_result["entry_zone_bottom"] <= current_price <= impulse_result["entry_zone_top"]
         if is_in_zone:
+            # Dla PENDING, TP to szczyt impulsu
             take_profit = float(impulse_result['impulse_high'])
             return {
                 "signal": True, "status": "PENDING",
@@ -155,16 +165,22 @@ def find_end_of_day_setup(ticker: str, api_client: AlphaVantageClient) -> dict:
             }
         else:
              return {"signal": False, "reason": f"Fib: Cena ({current_price:.2f}) poza strefą."}
+
     return {"signal": False, "reason": "Brak setupu EOD (Fib/Breakout/EMA Bounce)."}
 
-def run_tactical_planning(session: Session, qualified_tickers: list[str], get_current_state, api_client: AlphaVantageClient):
+# KROK 4 ZMIANA: Funkcja przyjmuje `qualified_data` zamiast `qualified_tickers`
+def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.DataFrame]], get_current_state, api_client: AlphaVantageClient):
     """Główna funkcja dla SKANERA NOCNEGO."""
     logger.info("Running Phase 3: End-of-Day Tactical Planning...")
     append_scan_log(session, "Faza 3: Skanowanie EOD w poszukiwaniu setupów...")
     successful_setups = 0
-    for ticker in qualified_tickers:
+    
+    # KROK 4 ZMIANA: Iterujemy po nowych danych
+    for ticker, daily_df in qualified_data:
         try:
-            trade_setup = find_end_of_day_setup(ticker, api_client)
+            # KROK 4 ZMIANA: Przekazujemy DataFrame; usuwamy `api_client`
+            trade_setup = find_end_of_day_setup(ticker, daily_df)
+            
             if trade_setup.get("signal"):
                 successful_setups += 1
                 stmt = text("""
@@ -221,6 +237,8 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     """
     Ulepszony monitor, który sprawdza WSZYSTKIE sygnały Fazy 3 (PENDING i ACTIVE)
     pod kątem osiągnięcia ceny wejścia w czasie rzeczywistym.
+    
+    (Ta funkcja pozostaje bez zmian w tym kroku - nadal wymaga `api_client` do `get_global_quote`)
     """
     market_info = get_market_status_and_time(api_client)
     
@@ -308,4 +326,3 @@ def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
     except Exception as e:
         logger.error(f"Error in _find_impulse_and_fib_zone: {e}", exc_info=True)
         return None
-
