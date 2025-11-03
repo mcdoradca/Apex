@@ -129,11 +129,12 @@ def main_loop():
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     
-    # === KRYTYCZNA ZMIANA: Wywołanie nowej, uniwersalnej funkcji monitorującej ===
-    schedule.every(1).minute.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
+    # === OPTYMALIZACJA MONITORA ALERTÓW (CZĘSTOTLIWOŚĆ) ===
+    # Zmieniono z 1 minuty na 15 sekund dla szybszych alertów day tradingowych
+    schedule.every(15).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 1 minute.")
+    logger.info("Real-Time Entry Trigger Monitor scheduled every 15 seconds.")
 
 
     with get_db_session() as initial_session:
@@ -168,3 +169,4 @@ if __name__ == "__main__":
         main_loop()
     else:
         logger.critical("Worker cannot start because database connection was not established.")
+
