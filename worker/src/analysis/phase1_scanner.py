@@ -5,7 +5,11 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from ..config import Phase1Config
-from .utils import append_scan_log, update_scan_progress, safe_float
+# KROK 2 ZMIANA: Importujemy nowe funkcje analityczne
+from .utils import (
+    append_scan_log, update_scan_progress, safe_float, 
+    standardize_df_columns, calculate_atr
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,11 +153,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 continue
             
-            # Konwersja do DataFrame i standaryzacja nazw kolumn
-            daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
-            daily_df.columns = [col.split('. ')[1] for col in daily_df.columns]
-            daily_df = daily_df.apply(pd.to_numeric)
-            daily_df.sort_index(inplace=True)
+            # KROK 2 ZMIANA: Używamy standaryzatora z utils
+            daily_df_raw = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
+            daily_df = standardize_df_columns(daily_df_raw)
 
 
             # Weryfikacja Wolumenu Względnego
@@ -167,13 +169,16 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
             if not volume_ratio_ok: continue
 
-            # Weryfikacja ATR%
-            atr_data_raw = api_client.get_atr(ticker)
-            if not atr_data_raw or 'Technical Analysis: ATR' not in atr_data_raw:
+            # KROK 2 ZMIANA: Weryfikacja ATR% (Lokalne obliczenia)
+            # Usuwamy wywołanie API: api_client.get_atr(ticker)
+            
+            # Obliczamy ATR lokalnie
+            atr_series = calculate_atr(daily_df, period=14)
+            if atr_series.empty or pd.isna(atr_series.iloc[-1]):
+                logger.warning(f"Nie można obliczyć lokalnego ATR dla {ticker}.")
                 continue
-
-            latest_atr_date = sorted(atr_data_raw['Technical Analysis: ATR'].keys())[-1]
-            latest_atr = safe_float(atr_data_raw['Technical Analysis: ATR'][latest_atr_date]['ATR'])
+            
+            latest_atr = atr_series.iloc[-1]
             current_price = candidate['price']
 
             if not current_price or not latest_atr or current_price == 0:
