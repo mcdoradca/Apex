@@ -1,4 +1,4 @@
-mport logging
+import logging
 import time
 import pandas as pd
 from sqlalchemy.orm import Session
