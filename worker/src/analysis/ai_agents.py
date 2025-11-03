@@ -2,46 +2,46 @@ import logging
 import pandas as pd
 from sqlalchemy.orm import Session
 from datetime import datetime
-
-from ..config import Phase2Config
-from .utils import safe_float, get_performance, get_market_status_and_time
+# POPRAWKA: Dodajemy importy dla lokalnych obliczeń
+from .utils import (
+    safe_float, get_market_status_and_time, standardize_df_columns, 
+    calculate_rsi, calculate_bbands
+)
+# POPRAWKA: Importujemy phase3_sniper, aby uzyskać dostęp do funkcji setupu
+from . import phase3_sniper
 
 logger = logging.getLogger(__name__)
 
 # --- AGENT 1: ANALIZA MOMENTUM I SIŁY WZGLĘDNEJ ---
-def _run_momentum_agent(ticker: str, api_client: object) -> dict:
+# POPRAWKA: Agent przyjmuje teraz przetworzone dane (daily_df i qqq_perf)
+def _run_momentum_agent(ticker: str, daily_df: pd.DataFrame, qqq_perf: float) -> dict:
     score = 0
     max_score = 4
     details = {}
     
     try:
-        rsi_data = api_client.get_rsi(ticker, time_period=9)
-        ticker_data_raw = api_client.get_daily_adjusted(ticker, 'compact')
-        qqq_data_raw = api_client.get_daily_adjusted('QQQ', 'compact')
-
-        if rsi_data and 'Technical Analysis: RSI' in rsi_data:
-            latest_rsi = safe_float(list(rsi_data['Technical Analysis: RSI'].values())[0]['RSI'])
-            if latest_rsi:
-                details["9-okresowy RSI"] = f"{latest_rsi:.2f}"
-                if latest_rsi > 60:
-                    score += 2
-                    details["Wniosek RSI"] = "Bardzo silne momentum (RSI > 60)"
-                elif latest_rsi > 50:
-                    score += 1
-                    details["Wniosek RSI"] = "Pozytywne momentum (RSI > 50)"
-                else:
-                    details["Wniosek RSI"] = "Neutralne lub słabe momentum"
+        # 1. Oblicz RSI lokalnie (zamiast wywołania API)
+        rsi_series = calculate_rsi(daily_df['close'], period=9)
+        if not rsi_series.empty:
+            latest_rsi = rsi_series.iloc[-1]
+            details["9-okresowy RSI"] = f"{latest_rsi:.2f}"
+            if latest_rsi > 60:
+                score += 2
+                details["Wniosek RSI"] = "Bardzo silne momentum (RSI > 60)"
+            elif latest_rsi > 50:
+                score += 1
+                details["Wniosek RSI"] = "Pozytywne momentum (RSI > 50)"
             else:
-                 details["RSI"] = "Brak danych"
+                details["Wniosek RSI"] = "Neutralne lub słabe momentum"
         else:
             details["RSI"] = "Brak danych"
 
-        ticker_perf = get_performance(ticker_data_raw, 5)
-        qqq_perf = get_performance(qqq_data_raw, 5)
-
-        if ticker_perf is not None and qqq_perf is not None:
+        # 2. Oblicz Performance vs QQQ lokalnie
+        if len(daily_df) > 5:
+            ticker_perf = (daily_df['close'].iloc[-1] - daily_df['close'].iloc[-6]) / daily_df['close'].iloc[-6] * 100
             details["Zwrot (5 dni)"] = f"{ticker_perf:.2f}%"
             details["Zwrot QQQ (5 dni)"] = f"{qqq_perf:.2f}%"
+            
             if ticker_perf > (qqq_perf * 1.5):
                 score += 2
                 details["Siła Względna"] = "Spółka jest liderem rynku"
@@ -51,7 +51,7 @@ def _run_momentum_agent(ticker: str, api_client: object) -> dict:
             details["Siła Względna"] = "Brak danych do porównania"
 
     except Exception as e:
-        logger.error(f"Błąd w Agencie Momentum dla {ticker}: {e}")
+        logger.error(f"Błąd w Agencie Momentum dla {ticker}: {e}", exc_info=True)
         return {"name": "Agent Momentum", "score": 0, "max_score": max_score, "summary": "Błąd analizy.", "details": {}}
     
     summary = "Spółka wykazuje bardzo silne momentum i jest liderem rynku." if score >= 3 else \
@@ -62,33 +62,25 @@ def _run_momentum_agent(ticker: str, api_client: object) -> dict:
 
 
 # --- AGENT 2: ANALIZA KOMPRESJI ENERGII ---
-def _run_volatility_agent(ticker: str, api_client: object) -> dict:
+# POPRAWKA: Agent przyjmuje teraz przetworzone dane (daily_df)
+def _run_volatility_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
     score = 0
     max_score = 3
     details = {}
     
     try:
-        bbands_data = api_client.get_bollinger_bands(ticker, time_period=20)
-        tech_analysis = bbands_data.get('Technical Analysis: BBANDS')
-        if not tech_analysis or len(tech_analysis) < 100:
+        # 1. Oblicz BBands i BBW lokalnie (zamiast wywołania API)
+        if len(daily_df) < 100:
              return {"name": "Agent Zmienności", "score": 0, "max_score": max_score, "summary": "Niewystarczająca historia danych do analizy.", "details": {}}
 
-        bbw_values = []
-        for date_str, values in tech_analysis.items():
-            upper = safe_float(values.get('Real Upper Band'))
-            lower = safe_float(values.get('Real Lower Band'))
-            middle = safe_float(values.get('Real Middle Band'))
-            if upper and lower and middle and middle > 0:
-                bbw = (upper - lower) / middle
-                bbw_values.append(bbw)
+        middle_band, upper_band, lower_band, bbw_series = calculate_bbands(daily_df['close'], period=20)
+        bbw_series = bbw_series.dropna()
         
-        if not bbw_values:
+        if bbw_series.empty:
             return {"name": "Agent Zmienności", "score": 0, "max_score": max_score, "summary": "Błąd obliczeń BBW.", "details": {}}
 
-        bbw_series = pd.Series(bbw_values)
-        current_bbw = bbw_series.iloc[0]
-        percentile_rank = bbw_series.rank(pct=True).iloc[0] * 100
-
+        # 2. Oblicz rangę procentową
+        percentile_rank = bbw_series.rank(pct=True).iloc[-1] * 100
         details["Ranga % BBW (100 dni)"] = f"{percentile_rank:.1f}%"
 
         if percentile_rank < 10:
@@ -107,13 +99,14 @@ def _run_volatility_agent(ticker: str, api_client: object) -> dict:
         details["Wniosek"] = summary
             
     except Exception as e:
-        logger.error(f"Błąd w Agencie Zmienności dla {ticker}: {e}")
+        logger.error(f"Błąd w Agencie Zmienności dla {ticker}: {e}", exc_info=True)
         return {"name": "Agent Zmienności", "score": 0, "max_score": max_score, "summary": "Błąd analizy.", "details": {}}
     
     return {"name": "Agent Zmienności", "score": score, "max_score": max_score, "summary": summary, "details": details}
 
 
 # --- AGENT 3: ANALIZA SENTYMENTU ---
+# POPRAWKA: Bez zmian, ten agent i tak był niezależny
 def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
     score = 0
     max_score = 3
@@ -154,13 +147,12 @@ def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
 
 
 # --- AGENT 4: WYSZUKIWANIE SETUPU TAKTYCZNEGO (FAZA 3) ---
-def _run_tactical_agent(ticker: str, api_client: object) -> dict:
-    from . import phase3_sniper
-    
+# POPRAWKA: Agent przyjmuje teraz przetworzone dane (daily_df)
+def _run_tactical_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
     details = {}
-
     try:
-        trade_setup = phase3_sniper.find_end_of_day_setup(ticker, api_client)
+        # POPRAWKA: Wywołujemy funkcję z 'daily_df' (naprawiając błąd)
+        trade_setup = phase3_sniper.find_end_of_day_setup(ticker, daily_df)
         
         if trade_setup.get("signal"):
             score = 5
@@ -168,7 +160,6 @@ def _run_tactical_agent(ticker: str, api_client: object) -> dict:
             summary = "Znaleziono prawidłowy setup taktyczny! Spółka jest w idealnej strukturze do potencjalnego wejścia."
             details["Status"] = "Setup Potwierdzony"
             
-            # POPRAWKA: Inteligentne wyświetlanie ceny lub strefy
             if trade_setup.get('entry_price'):
                 details["Cena Wejścia"] = f"${trade_setup['entry_price']:.2f}"
             elif trade_setup.get('entry_zone_bottom'):
@@ -185,27 +176,50 @@ def _run_tactical_agent(ticker: str, api_client: object) -> dict:
             
     except Exception as e:
         logger.error(f"Błąd w Agencie Taktycznym dla {ticker}: {e}", exc_info=True)
-        return {"name": "Agent Taktyczny", "score": 0, "max_score": 5, "summary": "Błąd analizy.", "details": {}}
+        # Zwracamy bardziej szczegółowy błąd, jeśli to możliwe
+        return {"name": "Agent Taktyczny", "score": 0, "max_score": 5, "summary": "Błąd analizy.", "details": {"Błąd": str(e)}}
 
     return {"name": "Agent Taktyczny", "score": score, "max_score": max_score, "summary": summary, "details": details}
 
 
 # --- GŁÓWNA FUNKCJA ORKIESTRUJĄCA ---
+# POPRAWKA: Ta funkcja jest teraz zoptymalizowana
 def run_ai_analysis(ticker: str, api_client: object) -> dict:
     """Uruchamia wszystkich agentów AI i agreguje ich wyniki."""
     logger.info(f"Running full AI analysis for {ticker}...")
     
-    quote_data = api_client.get_global_quote(ticker)
-    # ==================================================================
-    #  POPRAWKA KRYTYCZNA: Przekazanie `api_client` do funkcji
-    # ==================================================================
-    market_info = get_market_status_and_time(api_client)
-    # ==================================================================
-    
-    momentum_results = _run_momentum_agent(ticker, api_client)
-    volatility_results = _run_volatility_agent(ticker, api_client)
-    sentiment_results = _run_sentiment_agent(ticker, api_client)
-    tactical_results = _run_tactical_agent(ticker, api_client)
+    # --- ETAP 1: Zbieranie Danych ---
+    try:
+        quote_data = api_client.get_global_quote(ticker)
+        market_info = get_market_status_and_time(api_client)
+        
+        # Pobieramy dane historyczne DLA TICKERA (1 wywołanie)
+        ticker_data_raw = api_client.get_daily_adjusted(ticker, 'full') # 'full' dla historii BBands
+        if not ticker_data_raw or 'Time Series (Daily)' not in ticker_data_raw:
+            raise Exception(f"Brak danych historycznych (daily) dla {ticker}")
+        daily_df = pd.DataFrame.from_dict(ticker_data_raw['Time Series (Daily)'], orient='index')
+        daily_df = standardize_df_columns(daily_df)
+        
+        # Pobieramy dane historyczne DLA QQQ (1 wywołanie)
+        qqq_data_raw = api_client.get_daily_adjusted('QQQ', 'compact')
+        if not qqq_data_raw or 'Time Series (Daily)' not in qqq_data_raw:
+            raise Exception("Brak danych historycznych dla QQQ")
+        qqq_df = pd.DataFrame.from_dict(qqq_data_raw['Time Series (Daily)'], orient='index')
+        qqq_df = standardize_df_columns(qqq_df)
+        
+        if len(qqq_df) < 6: raise Exception("Za mało danych QQQ dla 5-dniowej wydajności")
+        qqq_perf = (qqq_df['close'].iloc[-1] - qqq_df['close'].iloc[-6]) / qqq_df['close'].iloc[-6] * 100
+
+    except Exception as e:
+        logger.error(f"Krytyczny błąd podczas pobierania danych w AI Analysis dla {ticker}: {e}", exc_info=True)
+        return {"status": "ERROR", "message": f"Błąd pobierania danych bazowych: {e}"}
+
+    # --- ETAP 2: Uruchamianie Agentów ---
+    # Przekazujemy pobrane dane - oszczędzamy wywołania API
+    momentum_results = _run_momentum_agent(ticker, daily_df, qqq_perf)
+    volatility_results = _run_volatility_agent(ticker, daily_df)
+    sentiment_results = _run_sentiment_agent(ticker, api_client) # Ten agent jest niezależny
+    tactical_results = _run_tactical_agent(ticker, daily_df)
     
     agents_list = [momentum_results, volatility_results, sentiment_results, tactical_results]
     
@@ -214,8 +228,9 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     
     final_score_percent = (total_score / total_max_score) * 100 if total_max_score > 0 else 0
     
+    # --- ETAP 3: Agregacja Wyników ---
     if final_score_percent >= 75 and tactical_results['score'] > 0:
-        recommendation = "BARDZO SILNY KANDYDAT DO KUPNA"
+        recommendation = "BARDZO SILNY KANDDAT DO KUPNA"
         recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach i posiada prawidłowy setup taktyczny."
     elif final_score_percent >= 60:
         recommendation = "SILNY KANDYDAT DO OBSERWACJI"
@@ -245,4 +260,3 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
         },
         "analysis_timestamp_utc": datetime.utcnow().isoformat()
     }
-
