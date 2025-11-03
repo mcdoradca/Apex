@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APEX Predator - Analizator Nasdaq</title>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" type="image/png" href="favicon-96x96.png">
+    <meta name="referrer" content="no-referrer">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0D1117; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #161B22; }
+        ::-webkit-scrollbar-thumb { background: #30363D; border-radius: 4px; }
+        .sidebar-item-active { background-color: #1f2937; border-left: 3px solid #0ea5e9; color: #f0f0f0; }
+        .sidebar-item { border-left: 3px solid transparent; }
+        .candidate-item:hover { background-color: #1f2937; }
+        .login-background {
+            background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy');
+            background-size: cover; background-position: center;
+        }
+        .glowing-btn { box-shadow: 0 0 5px #0ea5e9, 0 0 15px #0ea5e9; }
+        .phase-1-text { color: #8b5cf6; }
+        .phase-2-text { color: #f59e0b; }
+        .phase-3-text { color: #ef4444; }
+        .watchlist-text { color: #10b981; }
+        .alert-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; }
+        .progress-circle { transform: rotate(-90deg); }
+        /* Style dla modala */
+        .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
+        .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
+        .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
+        .modal-button { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 600; transition: background-color 0.2s; }
+        .modal-button-primary { background-color: #0ea5e9; color: white; }
+        .modal-button-primary:hover { background-color: #0284c7; }
+        .modal-button-secondary { background-color: #30363D; color: #f0f0f0; }
+        .modal-button-secondary:hover { background-color: #4b5563; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body class="text-gray-200">
+
+    <div id="system-alert-container"></div>
+
+    <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
+        <div class="bg-black bg-opacity-70 p-8 rounded-lg shadow-2xl backdrop-blur-sm w-full max-w-sm">
+            <div class="text-center mb-6">
+                <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-24 mx-auto mb-3">
+                <h1 class="text-2xl font-bold text-white">APEX Predator</h1>
+                <p class="text-gray-400 text-sm">AI-Powered Nasdaq Intelligence</p>
+            </div>
+            <form id="login-form">
+                <button type="submit" id="login-button" class="w-full bg-sky-600 text-white font-bold py-2 px-4 rounded-md transition duration-300 text-sm disabled:bg-gray-600 disabled:cursor-not-allowed glowing-btn" disabled>
+                    Łączenie...
+                </button>
+                <p id="login-status-text" class="text-center text-gray-400 text-xs mt-4 h-4"></p>
+            </form>
+        </div>
+    </div>
+
+    <div id="dashboard" class="h-screen flex hidden">
+        <aside class="w-72 bg-[#161B22] p-4 flex flex-col shrink-0">
+            <div class="shrink-0">
+                <div class="flex items-center mb-8">
+                    <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
+                    <h1 class="text-xl font-bold">APEX Predator</h1>
+                </div>
+                <nav class="space-y-1">
+                    <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
+                    <a href="#portfolio-view" id="portfolio-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="briefcase" class="mr-3 w-5 h-5"></i><span>Portfel</span></a>
+                    <a href="#transactions-view" id="transactions-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="history" class="mr-3 w-5 h-5"></i><span>Transakcje</span></a>
+                </nav>
+                 <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
+                    <div class="pl-2 mt-2 border-l border-gray-700 space-y-2">
+                        <button id="start-btn" class="w-full text-left flex items-center bg-green-600/20 hover:bg-green-600/40 text-green-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play" class="mr-2 h-4 w-4"></i>Start</button>
+                        <button id="pause-btn" class="w-full text-left flex items-center bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="pause" class="mr-2 h-4 w-4"></i>Pauza</button>
+                        <button id="resume-btn" class="w-full text-left flex items-center bg-sky-600/20 hover:bg-sky-600/40 text-sky-300 py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"><i data-lucide="play-circle" class="mr-2 h-4 w-4"></i>Wznów</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="phases-container" class="flex-grow overflow-y-auto space-y-4 py-4 mt-4 border-t border-gray-800">
+                <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Skanowania</h2>
+                <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
+                        <p class="text-sm font-semibold text-gray-300">Faza 1: Kandydaci (<span id="phase-1-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-1-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
+                </div>
+                 <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
+                        <p class="text-sm font-semibold text-gray-300">Faza 2: APEX Elita (<span id="phase-2-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-2-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
+                </div>
+                 <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
+                        <p class="text-sm font-semibold text-gray-300">Faza 3: Sygnały (<span id="phase-3-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-3-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
+                </div>
+            </div>
+
+            <div class="mt-auto shrink-0 border-t border-gray-800 pt-4">
+                <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">API Gateway:</span>
+                        <span id="api-status" class="flex items-center text-gray-500"><span class="h-2 w-2 rounded-full bg-gray-500 mr-2"></span>Offline</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Silnik:</span>
+                        <span id="worker-status-text" class="font-mono bg-gray-700 text-gray-200 px-2 py-1 rounded-md text-xs">IDLE</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Heartbeat:</span>
+                        <span id="heartbeat-status" class="text-gray-500 text-xs">--</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
+            <header class="p-4 border-b border-gray-800 shrink-0"><div class="max-w-xl mx-auto"><div class="relative"><i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i><input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter, aby uruchomić analizę AI" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"></div></div></header>
+
+            <div id="main-content" class="p-6 flex-grow">
+                </div>
+        </main>
+    </div>
+
+    <div id="buy-modal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <h3 class="text-xl font-bold mb-4 text-white">Kup <span id="buy-modal-ticker"></span></h3>
+            <label class="block text-sm font-medium text-gray-400 mb-1">Ilość akcji</label>
+            <input type="number" id="buy-quantity" min="1" step="1" class="modal-input" placeholder="np. 100">
+            <label class="block text-sm font-medium text-gray-400 mb-1">Cena zakupu (za 1 akcję)</label>
+            <input type="number" id="buy-price" min="0.01" step="0.01" class="modal-input" placeholder="np. 150.25">
+            <div class="flex justify-end gap-3 mt-6">
+                <button id="buy-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
+                <button id="buy-confirm-btn" class="modal-button modal-button-primary">Inwestuj</button>
+            </div>
+        </div>
+    </div>
+    <div id="sell-modal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <h3 class="text-xl font-bold mb-4 text-white">Sprzedaj <span id="sell-modal-ticker"></span></h3>
+            <p class="text-sm text-gray-400 mb-3">Posiadasz: <span id="sell-max-quantity" class="font-bold">0</span> akcji.</p>
+            <label class="block text-sm font-medium text-gray-400 mb-1">Ilość akcji do sprzedaży</label>
+            <input type="number" id="sell-quantity" min="1" step="1" class="modal-input" placeholder="np. 50">
+            <label class="block text-sm font-medium text-gray-400 mb-1">Cena sprzedaży (za 1 akcję)</label>
+            <input type="number" id="sell-price" min="0.01" step="0.01" class="modal-input" placeholder="np. 160.50">
+            <div class="flex justify-end gap-3 mt-6">
+                <button id="sell-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
+                <button id="sell-confirm-btn" class="modal-button modal-button-primary">Realizuj</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log("DOM fully loaded. Starting script initialization.");
+
+            // --- STAN APLIKACJI ---
+            const state = {
+                phase1: [], phase2: [], phase3: [],
+                portfolio: [],
+                transactions: [],
+                liveQuotes: {},
+                workerStatus: { status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 } },
+                activeAnalysisPolling: null,
+                activeQuotePolling: null,
+                activePortfolioPolling: null,
+                currentViewTicker: null // Zmieniono nazwę z currentAnalysisTicker dla jasności
+            };
+
+            // --- SELEKTORY UI (Definiowane od razu) ---
+            const ui = {
+                loginScreen: document.getElementById('login-screen'),
+                dashboardScreen: document.getElementById('dashboard'),
+                loginButton: document.getElementById('login-button'),
+                loginStatusText: document.getElementById('login-status-text'),
+                mainContent: document.getElementById('main-content'),
+                tickerInput: document.getElementById('ticker-input'),
+                startBtn: document.getElementById('start-btn'),
+                pauseBtn: document.getElementById('pause-btn'),
+                resumeBtn: document.getElementById('resume-btn'),
+                apiStatus: document.getElementById('api-status'),
+                workerStatusText: document.getElementById('worker-status-text'),
+                dashboardLink: document.getElementById('dashboard-link'),
+                portfolioLink: document.getElementById('portfolio-link'),
+                transactionsLink: document.getElementById('transactions-link'),
+                heartbeatStatus: document.getElementById('heartbeat-status'),
+                alertContainer: document.getElementById('system-alert-container'),
+                phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
+                phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
+                phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
+                buyModal: { 
+                    backdrop: document.getElementById('buy-modal'), 
+                    tickerSpan: document.getElementById('buy-modal-ticker'), 
+                    quantityInput: document.getElementById('buy-quantity'), 
+                    priceInput: document.getElementById('buy-price'),
+                    cancelBtn: document.getElementById('buy-cancel-btn'),
+                    confirmBtn: document.getElementById('buy-confirm-btn')
+                },
+                sellModal: { 
+                    backdrop: document.getElementById('sell-modal'), 
+                    tickerSpan: document.getElementById('sell-modal-ticker'), 
+                    maxQuantitySpan: document.getElementById('sell-max-quantity'), 
+                    quantityInput: document.getElementById('sell-quantity'), 
+                    priceInput: document.getElementById('sell-price'),
+                    cancelBtn: document.getElementById('sell-cancel-btn'),
+                    confirmBtn: document.getElementById('sell-confirm-btn')
+                }
+            };
+            console.log("UI Selectors defined.");
+
+            // --- KONFIGURACJA API ---
+            const API_BASE_URL = "https://apex-predator-api.onrender.com";
+            const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms
+            const QUOTE_POLL_INTERVAL = 15000;       // ms
+            const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund na odświeżenie portfela
+            // NOWA STAŁA: Częstotliwość sprawdzania alertów
+            const ALERT_POLL_INTERVAL = 7000; // 7 sekund
+
+            const logger = {
+                error: (message, ...args) => console.error(message, ...args),
+                info: (message, ...args) => console.log(message, ...args),
+                warn: (message) => console.warn(message)
+            };
+
+            const apiRequest = async (endpoint, options = {}) => {
+                const url = `${API_BASE_URL}${endpoint}`;
+                try {
+                    const response = await fetch(url, options);
+                    // Ta cześć jest już bezpieczna, bo 'ui' jest zdefiniowane
+                    if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        logger.error(`API Error ${response.status} for ${url}: ${errorText}`);
+                        if (response.status === 404) throw new Error(`404 - Not Found`);
+                        throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
+                    }
+                    if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
+                    return await response.json();
+                } catch (error) {
+                     logger.error(`Network or API Error for ${url}:`, error.message);
+                     if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline';
+                     throw error;
+                }
+            };
+
+            // --- Pełna definicja obiektu API (Definiowane od razu) ---
+            const api = {
+                getWorkerStatus: () => apiRequest('/api/v1/worker/status'),
+                sendWorkerControl: (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' }),
+                getPhase1Candidates: () => apiRequest('/api/v1/candidates/phase1'),
+                getPhase2Results: () => apiRequest('/api/v1/results/phase2'),
+                getPhase3Signals: () => apiRequest('/api/v1/signals/phase3'),
+                requestAIAnalysis: (ticker) => apiRequest('/api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
+                getAIAnalysisResult: (ticker) => apiRequest(`/api/v1/ai-analysis/result/${ticker}`),
+                getLiveQuote: (ticker) => apiRequest(`/api/v1/quote/${ticker}`),
+                addToWatchlist: (ticker) => apiRequest(`/api/v1/watchlist/${ticker}`, { method: 'POST' }),
+                getSystemAlert: () => apiRequest('/api/v1/system/alert'),
+                // NOWE FUNKCJE API
+                getPortfolio: () => apiRequest('/api/v1/portfolio'),
+                buyStock: (data) => apiRequest('/api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+                sellStock: (data) => apiRequest('/api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+                getTransactionHistory: () => apiRequest('/api/v1/transactions')
+            };
+            console.log("Full API object defined.");
+
+            // --- Renderowanie i Widoki ---
+            // === POPRAWKA WYŚWIETLANIA CENY ===
+            const renderQuoteBox = (quote, market) => {
+                 if (!quote || Object.keys(quote).length === 0) {
+                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych (Global Quote).</div>`;
+                }
+                 const safeMarket = market || { status: 'UNKNOWN', time_ny: 'N/A', date_ny: 'N/A' };
+                try {
+                    const cleanedQuote = Object.fromEntries(
+                        Object.entries(quote).map(([key, value]) => [key.substring(key.indexOf('.') + 2), value])
+                    );
+                    const price = parseFloat(cleanedQuote['price']);
+                    const change = parseFloat(cleanedQuote['change']);
+                    const changePercentStr = cleanedQuote['change percent'];
+                    const changePercent = parseFloat(changePercentStr ? changePercentStr.replace('%', '') : '0');
+                    const prevClose = parseFloat(cleanedQuote['previous close']);
+
+                    if (isNaN(price) || isNaN(change) || isNaN(changePercent) || isNaN(prevClose)) throw new Error(`Nieprawidłowe dane liczbowe w quote.`);
+                    
+                    const isPositive = change >= 0;
+                    const changeClass = isPositive ? 'text-green-500' : 'text-red-500';
+                    const changeIcon = isPositive ? 'trending-up' : 'trending-down';
+                    
+                    let statusText = 'Rynek Zamknięty';
+                    let statusClass = 'bg-gray-600';
+                    if (safeMarket.status === 'MARKET_OPEN') { statusText = 'Rynek Otwarty'; statusClass = 'bg-green-600'; }
+                    else if (safeMarket.status === 'PRE_MARKET') { statusText = 'Pre-Market'; statusClass = 'bg-yellow-600'; }
+                    else if (safeMarket.status === 'AFTER_MARKET') { statusText = 'After-Market'; statusClass = 'bg-blue-600'; }
+                    else if (safeMarket.status === 'UNKNOWN') { statusText = 'Status Nieznany'; statusClass = 'bg-purple-600'; }
+                    
+                    // Nowy, bardziej przejrzysty layout
+                    return `
+                        <div class="flex flex-wrap justify-between items-start gap-4">
+                            <div>
+                                <div class="flex items-end gap-3">
+                                    <span class="text-4xl font-bold text-white">${price.toFixed(2)}</span>
+                                    <div class="${changeClass} flex items-center gap-1 mb-1">
+                                        <i data-lucide="${changeIcon}" class="w-5 h-5"></i>
+                                        <span class="font-semibold">${change.toFixed(2)} (${changePercent.toFixed(2)}%)</span>
+                                    </div>
+                                </div>
+                                <p class="text-sm text-gray-500 mt-1">Poprz. zamkn.: ${prevClose.toFixed(2)}</p>
+                            </div>
+                            <div class="text-right">
+                                <span class="flex items-center justify-end gap-2 text-sm font-semibold text-gray-300">
+                                    <span class="relative flex h-3 w-3">
+                                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full ${statusClass} opacity-75"></span>
+                                        <span class="relative inline-flex rounded-full h-3 w-3 ${statusClass}"></span>
+                                    </span>
+                                    ${statusText}
+                                </span>
+                                <p class="text-xs text-gray-500 mt-1">Dane na ${safeMarket.date_ny} ${safeMarket.time_ny}</p>
+                            </div>
+                        </div>`;
+
+                } catch (e) {
+                    logger.error("Błąd renderowania quoteBox:", e, { quote, market: safeMarket });
+                    return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center">Błąd parsowania danych cenowych: ${e.message}</div>`;
+                }
+            };
+
+            const renderers = {
+                loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
+                phase1List: (candidates) => candidates.map(c => `<div data-ticker="${c.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+                phase2List: (results) => results.map(r => `<div data-ticker="${r.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+                phase3List: (signals) => signals.map(s => {
+                    let statusClass, statusText, icon;
+                    if (s.status === 'ACTIVE') { statusClass = 'text-green-400'; statusText = 'AKTYWNY'; icon = 'zap';}
+                    else if (s.status === 'PENDING') { statusClass = 'text-yellow-400'; statusText = 'OCZEKUJĄCY'; icon = 'hourglass'; }
+                    else { statusClass = 'text-gray-500'; statusText = s.status.toUpperCase(); icon = 'help-circle'; }
+                    return `<div data-ticker="${s.ticker}" class="candidate-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
+                }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
+
+                aiAnalysisDetails: (ticker, data) => {
+                    if (data.status === 'PROCESSING') return renderers.loading(data.message || `Analiza ${ticker} w toku...`);
+                    if (data.status === 'ERROR') return `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Analizy ${ticker}</h2><p>${data.message}</p></div>`;
+                    if (data.status !== 'DONE') return `<div class="text-yellow-400">Nieoczekiwany status: ${data.status}</div>`;
+                    const { overall_score = 0, max_score = 1, recommendation = "Brak", agents = {}, quote_data = null, market_info = null } = data;
+                    const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
+                    let rec_color = "bg-gray-500";
+                    if (recommendation === "BARDZO SILNY KANDYDAT DO KUPNA") rec_color = "bg-green-500";
+                    else if (recommendation === "SILNY KANDYDAT DO OBSERWACJI") rec_color = "bg-sky-500";
+                    else if (recommendation === "INTERESUJĄCY KANDYDAT") rec_color = "bg-yellow-500";
+                    const createAgentCard = (agentName, icon, agentData) => {
+                         if (!agentData) return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg text-gray-500">Brak danych dla Agenta: ${agentName}</div>`;
+                         return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg"><h4 class="font-bold text-gray-300 mb-3 flex items-center"><i data-lucide="${icon}" class="w-5 h-5 mr-2 text-sky-400"></i>Agent: ${agentName} <span class="ml-auto text-xs font-mono bg-gray-700 px-2 py-1 rounded-md">${agentData.score ?? '?'}/${agentData.max_score ?? '?'}</span></h4><p class="text-sm text-gray-400 mb-3">${agentData.summary ?? 'Brak podsumowania.'}</p><div class="text-xs space-y-1 border-t border-gray-700 pt-2">${agentData.details && Object.keys(agentData.details).length > 0 ? Object.entries(agentData.details).map(([key, value]) => `<div class="flex justify-between"><span class="text-gray-500">${key}:</span><span class="font-mono text-gray-300">${value}</span></div>`).join('') : '<p class="text-gray-500">Brak szczegółów.</p>'}</div></div>`;
+                    };
+                    return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data, market_info)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Taktycznego', 'crosshair', agents.tactical_setup)}</div></div>`;
+                },
+                dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3><p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p></div></div><h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3><div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div></div>`,
+                
+                // NOWY: Renderer Portfela
+                portfolio: (holdings, quotes) => {
+                    let totalPortfolioValue = 0;
+                    let totalProfitLoss = 0;
+                    const rows = holdings.map(h => {
+                        const quote = quotes[h.ticker];
+                        let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
+                        let priceClass = 'text-gray-400';
+                        if (quote && quote['05. price']) {
+                            try {
+                                currentPrice = parseFloat(quote['05. price']);
+                                dayChangePercent = parseFloat(quote['10. change percent'] ? quote['10. change percent'].replace('%', '') : '0');
+                                priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
+                                currentValue = h.quantity * currentPrice;
+                                const costBasis = h.quantity * h.average_buy_price;
+                                profitLoss = currentValue - costBasis;
+                                totalPortfolioValue += currentValue;
+                                totalProfitLoss += profitLoss;
+                            } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
+                        }
+                        const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
+                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400">${h.ticker}</td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
+                    }).join('');
+                    const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
+                    return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th><th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th><th scope="col" class="p-3 text-right">Akcja</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+                },
+                
+                // NOWY: Renderer Historii Transakcji
+                transactions: (transactions) => {
+                     const rows = transactions.map(t => {
+                        const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
+                        const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
+                        const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL');
+                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${transactionDate}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${typeClass}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${profitLossClass}">${t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
+                    }).join('');
+                    return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+                }
+            };
+            console.log("Renderers defined.");
+
+            // --- GŁÓWNE FUNKCJE KONTROLI APLIKACJI ---
+            
+            function updateDashboardUI(statusData) {
+                if (state.currentViewTicker || !document.getElementById('dashboard-view')) return;
+                const ui_dash = {
+                    status: document.getElementById('dashboard-worker-status'),
+                    phase: document.getElementById('dashboard-current-phase'),
+                    signals: document.getElementById('dashboard-active-signals'),
+                    progressText: document.getElementById('progress-text'),
+                    progressBar: document.getElementById('progress-bar'),
+                    scanLog: document.getElementById('scan-log'),
+                };
+                if (!ui_dash.status || !ui_dash.scanLog) {
+                    logger.warn("Elementy UI dashboardu nie znalezione, pomijam aktualizację.");
+                    return;
+                }
+                ui_dash.status.textContent = statusData.status;
+                ui_dash.phase.textContent = `Faza: ${statusData.phase || 'NONE'}`;
+                const processed = statusData.progress.processed, total = statusData.progress.total;
+                const percent = total > 0 ? Math.min((processed / total) * 100, 100) : 0;
+                ui_dash.progressText.textContent = `${processed} / ${total}`;
+                ui_dash.progressBar.style.width = `${percent.toFixed(0)}%`;
+                if (ui_dash.scanLog.textContent !== statusData.log) {
+                    ui_dash.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
+                    const logContainer = document.getElementById('scan-log-container');
+                    if(logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+                }
+                ui_dash.signals.textContent = state.phase3.length;
+            }
+
+            // === NOWA FUNKCJA: Wyświetlanie alertów systemowych ===
+            function displaySystemAlert(message) {
+                if (!message || message === 'NONE') return;
+
+                const alertId = `alert-${Date.now()}`;
+                const alertElement = document.createElement('div');
+                alertElement.id = alertId;
+                alertElement.className = "alert-bar flex items-center justify-between gap-4 bg-sky-500 text-white p-3 shadow-lg animate-pulse-once";
+                alertElement.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="bell-ring" class="w-6 h-6"></i>
+                        <span class="font-semibold">${message}</span>
+                    </div>
+                    <button data-alert-id="${alertId}" class="close-alert-btn p-1 rounded-full hover:bg-sky-400 transition-colors">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                `;
+                ui.alertContainer.appendChild(alertElement);
+                lucide.createIcons();
+
+                const closeButton = alertElement.querySelector('.close-alert-btn');
+                closeButton.addEventListener('click', () => {
+                    alertElement.remove();
+                });
+
+                // Automatyczne usunięcie alertu po 20 sekundach
+                setTimeout(() => {
+                    alertElement.remove();
+                }, 20000);
+            }
+
+            // === NOWA FUNKCJA: Cykliczne sprawdzanie alertów ===
+            async function pollSystemAlerts() {
+                try {
+                    const alertData = await api.getSystemAlert();
+                    if (alertData && alertData.message !== 'NONE') {
+                        displaySystemAlert(alertData.message);
+                    }
+                } catch (e) {
+                    // Błędy są już logowane w apiRequest, więc tutaj nie trzeba nic robić
+                } finally {
+                    // Kontynuuj pętlę
+                    setTimeout(pollSystemAlerts, ALERT_POLL_INTERVAL);
+                }
+            }
+
+
+            async function pollWorkerStatus() {
+                try {
+                    const statusData = await api.getWorkerStatus();
+                    state.workerStatus = statusData;
+                    let statusClass = 'bg-gray-700 text-gray-200';
+                    if (statusData.status === 'RUNNING') statusClass = 'bg-green-600/20 text-green-400';
+                    else if (statusData.status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
+                    else if (statusData.status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
+                    ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass}`;
+                    ui.workerStatusText.textContent = statusData.status;
+                    if (statusData.last_heartbeat_utc) {
+                        const diffSeconds = (new Date() - new Date(statusData.last_heartbeat_utc)) / 1000;
+                        ui.heartbeatStatus.className = `text-xs ${diffSeconds > 30 ? 'text-red-500' : 'text-green-500'}`;
+                        ui.heartbeatStatus.textContent = diffSeconds > 30 ? 'PRZERWANY' : new Date(statusData.last_heartbeat_utc).toLocaleTimeString();
+                    }
+                    ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
+                    ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
+                    ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
+                    updateDashboardUI(statusData);
+                } catch (e) { /* Błędy logowane w apiRequest */ }
+                setTimeout(pollWorkerStatus, 5000);
+            }
+
+            async function refreshSidebarData() {
+                try {
+                    const [phase1, phase2, phase3] = await Promise.all([
+                        api.getPhase1Candidates(), api.getPhase2Results(), api.getPhase3Signals()
+                    ]);
+                    state.phase1 = phase1 || [];
+                    state.phase2 = phase2 || [];
+                    state.phase3 = phase3 || [];
+                    ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
+                    ui.phase1.count.textContent = state.phase1.length;
+                    ui.phase2.list.innerHTML = renderers.phase2List(state.phase2);
+                    ui.phase2.count.textContent = state.phase2.length;
+                    ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
+                    ui.phase3.count.textContent = state.phase3.length;
+                    lucide.createIcons();
+                } catch (e) { /* Błędy logowane w apiRequest */ }
+                setTimeout(refreshSidebarData, 15000);
+            }
+
+            function stopAllPolling() {
+                logger.info("Zatrzymywanie wszystkich aktywnych timerów odpytywania.");
+                if (state.activeAnalysisPolling) { clearTimeout(state.activeAnalysisPolling); state.activeAnalysisPolling = null; }
+                if (state.activeQuotePolling) { clearTimeout(state.activeQuotePolling); state.activeQuotePolling = null; }
+                if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
+                state.currentViewTicker = null;
+            }
+
+            function setActiveSidebar(linkElement) {
+                document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('sidebar-item-active'));
+                if (linkElement) linkElement.classList.add('sidebar-item-active');
+            }
+
+            async function showDashboard() {
+                 stopAllPolling();
+                 state.currentViewTicker = null;
+                 setActiveSidebar(ui.dashboardLink);
+                 ui.mainContent.innerHTML = renderers.dashboard();
+                 updateDashboardUI(state.workerStatus);
+                 lucide.createIcons();
+            }
+
+            // NOWA: Funkcja widoku portfela
+            async function showPortfolio() {
+                stopAllPolling();
+                state.currentViewTicker = null;
+                setActiveSidebar(ui.portfolioLink);
+                ui.mainContent.innerHTML = renderers.loading("Ładowanie portfela...");
+                try {
+                    const holdings = await api.getPortfolio();
+                    state.portfolio = holdings;
+                    state.liveQuotes = {}; // Wyczyść cache cen
+                    ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
+                    lucide.createIcons();
+                    startPortfolioPolling(); // Rozpocznij odświeżanie cen
+                } catch (e) {
+                     ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania portfela: ${e.message}</div>`;
+                }
+            }
+
+            // NOWA: Funkcja widoku transakcji
+            async function showTransactions() {
+                stopAllPolling();
+                state.currentViewTicker = null;
+                setActiveSidebar(ui.transactionsLink);
+                ui.mainContent.innerHTML = renderers.loading("Ładowanie historii transakcji...");
+                try {
+                    const transactions = await api.getTransactionHistory();
+                    state.transactions = transactions;
+                    ui.mainContent.innerHTML = renderers.transactions(state.transactions);
+                    lucide.createIcons();
+                } catch (e) {
+                     ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania transakcji: ${e.message}</div>`;
+                }
+            }
+
+            // NOWA: Funkcja odświeżania cen w portfelu
+            async function pollPortfolioQuotes() {
+                 if (state.currentViewTicker) { // Jeśli jesteśmy w widoku analizy, zatrzymaj
+                    state.activePortfolioPolling = null; 
+                    return; 
+                 }
+                 const portfolioTickers = state.portfolio.map(h => h.ticker);
+                 if (portfolioTickers.length === 0) { 
+                    state.activePortfolioPolling = null; 
+                    return; 
+                 }
+                 
+                 logger.info(`Odświeżanie cen dla portfela: ${portfolioTickers.join(', ')}`);
+                 let quotesUpdated = false;
+                 try {
+                     // Używamy Promise.all, aby przyspieszyć pobieranie
+                     const quotePromises = portfolioTickers.map(ticker => api.getLiveQuote(ticker));
+                     const quoteResults = await Promise.all(quotePromises);
+                     
+                     quoteResults.forEach((quoteData, index) => {
+                         const ticker = portfolioTickers[index];
+                         if (quoteData) { 
+                             state.liveQuotes[ticker] = quoteData; 
+                             quotesUpdated = true; 
+                         } else {
+                             // Zachowaj stare dane, jeśli nowe się nie powiodły, lub usuń
+                             // delete state.liveQuotes[ticker]; 
+                             // quotesUpdated = true;
+                         }
+                     });
+
+                     if (quotesUpdated && !state.currentViewTicker && document.getElementById('portfolio-view')) {
+                          ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
+                          lucide.createIcons();
+                     }
+                 } catch (e) {
+                     logger.error("Błąd podczas odświeżania cen portfela:", e);
+                 } finally {
+                      if (!state.currentViewTicker) { // Kontynuuj tylko jeśli nadal jesteśmy w widoku portfela
+                           state.activePortfolioPolling = setTimeout(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
+                      } else { 
+                           state.activePortfolioPolling = null; 
+                      }
+                 }
+            }
+
+            function startPortfolioPolling() {
+                 stopPortfolioPolling();
+                 if (state.portfolio.length > 0) {
+                     logger.info("Rozpoczynam odświeżanie cen portfela.");
+                     pollPortfolioQuotes(); // Uruchom od razu
+                 }
+            }
+            function stopPortfolioPolling() {
+                 if (state.activePortfolioPolling) {
+                     logger.info("Zatrzymuję odświeżanie cen portfela.");
+                     clearTimeout(state.activePortfolioPolling);
+                     state.activePortfolioPolling = null;
+                 }
+            }
+
+            async function pollQuote(ticker) {
+                if (state.currentViewTicker !== ticker) { state.activeQuotePolling = null; return; }
+                try {
+                    const quoteData = await api.getLiveQuote(ticker);
+                    const marketInfo = state.currentAnalysisData?.market_info;
+                    const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
+                    if (quoteBoxPlaceholder) {
+                        quoteBoxPlaceholder.innerHTML = renderQuoteBox(quoteData, marketInfo);
+                        lucide.createIcons();
+                    }
+                } catch (e) {
+                    logger.error(`Błąd podczas odświeżania ceny dla ${ticker}:`, e);
+                    const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
+                    if (quoteBoxPlaceholder) { quoteBoxPlaceholder.innerHTML = `<div class="text-red-500 text-sm">Błąd odświeżania ceny.</div>`; }
+                } finally {
+                    if (state.currentViewTicker === ticker) {
+                       state.activeQuotePolling = setTimeout(() => pollQuote(ticker), QUOTE_POLL_INTERVAL);
+                    } else { state.activeQuotePolling = null; }
+                }
+            }
+            function startQuotePolling(ticker) {
+                 stopQuotePolling();
+                 logger.info(`Rozpoczynam odświeżanie ceny dla ${ticker}.`);
+                 pollQuote(ticker);
+            }
+            function stopQuotePolling() {
+                 if (state.activeQuotePolling) {
+                     logger.info("Zatrzymuję odświeżanie ceny.");
+                     clearTimeout(state.activeQuotePolling);
+                     state.activeQuotePolling = null;
+                 }
+            }
+
+            async function pollFullAnalysis(ticker) {
+                if (state.currentViewTicker !== ticker) { state.activeAnalysisPolling = null; return; }
+                try {
+                    const data = await api.getAIAnalysisResult(ticker);
+                    state.currentAnalysisData = data;
+                    ui.mainContent.innerHTML = renderers.aiAnalysisDetails(ticker, data);
+                    lucide.createIcons();
+                    if (data.status === 'PROCESSING') {
+                         logger.info(`Pełna analiza ${ticker} w toku, ponawiam za ${FULL_ANALYSIS_POLL_INTERVAL}ms...`);
+                         state.activeAnalysisPolling = setTimeout(() => pollFullAnalysis(ticker), FULL_ANALYSIS_POLL_INTERVAL);
+                    } else {
+                         logger.info(`Pełna analiza ${ticker} zakończona (${data.status}).`);
+                         state.activeAnalysisPolling = null;
+                         if (data.status === 'DONE') {
+                             startQuotePolling(ticker);
+                         }
+                    }
+                } catch(e) {
+                    logger.error(`Krytyczny błąd podczas odpytywania o pełną analizę dla ${ticker}:`, e);
+                    ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Pobierania Analizy</h2><p>${e.message}</p></div>`;
+                    state.activeAnalysisPolling = null;
+                    state.currentViewTicker = null;
+                }
+            }
+
+            async function showAiAnalysis(ticker) {
+                stopAllPolling();
+                state.currentViewTicker = ticker;
+                state.currentAnalysisData = null;
+                setActiveSidebar(null); // Odznacz aktywne linki w sidebarze
+                ui.mainContent.innerHTML = renderers.loading(`Uruchamianie analizy AI dla ${ticker}...`);
+                try {
+                    logger.info(`Zlecanie nowej analizy dla ${ticker} (POST)...`);
+                    await api.requestAIAnalysis(ticker);
+                    pollFullAnalysis(ticker);
+                } catch (reqError) {
+                     logger.error(`Błąd zlecania analizy dla ${ticker}:`, reqError);
+                     ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Zlecenia Analizy</h2><p>${reqError.message}</p></div>`;
+                     state.currentViewTicker = null;
+                }
+            }
+            
+            // --- Funkcje Obsługi Modali ---
+            function showBuyModal(ticker) {
+                ui.buyModal.tickerSpan.textContent = ticker;
+                ui.buyModal.quantityInput.value = '';
+                ui.buyModal.priceInput.value = '';
+                ui.buyModal.confirmBtn.dataset.ticker = ticker;
+                ui.buyModal.backdrop.classList.remove('hidden');
+                ui.buyModal.quantityInput.focus();
+            }
+            function hideBuyModal() { ui.buyModal.backdrop.classList.add('hidden'); }
+            
+            async function handleBuyConfirm() {
+                 const ticker = ui.buyModal.confirmBtn.dataset.ticker;
+                 const quantity = parseInt(ui.buyModal.quantityInput.value, 10);
+                 const price = parseFloat(ui.buyModal.priceInput.value);
+                 if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
+                     alert("Proszę wprowadzić poprawną ilość i cenę."); 
+                     return; 
+                 }
+                 ui.buyModal.confirmBtn.disabled = true; ui.buyModal.confirmBtn.textContent = "Przetwarzanie...";
+                 try {
+                    await api.buyStock({ ticker, quantity, price_per_share: price });
+                    hideBuyModal();
+                    showPortfolio(); // Odśwież widok portfela
+                } catch (e) { alert(`Błąd zakupu: ${e.message}`);
+                } finally { ui.buyModal.confirmBtn.disabled = false; ui.buyModal.confirmBtn.textContent = "Inwestuj"; }
+            }
+            
+            function showSellModal(ticker, maxQuantity) {
+                 ui.sellModal.tickerSpan.textContent = ticker;
+                 ui.sellModal.maxQuantitySpan.textContent = maxQuantity;
+                 ui.sellModal.quantityInput.value = '';
+                 ui.sellModal.quantityInput.max = maxQuantity;
+                 ui.sellModal.priceInput.value = '';
+                 ui.sellModal.confirmBtn.dataset.ticker = ticker;
+                 ui.sellModal.confirmBtn.dataset.maxQuantity = maxQuantity;
+                 ui.sellModal.backdrop.classList.remove('hidden');
+                 ui.sellModal.quantityInput.focus();
+            }
+            function hideSellModal() { ui.sellModal.backdrop.classList.add('hidden'); }
+            
+            async function handleSellConfirm() {
+                 const ticker = ui.sellModal.confirmBtn.dataset.ticker;
+                 const maxQuantity = parseInt(ui.sellModal.confirmBtn.dataset.maxQuantity, 10);
+                 const quantity = parseInt(ui.sellModal.quantityInput.value, 10);
+                 const price = parseFloat(ui.sellModal.priceInput.value);
+                 if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
+                     alert("Proszę wprowadzić poprawną ilość i cenę."); 
+                     return; 
+                 }
+                  if (quantity > maxQuantity) { 
+                      alert(`Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`); 
+                      return; 
+                  }
+                 ui.sellModal.confirmBtn.disabled = true; ui.sellModal.confirmBtn.textContent = "Przetwarzanie...";
+                 try {
+                     await api.sellStock({ ticker, quantity, price_per_share: price });
+                     hideSellModal();
+                     await showPortfolio(); // Odśwież widok portfela
+                 } catch (e) { alert(`Błąd sprzedaży: ${e.message}`);
+                 } finally { ui.sellModal.confirmBtn.disabled = false; ui.sellModal.confirmBtn.textContent = "Realizuj"; }
+            }
+            console.log("Modal functions defined.");
+            
+            // --- Handlery Zdarzeń (Dodawane od razu) ---
+            ui.tickerInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
+                    const ticker = ui.tickerInput.value.trim().toUpperCase();
+                    showAiAnalysis(ticker);
+                    ui.tickerInput.value = '';
+                }
+            });
+
+            ui.mainContent.addEventListener('click', async e => {
+                const watchlistBtn = e.target.closest('#add-to-watchlist-btn');
+                const buyBtn = e.target.closest('#buy-stock-btn');
+                const sellBtn = e.target.closest('.sell-stock-btn');
+
+                if (watchlistBtn) {
+                    const ticker = watchlistBtn.dataset.ticker;
+                    watchlistBtn.disabled = true;
+                    watchlistBtn.innerHTML = `<i data-lucide="loader-2" class="mr-2 h-5 w-5 animate-spin"></i>Dodawanie...`;
+                    lucide.createIcons();
+                    try {
+                        await api.addToWatchlist(ticker);
+                        watchlistBtn.innerHTML = `<i data-lucide="check" class="mr-2 h-5 w-5"></i>Dodano`;
+                        await refreshSidebarData();
+                    } catch (e) {
+                         watchlistBtn.innerHTML = `<i data-lucide="x" class="mr-2 h-5 w-5"></i>Błąd`;
+                         logger.error(`Błąd dodawania do watchlist: ${ticker}`, e);
+                         setTimeout(() => {
+                            watchlistBtn.disabled = false;
+                            watchlistBtn.innerHTML = `<i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj`;
+                            lucide.createIcons();
+                         }, 2000);
+                    } finally { lucide.createIcons(); }
+                }
+                else if (buyBtn) {
+                    const ticker = buyBtn.dataset.ticker;
+                    if (ticker) showBuyModal(ticker);
+                } else if (sellBtn) {
+                     const ticker = sellBtn.dataset.ticker;
+                     const quantity = parseInt(sellBtn.dataset.quantity, 10);
+                     if (ticker && !isNaN(quantity)) showSellModal(ticker, quantity);
+                }
+            });
+
+            document.getElementById('phases-container').addEventListener('click', (e) => {
+                const candidateItem = e.target.closest('.candidate-item');
+                const accordionToggle = e.target.closest('.accordion-toggle');
+                if (candidateItem) {
+                    const ticker = candidateItem.dataset.ticker;
+                    if (ticker) showAiAnalysis(ticker);
+                } else if (accordionToggle) {
+                    const content = accordionToggle.nextElementSibling;
+                    const icon = accordionToggle.querySelector('.accordion-icon');
+                    if (content && icon) {
+                         content.classList.toggle('hidden');
+                         icon.classList.toggle('rotate-180');
+                    }
+                }
+            });
+
+            ui.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); showDashboard(); });
+            ui.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); showPortfolio(); });
+            ui.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); showTransactions(); });
+
+            ['start', 'pause', 'resume'].forEach(action => {
+                document.getElementById(`${action}-btn`).addEventListener('click', async () => {
+                    try { await api.sendWorkerControl(action); await pollWorkerStatus(); }
+                    catch(e) { logger.error(`Błąd kontroli workera (${action}):`, e); }
+                });
+            });
+            
+            // Listenery dla Modali
+            ui.buyModal.cancelBtn.addEventListener('click', hideBuyModal);
+            ui.buyModal.confirmBtn.addEventListener('click', handleBuyConfirm);
+            ui.sellModal.cancelBtn.addEventListener('click', hideSellModal);
+            ui.sellModal.confirmBtn.addEventListener('click', handleSellConfirm);
+            
+            console.log("Event listeners added.");
+
+            // --- INICJALIZACJA ---
+            function startApp() {
+                logger.info("startApp called - Hiding login, showing dashboard.");
+                ui.loginScreen.classList.add('hidden');
+                ui.dashboardScreen.classList.remove('hidden');
+                ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
+                showDashboard();
+                pollWorkerStatus();
+                refreshSidebarData();
+                // === URUCHOMIENIE NOWEJ FUNKCJI ===
+                pollSystemAlerts(); // Startujemy pętlę sprawdzania alertów
+                try { lucide.createIcons(); } catch(e) { logger.error("Lucide error:", e); }
+            }
+            console.log("startApp function defined.");
+
+            // Główny listener formularza logowania (Dodawany od razu)
+            document.getElementById('login-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                if (ui.loginButton && !ui.loginButton.disabled) {
+                    startApp();
+                } else {
+                     logger.warn("Próba zalogowania, gdy przycisk zablokowany.");
+                }
+            });
+            console.log("Login form listener added.");
+
+            // --- BLOK STARTOWY (Tylko pętla sprawdzająca) ---
+            logger.info("Starting initial API status check interval...");
+            const intervalId = setInterval(async () => {
+                logger.info("Sprawdzanie statusu API...");
+                try {
+                    const statusData = await api.getWorkerStatus();
+                    if (statusData && statusData.status) {
+                        logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
+                        clearInterval(intervalId);
+                        ui.loginStatusText.textContent = 'System gotowy.';
+                        ui.loginButton.disabled = false;
+                        ui.loginButton.textContent = 'Wejdź do Aplikacji';
+                    } else {
+                         logger.warn("API zwróciło 200 OK, ale nieprawidłowe dane:", statusData);
+                         ui.loginStatusText.textContent = 'Problem z odp. API...';
+                    }
+                } catch (e) {
+                    logger.error("Błąd podczas sprawdzania statusu API:", e.message);
+                    ui.loginStatusText.textContent = 'Backend nie gotowy...';
+                }
+            }, 3000);
+            console.log("Initial API status check interval started.");
+
+        }); // Koniec DOMContentLoaded
+    </script>
+    </body>
+</html>
