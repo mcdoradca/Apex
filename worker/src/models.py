@@ -1,9 +1,8 @@
-from sqlalchemy import (
+rom sqlalchemy import (
     Column, String, VARCHAR, TIMESTAMP, NUMERIC, BIGINT, DATE,
-    Boolean, INTEGER, TEXT, ForeignKey, Index
+    Boolean, INTEGER, TEXT, ForeignKey, Index, func, UniqueConstraint # Dodano func i UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP, JSONB
-from sqlalchemy.sql import func
 # ZMIANA: Importujemy 'Base' z LOKALNEGO pliku database.py Workera
 from .database import Base
 
@@ -70,3 +69,26 @@ class AIAnalysisResult(Base):
     ticker = Column(VARCHAR(50), primary_key=True)
     analysis_data = Column(JSONB)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+# === NOWY MODEL DLA AGENCJI PRASOWEJ (CATALYST MONITOR) ===
+
+class ProcessedNews(Base):
+    """
+    Przechowuje "pamięć" Agencji Prasowej, aby nie wysyłać
+    wielokrotnie alertów o tej samej wiadomości.
+    """
+    __tablename__ = 'processed_news'
+
+    id = Column(INTEGER, primary_key=True, autoincrement=True)
+    ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), nullable=False, index=True)
+    news_hash = Column(VARCHAR(64), nullable=False, index=True, comment="SHA-256 hash of the news URL or headline")
+    processed_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+    sentiment = Column(VARCHAR(50), nullable=False, comment="'POSITIVE', 'NEGATIVE', 'NEUTRAL'")
+    headline = Column(TEXT, nullable=True)
+    source_url = Column(TEXT, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('ticker', 'news_hash', name='uq_ticker_news_hash'),
+    )
+
+# === KONIEC NOWEGO MODELU ===
