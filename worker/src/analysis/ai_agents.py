@@ -176,6 +176,13 @@ def _run_tactical_and_guard_agent(ticker: str, daily_df: pd.DataFrame, api_clien
         stop_loss = trade_setup.get('stop_loss')
         take_profit = trade_setup.get('take_profit')
 
+        # --- POPRAWKA: Dodajemy SL i TP do szczegółów, aby były widoczne ---
+        if stop_loss:
+            details["Stop Loss (EOD)"] = f"${stop_loss:.2f}"
+        if take_profit:
+            details["Take Profit (EOD)"] = f"${take_profit:.2f}"
+        # --- KONIEC POPRAWKI ---
+
         # Setup musi mieć cenę wejścia i stop loss do walidacji
         if not entry_price or not stop_loss:
              return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": max_score, "summary": "Setup EOD istnieje, ale brakuje mu ceny wejścia lub stop lossa do weryfikacji.", "details": details}
@@ -317,4 +324,5 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
         },
         "analysis_timestamp_utc": datetime.utcnow().isoformat()
     }
+
 
