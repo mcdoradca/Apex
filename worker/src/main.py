@@ -250,7 +250,10 @@ def main_loop():
                     handle_ai_analysis_request(session)
                     schedule.run_pending()
                 
-                utils.report_heartkey(session) # BŁĄD POPRAWIONY Z OSTATNIEJ WERSJI
+                # ==================================================================
+                #  POPRAWKA BŁĘDU (Literówka)
+                # ==================================================================
+                utils.report_heartbeat(session) # Poprawiono z `report_heartkey`
             except Exception as loop_error:
                 logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
         
