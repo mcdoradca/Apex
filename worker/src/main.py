@@ -11,7 +11,11 @@ from sqlalchemy import text
 from .models import Base
 from .database import get_db_session, engine
 
+# Zaktualizowane importy analityczne
 from .analysis import phase1_scanner, phase2_engine, phase3_sniper, ai_agents, utils
+# === KROK 3: Import nowego agenta ===
+from .analysis import catalyst_monitor
+
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .data_ingestion.data_initializer import initialize_database_if_empty
@@ -43,7 +47,8 @@ def handle_ai_analysis_request(session):
         session.commit()
 
         try:
-            results = ai_agents.run_ai_analysis(ticker_to_analyze, api_client)
+            # Używamy nowej, zoptymalizowanej funkcji
+            results = ai_agents.run_ai_analysis_optimized(ticker_to_analyze, api_client)
             stmt = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
             session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(results)})
             session.commit()
@@ -63,8 +68,9 @@ def run_full_analysis_cycle():
     session = get_db_session()
     try:
         logger.info("Cleaning tables before new analysis cycle...")
+        # Poprawka: Usuwamy tylko dane z bieżącego dnia, a nie z przyszłości
         session.execute(text("DELETE FROM phase2_results WHERE analysis_date = CURRENT_DATE;"))
-        session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date >= CURRENT_DATE;"))
+        session.execute(text("DELETE FROM phase1_candidates WHERE DATE(analysis_date) = CURRENT_DATE;"))
         session.commit()
         logger.info("Daily tables cleaned. Proceeding with analysis.")
     except Exception as e:
@@ -93,14 +99,13 @@ def run_full_analysis_cycle():
             raise Exception("Phase 1 found no candidates. Halting cycle.")
 
         utils.update_system_control(session, 'current_phase', 'PHASE_2')
-        # KROK 5 ZMIANA: Zmieniono nazwę zmiennej z `qualified_tickers` na `qualified_data`
+        # Zmiana: Faza 2 zwraca teraz (ticker, daily_df)
         qualified_data = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
-        # KROK 5 ZMIANA: Zaktualizowano warunek sprawdzający
         if not qualified_data:
             raise Exception("Phase 2 qualified no stocks. Halting cycle.")
 
         utils.update_system_control(session, 'current_phase', 'PHASE_3')
-        # KROK 5 ZMIANA: Przekazujemy `qualified_data` (zamiast `qualified_tickers`) do Fazy 3
+        # Zmiana: Faza 3 przyjmuje (ticker, daily_df)
         phase3_sniper.run_tactical_planning(session, qualified_data, lambda: current_state, api_client)
 
         utils.append_scan_log(session, "Cykl analizy zakończony pomyślnie.")
@@ -129,12 +134,16 @@ def main_loop():
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     
-    # === OPTYMALIZACJA MONITORA ALERTÓW (CZĘSTOTLIWOŚĆ) ===
-    # Zmieniono z 1 minuty na 15 sekund dla szybszych alertów day tradingowych
+    # Zmieniono harmonogram monitora alertów
     schedule.every(15).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
+    
+    # === KROK 3: Dodanie harmonogramu dla Agencji Prasowej ===
+    schedule.every(5).minutes.do(lambda: catalyst_monitor.run_catalyst_check(get_db_session()))
+
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Real-Time Entry Trigger Monitor scheduled every 15 seconds.")
+    logger.info("Catalyst News Monitor scheduled every 5 minutes.")
 
 
     with get_db_session() as initial_session:
