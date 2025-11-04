@@ -27,7 +27,6 @@
         .phase-3-text { color: #ef4444; }
         .watchlist-text { color: #10b981; }
 
-        /* === ZMIANA 1: Nowa pozycja dla kontenera alertów (Top-Right) === */
         #system-alert-container {
             position: fixed;
             top: 1.5rem; /* 24px */
@@ -38,7 +37,6 @@
             align-items: flex-end;
             gap: 0.5rem; /* 8px */
         }
-        /* Zmieniamy alert-bar aby działał w nowym kontenerze */
         .alert-bar { 
             max-width: 400px;
             width: 100%;
@@ -59,7 +57,6 @@
 </head>
 <body class="text-gray-200">
 
-    <!-- Ten kontener będzie teraz pozycjonowany przez CSS w prawym górnym rogu -->
     <div id="system-alert-container"></div>
 
     <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
@@ -195,10 +192,8 @@
                 activePortfolioPolling: null,
                 activeCountdownPolling: null, // Timer dla odliczania rynkowego
                 currentViewTicker: null,
-                // === NOWY STAN: Pamięć dla alertów zysku ===
-                profitAlertsSent: {}, // Słownik do śledzenia, czy alert dla danego tickera został już wysłany
-                // === NOWY STAN: Wyciszone alerty ===
-                snoozedAlerts: {} // Śledzi alerty wyciszone przez użytkownika (np. 'PROFIT-AAPL': timestamp_wygaśnięcia)
+                profitAlertsSent: {}, 
+                snoozedAlerts: {} 
             };
 
             // --- SELEKTORY UI (Definiowane od razu) ---
@@ -248,7 +243,6 @@
             const QUOTE_POLL_INTERVAL = 15000;       // ms
             const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund na odświeżenie portfela
             const ALERT_POLL_INTERVAL = 7000; // 7 sekund
-            // === NOWA STAŁA: Próg alertu zysku ===
             const PROFIT_ALERT_THRESHOLD = 1.02; // 1.02 oznacza +2%
 
             const logger = {
@@ -445,7 +439,6 @@
                                     ${statusText}
                                 </span>
                                 <p class="text-xs text-gray-500 mt-1">Dane na ${safeMarket.date_ny} ${safeMarket.time_ny}</p>
-                                <!-- === NOWY ELEMENT: MINUTNIK === -->
                                 <p class="text-xs text-yellow-400 font-mono mt-2" id="market-countdown-timer">Obliczanie...</p>
                             </div>
                         </div>`;
@@ -482,7 +475,7 @@
                          if (!agentData) return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg text-gray-500">Brak danych dla Agenta: ${agentName}</div>`;
                          return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg"><h4 class="font-bold text-gray-300 mb-3 flex items-center"><i data-lucide="${icon}" class="w-5 h-5 mr-2 text-sky-400"></i>Agent: ${agentName} <span class="ml-auto text-xs font-mono bg-gray-700 px-2 py-1 rounded-md">${agentData.score ?? '?'}/${agentData.max_score ?? '?'}</span></h4><p class="text-sm text-gray-400 mb-3">${agentData.summary ?? 'Brak podsumowania.'}</p><div class="text-xs space-y-1 border-t border-gray-700 pt-2">${agentData.details && Object.keys(agentData.details).length > 0 ? Object.entries(agentData.details).map(([key, value]) => `<div class="flex justify-between"><span class="text-gray-500">${key}:</span><span class="font-mono text-gray-300">${value}</span></div>`).join('') : '<p class="text-gray-500">Brak szczegółów.</p>'}</div></div>`;
                     };
-                    return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data, market_info)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Taktycznego', 'crosshair', agents.tactical_setup)}</div></div>`;
+                    return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data, market_info)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Strażnika Wejść', 'shield-check', agents.tactical_and_guard)}</div></div>`;
                 },
                 dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3><p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p></div></div><h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3><div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div></div>`,
                 
@@ -494,11 +487,9 @@
                         let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
                         let priceClass = 'text-gray-400';
                         
-                        // === POPRAWKA 1: Szukamy '05. price' ===
                         if (quote && quote['05. price']) {
                             try {
                                 currentPrice = parseFloat(quote['05. price']);
-                                // Używamy 'change percent' bez '10.' bo nasz client API (bulk quotes) zwraca czyste klucze
                                 dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                                 priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                                 currentValue = h.quantity * currentPrice;
@@ -561,10 +552,8 @@
             function displaySystemAlert(message) {
                 if (!message || message === 'NONE') return;
 
-                // === NOWA LOGIKA: Klucz alertu i Wyciszanie ===
                 let alertKey = 'GENERAL';
                 try {
-                    // Próba wyodrębnienia tickera dla unikalnego klucza
                     const parts = message.split(' ');
                     const ticker = parts.find(p => p.length > 2 && p.length < 6 && p === p.toUpperCase());
                     
@@ -574,15 +563,12 @@
                     
                 } catch(e) { 
                     logger.warn("Nie udało się wygenerować klucza alertu", e);
-                    // fallback na klucz 'GENERAL'
                 }
 
-                // Sprawdź, czy alert jest wyciszony
                 if (state.snoozedAlerts[alertKey] && Date.now() < state.snoozedAlerts[alertKey]) {
                     logger.info(`Alert ${alertKey} jest wyciszony. Pomijanie.`);
                     return;
                 }
-                // === KONIEC NOWEJ LOGIKI ===
 
                 let alertClass = 'bg-sky-500';
                 let alertIcon = 'bell-ring';
@@ -608,7 +594,6 @@
                         <i data-lucide="${alertIcon}" class="w-6 h-6"></i>
                         <span class="font-semibold">${message}</span>
                     </div>
-                    <!-- ZMIANA: Dodano data-alert-key -->
                     <button data-alert-id="${alertId}" data-alert-key="${alertKey}" class="close-alert-btn p-1 rounded-full hover:bg-black/20 transition-colors">
                         <i data-lucide="x" class="w-5 h-5"></i>
                     </button>
@@ -618,19 +603,16 @@
 
                 const closeButton = alertElement.querySelector('.close-alert-btn');
                 closeButton.addEventListener('click', () => {
-                    // === NOWA LOGIKA: Wyciszanie po kliknięciu ===
                     const keyToSnooze = closeButton.dataset.alertKey;
                     if (keyToSnooze) {
                         const snoozeDuration = 30 * 60 * 1000; // 30 minut
                         state.snoozedAlerts[keyToSnooze] = Date.now() + snoozeDuration;
                         logger.info(`Wyciszono alert '${keyToSnooze}' na 30 minut.`);
                     }
-                    // === KONIEC NOWEJ LOGIKI ===
                     alertElement.remove();
                 });
 
                 setTimeout(() => {
-                    // Sprawdź, czy element wciąż istnieje, zanim go usuniesz
                     const elToRemove = document.getElementById(alertId);
                     if (elToRemove) {
                         elToRemove.remove();
@@ -726,7 +708,6 @@
                     const holdings = await api.getPortfolio();
                     state.portfolio = holdings;
                     state.liveQuotes = {}; // Wyczyść cache cen
-                    // === POPRAWKA 2: Resetujemy pamięć alertów zysku ===
                     state.profitAlertsSent = {}; // Resetuj przy każdym załadowaniu portfela
                     ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
                     lucide.createIcons();
@@ -776,14 +757,13 @@
                              quotesUpdated = true; 
                          }
                      });
-                     state.liveQuotes = newQuotes; // Zaktualizuj stan globalny
+                     state.liveQuotes = newQuotes; 
 
                      if (quotesUpdated && !state.currentViewTicker && document.getElementById('portfolio-view')) {
                           ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
                           lucide.createIcons();
                      }
 
-                    // === POPRAWKA 2: Logika monitorowania zysku ===
                     checkPortfolioProfitAlerts();
 
                  } catch (e) {
@@ -797,7 +777,6 @@
                  }
             }
             
-            // === POPRAWKA 2: Nowa funkcja do sprawdzania zysków ===
             function checkPortfolioProfitAlerts() {
                 logger.info("Sprawdzanie alertów zysku w portfelu...");
                 state.portfolio.forEach(holding => {
@@ -807,19 +786,15 @@
                             const currentPrice = parseFloat(quote['05. price']);
                             const avgBuyPrice = holding.average_buy_price;
                             
-                            // Sprawdź, czy zysk przekroczył próg
                             if (currentPrice >= (avgBuyPrice * PROFIT_ALERT_THRESHOLD)) {
-                                // Sprawdź, czy alert nie został już wysłany
                                 if (!state.profitAlertsSent[holding.ticker]) {
                                     const profitPercent = ((currentPrice / avgBuyPrice) - 1) * 100;
                                     const alertMsg = `ALERT ZYSKU: ${holding.ticker} osiągnął +${profitPercent.toFixed(1)}% (Cena: ${currentPrice.toFixed(2)})`;
                                     logger.warn(alertMsg);
                                     displaySystemAlert(alertMsg);
-                                    state.profitAlertsSent[holding.ticker] = true; // Zaznacz jako wysłany
+                                    state.profitAlertsSent[holding.ticker] = true; 
                                 }
                             } else {
-                                // Zresetuj flagę alertu, jeśli cena spadnie poniżej progu
-                                // To pozwoli na ponowne powiadomienie, jeśli cena znowu wzrośnie
                                 if (state.profitAlertsSent[holding.ticker]) {
                                     logger.info(`Resetowanie alertu zysku dla ${holding.ticker}, cena spadła poniżej progu.`);
                                     state.profitAlertsSent[holding.ticker] = false;
@@ -1058,7 +1033,6 @@
                 });
             });
             
-            // Listenery dla Modali
             ui.buyModal.cancelBtn.addEventListener('click', hideBuyModal);
             ui.buyModal.confirmBtn.addEventListener('click', handleBuyConfirm);
             ui.sellModal.cancelBtn.addEventListener('click', hideSellModal);
@@ -1080,7 +1054,6 @@
             }
             console.log("startApp function defined.");
 
-            // Główny listener formularza logowania (Dodawany od razu)
             document.getElementById('login-form').addEventListener('submit', (e) => {
                 e.preventDefault();
                 if (ui.loginButton && !ui.loginButton.disabled) {
@@ -1118,3 +1091,4 @@
     </script>
     </body>
 </html>
+
