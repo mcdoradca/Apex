@@ -1,14 +1,16 @@
 import logging
 import pandas as pd
+# ZMIANA: Dodajemy import Session
 from sqlalchemy.orm import Session
 from datetime import datetime
-# POPRAWKA: Dodajemy importy dla lokalnych obliczeń
+# ZMIANA: Importujemy 'utils', aby użyć nowej funkcji
+from . import utils
 from .utils import (
     safe_float, get_market_status_and_time, standardize_df_columns, 
     calculate_rsi, calculate_bbands
 )
-# POPRAWKA: Importujemy phase3_sniper, aby uzyskać dostęp do funkcji setupu
-from . import phase3_sniper
+# ZMIANA: Nie potrzebujemy już importować całego phase3_sniper
+# from . import phase3_sniper 
 
 logger = logging.getLogger(__name__)
 
@@ -146,125 +148,77 @@ def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
     return {"name": "Agent Sentymentu", "score": score, "max_score": max_score, "summary": summary, "details": details}
 
 
-# --- AGENT 4: AGENT STRAŻNIKA WEJŚĆ (POPRAWIONA LOGIKA) ---
-def _run_tactical_and_guard_agent(ticker: str, daily_df: pd.DataFrame, api_client: object, live_quote_data: dict) -> dict:
+# --- AGENT 4: AGENT STRAŻNIKA WEJŚĆ (NOWA LOGIKA) ---
+# ZMIANA: Agent odczytuje teraz stan z bazy danych, zamiast go obliczać
+def _run_tactical_agent(session: Session, ticker: str) -> dict:
     """
-    Agent łączący dwie funkcje:
-    1. Weryfikuje, czy setup EOD (dzienny) nadal istnieje.
-    2. Uruchamia "Strażnika", który analizuje dane LIVE i H1 w celu walidacji wejścia.
+    Agent, który odczytuje AKTUALNY stan setupu (ACTIVE, PENDING, INVALIDATED)
+    z bazy danych i przekazuje go do frontendu.
     """
     score = 0
-    max_score = 5
+    max_score = 5 
     details = {}
 
-    # Helper do wyciągania ceny LIVE z danych, które już mamy
-    def _get_live_price_from_quote(quote: dict) -> float | None:
-        if not quote: return None
-        try:
-            # quote_data pochodzi z get_global_quote, który już sformatował klucze
-            price_str = quote.get('05. price')
-            return safe_float(price_str)
-        except Exception as e:
-            logger.error(f"Strażnik: Błąd parsowania ceny LIVE z quote_data: {e}")
-            return None
-
     try:
-        # 1. Sprawdź, czy setup EOD (na danych dziennych) w ogóle istnieje
-        trade_setup = phase3_sniper.find_end_of_day_setup(ticker, daily_df)
+        # 1. Użyj nowej funkcji pomocniczej, aby pobrać ostatni istotny sygnał
+        relevant_signal = utils.get_relevant_signal_from_db(session, ticker)
         
-        if not trade_setup.get("signal"):
-            # Jeśli nie ma setupu EOD, nie ma czego pilnować
+        # 2. Jeśli nie ma sygnału (nawet unieważnionego), to znaczy, że nic nie znaleziono
+        if not relevant_signal:
             return {
                 "name": "Agent Strażnik Wejść",
                 "score": 0, "max_score": max_score,
-                "summary": "Brak setupu taktycznego EOD. Spółka nie jest obecnie w strukturze do wejścia.",
-                "details": {"Status": "Brak Setupu", "Powód": trade_setup.get('reason', 'Nieznany.')}
+                "summary": "Brak aktywnego setupu taktycznego w bazie danych.",
+                "details": {"Status": "Brak Setupu"}
             }
 
-        # 2. Setup EOD istnieje. Zbieramy dane.
-        details["Status EOD"] = "Wykryto Setup: " + trade_setup.get('notes', 'Brak notatek.')
-        entry_price = trade_setup.get('entry_price') or trade_setup.get('entry_zone_top')
-        stop_loss = trade_setup.get('stop_loss')
-        take_profit = trade_setup.get('take_profit')
+        # 3. Mamy sygnał. Sprawdźmy jego status.
+        signal_status = relevant_signal.status
+        signal_notes = relevant_signal.notes
+        
+        # 4. Jeśli setup został już UNIEWAŻNIONY przez Strażnika (backend)...
+        if signal_status == 'INVALIDATED':
+            score = 1 # Dajemy niski wynik, ale nie zero
+            summary = "Setup ZANEGOWANY. Został unieważniony przez Strażnika backendu (cena spadła poniżej SL)."
+            details["Status"] = "ZANEGOWANY"
+            details["Powód"] = signal_notes
+            if relevant_signal.stop_loss:
+                details["Stop Loss (EOD)"] = f"${relevant_signal.stop_loss:.2f}"
+            
+            return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
 
-        # Wyświetlamy SL i TP (poprawka z poprzedniej iteracji)
+        # 5. Jeśli setup jest AKTYWNY lub OCZEKUJĄCY...
+        score = 5
+        summary = "Wykryto aktywny setup EOD. Strażnik w przeglądarce zweryfikuje cenę LIVE."
+        details["Status EOD"] = f"Setup {signal_status}: {signal_notes}"
+        
+        # Przekaż statyczne parametry do frontendu
+        entry_price = relevant_signal.entry_price or relevant_signal.entry_zone_top
+        stop_loss = relevant_signal.stop_loss
+        take_profit = relevant_signal.take_profit
+
+        if entry_price:
+             details["Cena Wejścia (EOD)"] = f"${entry_price:.2f}"
         if stop_loss:
             details["Stop Loss (EOD)"] = f"${stop_loss:.2f}"
         if take_profit:
             details["Take Profit (EOD)"] = f"${take_profit:.2f}"
-
-        if not entry_price or not stop_loss:
-             return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": max_score, "summary": "Setup EOD istnieje, ale brakuje mu ceny wejścia lub stop lossa do weryfikacji.", "details": details}
-
-        # 3. POBIERZ CENĘ LIVE (NAJWAŻNIEJSZA ZMIANA)
-        current_price = _get_live_price_from_quote(live_quote_data)
         
-        if not current_price:
-            # Jeśli z jakiegoś powodu live quote zawiedzie, nie możemy uruchomić strażnika
-            return {"name": "Agent Strażnik Wejść", "score": 1, "max_score": max_score, "summary": "Setup EOD istnieje, ale nie można było pobrać ceny LIVE do weryfikacji. Zachowaj ekstremalną ostrożność.", "details": details}
-
-        # Wyświetlamy cenę LIVE jako "Obecna Cena"
-        details["Obecna Cena"] = f"${current_price:.2f}"
-
-        # --- Logika Strażnika (Nowa Kolejność) ---
-        
-        # RULE B: "Stop-out" (Negacja) - SPRAWDZANY JAKO PIERWSZY WZGLĘDEM CENY LIVE
-        if current_price < stop_loss:
-            score = 0
-            summary = f"Setup ZANEGOWANY. Cena LIVE (${current_price:.2f}) spadła już poniżej wyznaczonego poziomu Stop Loss (${stop_loss:.2f}). Setup jest nieważny."
-            details["Weryfikacja Strażnika"] = "Setup nieważny (Stop Loss trafiony)."
-            return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
-
-        # RULE D: "Cena Uciekła" (Niekorzystny R/R) - SPRAWDZANY WZGLĘDEM CENY LIVE
-        if current_price > (entry_price * 1.02): # 2% powyżej wejścia
-            score = 1
-            summary = f"Cena UCIEKŁA. Setup jest nadal technicznie aktywny, ale obecna cena (${current_price:.2f}) jest znacznie powyżej idealnego wejścia (${entry_price:.2f}). Stosunek R/R jest niekorzystny."
-            details["Weryfikacja Strażnika"] = "Wysokie ryzyko (Cena uciekła)."
-            return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
-
-        # 4. Pobierz dane H1 *tylko* do sprawdzenia "Rule A" (Za Późno)
-        intraday_raw = api_client.get_intraday(ticker, interval='60min', outputsize='compact', extended_hours=False)
-        if not intraday_raw or 'Time Series (60min)' not in intraday_raw:
-            logger.warning(f"Strażnik dla {ticker}: Nie można pobrać danych H1 do sprawdzenia 'Rule A'.")
-            # Nie zwracamy błędu, tylko idziemy dalej, bo główne zasady (SL, Cena) są sprawdzone
-        else:
-            intraday_df = pd.DataFrame.from_dict(intraday_raw['Time Series (60min)'], orient='index')
-            intraday_df = standardize_df_columns(intraday_df)
-            recent_candles = intraday_df.iloc[-16:] # Ostatnie ~2 dni
-
-            # RULE A: "Za Późno" (Spike) - czy cel został prawie osiągnięty?
-            if take_profit and not recent_candles.empty:
-                halfway_to_target = entry_price + (take_profit - entry_price) * 0.5
-                if recent_candles['high'].max() > halfway_to_target:
-                    score = 0
-                    summary = "Setup SPALONY (Za Późno). Cena już wykonała znaczną część ruchu (ponad 50% do TP) i cofa. Wejście teraz jest bardzo ryzykowne."
-                    details["Weryfikacja Strażnika"] = "Ruch zrealizowany. Najwyższa cena H1 przekroczyła 50% celu."
-                    details["Najwyższa cena H1"] = f"${recent_candles['high'].max():.2f}"
-                    return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
-
-        # RULE C: "Wszystko OK"
-        # Jeśli żadna z powyższych reguł nie zadziałała, setup jest OK
-        score = 5
-        summary = "Setup POTWIERDZONY i WAŻNY. Cena jest nadal w strefie wejścia lub blisko niej. Setup EOD jest aktualny i bezpieczny do rozważenia."
-        details["Weryfikacja Strażnika"] = "Wszystko OK (Cena w strefie wejścia)."
         return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
 
     except Exception as e:
-        logger.error(f"Błąd w Agencie Taktycznym (Strażnik) dla {ticker}: {e}", exc_info=True)
-        return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": 5, "summary": "Błąd krytyczny agenta Strażnika.", "details": {"Błąd": str(e)}}
+        logger.error(f"Błąd w Agencie Taktycznym dla {ticker}: {e}", exc_info=True)
+        return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": 5, "summary": "Błąd krytyczny agenta taktycznego.", "details": {"Błąd": str(e)}}
 
 
 # --- GŁÓWNA FUNKCJA ORKIESTRUJĄCA ---
-def run_ai_analysis(ticker: str, api_client: object) -> dict:
+# ZMIANA: Dodano 'session: Session' jako pierwszy argument
+def run_ai_analysis(session: Session, ticker: str, api_client: object) -> dict:
     """Uruchamia wszystkich agentów AI i agreguje ich wyniki."""
     logger.info(f"Running full AI analysis for {ticker}...")
     
     # --- ETAP 1: Zbieranie Danych ---
     try:
-        # ZMIANA: Pobieramy dane LIVE jako pierwsze, bo są kluczowe
-        quote_data = api_client.get_global_quote(ticker)
-        market_info = get_market_status_and_time(api_client)
-        
         # Pobieramy dane historyczne DLA TICKERA (1 wywołanie)
         ticker_data_raw = api_client.get_daily_adjusted(ticker, 'full') # 'full' dla historii BBands
         if not ticker_data_raw or 'Time Series (Daily)' not in ticker_data_raw:
@@ -281,6 +235,8 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
         
         if len(qqq_df) < 6: raise Exception("Za mało danych QQQ dla 5-dniowej wydajności")
         qqq_perf = (qqq_df['close'].iloc[-1] - qqq_df['close'].iloc[-6]) / qqq_df['close'].iloc[-6] * 100
+        
+        market_info = get_market_status_and_time(api_client)
 
     except Exception as e:
         logger.error(f"Krytyczny błąd podczas pobierania danych w AI Analysis dla {ticker}: {e}", exc_info=True)
@@ -291,10 +247,10 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     volatility_results = _run_volatility_agent(ticker, daily_df)
     sentiment_results = _run_sentiment_agent(ticker, api_client) 
     
-    # ZMIANA: Przekazujemy 'quote_data' do agenta Strażnika!
-    tactical_and_guard_results = _run_tactical_and_guard_agent(ticker, daily_df, api_client, quote_data)
+    # ZMIANA: Wywołujemy agenta taktycznego, przekazując mu 'session'
+    tactical_results = _run_tactical_agent(session, ticker)
     
-    agents_list = [momentum_results, volatility_results, sentiment_results, tactical_and_guard_results]
+    agents_list = [momentum_results, volatility_results, sentiment_results, tactical_results]
     
     total_score = sum(agent['score'] for agent in agents_list)
     total_max_score = sum(agent['max_score'] for agent in agents_list)
@@ -302,13 +258,13 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     final_score_percent = (total_score / total_max_score) * 100 if total_max_score > 0 else 0
     
     # --- ETAP 3: Agregacja Wyników ---
-    # ZMIANA: Używamy nowego agenta w logice rekomendacji
-    if final_score_percent >= 75 and tactical_and_guard_results['score'] == 5: # Wymagamy, aby Strażnik dał pełne OK (wynik 5)
+    # ZMIANA: Logika rekomendacji opiera się teraz na wyniku taktycznym
+    if final_score_percent >= 75 and tactical_results['score'] == 5:
         recommendation = "BARDZO SILNY KANDDAT DO KUPNA"
-        recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach. Strażnik potwierdza, że setup jest nadal aktywny."
-    elif final_score_percent >= 60:
+        recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach. Strażnik (LIVE) zweryfikuje, czy setup jest nadal aktywny."
+    elif final_score_percent >= 60 and tactical_results['score'] > 0:
         recommendation = "SILNY KANDYDAT DO OBSERWACJI"
-        recommendation_details = "Spółka ma wiele pozytywnych cech. Warto dodać do obserwowanych i czekać na setup taktyczny."
+        recommendation_details = "Spółka ma wiele pozytywnych cech. Warto dodać do obserwowanych."
     elif final_score_percent >= 40:
         recommendation = "INTERESUJĄCY KANDYDAT"
         recommendation_details = "Spółka wykazuje pewne pozytywne sygnały, ale wymaga dalszej obserwacji."
@@ -316,12 +272,11 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
         recommendation = "NEUTRALNY / ZALECA SIĘ OSTROŻNOŚĆ"
         recommendation_details = "Obecnie spółka nie wykazuje wystarczająco silnych sygnałów do podjęcia działań."
 
-    # ZMIANA: Zmieniamy klucz dla agenta taktycznego
+    # ZMIANA: Usuwamy 'quote_data' z odpowiedzi
     return {
         "status": "DONE",
         "ticker": ticker,
-        "quote_data": quote_data,
-        "market_info": market_info,
+        "market_info": market_info, 
         "overall_score": total_score,
         "max_score": total_max_score,
         "final_score_percent": round(final_score_percent),
@@ -331,7 +286,7 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
             "momentum": momentum_results,
             "volatility": volatility_results,
             "sentiment": sentiment_results,
-            "tactical_and_guard": tactical_and_guard_results
+            "tactical_and_guard": tactical_results # Frontend oczekuje tego klucza
         },
         "analysis_timestamp_utc": datetime.utcnow().isoformat()
     }
