@@ -193,7 +193,9 @@
                 activeAnalysisPolling: null,
                 activeQuotePolling: null,
                 activePortfolioPolling: null,
-                currentViewTicker: null // Zmieniono nazwę z currentAnalysisTicker dla jasności
+                // === NOWY STAN ===
+                activeCountdownPolling: null, // Timer dla odliczania rynkowego
+                currentViewTicker: null
             };
 
             // --- SELEKTORY UI (Definiowane od razu) ---
@@ -293,15 +295,157 @@
             };
             console.log("Full API object defined.");
 
+
+            // ==========================================================
+            // === NOWE FUNKCJE: Minutnik Rynkowy ===
+            // ==========================================================
+
+            /**
+             * Zwraca aktualny obiekt Date dla strefy czasowej Nowego Jorku.
+             * Używa Intl.DateTimeFormat do wyciągnięcia komponentów czasu w ET,
+             * co jest niezawodne i odporne na zmiany czasu letniego/zimowego.
+             */
+            function getNYTime() {
+                try {
+                    const options = {
+                        timeZone: 'America/New_York',
+                        year: 'numeric', month: '2-digit', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit', second: '2-digit',
+                        hour12: false // Kluczowe dla formatu 24h
+                    };
+                    const formatter = new Intl.DateTimeFormat('en-US', options);
+                    const parts = formatter.formatToParts(new Date());
+
+                    const find = (type) => parts.find(p => p.type === type)?.value;
+                    
+                    const year = find('year');
+                    const month = find('month');
+                    const day = find('day');
+                    const hour = find('hour') === '24' ? '00' : find('hour'); // Poprawka dla północy
+                    const minute = find('minute');
+                    const second = find('second');
+
+                    // Tworzymy obiekt daty, który *reprezentuje* czas w ET
+                    // `new Date(year, monthIndex, day, hour, minute, second)`
+                    // Miesiące w JS są 0-indeksowane
+                    return new Date(year, parseInt(month) - 1, day, hour, minute, second);
+
+                } catch (e) {
+                    logger.error("Błąd pobierania czasu NY, używam czasu lokalnego.", e);
+                    return new Date(); // Fallback
+                }
+            }
+
+            /**
+             * Formatuje milisekundy na czytelny string odliczania (np. 02g 15m 10s).
+             */
+            function formatCountdown(ms) {
+                if (ms < 0) ms = 0;
+                const totalSeconds = Math.floor(ms / 1000);
+                const totalMinutes = Math.floor(totalSeconds / 60);
+                const totalHours = Math.floor(totalMinutes / 60);
+
+                const days = Math.floor(totalHours / 24);
+                const hours = totalHours % 24;
+                const minutes = totalMinutes % 60;
+                const seconds = totalSeconds % 60;
+                
+                let str = '';
+                if (days > 0) str += `${days}d `;
+                str += `${String(hours).padStart(2, '0')}g ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+                return str;
+            }
+
+            /**
+             * Główna logika obliczająca, co pokazać na minutniku.
+             */
+            function getMarketCountdown() {
+                const now = getNYTime();
+                const dayOfWeek = now.getDay(); // 0 = Niedziela, 1 = Poniedziałek, ..., 6 = Sobota
+
+                const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+
+                // Definicje czasu w ET (HH, MM, SS)
+                const preMarketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 4, 0, 0);
+                const marketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 30, 0);
+                const marketClose = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 16, 0, 0);
+
+                let message = '';
+                let targetTime = null;
+
+                if (isWeekend) {
+                    let daysToAdd = (dayOfWeek === 6) ? 2 : 1; // Jeśli Sobota, dodaj 2 dni; jeśli Niedziela, dodaj 1
+                    targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+                    message = 'Do otwarcia Pre-Market: ';
+                } else {
+                    // Jest dzień roboczy
+                    if (now < preMarketOpen) {
+                        // Przed 4:00 rano
+                        targetTime = preMarketOpen;
+                        message = 'Do otwarcia Pre-Market: ';
+                    } else if (now >= preMarketOpen && now < marketOpen) {
+                        // Pomiędzy 4:00 a 9:30
+                        targetTime = marketOpen;
+                        message = 'Do otwarcia Rynku: ';
+                    } else if (now >= marketOpen && now < marketClose) {
+                        // Rynek otwarty
+                        targetTime = marketClose;
+                        message = 'Do zamknięcia Rynku: ';
+                    } else {
+                        // Rynek zamknięty (po 16:00)
+                        let daysToAdd = (dayOfWeek === 5) ? 3 : 1; // Jeśli Piątek, dodaj 3 dni
+                        targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+                        message = 'Do otwarcia Pre-Market: ';
+                    }
+                }
+                
+                const diff = targetTime.getTime() - now.getTime();
+                return message + formatCountdown(diff);
+            }
+
+            /**
+             * Aktualizuje element DOM co sekundę.
+             */
+            function updateCountdownTimer() {
+                const timerElement = document.getElementById('market-countdown-timer');
+                if (timerElement) {
+                    timerElement.textContent = getMarketCountdown();
+                }
+            }
+
+            /**
+             * Uruchamia globalny interwał dla minutnika.
+             */
+            function startMarketCountdown() {
+                stopMarketCountdown(); // Zatrzymaj stary, jeśli istnieje
+                logger.info("Rozpoczynam odliczanie rynkowe (co 1s).");
+                updateCountdownTimer(); // Uruchom od razu
+                state.activeCountdownPolling = setInterval(updateCountdownTimer, 1000);
+            }
+
+            /**
+             * Zatrzymuje globalny interwał dla minutnika.
+             */
+            function stopMarketCountdown() {
+                if (state.activeCountdownPolling) {
+                    logger.info("Zatrzymuję odliczanie rynkowe.");
+                    clearInterval(state.activeCountdownPolling);
+                    state.activeCountdownPolling = null;
+                }
+            }
+
+            // ==========================================================
+            // === Koniec nowych funkcji Minutnika ===
+            // ==========================================================
+
+
             // --- Renderowanie i Widoki ---
-            // === POPRAWKA WYŚWIETLANIA CENY ===
             const renderQuoteBox = (quote, market) => {
                  if (!quote || Object.keys(quote).length === 0) {
-                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych (Global Quote).</div>`;
+                    return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych.</div>`;
                 }
                  const safeMarket = market || { status: 'UNKNOWN', time_ny: 'N/A', date_ny: 'N/A' };
                 try {
-                    // UWAGA: Ta logika (substring) może nie być już potrzebna po zmianie na BULK_QUOTES, ale zostawiamy ją dla bezpieczeństwa
                     const cleanedQuote = Object.fromEntries(
                         Object.entries(quote).map(([key, value]) => [key.includes('. ') ? key.substring(key.indexOf('.') + 2) : key, value])
                     );
@@ -325,7 +469,6 @@
                     else if (safeMarket.status === 'AFTER_MARKET') { statusText = 'After-Market'; statusClass = 'bg-blue-600'; }
                     else if (safeMarket.status === 'UNKNOWN') { statusText = 'Status Nieznany'; statusClass = 'bg-purple-600'; }
                     
-                    // Nowy, bardziej przejrzysty layout
                     return `
                         <div class="flex flex-wrap justify-between items-start gap-4">
                             <div>
@@ -347,6 +490,8 @@
                                     ${statusText}
                                 </span>
                                 <p class="text-xs text-gray-500 mt-1">Dane na ${safeMarket.date_ny} ${safeMarket.time_ny}</p>
+                                <!-- === NOWY ELEMENT: MINUTNIK === -->
+                                <p class="text-xs text-yellow-400 font-mono mt-2" id="market-countdown-timer">Obliczanie...</p>
                             </div>
                         </div>`;
 
@@ -571,6 +716,7 @@
                 if (state.activeAnalysisPolling) { clearTimeout(state.activeAnalysisPolling); state.activeAnalysisPolling = null; }
                 if (state.activeQuotePolling) { clearTimeout(state.activeQuotePolling); state.activeQuotePolling = null; }
                 if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
+                stopMarketCountdown(); // <-- ZATRZYMUJEMY MINUTNIK
                 state.currentViewTicker = null;
             }
 
@@ -733,6 +879,7 @@
                          state.activeAnalysisPolling = null;
                          if (data.status === 'DONE') {
                              startQuotePolling(ticker);
+                             startMarketCountdown(); // <-- URUCHAMIAMY MINUTNIK
                          }
                     }
                 } catch(e) {
@@ -955,3 +1102,4 @@
     </script>
     </body>
 </html>
+
