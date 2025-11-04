@@ -2,8 +2,9 @@ import logging
 import requests
 import json
 import hashlib
-import os # <-- NOWY IMPORT
-from dotenv import load_dotenv # <-- NOWY IMPORT
+import os
+import time # <-- Ważny import
+from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from sqlalchemy import text, select, func
 from datetime import datetime, timedelta
@@ -16,13 +17,12 @@ from ..analysis.utils import update_system_control
 logger = logging.getLogger(__name__)
 
 # --- Konfiguracja API Gemini ---
-load_dotenv() # <-- NOWE WYWOŁANIE
+load_dotenv() 
 
-# === POPRAWKA: Pobieramy klucz ze środowiska ===
 API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     logger.critical("GEMINI_API_KEY nie został znaleziony w zmiennych środowiskowych! Catalyst Monitor nie będzie działać.")
-    API_KEY = "" # Zapewnia, że f-string poniżej nie rzuci błędu
+    API_KEY = "" 
 
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
 API_HEADERS = {'Content-Type': 'application/json'}
@@ -95,7 +95,7 @@ def _call_gemini_search(ticker: str) -> list[dict]:
 
     try:
         response = requests.post(GEMINI_API_URL, headers=API_HEADERS, data=json.dumps(payload), timeout=20)
-        response.raise_for_status() # To jest linia 90, która rzuca błąd 403
+        response.raise_for_status() # To jest linia 98
         data = response.json()
 
         candidate = data.get('candidates', [{}])[0]
@@ -186,7 +186,6 @@ def run_catalyst_check(session: Session):
     """
     Główna funkcja "Agencji Prasowej" uruchamiana przez harmonogram.
     """
-    # === POPRAWKA: Sprawdź klucz API na początku ===
     if not API_KEY:
         logger.warning("CatalystMonitor: Brak klucza GEMINI_API_KEY. Pomijanie cyklu sprawdzania wiadomości.")
         return
@@ -235,5 +234,12 @@ def run_catalyst_check(session: Session):
         except Exception as e:
             logger.error(f"CatalystMonitor: Nieoczekiwany błąd w pętli dla tickera {ticker}: {e}", exc_info=True)
             session.rollback() # Upewnij się, że sesja jest czysta na następny ticker
+        
+        # === POPRAWKA: Zwiększamy pauzę do 2.1 sekundy ===
+        # To da nam ~28 zapytań/minutę, co jest bardzo bezpieczne
+        finally:
+            time.sleep(2.1) 
+            # === KONIEC POPRAWKI ===
 
     logger.info("CatalystMonitor: Cykl sprawdzania wiadomości zakończony.")
+
