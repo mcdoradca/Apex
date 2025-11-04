@@ -13,7 +13,7 @@ from . import phase3_sniper
 logger = logging.getLogger(__name__)
 
 # --- AGENT 1: ANALIZA MOMENTUM I SIŁY WZGLĘDNEJ ---
-# POPRAWKA: Agent przyjmuje teraz przetworzone dane (daily_df i qqq_perf)
+# (Bez zmian)
 def _run_momentum_agent(ticker: str, daily_df: pd.DataFrame, qqq_perf: float) -> dict:
     score = 0
     max_score = 4
@@ -62,7 +62,7 @@ def _run_momentum_agent(ticker: str, daily_df: pd.DataFrame, qqq_perf: float) ->
 
 
 # --- AGENT 2: ANALIZA KOMPRESJI ENERGII ---
-# POPRAWKA: Agent przyjmuje teraz przetworzone dane (daily_df)
+# (Bez zmian)
 def _run_volatility_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
     score = 0
     max_score = 3
@@ -106,7 +106,7 @@ def _run_volatility_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
 
 
 # --- AGENT 3: ANALIZA SENTYMENTU ---
-# POPRAWKA: Bez zmian, ten agent i tak był niezależny
+# (Bez zmian)
 def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
     score = 0
     max_score = 3
@@ -146,44 +146,97 @@ def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
     return {"name": "Agent Sentymentu", "score": score, "max_score": max_score, "summary": summary, "details": details}
 
 
-# --- AGENT 4: WYSZUKIWANIE SETUPU TAKTYCZNEGO (FAZA 3) ---
-# POPRAWKA: Agent przyjmuje teraz przetworzone dane (daily_df)
-def _run_tactical_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
+# --- AGENT 4: NOWY AGENT STRAŻNIKA WEJŚĆ (ZASTĘPUJE STAREGO AGENTA TAKTYCZNEGO) ---
+def _run_tactical_and_guard_agent(ticker: str, daily_df: pd.DataFrame, api_client: object) -> dict:
+    """
+    Agent łączący dwie funkcje:
+    1. Weryfikuje, czy setup EOD (dzienny) nadal istnieje.
+    2. Uruchamia "Strażnika", który analizuje dane Intraday (H1) w celu walidacji wejścia.
+    """
+    score = 0
+    max_score = 5
     details = {}
+
     try:
-        # POPRAWKA: Wywołujemy funkcję z 'daily_df' (naprawiając błąd)
+        # 1. Sprawdź, czy setup EOD (na danych dziennych) w ogóle istnieje
         trade_setup = phase3_sniper.find_end_of_day_setup(ticker, daily_df)
         
-        if trade_setup.get("signal"):
-            score = 5
-            max_score = 5
-            summary = "Znaleziono prawidłowy setup taktyczny! Spółka jest w idealnej strukturze do potencjalnego wejścia."
-            details["Status"] = "Setup Potwierdzony"
-            
-            if trade_setup.get('entry_price'):
-                details["Cena Wejścia"] = f"${trade_setup['entry_price']:.2f}"
-            elif trade_setup.get('entry_zone_bottom'):
-                details["Strefa Wejścia"] = f"${trade_setup['entry_zone_bottom']:.2f} - ${trade_setup['entry_zone_top']:.2f}"
-            
-            if trade_setup.get('take_profit'):
-                details["Potencjalny Cel (TP)"] = f"${trade_setup['take_profit']:.2f}"
-        else:
-            score = 0
-            max_score = 5
-            summary = "Brak setupu taktycznego. Spółka nie jest obecnie w optymalnej strukturze do wejścia."
-            details["Status"] = "Brak Setupu"
-            details["Powód"] = trade_setup.get('reason', 'Nieznany.')
-            
-    except Exception as e:
-        logger.error(f"Błąd w Agencie Taktycznym dla {ticker}: {e}", exc_info=True)
-        # Zwracamy bardziej szczegółowy błąd, jeśli to możliwe
-        return {"name": "Agent Taktyczny", "score": 0, "max_score": 5, "summary": "Błąd analizy.", "details": {"Błąd": str(e)}}
+        if not trade_setup.get("signal"):
+            # Jeśli nie ma setupu EOD, nie ma czego pilnować
+            return {
+                "name": "Agent Strażnik Wejść",
+                "score": 0, "max_score": max_score,
+                "summary": "Brak setupu taktycznego EOD. Spółka nie jest obecnie w strukturze do wejścia.",
+                "details": {"Status": "Brak Setupu", "Powód": trade_setup.get('reason', 'Nieznany.')}
+            }
 
-    return {"name": "Agent Taktyczny", "score": score, "max_score": max_score, "summary": summary, "details": details}
+        # 2. Setup EOD istnieje. Uruchamiamy Strażnika Wejść.
+        details["Status EOD"] = "Wykryto Setup: " + trade_setup.get('notes', 'Brak notatek.')
+        entry_price = trade_setup.get('entry_price') or trade_setup.get('entry_zone_top')
+        stop_loss = trade_setup.get('stop_loss')
+        take_profit = trade_setup.get('take_profit')
+
+        # Setup musi mieć cenę wejścia i stop loss do walidacji
+        if not entry_price or not stop_loss:
+             return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": max_score, "summary": "Setup EOD istnieje, ale brakuje mu ceny wejścia lub stop lossa do weryfikacji.", "details": details}
+
+        # 3. Pobierz dane intraday (H1) do weryfikacji
+        intraday_raw = api_client.get_intraday(ticker, interval='60min', outputsize='compact', extended_hours=False) # extended_hours=False dla czystszego obrazu
+        if not intraday_raw or 'Time Series (60min)' not in intraday_raw:
+            return {"name": "Agent Strażnik Wejść", "score": 1, "max_score": max_score, "summary": "Setup EOD istnieje, ale nie można pobrać danych intraday (H1) do jego weryfikacji. Zachowaj ostrożność.", "details": details}
+
+        intraday_df = pd.DataFrame.from_dict(intraday_raw['Time Series (60min)'], orient='index')
+        intraday_df = standardize_df_columns(intraday_df) # Używamy utils
+        
+        # Bierzemy ostatnie 16 świec H1 (ok. 2 dni handlowe) do analizy
+        recent_candles = intraday_df.iloc[-16:] 
+
+        current_price = recent_candles.iloc[-1]['close']
+        
+        # --- Logika Strażnika ---
+        
+        # RULE A: "Za Późno" (Spike) - czy cel został prawie osiągnięty?
+        if take_profit:
+            # Obliczmy 50% dystansu do TP
+            halfway_to_target = entry_price + (take_profit - entry_price) * 0.5
+            if recent_candles['high'].max() > halfway_to_target:
+                score = 0
+                summary = "Setup SPALONY (Za Późno). Cena już wykonała znaczną część ruchu (ponad 50% do TP) i cofa. Wejście teraz jest bardzo ryzykowne."
+                details["Weryfikacja Strażnika"] = "Ruch zrealizowany. Najwyższa cena H1 przekroczyła 50% celu."
+                details["Najwyższa cena H1"] = f"${recent_candles['high'].max():.2f}"
+                return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
+
+        # RULE B: "Stop-out" (Negacja)
+        if recent_candles['low'].min() < stop_loss:
+            score = 0
+            summary = "Setup ZANEGOWANY. Cena spadła już poniżej wyznaczonego poziomu Stop Loss (na wykresie H1). Setup jest nieważny."
+            details["Weryfikacja Strażnika"] = "Setup nieważny (Stop Loss trafiony)."
+            details["Najniższa cena H1"] = f"${recent_candles['low'].min():.2f}"
+            return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
+
+        # RULE D: "Cena Uciekła" (Niekorzystny R/R)
+        # Sprawdź, czy cena jest > 2% powyżej wejścia
+        if current_price > (entry_price * 1.02):
+            score = 1
+            summary = "Cena UCIEKŁA. Setup jest nadal technicznie aktywny (SL nie trafiony), ale obecna cena jest znacznie powyżej idealnego wejścia. Stosunek R/R jest niekorzystny."
+            details["Weryfikacja Strażnika"] = "Wysokie ryzyko (Cena uciekła)."
+            details["Obecna Cena"] = f"${current_price:.2f}"
+            return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
+
+        # RULE C: "Wszystko OK"
+        score = 5
+        summary = "Setup POTWIERDZONY i WAŻNY. Cena jest nadal w strefie wejścia lub blisko niej. Setup EOD jest aktualny i bezpieczny do rozważenia."
+        details["Weryfikacja Strażnika"] = "Wszystko OK (Cena w strefie wejścia)."
+        details["Obecna Cena"] = f"${current_price:.2f}"
+        return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
+
+    except Exception as e:
+        logger.error(f"Błąd w Agencie Taktycznym (Strażnik) dla {ticker}: {e}", exc_info=True)
+        return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": 5, "summary": "Błąd krytyczny agenta Strażnika.", "details": {"Błąd": str(e)}}
+
 
 
 # --- GŁÓWNA FUNKCJA ORKIESTRUJĄCA ---
-# POPRAWKA: Ta funkcja jest teraz zoptymalizowana
 def run_ai_analysis(ticker: str, api_client: object) -> dict:
     """Uruchamia wszystkich agentów AI i agreguje ich wyniki."""
     logger.info(f"Running full AI analysis for {ticker}...")
@@ -219,9 +272,11 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     momentum_results = _run_momentum_agent(ticker, daily_df, qqq_perf)
     volatility_results = _run_volatility_agent(ticker, daily_df)
     sentiment_results = _run_sentiment_agent(ticker, api_client) # Ten agent jest niezależny
-    tactical_results = _run_tactical_agent(ticker, daily_df)
     
-    agents_list = [momentum_results, volatility_results, sentiment_results, tactical_results]
+    # ZMIANA: Wywołujemy nowego agenta
+    tactical_and_guard_results = _run_tactical_and_guard_agent(ticker, daily_df, api_client)
+    
+    agents_list = [momentum_results, volatility_results, sentiment_results, tactical_and_guard_results]
     
     total_score = sum(agent['score'] for agent in agents_list)
     total_max_score = sum(agent['max_score'] for agent in agents_list)
@@ -229,9 +284,10 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
     final_score_percent = (total_score / total_max_score) * 100 if total_max_score > 0 else 0
     
     # --- ETAP 3: Agregacja Wyników ---
-    if final_score_percent >= 75 and tactical_results['score'] > 0:
+    # ZMIANA: Używamy nowego agenta w logice rekomendacji
+    if final_score_percent >= 75 and tactical_and_guard_results['score'] > 1: # Wymagamy, aby Strażnik dał OK (wynik 5) lub ostrzegał (wynik 1)
         recommendation = "BARDZO SILNY KANDDAT DO KUPNA"
-        recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach i posiada prawidłowy setup taktyczny."
+        recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach. Strażnik potwierdza, że setup jest nadal aktywny."
     elif final_score_percent >= 60:
         recommendation = "SILNY KANDYDAT DO OBSERWACJI"
         recommendation_details = "Spółka ma wiele pozytywnych cech. Warto dodać do obserwowanych i czekać na setup taktyczny."
@@ -242,6 +298,7 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
         recommendation = "NEUTRALNY / ZALECA SIĘ OSTROŻNOŚĆ"
         recommendation_details = "Obecnie spółka nie wykazuje wystarczająco silnych sygnałów do podjęcia działań."
 
+    # ZMIANA: Zmieniamy klucz dla agenta taktycznego
     return {
         "status": "DONE",
         "ticker": ticker,
@@ -256,7 +313,8 @@ def run_ai_analysis(ticker: str, api_client: object) -> dict:
             "momentum": momentum_results,
             "volatility": volatility_results,
             "sentiment": sentiment_results,
-            "tactical_setup": tactical_results
+            "tactical_and_guard": tactical_and_guard_results
         },
         "analysis_timestamp_utc": datetime.utcnow().isoformat()
     }
+
