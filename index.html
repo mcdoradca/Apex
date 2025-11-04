@@ -196,7 +196,9 @@
                 activeCountdownPolling: null, // Timer dla odliczania rynkowego
                 currentViewTicker: null,
                 // === NOWY STAN: Pamięć dla alertów zysku ===
-                profitAlertsSent: {} // Słownik do śledzenia, czy alert dla danego tickera został już wysłany
+                profitAlertsSent: {}, // Słownik do śledzenia, czy alert dla danego tickera został już wysłany
+                // === NOWY STAN: Wyciszone alerty ===
+                snoozedAlerts: {} // Śledzi alerty wyciszone przez użytkownika (np. 'PROFIT-AAPL': timestamp_wygaśnięcia)
             };
 
             // --- SELEKTORY UI (Definiowane od razu) ---
@@ -559,16 +561,38 @@
             function displaySystemAlert(message) {
                 if (!message || message === 'NONE') return;
 
+                // === NOWA LOGIKA: Klucz alertu i Wyciszanie ===
+                let alertKey = 'GENERAL';
+                try {
+                    // Próba wyodrębnienia tickera dla unikalnego klucza
+                    const parts = message.split(' ');
+                    const ticker = parts.find(p => p.length > 2 && p.length < 6 && p === p.toUpperCase());
+                    
+                    if (message.includes('ALERT ZYSKU')) alertKey = `PROFIT-${ticker || 'UNKNOWN'}`;
+                    else if (message.includes('ALARM CENOWY')) alertKey = `PRICE-${ticker || 'UNKNOWN'}`;
+                    else if (message.includes('PILNY ALERT')) alertKey = `NEWS-${ticker || 'UNKNOWN'}`;
+                    
+                } catch(e) { 
+                    logger.warn("Nie udało się wygenerować klucza alertu", e);
+                    // fallback na klucz 'GENERAL'
+                }
+
+                // Sprawdź, czy alert jest wyciszony
+                if (state.snoozedAlerts[alertKey] && Date.now() < state.snoozedAlerts[alertKey]) {
+                    logger.info(`Alert ${alertKey} jest wyciszony. Pomijanie.`);
+                    return;
+                }
+                // === KONIEC NOWEJ LOGIKI ===
+
                 let alertClass = 'bg-sky-500';
                 let alertIcon = 'bell-ring';
 
-                if (message.includes('NEGATYWNY ALERT')) {
+                if (message.includes('PILNY ALERT') && message.includes('NEGATYWNY')) {
                     alertClass = 'bg-red-600';
                     alertIcon = 'alert-octagon';
-                } else if (message.includes('POZYTYWNY ALERT')) {
+                } else if (message.includes('PILNY ALERT') && message.includes('POZYTYWNY')) {
                     alertClass = 'bg-green-600';
                     alertIcon = 'check-circle';
-                // === POPRAWKA 2: Nowy typ alertu dla zysku ===
                 } else if (message.includes('ALARM CENOWY') || message.includes('ALERT ZYSKU')) {
                     alertClass = 'bg-yellow-500';
                     alertIcon = 'dollar-sign';
@@ -584,7 +608,8 @@
                         <i data-lucide="${alertIcon}" class="w-6 h-6"></i>
                         <span class="font-semibold">${message}</span>
                     </div>
-                    <button data-alert-id="${alertId}" class="close-alert-btn p-1 rounded-full hover:bg-black/20 transition-colors">
+                    <!-- ZMIANA: Dodano data-alert-key -->
+                    <button data-alert-id="${alertId}" data-alert-key="${alertKey}" class="close-alert-btn p-1 rounded-full hover:bg-black/20 transition-colors">
                         <i data-lucide="x" class="w-5 h-5"></i>
                     </button>
                 `;
@@ -593,13 +618,26 @@
 
                 const closeButton = alertElement.querySelector('.close-alert-btn');
                 closeButton.addEventListener('click', () => {
+                    // === NOWA LOGIKA: Wyciszanie po kliknięciu ===
+                    const keyToSnooze = closeButton.dataset.alertKey;
+                    if (keyToSnooze) {
+                        const snoozeDuration = 30 * 60 * 1000; // 30 minut
+                        state.snoozedAlerts[keyToSnooze] = Date.now() + snoozeDuration;
+                        logger.info(`Wyciszono alert '${keyToSnooze}' na 30 minut.`);
+                    }
+                    // === KONIEC NOWEJ LOGIKI ===
                     alertElement.remove();
                 });
 
                 setTimeout(() => {
-                    alertElement.remove();
+                    // Sprawdź, czy element wciąż istnieje, zanim go usuniesz
+                    const elToRemove = document.getElementById(alertId);
+                    if (elToRemove) {
+                        elToRemove.remove();
+                    }
                 }, 20000);
             }
+
 
             async function pollSystemAlerts() {
                 try {
