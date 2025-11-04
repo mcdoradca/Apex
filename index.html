@@ -26,7 +26,24 @@
         .phase-2-text { color: #f59e0b; }
         .phase-3-text { color: #ef4444; }
         .watchlist-text { color: #10b981; }
-        .alert-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; }
+
+        /* === ZMIANA 1: Nowa pozycja dla kontenera alertów (Top-Right) === */
+        #system-alert-container {
+            position: fixed;
+            top: 1.5rem; /* 24px */
+            right: 1.5rem; /* 24px */
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 0.5rem; /* 8px */
+        }
+        /* Zmieniamy alert-bar aby działał w nowym kontenerze */
+        .alert-bar { 
+            max-width: 400px;
+            width: 100%;
+        }
+        
         .progress-circle { transform: rotate(-90deg); }
         /* Style dla modala */
         .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
@@ -42,6 +59,7 @@
 </head>
 <body class="text-gray-200">
 
+    <!-- Ten kontener będzie teraz pozycjonowany przez CSS w prawym górnym rogu -->
     <div id="system-alert-container"></div>
 
     <div id="login-screen" class="min-h-screen flex items-center justify-center login-background bg-gray-900">
@@ -220,7 +238,7 @@
             console.log("UI Selectors defined.");
 
             // --- KONFIGURACJA API ---
-            // TA LINIA ZOSTAŁA POPRAWIONA
+            // === ZMIANA: Poprawka adresu API ===
             const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
             const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms
             const QUOTE_POLL_INTERVAL = 15000;       // ms
@@ -283,9 +301,11 @@
                 }
                  const safeMarket = market || { status: 'UNKNOWN', time_ny: 'N/A', date_ny: 'N/A' };
                 try {
+                    // UWAGA: Ta logika (substring) może nie być już potrzebna po zmianie na BULK_QUOTES, ale zostawiamy ją dla bezpieczeństwa
                     const cleanedQuote = Object.fromEntries(
-                        Object.entries(quote).map(([key, value]) => [key.substring(key.indexOf('.') + 2), value])
+                        Object.entries(quote).map(([key, value]) => [key.includes('. ') ? key.substring(key.indexOf('.') + 2) : key, value])
                     );
+                    
                     const price = parseFloat(cleanedQuote['price']);
                     const change = parseFloat(cleanedQuote['change']);
                     const changePercentStr = cleanedQuote['change percent'];
@@ -374,10 +394,10 @@
                         const quote = quotes[h.ticker];
                         let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
                         let priceClass = 'text-gray-400';
-                        if (quote && quote['05. price']) {
+                        if (quote && quote['price']) { // Zmieniono z '05. price' na 'price'
                             try {
-                                currentPrice = parseFloat(quote['05. price']);
-                                dayChangePercent = parseFloat(quote['10. change percent'] ? quote['10. change percent'].replace('%', '') : '0');
+                                currentPrice = parseFloat(quote['price']);
+                                dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                                 priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                                 currentValue = h.quantity * currentPrice;
                                 const costBasis = h.quantity * h.average_buy_price;
@@ -428,28 +448,49 @@
                 const percent = total > 0 ? Math.min((processed / total) * 100, 100) : 0;
                 ui_dash.progressText.textContent = `${processed} / ${total}`;
                 ui_dash.progressBar.style.width = `${percent.toFixed(0)}%`;
+                
                 if (ui_dash.scanLog.textContent !== statusData.log) {
                     ui_dash.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
                     const logContainer = document.getElementById('scan-log-container');
-                    if(logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+                    
+                    // === ZMIANA 3: Przewijanie logów ===
+                    // Zmieniamy z scrollHeight na 0, aby zawsze pokazywać najnowszy log (który backend umieszcza na górze)
+                    if(logContainer) logContainer.scrollTop = 0; 
                 }
                 ui_dash.signals.textContent = state.phase3.length;
             }
 
-            // === NOWA FUNKCJA: Wyświetlanie alertów systemowych ===
+            // === ZMIANA 2: Inteligentne alerty (Kolory i Ikony) ===
             function displaySystemAlert(message) {
                 if (!message || message === 'NONE') return;
+
+                let alertClass = 'bg-sky-500'; // Domyślny (niebieski)
+                let alertIcon = 'bell-ring'; // Domyślna ikona
+
+                if (message.includes('NEGATYWNY ALERT')) {
+                    alertClass = 'bg-red-600'; // Czerwony dla negatywnych newsów
+                    alertIcon = 'alert-octagon';
+                } else if (message.includes('POZYTYWNY ALERT')) {
+                    alertClass = 'bg-green-600'; // Zielony dla pozytywnych newsów
+                    alertIcon = 'check-circle';
+                } else if (message.includes('ALARM CENOWY')) {
+                    alertClass = 'bg-yellow-500'; // Pomarańczowy/żółty dla alertów cenowych
+                    alertIcon = 'dollar-sign';
+                }
+                // Inne alerty (np. systemowe) pozostaną niebieskie
 
                 const alertId = `alert-${Date.now()}`;
                 const alertElement = document.createElement('div');
                 alertElement.id = alertId;
-                alertElement.className = "alert-bar flex items-center justify-between gap-4 bg-sky-500 text-white p-3 shadow-lg animate-pulse-once";
+                // Stosujemy dynamiczną klasę koloru
+                alertElement.className = `alert-bar flex items-center justify-between gap-4 ${alertClass} text-white p-3 shadow-lg rounded-md animate-pulse-once`;
+                
                 alertElement.innerHTML = `
                     <div class="flex items-center gap-3">
-                        <i data-lucide="bell-ring" class="w-6 h-6"></i>
+                        <i data-lucide="${alertIcon}" class="w-6 h-6"></i>
                         <span class="font-semibold">${message}</span>
                     </div>
-                    <button data-alert-id="${alertId}" class="close-alert-btn p-1 rounded-full hover:bg-sky-400 transition-colors">
+                    <button data-alert-id="${alertId}" class="close-alert-btn p-1 rounded-full hover:bg-black/20 transition-colors">
                         <i data-lucide="x" class="w-5 h-5"></i>
                     </button>
                 `;
@@ -646,7 +687,9 @@
                 if (state.currentViewTicker !== ticker) { state.activeQuotePolling = null; return; }
                 try {
                     const quoteData = await api.getLiveQuote(ticker);
+                    // Poprawka: Market info pobieramy teraz z quoteData, jeśli jest
                     const marketInfo = state.currentAnalysisData?.market_info;
+                    
                     const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
                     if (quoteBoxPlaceholder) {
                         quoteBoxPlaceholder.innerHTML = renderQuoteBox(quoteData, marketInfo);
@@ -733,7 +776,7 @@
                  const quantity = parseInt(ui.buyModal.quantityInput.value, 10);
                  const price = parseFloat(ui.buyModal.priceInput.value);
                  if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
-                     alert("Proszę wprowadzić poprawną ilość i cenę."); 
+                     displaySystemAlert("BŁĄD: Proszę wprowadzić poprawną ilość i cenę."); // Używamy nowego systemu alertów
                      return; 
                  }
                  ui.buyModal.confirmBtn.disabled = true; ui.buyModal.confirmBtn.textContent = "Przetwarzanie...";
@@ -741,7 +784,7 @@
                     await api.buyStock({ ticker, quantity, price_per_share: price });
                     hideBuyModal();
                     showPortfolio(); // Odśwież widok portfela
-                } catch (e) { alert(`Błąd zakupu: ${e.message}`);
+                } catch (e) { displaySystemAlert(`Błąd zakupu: ${e.message}`);
                 } finally { ui.buyModal.confirmBtn.disabled = false; ui.buyModal.confirmBtn.textContent = "Inwestuj"; }
             }
             
@@ -764,11 +807,11 @@
                  const quantity = parseInt(ui.sellModal.quantityInput.value, 10);
                  const price = parseFloat(ui.sellModal.priceInput.value);
                  if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
-                     alert("Proszę wprowadzić poprawną ilość i cenę."); 
+                     displaySystemAlert("BŁĄD: Proszę wprowadzić poprawną ilość i cenę."); 
                      return; 
                  }
                   if (quantity > maxQuantity) { 
-                      alert(`Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`); 
+                      displaySystemAlert(`BŁĄD: Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`); 
                       return; 
                   }
                  ui.sellModal.confirmBtn.disabled = true; ui.sellModal.confirmBtn.textContent = "Przetwarzanie...";
@@ -776,7 +819,7 @@
                      await api.sellStock({ ticker, quantity, price_per_share: price });
                      hideSellModal();
                      await showPortfolio(); // Odśwież widok portfela
-                 } catch (e) { alert(`Błąd sprzedaży: ${e.message}`);
+                 } catch (e) { displaySystemAlert(`Błąd sprzedaży: ${e.message}`);
                  } finally { ui.sellModal.confirmBtn.disabled = false; ui.sellModal.confirmBtn.textContent = "Realizuj"; }
             }
             console.log("Modal functions defined.");
@@ -912,4 +955,3 @@
     </script>
     </body>
 </html>
-
