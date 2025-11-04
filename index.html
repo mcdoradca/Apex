@@ -1,5 +1,1382 @@
 <!DOCTYPE html>
+<html lang="pl"><!DOCTYPE html>
 <html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APEX Predator - Analizator Nasdaq</title>
+    
+    <!-- Ładowanie bibliotek: React, ReactDOM, Babel (do "tłumaczenia" JSX) i Tailwind -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- === KLUCZOWE: Ładujemy bibliotekę ikon LUCIDE === -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <link rel="icon" type="image/png" href="favicon-96x96.png">
+    <meta name="referrer" content="no-referrer">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0D1117; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #161B22; }
+        ::-webkit-scrollbar-thumb { background: #30363D; border-radius: 4px; }
+        .sidebar-item-active { background-color: #1f2937; border-left: 3px solid #0ea5e9; color: #f0f0f0; }
+        .sidebar-item { border-left: 3px solid transparent; }
+        .candidate-item:hover { background-color: #1f2937; }
+        .login-background {
+            background-image: url('https://lh3.googleusercontent.com/d/1pIYmT4T0pZt8u-O7Ssjan5d_CITtgKBy');
+            background-size: cover; background-position: center;
+        }
+        .glowing-btn { box-shadow: 0 0 5px #0ea5e9, 0 0 15px #0ea5e9; }
+        .phase-1-text { color: #8b5cf6; }
+        .phase-2-text { color: #f59e0b; }
+        .phase-3-text { color: #ef4444; }
+        .watchlist-text { color: #10b981; }
+        #system-alert-container {
+            position: fixed; top: 1.5rem; right: 1.5rem; z-index: 1000;
+            display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;
+        }
+        .alert-bar { max-width: 400px; width: 100%; }
+        .progress-circle { transform: rotate(-90deg); transform-origin: center; }
+        .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
+        .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
+        .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
+        .modal-button { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 600; transition: background-color 0.2s; }
+        .modal-button-primary { background-color: #0ea5e9; color: white; }
+        .modal-button-primary:hover { background-color: #0284c7; }
+        .modal-button-secondary { background-color: #30363D; color: #f0f0f0; }
+        .modal-button-secondary:hover { background-color: #4b5563; }
+        .hidden { display: none; }
+
+        /* Poprawka dla ikon lucide renderowanych jako SVG */
+        i[data-lucide] {
+            width: 1rem;
+            height: 1rem;
+            margin-right: 0.75rem; /* 12px */
+            vertical-align: middle;
+        }
+        /* Dostosowanie rozmiarów tam, gdzie jest to potrzebne */
+        .lucide-lg { width: 1.5rem; height: 1.5rem; }
+        .lucide-md { width: 1.25rem; height: 1.25rem; }
+        .lucide-sm { width: 1rem; height: 1rem; }
+        .lucide-xs { width: 0.875rem; height: 0.875rem; }
+        
+        button i[data-lucide] { margin-right: 0.5rem; } /* mniejszy margines w przyciskach */
+        .sidebar-item i[data-lucide] { width: 1.25rem; height: 1.25rem; }
+        .alert-bar i[data-lucide] { width: 1.5rem; height: 1.5rem; }
+        #quote-box-placeholder i[data-lucide] { width: 1.25rem; height: 1.25rem; }
+        .agent-card-header i[data-lucide] { width: 1.25rem; height: 1.25rem; }
+        #market-countdown-timer i[data-lucide] { width: 0.75rem; height: 0.75rem; margin-right: 0.5rem; }
+    </style>
+</head>
+<body class="text-gray-200">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // === POPRAWKA: Nie używamy 'import React', ponieważ React jest już załadowany globalnie ===
+        // Zamiast tego, będziemy używać React.useState, React.useEffect itd.
+
+        // ==========================================================
+        // === KONFIGURACJA API I LOGIKA ===
+        // ==========================================================
+        const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
+        const FULL_ANALYSIS_POLL_INTERVAL = 3000;
+        const QUOTE_POLL_INTERVAL = 15000;
+        const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000;
+        const ALERT_POLL_INTERVAL = 7000;
+        const WORKER_STATUS_POLL_INTERVAL = 5000;
+        const SIDEBAR_REFRESH_INTERVAL = 15000;
+
+        const logger = {
+            error: (message, ...args) => console.error(message, ...args),
+            info: (message, ...args) => console.log(message, ...args),
+            warn: (message) => console.warn(message)
+        };
+
+        const apiRequest = async (endpoint, options = {}, onApiStatusChange = () => {}) => {
+            const url = `${API_BASE_URL}${endpoint}`;
+            try {
+                const response = await fetch(url, options);
+                onApiStatusChange(true);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    logger.error(`API Error ${response.status} for ${url}: ${errorText}`);
+                    if (response.status === 404) throw new Error(`404 - Not Found`);
+                    throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
+                }
+                if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
+                return await response.json();
+            } catch (error) {
+                 logger.error(`Network or API Error for ${url}:`, error.message);
+                 onApiStatusChange(false);
+                 throw error;
+            }
+        };
+
+        const api = {
+            getWorkerStatus: (onApiStatus) => apiRequest('/api/v1/worker/status', {}, onApiStatus),
+            sendWorkerControl: (action, onApiStatus) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' }, onApiStatus),
+            getPhase1Candidates: (onApiStatus) => apiRequest('/api/v1/candidates/phase1', {}, onApiStatus),
+            getPhase2Results: (onApiStatus) => apiRequest('/api/v1/results/phase2', {}, onApiStatus),
+            getPhase3Signals: (onApiStatus) => apiRequest('/api/v1/signals/phase3', {}, onApiStatus),
+            requestAIAnalysis: (ticker, onApiStatus) => apiRequest('/api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }, onApiStatus),
+            getAIAnalysisResult: (ticker, onApiStatus) => apiRequest(`/api/v1/ai-analysis/result/${ticker}`, {}, onApiStatus),
+            getLiveQuote: (ticker, onApiStatus) => apiRequest(`/api/v1/quote/${ticker}`, {}, onApiStatus),
+            addToWatchlist: (ticker, onApiStatus) => apiRequest(`/api/v1/watchlist/${ticker}`, { method: 'POST' }, onApiStatus),
+            getSystemAlert: (onApiStatus) => apiRequest('/api/v1/system/alert', {}, onApiStatus),
+            getPortfolio: (onApiStatus) => apiRequest('/api/v1/portfolio', {}, onApiStatus),
+            buyStock: (data, onApiStatus) => apiRequest('/api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }, onApiStatus),
+            sellStock: (data, onApiStatus) => apiRequest('/api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }, onApiStatus),
+            getTransactionHistory: (onApiStatus) => apiRequest('/api/v1/transactions', {}, onApiStatus)
+        };
+
+        // ==========================================================
+        // === LOGIKA MINUTNIKA RYNKOWEGO ===
+        // ==========================================================
+        function getNYTime() {
+            try {
+                const options = {
+                    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                };
+                const formatter = new Intl.DateTimeFormat('en-US', options);
+                const parts = formatter.formatToParts(new Date());
+                const find = (type) => parts.find(p => p.type === type)?.value;
+                const year = find('year'), month = find('month'), day = find('day');
+                const hour = find('hour') === '24' ? '00' : find('hour');
+                const minute = find('minute'), second = find('second');
+                return new Date(year, parseInt(month) - 1, day, hour, minute, second);
+            } catch (e) {
+                logger.error("Błąd pobierania czasu NY, używam czasu lokalnego.", e);
+                return new Date();
+            }
+        }
+
+        function formatCountdown(ms) {
+            if (ms < 0) ms = 0;
+            const s = Math.floor((ms / 1000) % 60);
+            const m = Math.floor((ms / 1000 / 60) % 60);
+            const h = Math.floor((ms / (1000 * 60 * 60)) % 24);
+            const d = Math.floor(ms / (1000 * 60 * 60 * 24));
+            let str = '';
+            if (d > 0) str += `${d}d `;
+            str += `${String(h).padStart(2, '0')}g ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+            return str;
+        }
+
+        function getMarketCountdown() {
+            const now = getNYTime();
+            const dayOfWeek = now.getDay();
+            const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+            const preMarketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 4, 0, 0);
+            const marketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 30, 0);
+            const marketClose = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 16, 0, 0);
+            let message = '', targetTime = null;
+
+            if (isWeekend) {
+                let daysToAdd = (dayOfWeek === 6) ? 2 : 1;
+                targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+                message = 'Do otwarcia Pre-Market: ';
+            } else {
+                if (now < preMarketOpen) {
+                    targetTime = preMarketOpen;
+                    message = 'Do otwarcia Pre-Market: ';
+                } else if (now < marketOpen) {
+                    targetTime = marketOpen;
+                    message = 'Do otwarcia Rynku: ';
+                } else if (now < marketClose) {
+                    targetTime = marketClose;
+                    message = 'Do zamknięcia Rynku: ';
+                } else {
+                    let daysToAdd = (dayOfWeek === 5) ? 3 : 1;
+                    targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+                    message = 'Do otwarcia Pre-Market: ';
+                }
+            }
+            return { text: message + formatCountdown(targetTime.getTime() - now.getTime()) };
+        }
+
+        // ==========================================================
+        // === GŁÓWNY KOMPONENT APLIKACJI ===
+        // ==========================================================
+        function App() {
+            // --- Stany Główne ---
+            const [isLoggedIn, setIsLoggedIn] = React.useState(false);
+            const [loginStatus, setLoginStatus] = React.useState('Łączenie...');
+            const [isLoginButtonEnabled, setIsLoginButtonEnabled] = React.useState(false);
+            
+            // --- Stany Aplikacji ---
+            const [currentView, setCurrentView] = React.useState('dashboard');
+            const [currentTicker, setCurrentTicker] = React.useState(null);
+            const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
+            const [apiStatusOnline, setApiStatusOnline] = React.useState(false);
+
+            // --- Stany Danych ---
+            const [phase1, setPhase1] = React.useState([]);
+            const [phase2, setPhase2] = React.useState([]);
+            const [phase3, setPhase3] = React.useState([]);
+            const [portfolio, setPortfolio] = React.useState([]);
+            const [transactions, setTransactions] = React.useState([]);
+            const [liveQuotes, setLiveQuotes] = React.useState({});
+            const [workerStatus, setWorkerStatus] = React.useState({ status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 }, last_heartbeat_utc: null, log: 'Czekam na rozpoczęcie skanowania...' });
+            const [systemAlerts, setSystemAlerts] = React.useState([]);
+            const [modal, setModal] = React.useState({ type: null, data: {} });
+            
+            const timers = React.useRef({});
+            
+            // === POPRAWKA: Używamy useEffect do wywołania lucide.createIcons() ===
+            React.useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                } else {
+                    logger.warn("Biblioteka Lucide nie jest jeszcze załadowana.");
+                }
+            });
+
+            // === FUNKCJE API (opakowane w useCallback) ===
+            const updateApiStatus = React.useCallback((isOnline) => {
+                setApiStatusOnline(isOnline);
+            }, []);
+
+            const memoizedApi = React.useMemo(() => {
+                const wrappedApi = {};
+                for (const key in api) {
+                    wrappedApi[key] = (...args) => api[key](...args, updateApiStatus);
+                }
+                return wrappedApi;
+            }, [updateApiStatus]);
+
+
+            // === EFEKTY (POLLING) ===
+
+            // 1. Sprawdzanie statusu API przed zalogowaniem
+            React.useEffect(() => {
+                logger.info("Uruchamianie pętli sprawdzania statusu API przed zalogowaniem...");
+                const checkApiStatus = async () => {
+                    try {
+                        const statusData = await memoizedApi.getWorkerStatus();
+                        if (statusData && statusData.status) {
+                            logger.info("API OK, odblokowanie logowania.");
+                            setLoginStatus('System gotowy.');
+                            setIsLoginButtonEnabled(true);
+                            if (timers.current.loginCheck) {
+                                clearInterval(timers.current.loginCheck);
+                            }
+                        } else {
+                            setLoginStatus('Problem z odp. API...');
+                        }
+                    } catch (e) {
+                        setLoginStatus('Backend nie gotowy...');
+                    }
+                };
+                checkApiStatus();
+                timers.current.loginCheck = setInterval(checkApiStatus, 3000);
+                return () => clearInterval(timers.current.loginCheck);
+            }, [memoizedApi]);
+
+            // 2. Główne pętle pollingu po zalogowaniu
+            React.useEffect(() => {
+                if (!isLoggedIn) return;
+
+                const pollWorkerStatus = async () => {
+                    try {
+                        const statusData = await memoizedApi.getWorkerStatus();
+                        setWorkerStatus(statusData);
+                    } catch (e) { logger.error("Błąd pollWorkerStatus:", e); }
+                };
+                
+                const refreshSidebarData = async () => {
+                     try {
+                        const [p1, p2, p3] = await Promise.all([
+                            memoizedApi.getPhase1Candidates(), 
+                            memoizedApi.getPhase2Results(), 
+                            memoizedApi.getPhase3Signals()
+                        ]);
+                        setPhase1(p1 || []);
+                        setPhase2(p2 || []);
+                        setPhase3(p3 || []);
+                    } catch (e) { logger.error("Błąd refreshSidebarData:", e); }
+                };
+
+                const pollSystemAlerts = async () => {
+                    try {
+                        const alertData = await memoizedApi.getSystemAlert();
+                        if (alertData && alertData.message !== 'NONE') {
+                            setSystemAlerts(prevAlerts => [
+                                ...prevAlerts, 
+                                { id: Date.now(), message: alertData.message }
+                            ]);
+                        }
+                    } catch (e) { logger.error("Błąd pollSystemAlerts:", e); }
+                };
+
+                pollWorkerStatus();
+                refreshSidebarData();
+                pollSystemAlerts();
+                
+                timers.current.workerStatus = setInterval(pollWorkerStatus, WORKER_STATUS_POLL_INTERVAL);
+                timers.current.sidebarData = setInterval(refreshSidebarData, SIDEBAR_REFRESH_INTERVAL);
+                timers.current.systemAlerts = setInterval(pollSystemAlerts, ALERT_POLL_INTERVAL);
+
+                return () => {
+                    clearInterval(timers.current.workerStatus);
+                    clearInterval(timers.current.sidebarData);
+                    clearInterval(timers.current.systemAlerts);
+                };
+            }, [isLoggedIn, memoizedApi]);
+
+            // 3. Kontekstowy polling (Portfel vs Analiza AI)
+            React.useEffect(() => {
+                if (!isLoggedIn) return;
+
+                const stopContextualPolling = () => {
+                    if (timers.current.portfolioQuotes) clearInterval(timers.current.portfolioQuotes);
+                    if (timers.current.aiAnalysis) clearTimeout(timers.current.aiAnalysis);
+                    if (timers.current.liveQuote) clearTimeout(timers.current.liveQuote);
+                    if (timers.current.marketCountdown) clearInterval(timers.current.marketCountdown);
+                };
+
+                if (currentView === 'portfolio' && !currentTicker) {
+                    const pollPortfolioQuotes = async () => {
+                        logger.info(`Odświeżanie cen dla portfela...`);
+                        const portfolioTickers = portfolio.map(h => h.ticker);
+                        if (portfolioTickers.length === 0) return;
+                        try {
+                            const quotePromises = portfolioTickers.map(ticker => memoizedApi.getLiveQuote(ticker));
+                            const quoteResults = await Promise.all(quotePromises);
+                            
+                            setLiveQuotes(prevQuotes => {
+                                const newQuotes = { ...prevQuotes };
+                                quoteResults.forEach((quoteData, index) => {
+                                    if (quoteData) {
+                                        newQuotes[portfolioTickers[index]] = quoteData;
+                                    }
+                                });
+                                return newQuotes;
+                            });
+                        } catch (e) { logger.error("Błąd pollPortfolioQuotes:", e); }
+                    };
+                    
+                    stopContextualPolling();
+                    pollPortfolioQuotes();
+                    timers.current.portfolioQuotes = setInterval(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
+                
+                } else if (currentTicker) {
+                    const pollFullAnalysis = async (ticker) => {
+                        logger.info(`Pobieranie pełnej analizy dla ${ticker}...`);
+                        try {
+                            const data = await memoizedApi.getAIAnalysisResult(ticker);
+                            if (data.status === 'PROCESSING') {
+                                timers.current.aiAnalysis = setTimeout(() => pollFullAnalysis(ticker), FULL_ANALYSIS_POLL_INTERVAL);
+                            } else if (data.status === 'DONE') {
+                                startLiveQuotePolling(ticker);
+                                startMarketCountdown();
+                            }
+                            setCurrentTicker(data);
+                        } catch(e) {
+                            logger.error(`Błąd pollFullAnalysis dla ${ticker}:`, e);
+                            setCurrentTicker({ status: 'ERROR', message: e.message });
+                        }
+                    };
+                    
+                    const startLiveQuotePolling = (ticker) => {
+                        const pollQuote = async () => {
+                            logger.info(`Odświeżanie ceny dla ${ticker}...`);
+                            try {
+                                const quoteData = await memoizedApi.getLiveQuote(ticker);
+                                if (quoteData) {
+                                    setCurrentTicker(prevData => ({
+                                        ...prevData,
+                                        quote_data: quoteData
+                                    }));
+                                }
+                            } catch (e) { logger.error(`Błąd pollQuote dla ${ticker}:`, e); }
+                            
+                            timers.current.liveQuote = setTimeout(pollQuote, QUOTE_POLL_INTERVAL);
+                        };
+                        pollQuote();
+                    };
+                    
+                    const startMarketCountdown = () => {
+                        timers.current.marketCountdown = setInterval(() => {
+                            const countdown = getMarketCountdown();
+                            setMarketCountdown(countdown.text);
+                        }, 1000);
+                        setMarketCountdown(getMarketCountdown().text);
+                    };
+                    
+                    stopContextualPolling();
+                    pollFullAnalysis(currentTicker.ticker || currentTicker);
+                }
+                
+                return stopContextualPolling;
+                
+            }, [isLoggedIn, currentView, currentTicker, portfolio, memoizedApi]);
+            
+            const [marketCountdown, setMarketCountdown] = React.useState('Obliczanie...');
+
+
+            // === HANDLERY ZDARZEŃ (opakowane w useCallback) ===
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (isLoginButtonEnabled) {
+                    logger.info("Logowanie...");
+                    setIsLoggedIn(true);
+                }
+            };
+
+            const handleSelectView = React.useCallback((view) => {
+                logger.info(`Zmiana widoku na: ${view}`);
+                setCurrentView(view);
+                setCurrentTicker(null);
+                setIsSidebarOpen(false);
+            }, []);
+
+            const handleAnalyzeTicker = React.useCallback(async (ticker) => {
+                logger.info(`Rozpoczynanie analizy dla: ${ticker}`);
+                setCurrentView(null);
+                setIsSidebarOpen(false);
+                
+                setCurrentTicker({ ticker: ticker, status: 'PROCESSING', message: 'Zlecanie analizy AI...' });
+                
+                try {
+                    await memoizedApi.requestAIAnalysis(ticker);
+                } catch (reqError) {
+                     logger.error(`Błąd zlecania analizy dla ${ticker}:`, reqError);
+                     setCurrentTicker({ status: 'ERROR', message: reqError.message });
+                }
+            }, [memoizedApi]);
+
+            const handleControlClick = React.useCallback(async (action) => {
+                try {
+                    await memoizedApi.sendWorkerControl(action);
+                    const statusData = await memoizedApi.getWorkerStatus();
+                    setWorkerStatus(statusData);
+                } catch(e) { 
+                    logger.error(`Błąd kontroli workera (${action}):`, e); 
+                }
+            }, [memoizedApi]);
+
+            const handleOpenModal = React.useCallback((type, data) => {
+                setModal({ type, data });
+            }, []);
+
+            const handleCloseModal = React.useCallback(() => {
+                setModal({ type: null, data: {} });
+            }, []);
+
+            const handleBuyConfirm = React.useCallback(async (ticker, quantity, price) => {
+                if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
+                    setSystemAlerts(prev => [...prev, { id: Date.now(), message: "BŁĄD: Proszę wprowadzić poprawną ilość i cenę." }]);
+                    return;
+                }
+                try {
+                    await memoizedApi.buyStock({ ticker, quantity, price_per_share: price });
+                    handleCloseModal();
+                    const holdings = await memoizedApi.getPortfolio();
+                    setPortfolio(holdings || []);
+                } catch (e) {
+                    setSystemAlerts(prev => [...prev, { id: Date.now(), message: `Błąd zakupu: ${e.message}` }]);
+                }
+            }, [memoizedApi, handleCloseModal]);
+            
+            const handleSellConfirm = React.useCallback(async (ticker, quantity, price, maxQuantity) => {
+                if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
+                    setSystemAlerts(prev => [...prev, { id: Date.now(), message: "BŁĄD: Proszę wprowadzić poprawną ilość i cenę." }]);
+                    return;
+                }
+                if (quantity > maxQuantity) { 
+                    setSystemAlerts(prev => [...prev, { id: Date.now(), message: `BŁĄD: Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).` }]);
+                    return; 
+                }
+                try {
+                    await memoizedApi.sellStock({ ticker, quantity, price_per_share: price });
+                    handleCloseModal();
+                    const holdings = await memoizedApi.getPortfolio();
+                    setPortfolio(holdings || []);
+                } catch (e) {
+                    setSystemAlerts(prev => [...prev, { id: Date.now(), message: `Błąd sprzedaży: ${e.message}` }]);
+                }
+            }, [memoizedApi, handleCloseModal]);
+
+            const dismissAlert = React.useCallback((id) => {
+                setSystemAlerts(prevAlerts => prevAlerts.filter(alert => alert.id !== id));
+            }, []);
+
+            // === GŁÓWNA FUNKCJA RENDERUJĄCA ===
+
+            if (!isLoggedIn) {
+                return (
+                    <LoginScreen 
+                        onLogin={handleLogin} 
+                        statusText={loginStatus} 
+                        isButtonEnabled={isLoginButtonEnabled} 
+                    />
+                );
+            }
+
+            return (
+                <div className="h-screen flex bg-[#0D1117] text-gray-200 overflow-hidden">
+                    <AlertContainer alerts={systemAlerts} onDismiss={dismissAlert} />
+                    <Sidebar
+                        isOpen={isSidebarOpen}
+                        onClose={() => setIsSidebarOpen(false)}
+                        currentView={currentView}
+                        onSelectView={handleSelectView}
+                        onControlClick={handleControlClick}
+                        workerStatus={workerStatus}
+                        apiStatusOnline={apiStatusOnline}
+                        phase1Count={phase1.length}
+                        phase2Count={phase2.length}
+                        phase3Count={phase3.length}
+                        phase1List={<PhaseList items={phase1} onSelect={handleAnalyzeTicker} className="phase-1-text" />}
+                        phase2List={<PhaseList items={phase2} onSelect={handleAnalyzeTicker} className="phase-2-text" iconType="score" />}
+                        phase3List={<PhaseList items={phase3} onSelect={handleAnalyzeTicker} className="phase-3-text" iconType="status" />}
+                    />
+                    <MainContent
+                        onOpenSidebar={() => setIsSidebarOpen(true)}
+                        onAnalyzeTicker={handleAnalyzeTicker}
+                    >
+                        {currentTicker ? (
+                            <AiAnalysisView 
+                                analysisData={currentTicker} 
+                                marketCountdown={marketCountdown}
+                                onAddToWatchlist={memoizedApi.addToWatchlist}
+                                onBuyStock={ticker => handleOpenModal('buy', { ticker })}
+                            />
+                        ) : currentView === 'dashboard' ? (
+                            <DashboardView 
+                                workerStatus={workerStatus}
+                                phase3Count={phase3.length}
+                            />
+                        ) : currentView === 'portfolio' ? (
+                            <PortfolioView 
+                                holdings={portfolio}
+                                quotes={liveQuotes}
+                                onSellStock={(ticker, quantity) => handleOpenModal('sell', { ticker, maxQuantity: quantity })}
+                            />
+                        ) : currentView === 'transactions' ? (
+                            <TransactionsView 
+                                transactions={transactions}
+                                onMount={async () => setTransactions(await memoizedApi.getTransactionHistory() || [])}
+                            />
+                        ) : null}
+                    </MainContent>
+                    {modal.type === 'buy' && (
+                        <BuyModal
+                            ticker={modal.data.ticker}
+                            onClose={handleCloseModal}
+                            onConfirm={handleBuyConfirm}
+                        />
+                    )}
+                    {modal.type === 'sell' && (
+                        <SellModal
+                            ticker={modal.data.ticker}
+                            maxQuantity={modal.data.maxQuantity}
+                            onClose={handleCloseModal}
+                            onConfirm={handleSellConfirm}
+                        />
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================================
+        // === KOMPONENTY PODRZĘDNE (Wszystko w jednym pliku) ===
+        // ==========================================================
+
+        const LoginScreen = ({ onLogin, statusText, isButtonEnabled }) => (
+            <div className="min-h-screen flex items-center justify-center login-background bg-gray-900">
+                <div className="bg-black bg-opacity-70 p-8 rounded-lg shadow-2xl backdrop-blur-sm w-full max-w-sm">
+                    <div className="text-center mb-6">
+                        <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" className="w-24 mx-auto mb-3" />
+                        <h1 className="text-2xl font-bold text-white">APEX Predator</h1>
+                        <p className="text-gray-400 text-sm">AI-Powered Nasdaq Intelligence</p>
+                    </div>
+                    <form onSubmit={onLogin}>
+                        <button 
+                            type="submit" 
+                            className="w-full bg-sky-600 text-white font-bold py-2 px-4 rounded-md transition duration-300 text-sm disabled:bg-gray-600 disabled:cursor-not-allowed glowing-btn" 
+                            disabled={!isButtonEnabled}
+                        >
+                            {isButtonEnabled ? 'Wejdź do Aplikacji' : statusText}
+                        </button>
+                        <p className="text-center text-gray-400 text-xs mt-4 h-4">
+                            {!isButtonEnabled && statusText}
+                        </p>
+                    </form>
+                </div>
+            </div>
+        );
+
+        const AlertContainer = ({ alerts, onDismiss }) => (
+            <div id="system-alert-container">
+                {alerts.map(alert => (
+                    <Alert key={alert.id} {...alert} onDismiss={() => onDismiss(alert.id)} />
+                ))}
+            </div>
+        );
+
+        const Alert = ({ id, message, onDismiss }) => {
+            let alertClass = 'bg-sky-500';
+            let alertIcon = 'bell-ring'; // ZMIANA: Przechowujemy nazwę ikony
+            if (message.includes('NEGATYWNY ALERT')) {
+                alertClass = 'bg-red-600';
+                alertIcon = 'alert-octagon';
+            } else if (message.includes('POZYTYWNY ALERT')) {
+                alertClass = 'bg-green-600';
+                alertIcon = 'check-circle';
+            } else if (message.includes('ALARM CENOWY')) {
+                alertClass = 'bg-yellow-500';
+                alertIcon = 'dollar-sign';
+            }
+
+            React.useEffect(() => {
+                const timer = setTimeout(() => onDismiss(id), 20000);
+                return () => clearTimeout(timer);
+            }, [id, onDismiss]);
+
+            return (
+                <div className={`alert-bar flex items-center justify-between gap-4 ${alertClass} text-white p-3 shadow-lg rounded-md animate-pulse-once max-w-md w-full`}>
+                    <div className="flex items-center gap-3">
+                        <i data-lucide={alertIcon} className="w-6 h-6 flex-shrink-0" />
+                        <span className="font-semibold text-sm">{message}</span>
+                    </div>
+                    <button onClick={onDismiss} className="p-1 rounded-full hover:bg-black/20 transition-colors flex-shrink-0">
+                        <i data-lucide="x" className="w-5 h-5" style={{ marginRight: 0 }} />
+                    </button>
+                </div>
+            );
+        };
+
+        const Sidebar = ({ 
+            isOpen, onClose, currentView, onSelectView, onControlClick, 
+            workerStatus, apiStatusOnline, 
+            phase1Count, phase2Count, phase3Count,
+            phase1List, phase2List, phase3List 
+        }) => {
+            const navItems = [
+                { id: 'dashboard', label: 'Dashboard', iconName: 'layout-dashboard' },
+                { id: 'portfolio', label: 'Portfel', iconName: 'briefcase' },
+                { id: 'transactions', label: 'Transakcje', iconName: 'history' },
+            ];
+
+            const controlButtons = [
+                { id: 'start', label: 'Start', iconName: 'play', className: 'bg-green-600/20 hover:bg-green-600/40 text-green-300', disabled: workerStatus.status !== 'IDLE' && workerStatus.status !== 'ERROR' },
+                { id: 'pause', label: 'Pauza', iconName: 'pause', className: 'bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-300', disabled: workerStatus.status !== 'RUNNING' },
+                { id: 'resume', label: 'Wznów', iconName: 'play-circle', className: 'bg-sky-600/20 hover:bg-sky-600/40 text-sky-300', disabled: workerStatus.status !== 'PAUSED' },
+            ];
+
+            return (
+                <>
+                    <div 
+                        className={`fixed inset-0 z-20 bg-black/50 md:hidden ${isOpen ? 'block' : 'hidden'}`} 
+                        onClick={onClose}
+                    ></div>
+                    <aside className={`fixed inset-y-0 left-0 z-30 w-72 bg-[#161B22] p-4 flex flex-col transform ${isOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 md:relative md:translate-x-0 md:flex-shrink-0`}>
+                        <div className="shrink-0">
+                            <div className="flex items-center justify-between mb-8">
+                                <div className="flex items-center">
+                                    <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" className="w-10 h-10 mr-3" />
+                                    <h1 className="text-xl font-bold">APEX Predator</h1>
+                                </div>
+                                <button onClick={onClose} className="md:hidden p-1 text-gray-400 hover:text-white">
+                                    <i data-lucide="x" className="w-6 h-6" style={{ marginRight: 0 }} />
+                                </button>
+                            </div>
+                            <nav className="space-y-1">
+                                {navItems.map(item => (
+                                    <button 
+                                        key={item.id}
+                                        onClick={() => onSelectView(item.id)}
+                                        className={`sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer w-full text-left ${currentView === item.id ? 'sidebar-item-active' : 'text-gray-400 hover:bg-gray-700/50 hover:text-gray-200'}`}
+                                    >
+                                        <i data-lucide={item.iconName} />
+                                        <span>{item.label}</span>
+                                    </button>
+                                ))}
+                            </nav>
+                            <div className="pt-4">
+                                <h2 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
+                                <div className="pl-2 mt-2 border-l border-gray-700 space-y-2">
+                                    {controlButtons.map(btn => (
+                                        <button 
+                                            key={btn.id}
+                                            onClick={() => onControlClick(btn.id)}
+                                            disabled={btn.disabled}
+                                            className={`w-full text-left flex items-center py-1.5 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${btn.className}`}
+                                        >
+                                            <i data-lucide={btn.iconName} className="lucide-sm" />
+                                            {btn.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex-grow overflow-y-auto space-y-4 py-4 mt-4 border-t border-gray-800">
+                            <h2 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Skanowania</h2>
+                            <Accordion title={`Faza 1: Kandydaci (${phase1Count})`}>{phase1List}</Accordion>
+                            <Accordion title={`Faza 2: APEX Elita (${phase2Count})`}>{phase2List}</Accordion>
+                            <Accordion title={`Faza 3: Sygnały (${phase3Count})`}>{phase3List}</Accordion>
+                        </div>
+
+                        <div className="mt-auto shrink-0 border-t border-gray-800 pt-4">
+                            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3>
+                            <div className="space-y-2 text-sm">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-gray-400">API Gateway:</span>
+                                    <span className={`flex items-center ${apiStatusOnline ? 'text-green-500' : 'text-gray-500'}`}>
+                                        <span className={`h-2 w-2 rounded-full mr-2 ${apiStatusOnline ? 'bg-green-500' : 'bg-gray-500'}`}></span>
+                                        {apiStatusOnline ? 'Online' : 'Offline'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-gray-400">Silnik:</span>
+                                    <StatusBadge status={workerStatus.status} />
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-gray-400">Heartbeat:</span>
+                                    <Heartbeat time={workerStatus.last_heartbeat_utc} />
+                                </div>
+                            </div>
+                        </div>
+                    </aside>
+                </>
+            );
+        };
+
+        const MainContent = ({ onOpenSidebar, onAnalyzeTicker, children }) => {
+            const handleSearch = (e) => {
+                if (e.key === 'Enter') {
+                    const ticker = e.target.value.trim().toUpperCase();
+                    if (ticker) {
+                        onAnalyzeTicker(ticker);
+                        e.target.value = '';
+                    }
+                }
+            };
+            
+            return (
+                <main className="flex-1 flex flex-col overflow-y-auto">
+                    <header className="p-4 border-b border-gray-800 shrink-0 flex items-center gap-4">
+                        <button onClick={onOpenSidebar} className="p-1 text-gray-400 hover:text-white md:hidden">
+                            <i data-lucide="menu" className="w-6 h-6" style={{ marginRight: 0 }} />
+                        </button>
+                        <div className="max-w-xl mx-auto w-full">
+                            <div className="relative">
+                                <i data-lucide="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5" style={{ marginRight: 0 }} />
+                                <input 
+                                    onKeyDown={handleSearch}
+                                    type="text" 
+                                    placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter, aby uruchomić analizę AI" 
+                                    className="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm" 
+                                />
+                            </div>
+                        </div>
+                    </header>
+                    <div className="p-3 md:p-6 flex-grow">
+                        {children}
+                    </div>
+                </main>
+            );
+        };
+
+        // ==========================================================
+        // === KOMPONENTY WIDOKÓW ===
+        // ==========================================================
+
+        const DashboardView = ({ workerStatus, phase3Count }) => {
+            const logContainerRef = React.useRef(null);
+            React.useEffect(() => {
+                if (logContainerRef.current) {
+                    logContainerRef.current.scrollTop = 0;
+                }
+            }, [workerStatus.log]);
+
+            const progress = workerStatus.progress;
+            const percent = progress.total > 0 ? Math.min((progress.processed / progress.total) * 100, 100) : 0;
+            
+            return (
+                <div id="dashboard-view" className="max-w-4xl mx-auto">
+                    <h2 className="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
+                        <div className="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                            <h3 className="font-semibold text-gray-400 flex items-center text-sm">
+                                <i data-lucide="cpu" className="w-4 h-4 mr-2 text-sky-400" />
+                                Status Silnika
+                            </h3>
+                            <p className={`text-3xl lg:text-4xl font-extrabold mt-2 ${workerStatus.status === 'IDLE' ? 'text-green-500' : 'text-yellow-400'}`}>
+                                {workerStatus.status}
+                            </p>
+                            <p className="text-sm text-gray-500 mt-1">Faza: {workerStatus.phase || 'NONE'}</p>
+                        </div>
+                        <div className="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                            <h3 className="font-semibold text-gray-400 flex items-center text-sm">
+                                <i data-lucide="bar-chart-2" className="w-4 h-4 mr-2 text-yellow-400" />
+                                Postęp Skanowania
+                            </h3>
+                            <div className="mt-2">
+                                <span className="text-2xl lg:text-3xl font-extrabold">{progress.processed} / {progress.total}</span>
+                                <span className="text-gray-500 text-sm ml-2">tickery</span>
+                            </div>
+                            <div className="w-full bg-gray-700 rounded-full h-2.5 mt-2">
+                                <div className="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style={{ width: `${percent.toFixed(0)}%` }}></div>
+                            </div>
+                        </div>
+                        <div className="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                            <h3 className="font-semibold text-gray-400 flex items-center text-sm">
+                                <i data-lucide="trending-up" className="w-4 h-4 mr-2 text-red-500" />
+                                Aktywne Sygnały
+                            </h3>
+                            <p className="text-3xl lg:text-4xl font-extrabold mt-2 text-red-400">{phase3Count}</p>
+                            <p className="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p>
+                        </div>
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
+                    <div ref={logContainerRef} className="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
+                        <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono">
+                            {workerStatus.log || 'Czekam na rozpoczęcie skanowania...'}
+                        </pre>
+                    </div>
+                </div>
+            );
+        };
+
+        const PortfolioView = ({ holdings, quotes, onSellStock }) => {
+            let totalPortfolioValue = 0;
+            let totalProfitLoss = 0;
+
+            const rows = holdings.map(h => {
+                const quote = quotes[h.ticker];
+                let currentPrice = null, dayChangePercent = null, profitLoss = null;
+                let priceClass = 'text-gray-400';
+                
+                if (quote && quote['price']) {
+                    try {
+                        currentPrice = parseFloat(quote['price']);
+                        dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
+                        priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
+                        const currentValue = h.quantity * currentPrice;
+                        const costBasis = h.quantity * h.average_buy_price;
+                        profitLoss = currentValue - costBasis;
+                        totalPortfolioValue += currentValue;
+                        totalProfitLoss += profitLoss;
+                    } catch (e) { logger.error(`Błąd obliczeń dla ${h.ticker} w portfela:`, e); }
+                }
+                const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
+                
+                return (
+                    <tr key={h.ticker} className="border-b border-gray-800 hover:bg-[#1f2937]">
+                        <td className="p-3 font-bold text-sky-400">{h.ticker}</td>
+                        <td className="p-3 text-right">{h.quantity}</td>
+                        <td className="p-3 text-right">{h.average_buy_price.toFixed(4)}</td>
+                        <td className={`p-3 text-right ${priceClass}`}>{currentPrice ? currentPrice.toFixed(2) : '---'}</td>
+                        <td className={`p-3 text-right ${profitLossClass}`}>{profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
+                        <td className="p-3 text-right">
+                            <button 
+                                onClick={() => onSellStock(h.ticker, h.quantity)}
+                                className="text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded"
+                            >
+                                Sprzedaj
+                            </button>
+                        </td>
+                    </tr>
+                );
+            });
+
+            const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
+
+            return (
+                <div id="portfolio-view" className="max-w-6xl mx-auto">
+                    <h2 className="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex flex-col md:flex-row justify-between md:items-center">
+                        Portfel Inwestycyjny
+                        <span className="text-lg text-gray-400 mt-2 md:mt-0">
+                            Wartość: {totalPortfolioValue.toFixed(2)} USD | Z/S: <span className={totalProfitLossClass}>{totalProfitLoss.toFixed(2)} USD</span>
+                        </span>
+                    </h2>
+                    {holdings.length === 0 ? (
+                        <p className="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>
+                    ) : (
+                        <div className="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
+                            <table className="w-full text-sm text-left text-gray-300">
+                                <thead className="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                                    <tr>
+                                        <th scope="col" className="p-3">Ticker</th>
+                                        <th scope="col" className="p-3 text-right">Ilość</th>
+                                        <th scope="col" className="p-3 text-right">Śr. Cena Zakupu (USD)</th>
+                                        <th scope="col" className="p-3 text-right">Bieżąca Cena (USD)</th>
+                                        <th scope="col" className="p-3 text-right">Zysk / Strata (USD)</th>
+                                        <th scope="col" className="p-3 text-right">Akcja</th>
+                                    </tr>
+                                </thead>
+                                <tbody>{rows}</tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const TransactionsView = ({ transactions, onMount }) => {
+            React.useEffect(() => {
+                onMount();
+            }, [onMount]);
+
+            const rows = transactions.map(t => {
+                const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
+                const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
+                const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL');
+                return (
+                    <tr key={t.id} className="border-b border-gray-800 hover:bg-[#1f2937]">
+                        <td className="p-3 text-gray-400 text-xs">{transactionDate}</td>
+                        <td className="p-3 font-bold text-sky-400">{t.ticker}</td>
+                        <td className={`p-3 font-semibold ${typeClass}`}>{t.transaction_type}</td>
+                        <td className="p-3 text-right">{t.quantity}</td>
+                        <td className="p-3 text-right">{t.price_per_share.toFixed(4)}</td>
+                        <td className={`p-3 text-right ${profitLossClass}`}>{t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td>
+                    </tr>
+                );
+            });
+
+            return (
+                <div id="transactions-view" className="max-w-6xl mx-auto">
+                    <h2 className="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>
+                    {transactions.length === 0 ? (
+                        <p className="text-center text-gray-500 py-10">Brak historii transakcji.</p>
+                    ) : (
+                        <div className="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
+                            <table className="w-full text-sm text-left text-gray-300">
+                                <thead className="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                                    <tr>
+                                        <th scope="col" className="p-3">Data</th>
+                                        <th scope="col" className="p-3">Ticker</th>
+                                        <th scope="col" className="p-3">Typ</th>
+                                        <th scope="col" className="p-3 text-right">Ilość</th>
+                                        <th scope="col" className="p-3 text-right">Cena (USD)</th>
+                                        <th scope="col" className="p-3 text-right">Zysk / Strata (USD)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>{rows}</tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const AiAnalysisView = ({ analysisData, marketCountdown, onAddToWatchlist, onBuyStock }) => {
+            const [isWatchlistLoading, setIsWatchlistLoading] = React.useState(false);
+            
+            const handleWatchlistClick = async (ticker) => {
+                setIsWatchlistLoading(true);
+                try {
+                    await onAddToWatchlist(ticker);
+                } catch (e) {
+                    logger.error(`Błąd dodawania do watchlist: ${ticker}`, e);
+                } finally {
+                    setIsWatchlistLoading('done');
+                }
+            };
+
+            if (!analysisData) return null;
+            
+            if (analysisData.status === 'PROCESSING') {
+                return <LoadingIndicator text={analysisData.message || `Analiza ${analysisData.ticker} w toku...`} />;
+            }
+            
+            if (analysisData.status === 'ERROR') {
+                return (
+                    <div className="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">
+                        <h2 className="text-2xl font-bold mb-2">Błąd Analizy {analysisData.ticker}</h2>
+                        <p>{analysisData.message}</p>
+                    </div>
+                );
+            }
+
+            const { 
+                ticker, overall_score = 0, max_score = 1, recommendation = "Brak", 
+                agents = {}, quote_data = null, market_info = null, recommendation_details = ""
+            } = analysisData;
+            
+            const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
+            
+            let rec_color = "text-gray-500";
+            if (recommendation === "BARDZO SILNY KANDDAT DO KUPNA") rec_color = "text-green-500";
+            else if (recommendation === "SILNY KANDYDAT DO OBSERWACJI") rec_color = "text-sky-500";
+            else if (recommendation === "INTERESUJĄCY KANDYDAT") rec_color = "text-yellow-500";
+
+            return (
+                <div className="max-w-4xl mx-auto" id={`ai-details-${ticker}`}>
+                    <div className="flex flex-col md:flex-row justify-between md:items-start gap-4 mb-4">
+                        <div>
+                            <h2 className="text-3xl font-bold text-white">{ticker}</h2>
+                            <p className="text-gray-400">Raport Analityczny AI dla Week Tradingu</p>
+                        </div>
+                        <div className="flex gap-3 flex-shrink-0">
+                            <button 
+                                onClick={() => handleWatchlistClick(ticker)}
+                                disabled={!!isWatchlistLoading}
+                                className="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50"
+                            >
+                                {isWatchlistLoading === 'done' ? <i data-lucide="check" /> : (isWatchlistLoading ? <i data-lucide="loader-2" className="animate-spin" /> : <i data-lucide="plus-circle" />)}
+                                {isWatchlistLoading === 'done' ? 'Dodano' : (isWatchlistLoading ? 'Dodawanie...' : 'Obserwuj')}
+                            </button>
+                            <button 
+                                onClick={() => onBuyStock(ticker)}
+                                className="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"
+                            >
+                                <i data-lucide="shopping-cart" />
+                                Kup
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <QuoteBox quote={quote_data} market={market_info} countdownText={marketCountdown} />
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 my-6">
+                        <div className="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg">
+                            <h3 className="text-lg font-semibold mb-1">Rekomendacja Systemu</h3>
+                            <p className={`text-2xl font-bold ${rec_color} mb-4`}>{recommendation}</p>
+                            <p className="text-sm text-gray-400">{recommendation_details || `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p>
+                        </div>
+                        <div className="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center">
+                            <h3 className="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3>
+                            <div className="relative w-24 h-24">
+                                <svg className="w-full h-full" viewBox="0 0 36 36">
+                                    <path className="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3"></path>
+                                    <path className="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" strokeDasharray={`${scorePercent.toFixed(0)}, 100`}></path>
+                                </svg>
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                    <span className="text-2xl font-bold text-white">{overall_score}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3 className="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <AgentCard title="Momentum" iconName="trending-up" data={agents.momentum} />
+                        <AgentCard title="Zmienności" iconName="activity" data={agents.volatility} />
+                        <AgentCard title="Sentymentu" iconName="message-circle" data={agents.sentiment} />
+                        <AgentCard title="Taktycznego" iconName="crosshair" data={agents.tactical_setup} />
+                    </div>
+                </div>
+            );
+        };
+
+        // ==========================================================
+        // === KOMPONENTY POMOCNICZE ===
+        // ==========================================================
+
+        const LoadingIndicator = ({ text }) => (
+            <div className="text-center py-10">
+                <div role="status" className="flex flex-col items-center">
+                    <i data-lucide="loader-2" className="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" style={{ marginRight: 0 }} />
+                    <p className="text-sky-400 mt-4">{text}</p>
+                </div>
+            </div>
+        );
+
+        const QuoteBox = ({ quote, market, countdownText }) => {
+            if (!quote || Object.keys(quote).length === 0) {
+                return <div className="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych.</div>;
+            }
+            
+            const safeMarket = market || { status: 'UNKNOWN', time_ny: 'N/A', date_ny: 'N/A' };
+            try {
+                const cleanedQuote = Object.fromEntries(
+                    Object.entries(quote).map(([key, value]) => [key.includes('. ') ? key.substring(key.indexOf('.') + 2) : key, value])
+                );
+                
+                const price = parseFloat(cleanedQuote['price']);
+                const change = parseFloat(cleanedQuote['change']);
+                const changePercent = parseFloat(cleanedQuote['change percent']?.replace('%', '') || '0');
+                const prevClose = parseFloat(cleanedQuote['previous close']);
+
+                if (isNaN(price) || isNaN(change) || isNaN(changePercent) || isNaN(prevClose)) throw new Error('Nieprawidłowe dane liczbowe w quote.');
+                
+                const isPositive = change >= 0;
+                const changeClass = isPositive ? 'text-green-500' : 'text-red-500';
+                const changeIconName = isPositive ? 'trending-up' : 'trending-down';
+                
+                let statusText = 'Rynek Zamknięty', statusClass = 'bg-gray-600';
+                if (safeMarket.status === 'MARKET_OPEN') { statusText = 'Rynek Otwarty'; statusClass = 'bg-green-600'; }
+                else if (safeMarket.status === 'PRE_MARKET') { statusText = 'Pre-Market'; statusClass = 'bg-yellow-600'; }
+                else if (safeMarket.status === 'AFTER_MARKET') { statusText = 'After-Market'; statusClass = 'bg-blue-600'; }
+                else if (safeMarket.status === 'UNKNOWN') { statusText = 'Status Nieznany'; statusClass = 'bg-purple-600'; }
+                
+                return (
+                    <div id="quote-box-placeholder" className="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">
+                        <div className="flex flex-col md:flex-row justify-between md:items-start gap-4">
+                            <div>
+                                <div className="flex items-end gap-3">
+                                    <span className="text-4xl font-bold text-white">{price.toFixed(2)}</span>
+                                    <div className={`${changeClass} flex items-center gap-1 mb-1`}>
+                                        <i data-lucide={changeIconName} className="w-5 h-5" />
+                                        <span className="font-semibold">{change.toFixed(2)} ({changePercent.toFixed(2)}%)</span>
+                                    </div>
+                                </div>
+                                <p className="text-sm text-gray-500 mt-1">Poprz. zamkn.: {prevClose.toFixed(2)}</p>
+                            </div>
+                            <div className="text-left md:text-right">
+                                <span className="flex items-center md:justify-end gap-2 text-sm font-semibold text-gray-300">
+                                    <span className="relative flex h-3 w-3">
+                                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${statusClass} opacity-75`}></span>
+                                        <span className={`relative inline-flex rounded-full h-3 w-3 ${statusClass}`}></span>
+                                    </span>
+                                    {statusText}
+                                </span>
+                                <p className="text-xs text-gray-500 mt-1">Dane na {safeMarket.date_ny} {safeMarket.time_ny}</p>
+                                <p id="market-countdown-timer" className="text-xs text-yellow-400 font-mono mt-2 flex items-center md:justify-end gap-2">
+                                    <i data-lucide="clock" className="lucide-xs" />
+                                    {countdownText}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                );
+
+            } catch (e) {
+                logger.error("Błąd renderowania quoteBox:", e, { quote, market: safeMarket });
+                return <div className="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center">Błąd parsowania danych cenowych: {e.message}</div>;
+            }
+        };
+
+        const AgentCard = ({ title, iconName, data }) => {
+            if (!data) {
+                return <div className="bg-[#161B22] border border-gray-800 p-4 rounded-lg text-gray-500">Brak danych dla Agenta: {title}</div>;
+            }
+            const { score = '?', max_score = '?', summary = 'Brak podsumowania.', details = {} } = data;
+            return (
+                <div className="bg-[#161B22] border border-gray-800 p-4 rounded-lg">
+                    <h4 className="agent-card-header font-bold text-gray-300 mb-3 flex items-center">
+                        <i data-lucide={iconName} className="text-sky-400" />
+                        Agent: {title}
+                        <span className="ml-auto text-xs font-mono bg-gray-700 px-2 py-1 rounded-md">{score}/{max_score}</span>
+                    </h4>
+                    <p className="text-sm text-gray-400 mb-3">{summary}</p>
+                    <div className="text-xs space-y-1 border-t border-gray-700 pt-2">
+                        {Object.keys(details).length > 0 ? (
+                            Object.entries(details).map(([key, value]) => (
+                                <div key={key} className="flex justify-between">
+                                    <span className="text-gray-500">{key}:</span>
+                                    <span className="font-mono text-gray-300">{value}</span>
+                                </div>
+                            ))
+                        ) : (
+                            <p className="text-gray-500">Brak szczegółów.</p>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const Accordion = ({ title, children }) => {
+            const [isOpen, setIsOpen] = React.useState(false);
+            return (
+                <div className="px-2">
+                    <button onClick={() => setIsOpen(!isOpen)} className="flex justify-between items-center w-full text-left cursor-pointer">
+                        <p className="text-sm font-semibold text-gray-300">{title}</p>
+                        <i data-lucide="chevron-down" className={`w-5 h-5 transition-transform ${isOpen ? 'rotate-180' : ''}`} style={{ marginRight: 0 }} />
+                    </button>
+                    {isOpen && (
+                        <div className="mt-2 pl-2 border-l border-gray-700 space-y-1">
+                            {children}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const PhaseList = ({ items, onSelect, className, iconType }) => {
+            if (!items || items.length === 0) {
+                return <p className="text-xs text-gray-500 p-2">Brak wyników.</p>;
+            }
+            return items.map(item => {
+                let icon;
+                if (iconType === 'score') {
+                    icon = <span>Score: {item.total_score}/10</span>;
+                } else if (iconType === 'status') {
+                    const isPending = item.status === 'PENDING';
+                    icon = (
+                        <>
+                            <i data-lucide={isPending ? 'hourglass' : 'zap'} className="w-4 h-4 mr-2" />
+                            <span className="ml-auto text-gray-500">{isPending ? 'OCZEKUJĄCY' : 'AKTYWNY'}</span>
+                        </>
+                    );
+                }
+
+                return (
+                    <div 
+                        key={item.ticker} 
+                        onClick={() => onSelect(item.ticker)}
+                        className={`candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${className}`}
+                    >
+                        <span className="font-bold">{item.ticker}</span>
+                        <div className="flex items-center" style={{ marginRight: 0 }}>{icon}</div>
+                    </div>
+                );
+            });
+        };
+
+        const StatusBadge = ({ status }) => {
+            let statusClass = 'bg-gray-700 text-gray-200';
+            if (status === 'RUNNING') statusClass = 'bg-green-600/20 text-green-400';
+            else if (status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
+            else if (status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
+            return <span className={`font-mono px-2 py-1 rounded-md text-xs ${statusClass}`}>{status}</span>;
+        };
+
+        const Heartbeat = ({ time }) => {
+            const [diffSeconds, setDiffSeconds] = React.useState(null);
+            React.useEffect(() => {
+                if (!time) {
+                    setDiffSeconds(null);
+                    return;
+                }
+                const updateDiff = () => {
+                    const diff = (new Date() - new Date(time)) / 1000;
+                    setDiffSeconds(diff);
+                };
+                updateDiff();
+                const interval = setInterval(updateDiff, 1000);
+                return () => clearInterval(interval);
+            }, [time]);
+
+            if (diffSeconds === null) {
+                return <span className="text-gray-500 text-xs">--</span>;
+            }
+            
+            const isStale = diffSeconds > 30;
+            const displayTime = new Date(time).toLocaleTimeString();
+            
+            return (
+                <span className={`text-xs ${isStale ? 'text-red-500' : 'text-green-500'}`}>
+                    {isStale ? 'PRZERWANY' : displayTime}
+                </span>
+            );
+        };
+
+        const Modal = ({ children, onClose }) => (
+            <div className="modal-backdrop" onClick={onClose}>
+                <div className="modal-content" onClick={e => e.stopPropagation()}>
+                    {children}
+                </div>
+            </div>
+        );
+
+        const BuyModal = ({ ticker, onClose, onConfirm }) => {
+            const [quantity, setQuantity] = React.useState('');
+            const [price, setPrice] = React.useState('');
+            const [isLoading, setIsLoading] = React.useState(false);
+
+            const handleSubmit = async () => {
+                setIsLoading(true);
+                await onConfirm(ticker, parseInt(quantity, 10), parseFloat(price));
+                setIsLoading(false);
+            };
+
+            return (
+                <Modal onClose={onClose}>
+                    <h3 className="text-xl font-bold mb-4 text-white">Kup <span className="text-sky-400">{ticker}</span></h3>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Ilość akcji</label>
+                    <input 
+                        type="number" 
+                        value={quantity} 
+                        onChange={e => setQuantity(e.target.value)} 
+                        min="1" 
+                        step="1" 
+                        className="modal-input" 
+                        placeholder="np. 100" 
+                    />
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Cena zakupu (za 1 akcję)</label>
+                    <input 
+                        type="number" 
+                        value={price} 
+                        onChange={e => setPrice(e.target.value)} 
+                        min="0.01" 
+                        step="0.01" 
+                        className="modal-input" 
+                        placeholder="np. 150.25" 
+                    />
+                    <div className="flex justify-end gap-3 mt-6">
+                        <button onClick={onClose} className="modal-button modal-button-secondary">Anuluj</button>
+                        <button 
+                            onClick={handleSubmit} 
+                            disabled={isLoading}
+                            className="modal-button modal-button-primary disabled:opacity-50"
+                        >
+                            {isLoading ? <i data-lucide="loader-2" className="animate-spin" /> : 'Inwestuj'}
+                        </button>
+                    </div>
+                </Modal>
+            );
+        };
+
+        const SellModal = ({ ticker, maxQuantity, onClose, onConfirm }) => {
+            const [quantity, setQuantity] = React.useState('');
+            const [price, setPrice] = React.useState('');
+            const [isLoading, setIsLoading] = React.useState(false);
+
+            const handleSubmit = async () => {
+                setIsLoading(true);
+                await onConfirm(ticker, parseInt(quantity, 10), parseFloat(price), maxQuantity);
+                setIsLoading(false);
+            };
+            
+            return (
+                <Modal onClose={onClose}>
+                    <h3 className="text-xl font-bold mb-4 text-white">Sprzedaj <span className="text-sky-400">{ticker}</span></h3>
+                    <p className="text-sm text-gray-400 mb-3">Posiadasz: <span className="font-bold">{maxQuantity}</span> akcji.</p>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Ilość akcji do sprzedaży</label>
+                    <input 
+                        type="number" 
+                        value={quantity} 
+                        onChange={e => setQuantity(e.target.value)} 
+                        min="1" 
+                        step="1" 
+                        max={maxQuantity}
+                        className="modal-input" 
+                        placeholder="np. 50" 
+                    />
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Cena sprzedaży (za 1 akcję)</label>
+                    <input 
+                        type="number" 
+                        value={price} 
+                        onChange={e => setPrice(e.target.value)} 
+                        min="0.01" 
+                        step="0.01" 
+                        className="modal-input" 
+                        placeholder="np. 160.50" 
+                    />
+                    <div className="flex justify-end gap-3 mt-6">
+                        <button onClick={onClose} className="modal-button modal-button-secondary">Anuluj</button>
+                        <button 
+                            onClick={handleSubmit} 
+                            disabled={isLoading}
+                            className="modal-button modal-button-primary disabled:opacity-50"
+                        >
+                            {isLoading ? <i data-lucide="loader-2" className="animate-spin" /> : 'Realizuj'}
+                        </button>
+                    </div>
+                </Modal>
+            );
+        };
+
+        // Renderowanie głównej aplikacji React do elementu #root
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+    </script>
+</body>
+</html>
+
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1377,4 +2754,5 @@
     </script>
 </body>
 </html>
+
 
