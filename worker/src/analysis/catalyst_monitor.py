@@ -2,6 +2,8 @@ import logging
 import requests
 import json
 import hashlib
+import os # <-- NOWY IMPORT
+from dotenv import load_dotenv # <-- NOWY IMPORT
 from sqlalchemy.orm import Session
 from sqlalchemy import text, select, func
 from datetime import datetime, timedelta
@@ -14,8 +16,14 @@ from ..analysis.utils import update_system_control
 logger = logging.getLogger(__name__)
 
 # --- Konfiguracja API Gemini ---
-# Klucz API jest pusty, ponieważ zakładamy, że jest dostarczany przez środowisko Render/Canvas
-API_KEY = ""
+load_dotenv() # <-- NOWE WYWOŁANIE
+
+# === POPRAWKA: Pobieramy klucz ze środowiska ===
+API_KEY = os.getenv("GEMINI_API_KEY")
+if not API_KEY:
+    logger.critical("GEMINI_API_KEY nie został znaleziony w zmiennych środowiskowych! Catalyst Monitor nie będzie działać.")
+    API_KEY = "" # Zapewnia, że f-string poniżej nie rzuci błędu
+
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
 API_HEADERS = {'Content-Type': 'application/json'}
 
@@ -87,7 +95,7 @@ def _call_gemini_search(ticker: str) -> list[dict]:
 
     try:
         response = requests.post(GEMINI_API_URL, headers=API_HEADERS, data=json.dumps(payload), timeout=20)
-        response.raise_for_status()
+        response.raise_for_status() # To jest linia 90, która rzuca błąd 403
         data = response.json()
 
         candidate = data.get('candidates', [{}])[0]
@@ -178,6 +186,11 @@ def run_catalyst_check(session: Session):
     """
     Główna funkcja "Agencji Prasowej" uruchamiana przez harmonogram.
     """
+    # === POPRAWKA: Sprawdź klucz API na początku ===
+    if not API_KEY:
+        logger.warning("CatalystMonitor: Brak klucza GEMINI_API_KEY. Pomijanie cyklu sprawdzania wiadomości.")
+        return
+
     logger.info("CatalystMonitor: Uruchamianie cyklu sprawdzania wiadomości...")
     
     tickers = _get_tickers_to_monitor(session)
