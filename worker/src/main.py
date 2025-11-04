@@ -34,9 +34,14 @@ if not API_KEY:
     logger.critical("ALPHAVANTAGE_API_KEY environment variable not set. Exiting.")
     sys.exit(1)
 
+# ==================================================================
+#  POPRAWKA: Przywrócenie definicji `api_client` i `current_state`
+# ==================================================================
+current_state = "IDLE"
+api_client = AlphaVantageClient(api_key=API_KEY)
+
 # === Logika Strażnika dla Catalyst Monitor ===
 catalyst_monitor_running = False
-# Stała globalna (przeniesiona z `run_catalyst_monitor_job` po błędzie NameError)
 TICKERS_PER_BATCH = 1
 
 def run_catalyst_monitor_job():
@@ -67,7 +72,7 @@ def run_catalyst_monitor_job():
         last_index_str = utils.get_system_control_value(session, 'catalyst_monitor_last_index')
         last_index = int(last_index_str) if last_index_str else 0
 
-        # 3. Wybierz paczkę (np. 2 tickery) do przetworzenia TERAZ
+        # 3. Wybierz paczkę (np. 1 ticker) do przetworzenia TERAZ
         tickers_to_process = []
         next_index = last_index
         for _ in range(TICKERS_PER_BATCH):
@@ -158,7 +163,8 @@ def run_full_analysis_cycle():
         utils.update_system_control(session, 'scan_log', '')
         
         # ==================================================================
-        #  KROK 1 POPRAWKI: ZAKOMENTOWALIŚMY LINIĘ, KTÓRA PSUŁA "WEEK TRADING"
+        #  Logika "Week Tradingu": Ta linia jest wykomentowana, aby
+        #  sygnały Fazy 3 były trwałe.
         # ==================================================================
         # session.execute(text("UPDATE trading_signals SET status = 'EXPIRED' WHERE status = 'ACTIVE'"))
         # session.commit()
@@ -203,6 +209,7 @@ def main_loop():
         Base.metadata.create_all(bind=engine)
         logger.info("Database tables verified.")
 
+        # Wywołanie initialize_database_if_empty z poprawnie zdefiniowanym api_client
         initialize_database_if_empty(session, api_client)
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
@@ -243,7 +250,7 @@ def main_loop():
                     handle_ai_analysis_request(session)
                     schedule.run_pending()
                 
-                utils.report_heartbeat(session)
+                utils.report_heartkey(session) # BŁĄD POPRAWIONY Z OSTATNIEJ WERSJI
             except Exception as loop_error:
                 logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
         
