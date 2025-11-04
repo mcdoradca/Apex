@@ -377,7 +377,7 @@
                             setCurrentTicker(data);
                         } catch(e) {
                             logger.error(`Błąd pollFullAnalysis dla ${ticker}:`, e);
-                            setCurrentTicker({ status: 'ERROR', message: e.message });
+                            setCurrentTicker({ status: 'ERROR', message: e.message, ticker: ticker });
                         }
                     };
                     
@@ -410,15 +410,14 @@
                     stopContextualPolling();
                     
                     // === POPRAWKA: Opóźnienie (Grace Period) dla "Race Condition" ===
-                    // Sprawdź, czy to jest *pierwsze* uruchomienie (nasz 'race condition')
                     if (currentTicker.status === 'PROCESSING' && currentTicker.message === 'Zlecanie analizy AI...') {
                         logger.info("Wykryto nowe zlecenie analizy. Czekam 2 sekundy (grace period) przed rozpoczęciem pollingu...");
                         timers.current.aiAnalysis = setTimeout(() => {
-                            pollFullAnalysis(currentTicker.ticker || currentTicker);
+                            pollFullAnalysis(currentTicker.ticker); // POPRAWKA: Przekazujemy string, nie obiekt
                         }, 2000); // 2-sekundowe opóźnienie
                     } else {
                         // To jest normalny poll (np. odświeżenie strony) lub ponowny poll
-                        pollFullAnalysis(currentTicker.ticker || currentTicker);
+                        pollFullAnalysis(currentTicker.ticker); // POPRAWKA: Przekazujemy string, nie obiekt
                     }
                     // === KONIEC POPRAWKI ===
                 }
@@ -458,7 +457,7 @@
                     await memoizedApi.requestAIAnalysis(ticker);
                 } catch (reqError) {
                      logger.error(`Błąd zlecania analizy dla ${ticker}:`, reqError);
-                     setCurrentTicker({ status: 'ERROR', message: reqError.message });
+                     setCurrentTicker({ status: 'ERROR', message: reqError.message, ticker: ticker });
                 }
             }, [memoizedApi]);
 
