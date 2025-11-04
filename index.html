@@ -2,6 +2,7 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
+    <!-- Prawidłowy meta tag viewport (już go miałeś, co jest super) -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>APEX Predator - Analizator Nasdaq</title>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -75,12 +76,28 @@
         </div>
     </div>
 
+    <!-- ZMIANA: Usunięto 'flex' z głównego kontenera, sidebar będzie 'fixed' na mobile -->
     <div id="dashboard" class="h-screen flex hidden">
-        <aside class="w-72 bg-[#161B22] p-4 flex flex-col shrink-0">
+        
+        <!-- ZMIANA: Tło/Backdrop dla mobilnego menu, domyślnie ukryte -->
+        <div id="sidebar-backdrop" class="fixed inset-0 bg-black/60 z-20 md:hidden hidden"></div>
+
+        <!-- 
+          ZMIANA: Klasy dla responsywności
+          - Domyślnie (mobile): 'fixed', 'z-30', 'inset-y-0 left-0', '-translate-x-full' (schowany)
+          - Na desktopie (md:): 'relative', 'z-auto', 'translate-x-0', 'shrink-0' (wraca do normy)
+        -->
+        <aside id="app-sidebar" class="fixed inset-y-0 left-0 z-30 w-72 bg-[#161B22] p-4 flex flex-col transform -translate-x-full md:relative md:translate-x-0 md:shrink-0 transition-transform duration-300 ease-in-out">
             <div class="shrink-0">
-                <div class="flex items-center mb-8">
-                    <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
-                    <h1 class="text-xl font-bold">APEX Predator</h1>
+                <!-- ZMIANA: Dodano przycisk zamykania 'x' widoczny tylko na mobile (md:hidden) -->
+                <div class="flex items-center justify-between mb-8">
+                    <div class="flex items-center">
+                        <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
+                        <h1 class="text-xl font-bold">APEX Predator</h1>
+                    </div>
+                    <button id="mobile-sidebar-close" class="md:hidden p-1 text-gray-500 hover:text-white">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
                 </div>
                 <nav class="space-y-1">
                     <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
@@ -140,14 +157,32 @@
             </div>
         </aside>
 
+        <!-- ZMIANA: Na mobile 'main' automatycznie zajmie 100% szerokości, bo 'aside' jest 'fixed' -->
         <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
-            <header class="p-4 border-b border-gray-800 shrink-0"><div class="max-w-xl mx-auto"><div class="relative"><i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i><input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter, aby uruchomić analizę AI" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"></div></div></header>
+            <!-- 
+              ZMIANA: Zmieniono strukturę nagłówka
+              - Dodano 'flex items-center gap-2'
+              - Dodano przycisk hamburgera 'mobile-menu-btn' (widoczny tylko na mobile 'md:hidden')
+              - Input wyszukiwania ma teraz 'flex-1'
+            -->
+            <header class="p-4 border-b border-gray-800 shrink-0">
+                <div class="max-w-xl mx-auto flex items-center gap-2">
+                    <button id="mobile-menu-btn" class="md:hidden p-1 -ml-1 text-gray-400 hover:text-white rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500">
+                        <i data-lucide="menu" class="w-6 h-6"></i>
+                    </button>
+                    <div class="relative flex-1">
+                        <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i>
+                        <input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    </div>
+                </div>
+            </header>
 
             <div id="main-content" class="p-6 flex-grow">
                 </div>
         </main>
     </div>
 
+    <!-- Modale (bez zmian) -->
     <div id="buy-modal" class="modal-backdrop hidden">
         <div class="modal-content">
             <h3 class="text-xl font-bold mb-4 text-white">Kup <span id="buy-modal-ticker"></span></h3>
@@ -190,7 +225,7 @@
                 activeAnalysisPolling: null,
                 activeQuotePolling: null,
                 activePortfolioPolling: null,
-                activeCountdownPolling: null, // Timer dla odliczania rynkowego
+                activeCountdownPolling: null, 
                 currentViewTicker: null,
                 profitAlertsSent: {}, 
                 snoozedAlerts: {} 
@@ -233,7 +268,14 @@
                     priceInput: document.getElementById('sell-price'),
                     cancelBtn: document.getElementById('sell-cancel-btn'),
                     confirmBtn: document.getElementById('sell-confirm-btn')
-                }
+                },
+                // NOWE SELEKTORY DLA MOBILNEGO MENU
+                sidebar: document.getElementById('app-sidebar'),
+                sidebarBackdrop: document.getElementById('sidebar-backdrop'),
+                mobileMenuBtn: document.getElementById('mobile-menu-btn'),
+                mobileSidebarCloseBtn: document.getElementById('mobile-sidebar-close'),
+                sidebarNav: document.querySelector('#app-sidebar nav'),
+                sidebarPhasesContainer: document.getElementById('phases-container')
             };
             console.log("UI Selectors defined.");
 
@@ -271,7 +313,6 @@
                 }
             };
 
-            // --- Pełna definicja obiektu API (Definiowane od razu) ---
             const api = {
                 getWorkerStatus: () => apiRequest('/api/v1/worker/status'),
                 sendWorkerControl: (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' }),
@@ -289,6 +330,50 @@
                 getTransactionHistory: () => apiRequest('/api/v1/transactions')
             };
             console.log("Full API object defined.");
+
+            // ==========================================================
+            // === NOWA LOGIKA: Sterowanie Mobilnym Sidebarem ===
+            // ==========================================================
+            function openSidebar() {
+                if (ui.sidebar) {
+                    ui.sidebar.classList.remove('-translate-x-full');
+                    ui.sidebar.classList.add('translate-x-0');
+                }
+                if (ui.sidebarBackdrop) {
+                    ui.sidebarBackdrop.classList.remove('hidden');
+                }
+            }
+
+            function closeSidebar() {
+                if (ui.sidebar) {
+                    ui.sidebar.classList.add('-translate-x-full');
+                    ui.sidebar.classList.remove('translate-x-0');
+                }
+                if (ui.sidebarBackdrop) {
+                    ui.sidebarBackdrop.classList.add('hidden');
+                }
+            }
+
+            // Podłączanie listenerów do przycisków
+            if (ui.mobileMenuBtn) {
+                ui.mobileMenuBtn.addEventListener('click', openSidebar);
+            }
+            if (ui.mobileSidebarCloseBtn) {
+                ui.mobileSidebarCloseBtn.addEventListener('click', closeSidebar);
+            }
+            if (ui.sidebarBackdrop) {
+                ui.sidebarBackdrop.addEventListener('click', closeSidebar);
+            }
+            
+            // Listener do zamykania menu po kliknięciu linku nawigacji
+            if (ui.sidebarNav) {
+                ui.sidebarNav.addEventListener('click', (e) => {
+                    if (e.target.closest('a')) {
+                        closeSidebar();
+                    }
+                });
+            }
+            console.log("Mobile sidebar logic initialized.");
 
 
             // ==========================================================
@@ -1006,12 +1091,16 @@
                 }
             });
 
-            document.getElementById('phases-container').addEventListener('click', (e) => {
+            // ZMIANA: Dodano 'closeSidebar()' do kliknięć na elementy listy
+            ui.sidebarPhasesContainer.addEventListener('click', (e) => {
                 const candidateItem = e.target.closest('.candidate-item');
                 const accordionToggle = e.target.closest('.accordion-toggle');
                 if (candidateItem) {
                     const ticker = candidateItem.dataset.ticker;
-                    if (ticker) showAiAnalysis(ticker);
+                    if (ticker) {
+                        showAiAnalysis(ticker);
+                        closeSidebar(); // Zamknij menu po kliknięciu
+                    }
                 } else if (accordionToggle) {
                     const content = accordionToggle.nextElementSibling;
                     const icon = accordionToggle.querySelector('.accordion-icon');
