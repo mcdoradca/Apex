@@ -42,6 +42,11 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 catalyst_monitor_running = False
 # === KONIEC ===
 
+# === POPRAWKA: Definiujemy stałą globalnie ===
+# DEFINIUJEMY WIELKOŚĆ PACZKI (Limit 250/dzień)
+TICKERS_PER_BATCH = 1
+# === KONIEC POPRAWKI ===
+
 def handle_ai_analysis_request(session):
     """Sprawdza i wykonuje nową analizę AI na żądanie."""
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
@@ -87,8 +92,7 @@ def run_catalyst_monitor_job():
     catalyst_monitor_running = True
     session = None
     
-    # DEFINIUJEMY WIELKOŚĆ PACZKI (Limit 250/dzień)
-    TICKERS_PER_BATCH = 1
+    # POPRAWKA: Zmienna jest teraz globalna, nie ma potrzeby jej tu definiować
 
     try:
         session = get_db_session()
@@ -230,6 +234,7 @@ def main_loop():
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Real-Time Entry Trigger Monitor scheduled every 15 seconds.")
+    # POPRAWKA: Teraz logowanie używa globalnej stałej
     logger.info(f"Catalyst News Monitor scheduled every 10 minutes (processing {TICKERS_PER_BATCH} ticker(s) per run).")
 
 
