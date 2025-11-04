@@ -86,6 +86,9 @@ def _call_gemini_search(ticker: str) -> list[dict]:
     Wywołuje Gemini API z Google Search (Grounding), aby znaleźć najnowsze wiadomości.
     Zwraca listę przetworzonych obiektów newsów (headline, uri).
     """
+    # === POPRAWKA RATE LIMIT: Czekaj ZANIM wyślesz zapytanie ===
+    time.sleep(2.1)
+    
     prompt = f"Find breaking, high-impact financial news, press releases, or FDA announcements for the company {ticker} from the last 3 hours. Focus on catalysts that could move the stock price significantly."
     
     payload = {
@@ -128,6 +131,9 @@ def _call_gemini_analysis(ticker: str, headline: str, uri: str) -> str:
     Wywołuje Gemini API, aby przeanalizować pojedynczą wiadomość i zwrócić sentyment.
     Używa JSON Schema do wymuszenia odpowiedzi.
     """
+    # === POPRAWKA RATE LIMIT: Czekaj ZANIM wyślesz zapytanie ===
+    time.sleep(2.1)
+    
     prompt = f"""
     Analyze the following news headline and URL for stock ticker {ticker} from a day-trader's perspective.
     Is this news a significant positive catalyst, a significant negative catalyst, or just neutral noise?
@@ -235,11 +241,8 @@ def run_catalyst_check(session: Session):
             logger.error(f"CatalystMonitor: Nieoczekiwany błąd w pętli dla tickera {ticker}: {e}", exc_info=True)
             session.rollback() # Upewnij się, że sesja jest czysta na następny ticker
         
-        # === POPRAWKA: Zwiększamy pauzę do 2.1 sekundy ===
-        # To da nam ~28 zapytań/minutę, co jest bardzo bezpieczne
-        finally:
-            time.sleep(2.1) 
-            # === KONIEC POPRAWKI ===
+        # === POPRAWKA: Usunięto time.sleep(2.1) z bloku 'finally' ===
+        # Pauza jest teraz obsługiwana wewnątrz funkcji _call_gemini_search i _call_gemini_analysis
 
     logger.info("CatalystMonitor: Cykl sprawdzania wiadomości zakończony.")
 
