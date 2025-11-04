@@ -38,6 +38,10 @@ if not API_KEY:
 current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
+# === NOWA ZMIENNA BLOKUJĄCA ===
+catalyst_monitor_running = False
+# === KONIEC ===
+
 def handle_ai_analysis_request(session):
     """Sprawdza i wykonuje nową analizę AI na żądanie."""
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
@@ -69,6 +73,38 @@ def handle_ai_analysis_request(session):
             session.commit()
         finally:
              utils.update_system_control(session, 'ai_analysis_request', 'NONE')
+
+
+# === NOWA FUNKCJA OTACZAJĄCA (WRAPPER) ===
+def run_catalyst_monitor_job():
+    """
+    Funkcja otaczająca (wrapper) z blokadą, aby zapobiec
+    współbieżnemu uruchamianiu monitora katalizatorów.
+    """
+    global catalyst_monitor_running
+    
+    if catalyst_monitor_running:
+        logger.warning("Catalyst monitor job skipped (already running).")
+        return
+    
+    logger.info("Starting catalyst monitor job...")
+    catalyst_monitor_running = True
+    session = None # Zdefiniuj sesję poza try, aby była dostępna w finally
+    try:
+        # Używamy get_db_session() do stworzenia nowej sesji dla zadania
+        session = get_db_session()
+        if session:
+            catalyst_monitor.run_catalyst_check(session)
+        else:
+            logger.error("Nie udało się uzyskać sesji bazy danych dla catalyst_monitor_job.")
+    except Exception as e:
+        logger.error(f"Critical error in catalyst_monitor_job: {e}", exc_info=True)
+    finally:
+        if session:
+            session.close() # Upewnij się, że sesja jest zamknięta
+        catalyst_monitor_running = False
+        logger.info("Catalyst monitor job finished.")
+# === KONIEC FUNKCJI ===
 
 
 def run_full_analysis_cycle():
@@ -147,7 +183,8 @@ def main_loop():
     schedule.every(15).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     
     # KROK 3: Dodajemy harmonogram dla Agencji Prasowej (co 5 minut)
-    schedule.every(5).minutes.do(lambda: catalyst_monitor.run_catalyst_check(get_db_session()))
+    # === POPRAWKA: Używamy nowej funkcji z blokadą ===
+    schedule.every(5).minutes.do(run_catalyst_monitor_job)
 
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
