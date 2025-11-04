@@ -87,7 +87,7 @@ def _call_gemini_search(ticker: str) -> list[dict]:
     Zwraca listę przetworzonych obiektów newsów (headline, uri).
     """
     # === POPRAWKA RATE LIMIT: Czekaj ZANIM wyślesz zapytanie ===
-    time.sleep(2.1)
+    time.sleep(6.1) # Zwiększono pauzę do 6.1 sekundy
     
     prompt = f"Find breaking, high-impact financial news, press releases, or FDA announcements for the company {ticker} from the last 3 hours. Focus on catalysts that could move the stock price significantly."
     
@@ -132,7 +132,7 @@ def _call_gemini_analysis(ticker: str, headline: str, uri: str) -> str:
     Używa JSON Schema do wymuszenia odpowiedzi.
     """
     # === POPRAWKA RATE LIMIT: Czekaj ZANIM wyślesz zapytanie ===
-    time.sleep(2.1)
+    time.sleep(6.1) # Zwiększono pauzę do 6.1 sekundy
     
     prompt = f"""
     Analyze the following news headline and URL for stock ticker {ticker} from a day-trader's perspective.
@@ -241,8 +241,7 @@ def run_catalyst_check(session: Session):
             logger.error(f"CatalystMonitor: Nieoczekiwany błąd w pętli dla tickera {ticker}: {e}", exc_info=True)
             session.rollback() # Upewnij się, że sesja jest czysta na następny ticker
         
-        # === POPRAWKA: Usunięto time.sleep(2.1) z bloku 'finally' ===
-        # Pauza jest teraz obsługiwana wewnątrz funkcji _call_gemini_search i _call_gemini_analysis
+        # Pauza została przeniesiona DO WNĘTRZA funkcji _call_gemini_...
 
     logger.info("CatalystMonitor: Cykl sprawdzania wiadomości zakończony.")
 
