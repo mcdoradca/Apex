@@ -1,11 +1,13 @@
 import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, Row
 from datetime import datetime, timezone
 import pytz
 # Importy dla Pandas, których potrzebujemy do obliczeń
 import pandas as pd
 from pandas import Series as pd_Series
+# ZMIANA: Dodajemy import 'Optional'
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -243,4 +245,27 @@ def calculate_ema(series: pd_Series, period: int) -> pd_Series:
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
     return series.ewm(span=period, adjust=False).mean()
+
+
+# ==================================================================
+#  NOWA FUNKCJA POMOCNICZA DLA AGENTA STRAŻNIKA
+# ==================================================================
+def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
+    """
+    Pobiera najnowszy istotny sygnał (AKTYWNY, OCZEKUJĄCY lub UNIEWAŻNIONY)
+    dla danego tickera z bazy danych.
+    """
+    try:
+        stmt = text("""
+            SELECT * FROM trading_signals
+            WHERE ticker = :ticker
+            AND status IN ('ACTIVE', 'PENDING', 'INVALIDATED')
+            ORDER BY generation_date DESC
+            LIMIT 1;
+        """)
+        result = session.execute(stmt, {'ticker': ticker}).fetchone()
+        return result
+    except Exception as e:
+        logger.error(f"Error fetching relevant signal for {ticker}: {e}", exc_info=True)
+        return None
 
