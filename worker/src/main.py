@@ -18,7 +18,7 @@ from .analysis import (
     phase3_sniper, 
     ai_agents, 
     utils,
-    catalyst_monitor # <-- NOWY IMPORT
+    catalyst_monitor # <-- Importujemy cały moduł
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -38,7 +38,7 @@ if not API_KEY:
 current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
-# === NOWA ZMIENNA BLOKUJĄCA ===
+# === ZMIENNA BLOKUJĄCA (NADAL POTRZEBNA) ===
 catalyst_monitor_running = False
 # === KONIEC ===
 
@@ -55,11 +55,7 @@ def handle_ai_analysis_request(session):
         session.commit()
 
         try:
-            # ==================================================================
-            #  OSTATECZNA POPRAWKA: Usunięto "_optimized" z nazwy funkcji
-            # ==================================================================
             results = ai_agents.run_ai_analysis(ticker_to_analyze, api_client)
-            # ==================================================================
             
             stmt = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
             session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(results)})
@@ -75,36 +71,86 @@ def handle_ai_analysis_request(session):
              utils.update_system_control(session, 'ai_analysis_request', 'NONE')
 
 
-# === NOWA FUNKCJA OTACZAJĄCA (WRAPPER) ===
+# === ZMODYFIKOWANA FUNKCJA (LOGIKA "STRAŻNIKA") ===
 def run_catalyst_monitor_job():
     """
-    Funkcja otaczająca (wrapper) z blokadą, aby zapobiec
-    współbieżnemu uruchamianiu monitora katalizatorów.
+    Funkcja "Strażnika". Uruchamiana co 10 minut, przetwarza 1 ticker,
+    ale tylko wtedy, gdy rynek jest otwarty (lub w pre-market).
     """
     global catalyst_monitor_running
     
     if catalyst_monitor_running:
-        logger.warning("Catalyst monitor job skipped (already running).")
+        logger.warning("Catalyst monitor job skipped (previous job still running).")
         return
     
-    logger.info("Starting catalyst monitor job...")
+    logger.info("Starting catalyst monitor batch job...")
     catalyst_monitor_running = True
-    session = None # Zdefiniuj sesję poza try, aby była dostępna w finally
+    session = None
+    
+    # DEFINIUJEMY WIELKOŚĆ PACZKI (Limit 250/dzień)
+    TICKERS_PER_BATCH = 1
+
     try:
-        # Używamy get_db_session() do stworzenia nowej sesji dla zadania
         session = get_db_session()
-        if session:
-            catalyst_monitor.run_catalyst_check(session)
-        else:
+        if not session:
             logger.error("Nie udało się uzyskać sesji bazy danych dla catalyst_monitor_job.")
+            catalyst_monitor_running = False
+            return
+            
+        # 1. SPRAWDŹ STATUS RYNKU (ABY NIE MARNOWAĆ ZAPYTAŃ API)
+        market_info = utils.get_market_status_and_time(api_client)
+        # Uruchamiaj tylko jeśli rynek jest otwarty, w pre-markecie lub after-market
+        if market_info["status"] == "MARKET_CLOSED":
+            logger.info(f"Catalyst monitor skipped (Market is {market_info['status']}).")
+            catalyst_monitor_running = False
+            return
+        
+        logger.info(f"Catalyst monitor running (Market is {market_info['status']}).")
+
+        # 2. Pobierz pełną listę tickerów do monitorowania
+        tickers = catalyst_monitor.get_tickers_to_monitor(session)
+        if not tickers:
+            logger.info("Catalyst monitor: Brak tickerów Fazy 3 do monitorowania.")
+            catalyst_monitor_running = False
+            return
+        
+        total_tickers = len(tickers)
+        
+        # 3. Pobierz ostatni indeks, od którego mamy zacząć
+        last_index_str = utils.get_system_control_value(session, 'catalyst_monitor_last_index')
+        last_index = 0
+        if last_index_str:
+            try:
+                last_index = int(last_index_str)
+            except ValueError:
+                logger.warning("Nieprawidłowa wartość 'catalyst_monitor_last_index' w bazie. Resetowanie do 0.")
+                last_index = 0
+
+        # 4. Przetwórz paczkę (BATCH) tickerów
+        logger.info(f"Catalyst monitor: Przetwarzanie paczki {TICKERS_PER_BATCH} tickerów (zaczynając od indeksu {last_index}). Całkowita lista: {total_tickers}")
+        
+        for i in range(TICKERS_PER_BATCH):
+            current_index = (last_index + i) % total_tickers
+            ticker_to_check = tickers[current_index]
+            
+            logger.info(f"Catalyst monitor processing ticker {current_index + 1}/{total_tickers}: {ticker_to_check}")
+            # Wywołaj funkcję sprawdzającą dla pojedynczego tickera
+            catalyst_monitor.run_check_for_single_ticker(ticker_to_check, session)
+
+        # 5. Zaktualizuj indeks na następne uruchomienie
+        new_index = (last_index + TICKERS_PER_BATCH) % total_tickers
+        utils.update_system_control(session, 'catalyst_monitor_last_index', str(new_index))
+
     except Exception as e:
         logger.error(f"Critical error in catalyst_monitor_job: {e}", exc_info=True)
+        if session:
+            session.rollback()
     finally:
         if session:
-            session.close() # Upewnij się, że sesja jest zamknięta
+            session.close()
         catalyst_monitor_running = False
-        logger.info("Catalyst monitor job finished.")
-# === KONIEC FUNKCJI ===
+        logger.info("Catalyst monitor batch job finished.")
+# === KONIEC ZMODYFIKOWANEJ FUNKCJI ===
 
 
 def run_full_analysis_cycle():
@@ -114,7 +160,6 @@ def run_full_analysis_cycle():
         logger.info("Cleaning tables before new analysis cycle...")
         session.execute(text("DELETE FROM phase2_results WHERE analysis_date = CURRENT_DATE;"))
         session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date >= CURRENT_DATE;"))
-        # Czyścimy stare wiadomości, aby umożliwić ponowną analizę
         session.execute(text("DELETE FROM processed_news WHERE processed_at < NOW() - INTERVAL '3 days';"))
         session.commit()
         logger.info("Daily tables cleaned. Proceeding with analysis.")
@@ -144,13 +189,11 @@ def run_full_analysis_cycle():
             raise Exception("Phase 1 found no candidates. Halting cycle.")
 
         utils.update_system_control(session, 'current_phase', 'PHASE_2')
-        # Zmieniona nazwa zmiennej, aby odzwierciedlić pełne dane
         qualified_data = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
         if not qualified_data:
             raise Exception("Phase 2 qualified no stocks. Halting cycle.")
 
         utils.update_system_control(session, 'current_phase', 'PHASE_3')
-        # Przekazujemy pełne dane (ticker, df) do Fazy 3
         phase3_sniper.run_tactical_planning(session, qualified_data, lambda: current_state, api_client)
 
         utils.append_scan_log(session, "Cykl analizy zakończony pomyślnie.")
@@ -179,17 +222,15 @@ def main_loop():
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     
-    # ZMIANA: Z 1 minuty na 15 sekund
     schedule.every(15).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     
-    # KROK 3: Dodajemy harmonogram dla Agencji Prasowej (co 5 minut)
-    # === POPRAWKA: Używamy nowej funkcji z blokadą ===
-    schedule.every(5).minutes.do(run_catalyst_monitor_job)
+    # ZMIANA: Używamy nowej funkcji "karuzeli" i rzadszego harmonogramu
+    schedule.every(10).minutes.do(run_catalyst_monitor_job)
 
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Real-Time Entry Trigger Monitor scheduled every 15 seconds.")
-    logger.info("Catalyst News Monitor scheduled every 5 minutes.") # <-- NOWY LOG
+    logger.info(f"Catalyst News Monitor scheduled every 10 minutes (processing {TICKERS_PER_BATCH} ticker(s) per run).")
 
 
     with get_db_session() as initial_session:
@@ -198,6 +239,7 @@ def main_loop():
         utils.update_system_control(initial_session, 'ai_analysis_request', 'NONE')
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'system_alert', 'NONE')
+        utils.update_system_control(initial_session, 'catalyst_monitor_last_index', '0') # Inicjalizujemy nowy wskaźnik
         utils.report_heartbeat(initial_session)
 
     while True:
