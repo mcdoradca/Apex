@@ -193,9 +193,10 @@
                 activeAnalysisPolling: null,
                 activeQuotePolling: null,
                 activePortfolioPolling: null,
-                // === NOWY STAN ===
                 activeCountdownPolling: null, // Timer dla odliczania rynkowego
-                currentViewTicker: null
+                currentViewTicker: null,
+                // === NOWY STAN: Pamięć dla alertów zysku ===
+                profitAlertsSent: {} // Słownik do śledzenia, czy alert dla danego tickera został już wysłany
             };
 
             // --- SELEKTORY UI (Definiowane od razu) ---
@@ -240,13 +241,13 @@
             console.log("UI Selectors defined.");
 
             // --- KONFIGURACJA API ---
-            // === ZMIANA: Poprawka adresu API ===
             const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
             const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms
             const QUOTE_POLL_INTERVAL = 15000;       // ms
             const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund na odświeżenie portfela
-            // NOWA STAŁA: Częstotliwość sprawdzania alertów
             const ALERT_POLL_INTERVAL = 7000; // 7 sekund
+            // === NOWA STAŁA: Próg alertu zysku ===
+            const PROFIT_ALERT_THRESHOLD = 1.02; // 1.02 oznacza +2%
 
             const logger = {
                 error: (message, ...args) => console.error(message, ...args),
@@ -258,7 +259,6 @@
                 const url = `${API_BASE_URL}${endpoint}`;
                 try {
                     const response = await fetch(url, options);
-                    // Ta cześć jest już bezpieczna, bo 'ui' jest zdefiniowane
                     if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
                     if (!response.ok) {
                         const errorText = await response.text();
@@ -287,7 +287,6 @@
                 getLiveQuote: (ticker) => apiRequest(`/api/v1/quote/${ticker}`),
                 addToWatchlist: (ticker) => apiRequest(`/api/v1/watchlist/${ticker}`, { method: 'POST' }),
                 getSystemAlert: () => apiRequest('/api/v1/system/alert'),
-                // NOWE FUNKCJE API
                 getPortfolio: () => apiRequest('/api/v1/portfolio'),
                 buyStock: (data) => apiRequest('/api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
                 sellStock: (data) => apiRequest('/api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
@@ -297,115 +296,75 @@
 
 
             // ==========================================================
-            // === NOWE FUNKCJE: Minutnik Rynkowy ===
+            // === FUNKCJE: Minutnik Rynkowy ===
             // ==========================================================
-
-            /**
-             * Zwraca aktualny obiekt Date dla strefy czasowej Nowego Jorku.
-             * Używa Intl.DateTimeFormat do wyciągnięcia komponentów czasu w ET,
-             * co jest niezawodne i odporne na zmiany czasu letniego/zimowego.
-             */
             function getNYTime() {
                 try {
                     const options = {
-                        timeZone: 'America/New_York',
-                        year: 'numeric', month: '2-digit', day: '2-digit',
-                        hour: '2-digit', minute: '2-digit', second: '2-digit',
-                        hour12: false // Kluczowe dla formatu 24h
+                        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
                     };
                     const formatter = new Intl.DateTimeFormat('en-US', options);
                     const parts = formatter.formatToParts(new Date());
-
                     const find = (type) => parts.find(p => p.type === type)?.value;
-                    
-                    const year = find('year');
-                    const month = find('month');
-                    const day = find('day');
-                    const hour = find('hour') === '24' ? '00' : find('hour'); // Poprawka dla północy
-                    const minute = find('minute');
-                    const second = find('second');
-
-                    // Tworzymy obiekt daty, który *reprezentuje* czas w ET
-                    // `new Date(year, monthIndex, day, hour, minute, second)`
-                    // Miesiące w JS są 0-indeksowane
+                    const year = find('year'), month = find('month'), day = find('day');
+                    const hour = find('hour') === '24' ? '00' : find('hour');
+                    const minute = find('minute'), second = find('second');
                     return new Date(year, parseInt(month) - 1, day, hour, minute, second);
-
                 } catch (e) {
                     logger.error("Błąd pobierania czasu NY, używam czasu lokalnego.", e);
-                    return new Date(); // Fallback
+                    return new Date();
                 }
             }
 
-            /**
-             * Formatuje milisekundy na czytelny string odliczania (np. 02g 15m 10s).
-             */
             function formatCountdown(ms) {
                 if (ms < 0) ms = 0;
                 const totalSeconds = Math.floor(ms / 1000);
                 const totalMinutes = Math.floor(totalSeconds / 60);
                 const totalHours = Math.floor(totalMinutes / 60);
-
                 const days = Math.floor(totalHours / 24);
                 const hours = totalHours % 24;
                 const minutes = totalMinutes % 60;
                 const seconds = totalSeconds % 60;
-                
                 let str = '';
                 if (days > 0) str += `${days}d `;
                 str += `${String(hours).padStart(2, '0')}g ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
                 return str;
             }
 
-            /**
-             * Główna logika obliczająca, co pokazać na minutniku.
-             */
             function getMarketCountdown() {
                 const now = getNYTime();
-                const dayOfWeek = now.getDay(); // 0 = Niedziela, 1 = Poniedziałek, ..., 6 = Sobota
-
+                const dayOfWeek = now.getDay();
                 const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
-
-                // Definicje czasu w ET (HH, MM, SS)
                 const preMarketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 4, 0, 0);
                 const marketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 30, 0);
                 const marketClose = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 16, 0, 0);
-
-                let message = '';
-                let targetTime = null;
+                let message = '', targetTime = null;
 
                 if (isWeekend) {
-                    let daysToAdd = (dayOfWeek === 6) ? 2 : 1; // Jeśli Sobota, dodaj 2 dni; jeśli Niedziela, dodaj 1
+                    let daysToAdd = (dayOfWeek === 6) ? 2 : 1;
                     targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
                     message = 'Do otwarcia Pre-Market: ';
                 } else {
-                    // Jest dzień roboczy
                     if (now < preMarketOpen) {
-                        // Przed 4:00 rano
                         targetTime = preMarketOpen;
                         message = 'Do otwarcia Pre-Market: ';
                     } else if (now >= preMarketOpen && now < marketOpen) {
-                        // Pomiędzy 4:00 a 9:30
                         targetTime = marketOpen;
                         message = 'Do otwarcia Rynku: ';
                     } else if (now >= marketOpen && now < marketClose) {
-                        // Rynek otwarty
                         targetTime = marketClose;
                         message = 'Do zamknięcia Rynku: ';
                     } else {
-                        // Rynek zamknięty (po 16:00)
-                        let daysToAdd = (dayOfWeek === 5) ? 3 : 1; // Jeśli Piątek, dodaj 3 dni
+                        let daysToAdd = (dayOfWeek === 5) ? 3 : 1;
                         targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
                         message = 'Do otwarcia Pre-Market: ';
                     }
                 }
-                
                 const diff = targetTime.getTime() - now.getTime();
                 return message + formatCountdown(diff);
             }
 
-            /**
-             * Aktualizuje element DOM co sekundę.
-             */
             function updateCountdownTimer() {
                 const timerElement = document.getElementById('market-countdown-timer');
                 if (timerElement) {
@@ -413,19 +372,13 @@
                 }
             }
 
-            /**
-             * Uruchamia globalny interwał dla minutnika.
-             */
             function startMarketCountdown() {
-                stopMarketCountdown(); // Zatrzymaj stary, jeśli istnieje
+                stopMarketCountdown();
                 logger.info("Rozpoczynam odliczanie rynkowe (co 1s).");
-                updateCountdownTimer(); // Uruchom od razu
+                updateCountdownTimer();
                 state.activeCountdownPolling = setInterval(updateCountdownTimer, 1000);
             }
 
-            /**
-             * Zatrzymuje globalny interwał dla minutnika.
-             */
             function stopMarketCountdown() {
                 if (state.activeCountdownPolling) {
                     logger.info("Zatrzymuję odliczanie rynkowe.");
@@ -435,7 +388,7 @@
             }
 
             // ==========================================================
-            // === Koniec nowych funkcji Minutnika ===
+            // === Koniec funkcji Minutnika ===
             // ==========================================================
 
 
@@ -520,7 +473,7 @@
                     const { overall_score = 0, max_score = 1, recommendation = "Brak", agents = {}, quote_data = null, market_info = null } = data;
                     const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
                     let rec_color = "bg-gray-500";
-                    if (recommendation === "BARDZO SILNY KANDYDAT DO KUPNA") rec_color = "bg-green-500";
+                    if (recommendation === "BARDZO SILNY KANDDAT DO KUPNA") rec_color = "bg-green-500";
                     else if (recommendation === "SILNY KANDYDAT DO OBSERWACJI") rec_color = "bg-sky-500";
                     else if (recommendation === "INTERESUJĄCY KANDYDAT") rec_color = "bg-yellow-500";
                     const createAgentCard = (agentName, icon, agentData) => {
@@ -531,7 +484,6 @@
                 },
                 dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3><p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p></div></div><h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3><div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div></div>`,
                 
-                // NOWY: Renderer Portfela
                 portfolio: (holdings, quotes) => {
                     let totalPortfolioValue = 0;
                     let totalProfitLoss = 0;
@@ -539,9 +491,12 @@
                         const quote = quotes[h.ticker];
                         let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
                         let priceClass = 'text-gray-400';
-                        if (quote && quote['price']) { // Zmieniono z '05. price' na 'price'
+                        
+                        // === POPRAWKA 1: Szukamy '05. price' ===
+                        if (quote && quote['05. price']) {
                             try {
-                                currentPrice = parseFloat(quote['price']);
+                                currentPrice = parseFloat(quote['05. price']);
+                                // Używamy 'change percent' bez '10.' bo nasz client API (bulk quotes) zwraca czyste klucze
                                 dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                                 priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                                 currentValue = h.quantity * currentPrice;
@@ -558,7 +513,6 @@
                     return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th><th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th><th scope="col" class="p-3 text-right">Akcja</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
                 },
                 
-                // NOWY: Renderer Historii Transakcji
                 transactions: (transactions) => {
                      const rows = transactions.map(t => {
                         const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
@@ -597,37 +551,32 @@
                 if (ui_dash.scanLog.textContent !== statusData.log) {
                     ui_dash.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
                     const logContainer = document.getElementById('scan-log-container');
-                    
-                    // === ZMIANA 3: Przewijanie logów ===
-                    // Zmieniamy z scrollHeight na 0, aby zawsze pokazywać najnowszy log (który backend umieszcza na górze)
                     if(logContainer) logContainer.scrollTop = 0; 
                 }
                 ui_dash.signals.textContent = state.phase3.length;
             }
 
-            // === ZMIANA 2: Inteligentne alerty (Kolory i Ikony) ===
             function displaySystemAlert(message) {
                 if (!message || message === 'NONE') return;
 
-                let alertClass = 'bg-sky-500'; // Domyślny (niebieski)
-                let alertIcon = 'bell-ring'; // Domyślna ikona
+                let alertClass = 'bg-sky-500';
+                let alertIcon = 'bell-ring';
 
                 if (message.includes('NEGATYWNY ALERT')) {
-                    alertClass = 'bg-red-600'; // Czerwony dla negatywnych newsów
+                    alertClass = 'bg-red-600';
                     alertIcon = 'alert-octagon';
                 } else if (message.includes('POZYTYWNY ALERT')) {
-                    alertClass = 'bg-green-600'; // Zielony dla pozytywnych newsów
+                    alertClass = 'bg-green-600';
                     alertIcon = 'check-circle';
-                } else if (message.includes('ALARM CENOWY')) {
-                    alertClass = 'bg-yellow-500'; // Pomarańczowy/żółty dla alertów cenowych
+                // === POPRAWKA 2: Nowy typ alertu dla zysku ===
+                } else if (message.includes('ALARM CENOWY') || message.includes('ALERT ZYSKU')) {
+                    alertClass = 'bg-yellow-500';
                     alertIcon = 'dollar-sign';
                 }
-                // Inne alerty (np. systemowe) pozostaną niebieskie
 
                 const alertId = `alert-${Date.now()}`;
                 const alertElement = document.createElement('div');
                 alertElement.id = alertId;
-                // Stosujemy dynamiczną klasę koloru
                 alertElement.className = `alert-bar flex items-center justify-between gap-4 ${alertClass} text-white p-3 shadow-lg rounded-md animate-pulse-once`;
                 
                 alertElement.innerHTML = `
@@ -647,13 +596,11 @@
                     alertElement.remove();
                 });
 
-                // Automatyczne usunięcie alertu po 20 sekundach
                 setTimeout(() => {
                     alertElement.remove();
                 }, 20000);
             }
 
-            // === NOWA FUNKCJA: Cykliczne sprawdzanie alertów ===
             async function pollSystemAlerts() {
                 try {
                     const alertData = await api.getSystemAlert();
@@ -661,9 +608,7 @@
                         displaySystemAlert(alertData.message);
                     }
                 } catch (e) {
-                    // Błędy są już logowane w apiRequest, więc tutaj nie trzeba nic robić
                 } finally {
-                    // Kontynuuj pętlę
                     setTimeout(pollSystemAlerts, ALERT_POLL_INTERVAL);
                 }
             }
@@ -716,7 +661,7 @@
                 if (state.activeAnalysisPolling) { clearTimeout(state.activeAnalysisPolling); state.activeAnalysisPolling = null; }
                 if (state.activeQuotePolling) { clearTimeout(state.activeQuotePolling); state.activeQuotePolling = null; }
                 if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
-                stopMarketCountdown(); // <-- ZATRZYMUJEMY MINUTNIK
+                stopMarketCountdown(); 
                 state.currentViewTicker = null;
             }
 
@@ -734,7 +679,6 @@
                  lucide.createIcons();
             }
 
-            // NOWA: Funkcja widoku portfela
             async function showPortfolio() {
                 stopAllPolling();
                 state.currentViewTicker = null;
@@ -744,6 +688,8 @@
                     const holdings = await api.getPortfolio();
                     state.portfolio = holdings;
                     state.liveQuotes = {}; // Wyczyść cache cen
+                    // === POPRAWKA 2: Resetujemy pamięć alertów zysku ===
+                    state.profitAlertsSent = {}; // Resetuj przy każdym załadowaniu portfela
                     ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
                     lucide.createIcons();
                     startPortfolioPolling(); // Rozpocznij odświeżanie cen
@@ -752,7 +698,6 @@
                 }
             }
 
-            // NOWA: Funkcja widoku transakcji
             async function showTransactions() {
                 stopAllPolling();
                 state.currentViewTicker = null;
@@ -768,9 +713,8 @@
                 }
             }
 
-            // NOWA: Funkcja odświeżania cen w portfelu
             async function pollPortfolioQuotes() {
-                 if (state.currentViewTicker) { // Jeśli jesteśmy w widoku analizy, zatrzymaj
+                 if (state.currentViewTicker) {
                     state.activePortfolioPolling = null; 
                     return; 
                  }
@@ -783,42 +727,78 @@
                  logger.info(`Odświeżanie cen dla portfela: ${portfolioTickers.join(', ')}`);
                  let quotesUpdated = false;
                  try {
-                     // Używamy Promise.all, aby przyspieszyć pobieranie
                      const quotePromises = portfolioTickers.map(ticker => api.getLiveQuote(ticker));
                      const quoteResults = await Promise.all(quotePromises);
                      
+                     const newQuotes = { ...state.liveQuotes };
                      quoteResults.forEach((quoteData, index) => {
                          const ticker = portfolioTickers[index];
                          if (quoteData) { 
-                             state.liveQuotes[ticker] = quoteData; 
+                             newQuotes[ticker] = quoteData; 
                              quotesUpdated = true; 
-                         } else {
-                             // Zachowaj stare dane, jeśli nowe się nie powiodły, lub usuń
-                             // delete state.liveQuotes[ticker]; 
-                             // quotesUpdated = true;
                          }
                      });
+                     state.liveQuotes = newQuotes; // Zaktualizuj stan globalny
 
                      if (quotesUpdated && !state.currentViewTicker && document.getElementById('portfolio-view')) {
                           ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
                           lucide.createIcons();
                      }
+
+                    // === POPRAWKA 2: Logika monitorowania zysku ===
+                    checkPortfolioProfitAlerts();
+
                  } catch (e) {
                      logger.error("Błąd podczas odświeżania cen portfela:", e);
                  } finally {
-                      if (!state.currentViewTicker) { // Kontynuuj tylko jeśli nadal jesteśmy w widoku portfela
+                      if (!state.currentViewTicker) { 
                            state.activePortfolioPolling = setTimeout(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
                       } else { 
                            state.activePortfolioPolling = null; 
                       }
                  }
             }
+            
+            // === POPRAWKA 2: Nowa funkcja do sprawdzania zysków ===
+            function checkPortfolioProfitAlerts() {
+                logger.info("Sprawdzanie alertów zysku w portfelu...");
+                state.portfolio.forEach(holding => {
+                    const quote = state.liveQuotes[holding.ticker];
+                    if (quote && quote['05. price']) {
+                        try {
+                            const currentPrice = parseFloat(quote['05. price']);
+                            const avgBuyPrice = holding.average_buy_price;
+                            
+                            // Sprawdź, czy zysk przekroczył próg
+                            if (currentPrice >= (avgBuyPrice * PROFIT_ALERT_THRESHOLD)) {
+                                // Sprawdź, czy alert nie został już wysłany
+                                if (!state.profitAlertsSent[holding.ticker]) {
+                                    const profitPercent = ((currentPrice / avgBuyPrice) - 1) * 100;
+                                    const alertMsg = `ALERT ZYSKU: ${holding.ticker} osiągnął +${profitPercent.toFixed(1)}% (Cena: ${currentPrice.toFixed(2)})`;
+                                    logger.warn(alertMsg);
+                                    displaySystemAlert(alertMsg);
+                                    state.profitAlertsSent[holding.ticker] = true; // Zaznacz jako wysłany
+                                }
+                            } else {
+                                // Zresetuj flagę alertu, jeśli cena spadnie poniżej progu
+                                // To pozwoli na ponowne powiadomienie, jeśli cena znowu wzrośnie
+                                if (state.profitAlertsSent[holding.ticker]) {
+                                    logger.info(`Resetowanie alertu zysku dla ${holding.ticker}, cena spadła poniżej progu.`);
+                                    state.profitAlertsSent[holding.ticker] = false;
+                                }
+                            }
+                        } catch(e) {
+                            logger.error(`Błąd podczas sprawdzania alertu zysku dla ${holding.ticker}:`, e);
+                        }
+                    }
+                });
+            }
 
             function startPortfolioPolling() {
                  stopPortfolioPolling();
                  if (state.portfolio.length > 0) {
                      logger.info("Rozpoczynam odświeżanie cen portfela.");
-                     pollPortfolioQuotes(); // Uruchom od razu
+                     pollPortfolioQuotes();
                  }
             }
             function stopPortfolioPolling() {
@@ -833,7 +813,6 @@
                 if (state.currentViewTicker !== ticker) { state.activeQuotePolling = null; return; }
                 try {
                     const quoteData = await api.getLiveQuote(ticker);
-                    // Poprawka: Market info pobieramy teraz z quoteData, jeśli jest
                     const marketInfo = state.currentAnalysisData?.market_info;
                     
                     const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
@@ -879,7 +858,7 @@
                          state.activeAnalysisPolling = null;
                          if (data.status === 'DONE') {
                              startQuotePolling(ticker);
-                             startMarketCountdown(); // <-- URUCHAMIAMY MINUTNIK
+                             startMarketCountdown();
                          }
                     }
                 } catch(e) {
@@ -894,7 +873,7 @@
                 stopAllPolling();
                 state.currentViewTicker = ticker;
                 state.currentAnalysisData = null;
-                setActiveSidebar(null); // Odznacz aktywne linki w sidebarze
+                setActiveSidebar(null);
                 ui.mainContent.innerHTML = renderers.loading(`Uruchamianie analizy AI dla ${ticker}...`);
                 try {
                     logger.info(`Zlecanie nowej analizy dla ${ticker} (POST)...`);
@@ -923,14 +902,14 @@
                  const quantity = parseInt(ui.buyModal.quantityInput.value, 10);
                  const price = parseFloat(ui.buyModal.priceInput.value);
                  if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
-                     displaySystemAlert("BŁĄD: Proszę wprowadzić poprawną ilość i cenę."); // Używamy nowego systemu alertów
+                     displaySystemAlert("BŁĄD: Proszę wprowadzić poprawną ilość i cenę.");
                      return; 
                  }
                  ui.buyModal.confirmBtn.disabled = true; ui.buyModal.confirmBtn.textContent = "Przetwarzanie...";
                  try {
                     await api.buyStock({ ticker, quantity, price_per_share: price });
                     hideBuyModal();
-                    showPortfolio(); // Odśwież widok portfela
+                    showPortfolio();
                 } catch (e) { displaySystemAlert(`Błąd zakupu: ${e.message}`);
                 } finally { ui.buyModal.confirmBtn.disabled = false; ui.buyModal.confirmBtn.textContent = "Inwestuj"; }
             }
@@ -965,7 +944,7 @@
                  try {
                      await api.sellStock({ ticker, quantity, price_per_share: price });
                      hideSellModal();
-                     await showPortfolio(); // Odśwież widok portfela
+                     await showPortfolio();
                  } catch (e) { displaySystemAlert(`Błąd sprzedaży: ${e.message}`);
                  } finally { ui.sellModal.confirmBtn.disabled = false; ui.sellModal.confirmBtn.textContent = "Realizuj"; }
             }
@@ -1058,8 +1037,7 @@
                 showDashboard();
                 pollWorkerStatus();
                 refreshSidebarData();
-                // === URUCHOMIENIE NOWEJ FUNKCJI ===
-                pollSystemAlerts(); // Startujemy pętlę sprawdzania alertów
+                pollSystemAlerts(); 
                 try { lucide.createIcons(); } catch(e) { logger.error("Lucide error:", e); }
             }
             console.log("startApp function defined.");
@@ -1102,4 +1080,3 @@
     </script>
     </body>
 </html>
-
