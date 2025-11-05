@@ -26,6 +26,7 @@ class PortfolioHoldingBase(BaseModel):
 class PortfolioHolding(PortfolioHoldingBase):
     first_purchase_date: datetime
     last_updated: datetime
+    take_profit: Optional[float] = None # <-- POPRAWIONE POLE (Take Profit)
 
     model_config = ConfigDict(from_attributes=True) # Umożliwia tworzenie z obiektów ORM
 
