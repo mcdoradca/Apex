@@ -21,14 +21,27 @@ def _run_schema_and_index_migration(session: Session):
         # --- Krok 1: Sprawdzenie i dodanie brakujących kolumn (jeśli istnieją) ---
         engine = session.get_bind()
         inspector = inspect(engine)
+        
         if 'trading_signals' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('trading_signals')]
+            
             if 'entry_zone_bottom' not in columns:
                 logger.warning("Migration needed: Adding column 'entry_zone_bottom'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN entry_zone_bottom NUMERIC(12, 2)"))
             if 'entry_zone_top' not in columns:
                 logger.warning("Migration needed: Adding column 'entry_zone_top'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN entry_zone_top NUMERIC(12, 2)"))
+                
+            # ==================================================================
+            # KROK 4 (Migracja): Dodanie brakującej kolumny "updated_at"
+            # To jest polecenie, którego brak powoduje wszystkie błędy.
+            # ==================================================================
+            if 'updated_at' not in columns:
+                logger.warning("Migration needed: Adding column 'updated_at' to 'trading_signals' table.")
+                # Dodajemy kolumnę z domyślną wartością NOW(), aby uniknąć problemów z istniejącymi wierszami
+                session.execute(text("ALTER TABLE trading_signals ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+                logger.info("Successfully added 'updated_at' column.")
+            # ==================================================================
 
         # --- Krok 2: OSTATECZNA NAPRAWA - Zapewnienie istnienia częściowego indeksu unikalnego ---
         index_name = 'uq_active_pending_ticker'
