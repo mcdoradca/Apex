@@ -53,12 +53,20 @@ class AlphaVantageClient:
             logger.error("Cannot make Alpha Vantage request: API key is missing.")
             return None
             
+        # === POPRAWKA KODU: Dodanie klucza API do każdego zapytania ===
+        # Tworzymy nowy słownik params, który zawiera oryginalne parametry
+        # oraz klucz API.
+        request_params = params.copy()
+        request_params['apikey'] = self.api_key
+        # ==========================================================
+            
         request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
         
         for attempt in range(self.retries):
             self._rate_limiter() # Przeniesiono limiter *do* pętli ponawiania
             try:
-                response = requests.get(self.BASE_URL, params=params, timeout=30)
+                # Używamy nowego słownika 'request_params' zamiast 'params'
+                response = requests.get(self.BASE_URL, params=request_params, timeout=30)
                 
                 # Spróbuj sparsować JSON w pierwszej kolejności
                 try:
@@ -272,4 +280,3 @@ class AlphaVantageClient:
             logger.error(f"Błąd podczas konwersji formatu Bulk->GlobalQuote dla {symbol}: {e}", exc_info=True)
             # ==================================================================
             return None
-
