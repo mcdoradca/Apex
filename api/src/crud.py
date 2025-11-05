@@ -25,9 +25,34 @@ def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
 # === NOWE FUNKCJE CRUD DLA PORTFELA I TRANSAKCJI ===
 # ==========================================================
 
-def get_portfolio_holdings(db: Session) -> List[models.PortfolioHolding]:
-    """Pobiera wszystkie aktualnie otwarte pozycje z portfela."""
-    return db.query(models.PortfolioHolding).order_by(models.PortfolioHolding.ticker).all()
+def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
+    """
+    Pobiera wszystkie aktualnie otwarte pozycje z portfela,
+    dołączając docelową cenę (take_profit) z aktywnych lub oczekujących sygnałów.
+    """
+    # Wykonujemy zapytanie z LEFT OUTER JOIN
+    results = db.query(
+        models.PortfolioHolding,
+        models.TradingSignal.take_profit
+    ).outerjoin(
+        models.TradingSignal,
+        (models.PortfolioHolding.ticker == models.TradingSignal.ticker) &
+        (models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])) # Łączymy tylko z istotnymi sygnałami
+    ).order_by(models.PortfolioHolding.ticker).all()
+
+    # Przetwarzamy wyniki
+    holdings_with_tp = []
+    for (holding, take_profit) in results:
+        # Konwertujemy model ORM 'holding' na schemat Pydantic 'PortfolioHolding'
+        # (dzięki config: from_attributes=True w schemas.py)
+        holding_schema = schemas.PortfolioHolding.model_validate(holding)
+        
+        # Ręcznie ustawiamy dodatkowe pole 'take_profit'
+        holding_schema.take_profit = float(take_profit) if take_profit is not None else None
+        
+        holdings_with_tp.append(holding_schema)
+    
+    return holdings_with_tp
 
 def get_transaction_history(db: Session, limit: int = 100) -> List[models.TransactionHistory]:
     """Pobiera historię ostatnich transakcji."""
