@@ -11,6 +11,20 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# ==================================================================
+# KROK 1 ZMIANY: Wydzielenie funkcji czasu nowojorskiego
+# ==================================================================
+def get_current_NY_datetime() -> datetime:
+    """Zwraca aktualny obiekt datetime dla strefy czasowej Nowego Jorku."""
+    try:
+        tz = pytz.timezone('US/Eastern')
+        return datetime.now(tz)
+    except Exception as e:
+        logger.error(f"Error getting New York time: {e}", exc_info=True)
+        # Zwróć czas UTC jako awaryjny
+        return datetime.now(timezone.utc)
+# ==================================================================
+
 def get_market_status_and_time(api_client) -> dict:
     """
     Sprawdza status giełdy NASDAQ używając dedykowanego endpointu API
@@ -18,12 +32,12 @@ def get_market_status_and_time(api_client) -> dict:
     """
     # 1. Zawsze pobieraj aktualny czas dla celów wyświetlania
     try:
-        tz = pytz.timezone('US/Eastern')
-        now_ny = datetime.now(tz)
+        # ZMIANA: Używamy nowej, wydzielonej funkcji
+        now_ny = get_current_NY_datetime()
         time_ny_str = now_ny.strftime('%H:%M:%S ET')
         date_ny_str = now_ny.strftime('%Y-%m-%d')
     except Exception as e:
-        logger.error(f"Error getting New York time: {e}")
+        logger.error(f"Error formatting New York time: {e}")
         time_ny_str = "N/A"
         date_ny_str = "N/A"
 
@@ -267,5 +281,4 @@ def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
         return result
     except Exception as e:
         logger.error(f"Error fetching relevant signal for {ticker}: {e}", exc_info=True)
-        return None
-
+        
