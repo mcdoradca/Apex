@@ -142,6 +142,24 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     return crud.get_active_and_pending_signals(db)
 
+# ==========================================================
+# KROK 4e (Licznik): Endpoint API do pobierania licznika
+# ==========================================================
+@app.get("/api/v1/signals/discarded-count-24h", response_model=Dict[str, int], summary="Pobiera liczbę sygnałów unieważnionych/zakończonych w ciągu ostatnich 24h")
+def get_discarded_signals_count(db: Session = Depends(get_db)):
+    """
+    Zwraca liczbę sygnałów, które zmieniły status na 'INVALIDATED' 
+    lub 'COMPLETED' w ciągu ostatnich 24 godzin.
+    """
+    try:
+        count = crud.get_discarded_signals_count_24h(db)
+        return {"discarded_count_24h": count}
+    except Exception as e:
+        logger.error(f"Error fetching discarded signals count: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Nie można pobrać licznika unieważnionych sygnałów.")
+# ==========================================================
+
+
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
 def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
     try:
