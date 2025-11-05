@@ -269,6 +269,10 @@ class AlphaVantageClient:
             return formatted_quote
             
         except Exception as e:
-            logger.error(f"Błąd podczas konwersji formatu Bulk->GlobalQuote dla {symbol}: {e}", exc_info:True)
+            # ==================================================================
+            # KRYTYCZNA POPRAWKA: Zmiana ':' na '='
+            # ==================================================================
+            logger.error(f"Błąd podczas konwersji formatu Bulk->GlobalQuote dla {symbol}: {e}", exc_info=True)
+            # ==================================================================
             return None
 
