@@ -2,7 +2,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, desc, func, update, delete # Dodano update, delete
 from . import models, schemas # Dodano import schemas
 from typing import Optional, Any, Dict, List
-from datetime import date, datetime, timezone # <<< DODANO timezone TUTAJ
+# KROK 4d: Dodano 'timedelta' do obliczeń 24-godzinnych
+from datetime import date, datetime, timezone, timedelta 
 import logging
 # NOWY IMPORT dla typów Decimal, które są lepsze do obliczeń finansowych
 from decimal import Decimal, ROUND_HALF_UP
@@ -288,6 +289,37 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
         } for signal in signals_from_db
     ]
 
+# ==================================================================
+# KROK 4d (Licznik): Dodanie nowej funkcji do zliczania "wyrzuconych"
+# ==================================================================
+def get_discarded_signals_count_24h(db: Session) -> int:
+    """
+    Zlicza sygnały, które zostały unieważnione (INVALIDATED) lub
+    zakończone (COMPLETED) w ciągu ostatnich 24 godzin.
+    """
+    try:
+        # Definiujemy statusy "wyrzucone" (zakończone lub unieważnione)
+        discarded_statuses = ['INVALIDATED', 'COMPLETED']
+        
+        # Obliczamy czas 24 godziny temu
+        time_24_hours_ago = datetime.now(timezone.utc) - timedelta(days=1)
+
+        # Budujemy zapytanie
+        # Zliczamy sygnały, których status należy do "wyrzuconych"
+        # ORAZ których data aktualizacji jest w ciągu ostatnich 24h
+        count = db.query(func.count(models.TradingSignal.id)).filter(
+            models.TradingSignal.status.in_(discarded_statuses),
+            models.TradingSignal.updated_at >= time_24_hours_ago
+        ).scalar()
+        
+        return count if count is not None else 0
+        
+    except Exception as e:
+        logger.error(f"Error counting discarded signals: {e}", exc_info=True)
+        return 0 # Zwróć 0 w przypadku błędu
+# ==================================================================
+# Koniec Krok 4d
+# ==================================================================
 
 def delete_phase1_candidate(db: Session, ticker: str):
     # Nieużywane?
