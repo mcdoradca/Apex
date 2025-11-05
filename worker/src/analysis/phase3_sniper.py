@@ -182,12 +182,14 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
                     INSERT INTO trading_signals (
                         ticker, generation_date, status, 
                         entry_price, stop_loss, take_profit, risk_reward_ratio, 
-                        notes, entry_zone_bottom, entry_zone_top
+                        notes, entry_zone_bottom, entry_zone_top,
+                        updated_at 
                     )
                     VALUES (
                         :ticker, NOW(), :status, 
                         :entry, :sl, :tp, :rr, 
-                        :notes, :ezb, :ezt
+                        :notes, :ezb, :ezt,
+                        NOW()
                     )
                     ON CONFLICT (ticker) WHERE status IN ('ACTIVE', 'PENDING')
                     DO UPDATE SET 
@@ -199,7 +201,8 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
                         risk_reward_ratio = EXCLUDED.risk_reward_ratio, 
                         notes = EXCLUDED.notes, 
                         entry_zone_bottom = EXCLUDED.entry_zone_bottom, 
-                        entry_zone_top = EXCLUDED.entry_zone_top;
+                        entry_zone_top = EXCLUDED.entry_zone_top,
+                        updated_at = EXCLUDED.updated_at;
                 """)
                 params = {
                     'ticker': ticker,
@@ -295,12 +298,13 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
             entry_price_target = float(signal_row.entry_price) if signal_row.entry_price is not None else float(signal_row.entry_zone_bottom) if signal_row.entry_zone_bottom is not None else None
 
             # ==================================================================
-            # KROK 2 POPRAWKI (LOGIKA): Monitor Take Profit
+            # KROK 3 i 4c POPRAWKI (LOGIKA): Monitor Take Profit
             # ==================================================================
             if take_profit_price is not None and current_price >= take_profit_price:
                 logger.warning(f"TAKE PROFIT: {ticker} cena LIVE ({current_price}) osiągnęła cel ({take_profit_price}). Zamykanie sygnału.")
                 
-                update_stmt = text("UPDATE trading_signals SET status = 'COMPLETED', notes = :notes WHERE id = :signal_id")
+                # Krok 4c: Dodano ", updated_at = NOW()"
+                update_stmt = text("UPDATE trading_signals SET status = 'COMPLETED', notes = :notes, updated_at = NOW() WHERE id = :signal_id")
                 session.execute(update_stmt, {
                     'signal_id': signal_row.id,
                     'notes': f"Sygnał zakończony (TAKE PROFIT). Cena LIVE {current_price} >= Cel {take_profit_price}."
@@ -314,12 +318,15 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
             # === Koniec Logiki Take Profit ===
 
 
-            # === Logika Stop Loss (Strażnik) ===
+            # ==================================================================
+            # KROK 4c POPRAWKI (LOGIKA): Monitor Stop Loss (Strażnik)
+            # ==================================================================
             if stop_loss_price is not None and current_price <= stop_loss_price:
                 # CENA JEST PONIŻEJ STOP LOSSA!
                 logger.warning(f"STOP LOSS (Strażnik): {ticker} cena LIVE ({current_price}) spadła PONIŻEJ Stop Loss ({stop_loss_price}). Unieważnianie setupu.")
                 
-                update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes WHERE id = :signal_id")
+                # Krok 4c: Dodano ", updated_at = NOW()"
+                update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes, updated_at = NOW() WHERE id = :signal_id")
                 session.execute(update_stmt, {
                     'signal_id': signal_row.id,
                     'notes': f"Setup automatycznie unieważniony (STOP LOSS). Cena LIVE {current_price} <= SL {stop_loss_price}."
@@ -338,7 +345,7 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                 continue
             
             # ==================================================================
-            # KROK 2 POPRAWKI (LOGIKA): Monitor "Zużycia" Setupu (Problem CSTL)
+            # KROK 3 i 4c POPRAWKI (LOGIKA): Monitor "Zużycia" Setupu (Problem CSTL)
             # ==================================================================
             # Sprawdzamy tylko sygnały PENDING (OCZEKUJĄCE)
             if signal_row.status == 'PENDING':
@@ -355,7 +362,8 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                         if gap_percent > 0.30:
                             logger.warning(f"ZUŻYTY SETUP: {ticker} cena LIVE ({current_price}) jest zbyt daleko od wejścia ({entry_price_target}). Unieważnianie.")
                             
-                            update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes WHERE id = :signal_id")
+                            # Krok 4c: Dodano ", updated_at = NOW()"
+                            update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes, updated_at = NOW() WHERE id = :signal_id")
                             session.execute(update_stmt, {
                                 'signal_id': signal_row.id,
                                 'notes': f"Setup unieważniony (ZUŻYTY). Cena LIVE ({current_price}) zbyt daleko od wejścia ({entry_price_target})."
@@ -380,7 +388,9 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                 # Jeśli sygnał był PENDING, promuj go na ACTIVE
                 if signal_row.status == 'PENDING':
                     logger.info(f"Promowanie sygnału dla {ticker} z PENDING na ACTIVE.")
-                    update_stmt = text("UPDATE trading_signals SET status = 'ACTIVE' WHERE id = :signal_id")
+                    
+                    # Krok 4c: Dodano ", updated_at = NOW()"
+                    update_stmt = text("UPDATE trading_signals SET status = 'ACTIVE', updated_at = NOW() WHERE id = :signal_id")
                     session.execute(update_stmt, {'signal_id': signal_row.id})
                     session.commit() # Commitujemy od razu zmianę statusu
                     
