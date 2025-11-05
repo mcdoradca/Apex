@@ -149,18 +149,23 @@ def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
 
 
 # --- AGENT 4: AGENT STRAŻNIKA WEJŚĆ (NOWA LOGIKA) ---
-# ZMIANA: Agent odczytuje teraz stan z bazy danych, zamiast go obliczać
+# ==================================================================
+# KROK 6 POPRAWKI (LOGIKA): Przebudowa Agenta Taktycznego
+# ==================================================================
 def _run_tactical_agent(session: Session, ticker: str) -> dict:
     """
     Agent, który odczytuje AKTUALNY stan setupu (ACTIVE, PENDING, INVALIDATED)
-    z bazy danych i przekazuje go do frontendu.
+    z bazy danych i przekazuje go do frontendu, używając dynamicznych
+    i precyzyjnych komunikatów, a nie statycznego tekstu.
     """
     score = 0
     max_score = 5 
     details = {}
+    summary = "" # Zostanie ustawiony dynamicznie
 
     try:
         # 1. Użyj nowej funkcji pomocniczej, aby pobrać ostatni istotny sygnał
+        #    (Funkcja ta pobiera teraz także COMPLETED)
         relevant_signal = utils.get_relevant_signal_from_db(session, ticker)
         
         # 2. Jeśli nie ma sygnału (nawet unieważnionego), to znaczy, że nic nie znaleziono
@@ -176,23 +181,39 @@ def _run_tactical_agent(session: Session, ticker: str) -> dict:
         signal_status = relevant_signal.status
         signal_notes = relevant_signal.notes
         
-        # 4. Jeśli setup został już UNIEWAŻNIONY przez Strażnika (backend)...
-        if signal_status == 'INVALIDATED':
-            score = 1 # Dajemy niski wynik, ale nie zero
-            summary = "Setup ZANEGOWANY. Został unieważniony przez Strażnika backendu (cena spadła poniżej SL)."
-            details["Status"] = "ZANEGOWANY"
-            details["Powód"] = signal_notes
-            if relevant_signal.stop_loss:
-                details["Stop Loss (EOD)"] = f"${relevant_signal.stop_loss:.2f}"
-            
-            return {"name": "Agent Strażnik Wejść", "score": score, "max_score": max_score, "summary": summary, "details": details}
-
-        # 5. Jeśli setup jest AKTYWNY lub OCZEKUJĄCY...
-        score = 5
-        summary = "Wykryto aktywny setup EOD. Strażnik w przeglądarce zweryfikuje cenę LIVE."
-        details["Status EOD"] = f"Setup {signal_status}: {signal_notes}"
+        # 4. Dynamiczne generowanie podsumowania i wyniku na podstawie statusu
         
-        # Przekaż statyczne parametry do frontendu
+        if signal_status == 'INVALIDATED':
+            score = 1 # Niski wynik, ale nie zero (informacja jest cenna)
+            summary = "Setup ZANEGOWANY (NIEAKTUALNY). Został unieważniony przez Strażnika Backendu."
+            details["Status"] = "ZANEGOWANY"
+            details["Powód unieważnienia"] = signal_notes
+            
+        elif signal_status == 'COMPLETED':
+            score = 1 # Niski wynik, informacja historyczna
+            summary = "Setup ZAKOŃCZONY. Cel (Take Profit) został osiągnięty."
+            details["Status"] = "ZAKOŃCZONY"
+            details["Notatki"] = signal_notes
+
+        elif signal_status == 'PENDING':
+            score = 5 # Najwyższy wynik - gotowy do obserwacji
+            summary = "Wykryto setup EOD (Oczekujący). System monitoruje cenę wejścia."
+            details["Status EOD"] = f"Setup {signal_status}"
+            details["Notatki"] = signal_notes
+
+        elif signal_status == 'ACTIVE':
+            score = 5 # Najwyższy wynik - aktywny
+            summary = "Setup AKTYWNY. System monitoruje poziomy Stop Loss i Take Profit."
+            details["Status EOD"] = f"Setup {signal_status}"
+            details["Notatki"] = signal_notes
+            
+        else: # Obsługa innych statusów, np. CANCELLED
+            score = 0
+            summary = f"Wykryto sygnał ze statusem: {signal_status}."
+            details["Status"] = signal_status
+            details["Notatki"] = signal_notes
+        
+        # 5. Przekaż statyczne parametry do frontendu (bez zmian)
         entry_price = relevant_signal.entry_price or relevant_signal.entry_zone_top
         stop_loss = relevant_signal.stop_loss
         take_profit = relevant_signal.take_profit
@@ -209,6 +230,9 @@ def _run_tactical_agent(session: Session, ticker: str) -> dict:
     except Exception as e:
         logger.error(f"Błąd w Agencie Taktycznym dla {ticker}: {e}", exc_info=True)
         return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": 5, "summary": "Błąd krytyczny agenta taktycznego.", "details": {"Błąd": str(e)}}
+# ==================================================================
+# Koniec Kroku 6
+# ==================================================================
 
 
 # --- GŁÓWNA FUNKCJA ORKIESTRUJĄCA ---
@@ -261,7 +285,7 @@ def run_ai_analysis(session: Session, ticker: str, api_client: object) -> dict:
     # ZMIANA: Logika rekomendacji opiera się teraz na wyniku taktycznym
     if final_score_percent >= 75 and tactical_results['score'] == 5:
         recommendation = "BARDZO SILNY KANDDAT DO KUPNA"
-        recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach. Strażnik (LIVE) zweryfikuje, czy setup jest nadal aktywny."
+        recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach. Strażnik Backendu monitoruje ceny wejścia, SL i TP."
     elif final_score_percent >= 60 and tactical_results['score'] > 0:
         recommendation = "SILNY KANDYDAT DO OBSERWACJI"
         recommendation_details = "Spółka ma wiele pozytywnych cech. Warto dodać do obserwowanych."
@@ -290,4 +314,3 @@ def run_ai_analysis(session: Session, ticker: str, api_client: object) -> dict:
         },
         "analysis_timestamp_utc": datetime.utcnow().isoformat()
     }
-
