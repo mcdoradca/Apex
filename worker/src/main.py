@@ -154,11 +154,29 @@ def run_catalyst_monitor_job():
         logger.warning("Catalyst monitor job already running. Skipping this cycle.")
         return
 
+    # ==================================================================
+    # KROK 2 POPRAWKI: "Pre-Check" Czasu w NY
+    # ==================================================================
+    try:
+        now_ny = utils.get_current_NY_datetime()
+        ny_weekday = now_ny.weekday()
+        ny_hour = now_ny.hour
+        # 0=Pon, 4=Pt. Godziny 3:00 - 21:00 ET (bezpieczny bufor dla 4:00 - 20:00)
+        is_market_buffer = (0 <= ny_weekday <= 4) and (3 <= ny_hour <= 21) 
+        
+        if not is_market_buffer:
+            logger.info(f"Catalyst monitor: NY time ({ny_hour}h, Dzień: {ny_weekday}) is outside active buffer. Skipping.")
+            return # Zakończ pracę, nie uruchamiaj logiki
+    except Exception as e:
+        logger.error(f"Error during NY time pre-check in Catalyst monitor: {e}", exc_info=True)
+        # Na wszelki wypadek, kontynuuj i pozwól `get_market_status` zadecydować
+    # ==================================================================
+
     catalyst_monitor_running = True
-    logger.info("Starting catalyst monitor job...")
+    logger.info("Starting catalyst monitor job (within market buffer)...")
     session = get_db_session()
     try:
-        # 1. Sprawdź, czy rynek jest aktywny (nie marnuj API, gdy jest zamknięty)
+        # 1. Sprawdź, czy rynek jest AKTYWNY (teraz pytamy API tylko w dobrych godzinach)
         market_info = utils.get_market_status_and_time(api_client)
         market_status = market_info.get("status")
         
@@ -265,5 +283,4 @@ if __name__ == "__main__":
     if engine:
         main_loop()
     else:
-        logger.critical("Worker cannot start because database connection was not established.")
-
+        logger.criti
