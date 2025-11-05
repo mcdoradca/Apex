@@ -24,8 +24,11 @@ from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .data_ingestion.data_initializer import initialize_database_if_empty
 
-# ZMIANA: Definiujemy stałą paczki globalnie
-TICKERS_PER_BATCH = 1
+# ==================================================================
+# KROK 2 POPRAWKI (STRATEGIA): Wyłączenie Strażnika Wiadomości (błąd "karuzeli")
+# Ustawiamy na 0, aby całkowicie wyłączyć ten wadliwy komponent.
+# ==================================================================
+TICKERS_PER_BATCH = 0
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
@@ -101,6 +104,29 @@ def run_full_analysis_cycle():
         return
 
     try:
+        # ==================================================================
+        # === NOWA POPRAWKA: Strażnik Statusu Rynku ===
+        # Sprawdzamy status rynku PRZED uruchomieniem Fazy 1.
+        # Skanowanie ma sens tylko wtedy, gdy dane (nawet pre-market) są dostępne.
+        # ==================================================================
+        logger.info("Checking market status before starting Phase 1 scan...")
+        market_info = utils.get_market_status_and_time(api_client)
+        market_status = market_info.get("status")
+
+        if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
+            logger.warning(f"Market status is {market_status}. Full analysis cycle (Phase 1) will not run.")
+            utils.append_scan_log(session, f"Skanowanie Fazy 1 wstrzymane. Rynek jest {market_status}.")
+            # Upewnij się, że stan wraca na IDLE, gdyby został uruchomiony ręcznie
+            current_state = "IDLE"
+            utils.update_system_control(session, 'worker_status', 'IDLE')
+            session.close()
+            return # Zakończ funkcję, nie uruchamiaj skanowania
+        
+        logger.info(f"Market status is {market_status}. Proceeding with analysis cycle.")
+        # ==================================================================
+        # === Koniec Poprawki ===
+        # ==================================================================
+
         logger.info("Starting full analysis cycle...")
         current_state = "RUNNING"
         utils.update_system_control(session, 'worker_status', 'RUNNING')
@@ -153,6 +179,14 @@ def run_catalyst_monitor_job():
     if catalyst_monitor_running:
         logger.warning("Catalyst monitor job already running. Skipping this cycle.")
         return
+        
+    # ==================================================================
+    # KROK 2 POPRAWKI (STRATEGIA): Jeśli paczka = 0, nie uruchamiaj zadania
+    # ==================================================================
+    if TICKERS_PER_BATCH <= 0:
+        logger.info("Catalyst monitor job is disabled (TICKERS_PER_BATCH = 0).")
+        return
+    # ==================================================================
 
     # ==================================================================
     # KROK 2 POPRAWKI: "Pre-Check" Czasu w NY
