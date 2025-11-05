@@ -585,10 +585,52 @@
                             } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
                         }
                         const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
-                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400">${h.ticker}</td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
+                        
+                        // <-- POCZĄTEK ZMIANY: Dodanie formatowania dla Take Profit
+                        const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
+                        // <-- KONIEC ZMIANY
+                        
+                        // <-- POCZĄTEK ZMIANY: Dodanie nowej komórki <td> dla Take Profit
+                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
+                                    <td class="p-3 font-bold text-sky-400">${h.ticker}</td>
+                                    <td class="p-3 text-right">${h.quantity}</td>
+                                    <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
+                                    <td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td>
+                                    <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
+                                    <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
+                                    <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
+                                </tr>`;
+                        // <-- KONIEC ZMIANY
                     }).join('');
                     const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
-                    return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th><th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th><th scope="col" class="p-3 text-right">Akcja</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+                    
+                    // <-- POCZĄTEK ZMIANY: Dodanie nowego nagłówka <th>
+                    const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                                            <tr>
+                                                <th scope="col" class="p-3">Ticker</th>
+                                                <th scope="col" class="p-3 text-right">Ilość</th>
+                                                <th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th>
+                                                <th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th>
+                                                <th scope="col" class="p-3 text-right">Cena Docelowa (USD)</th>
+                                                <th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th>
+                                                <th scope="col" class="p-3 text-right">Akcja</th>
+                                            </tr>
+                                         </thead>`;
+                    // <-- KONIEC ZMIANY
+                                         
+                    return `<div id="portfolio-view" class="max-w-6xl mx-auto">
+                                <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">
+                                    Portfel Inwestycyjny
+                                    <span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span>
+                                </h2>
+                                ${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : 
+                                `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
+                                    <table class="w-full text-sm text-left text-gray-300">
+                                        ${tableHeader}
+                                        <tbody>${rows}</tbody>
+                                    </table>
+                                 </div>` }
+                            </div>`;
                 },
                 
                 transactions: (transactions) => {
@@ -1180,4 +1222,3 @@
     </script>
     </body>
 </html>
-
