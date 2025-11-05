@@ -1,21 +1,38 @@
 import logging
 import pandas as pd
-# ZMIANA: Dodajemy import Session
+# ==================================================================
+# KROK 2 (KAT. 2): Dodatkowe importy dla Agenta Newsowego
+# ==================================================================
+import requests
+import json
+import os
+import time
+import random
+# ==================================================================
 from sqlalchemy.orm import Session
 from datetime import datetime
-# ZMIANA: Importujemy 'utils', aby użyć nowej funkcji
 from . import utils
 from .utils import (
     safe_float, get_market_status_and_time, standardize_df_columns, 
-    calculate_rsi, calculate_bbands
+    calculate_rsi, calculate_bbands, get_relevant_signal_from_db
 )
-# ZMIANA: Nie potrzebujemy już importować całego phase3_sniper
-# from . import phase3_sniper 
 
 logger = logging.getLogger(__name__)
 
+# ==================================================================
+# KROK 2 (KAT. 2): Konfiguracja API Gemini dla Agenta Newsowego
+# ==================================================================
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    logger.critical("GEMINI_API_KEY nie został znaleziony! Agent Newsowy nie będzie działać.")
+    GEMINI_API_KEY = "" 
+
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={GEMINI_API_KEY}"
+API_HEADERS = {'Content-Type': 'application/json'}
+# ==================================================================
+
+
 # --- AGENT 1: ANALIZA MOMENTUM I SIŁY WZGLĘDNEJ ---
-# (Bez zmian)
 def _run_momentum_agent(ticker: str, daily_df: pd.DataFrame, qqq_perf: float) -> dict:
     score = 0
     max_score = 4
@@ -64,7 +81,6 @@ def _run_momentum_agent(ticker: str, daily_df: pd.DataFrame, qqq_perf: float) ->
 
 
 # --- AGENT 2: ANALIZA KOMPRESJI ENERGII ---
-# (Bez zmian)
 def _run_volatility_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
     score = 0
     max_score = 3
@@ -108,7 +124,6 @@ def _run_volatility_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
 
 
 # --- AGENT 3: ANALIZA SENTYMENTU ---
-# (Bez zmian)
 def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
     score = 0
     max_score = 3
@@ -149,9 +164,6 @@ def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
 
 
 # --- AGENT 4: AGENT STRAŻNIKA WEJŚĆ (NOWA LOGIKA) ---
-# ==================================================================
-# KROK 6 POPRAWKI (LOGIKA): Przebudowa Agenta Taktycznego
-# ==================================================================
 def _run_tactical_agent(session: Session, ticker: str) -> dict:
     """
     Agent, który odczytuje AKTUALNY stan setupu (ACTIVE, PENDING, INVALIDATED)
@@ -166,7 +178,7 @@ def _run_tactical_agent(session: Session, ticker: str) -> dict:
     try:
         # 1. Użyj nowej funkcji pomocniczej, aby pobrać ostatni istotny sygnał
         #    (Funkcja ta pobiera teraz także COMPLETED)
-        relevant_signal = utils.get_relevant_signal_from_db(session, ticker)
+        relevant_signal = get_relevant_signal_from_db(session, ticker)
         
         # 2. Jeśli nie ma sygnału (nawet unieważnionego), to znaczy, że nic nie znaleziono
         if not relevant_signal:
@@ -230,13 +242,9 @@ def _run_tactical_agent(session: Session, ticker: str) -> dict:
     except Exception as e:
         logger.error(f"Błąd w Agencie Taktycznym dla {ticker}: {e}", exc_info=True)
         return {"name": "Agent Strażnik Wejść", "score": 0, "max_score": 5, "summary": "Błąd krytyczny agenta taktycznego.", "details": {"Błąd": str(e)}}
-# ==================================================================
-# Koniec Kroku 6
-# ==================================================================
 
 
 # --- GŁÓWNA FUNKCJA ORKIESTRUJĄCA ---
-# ZMIANA: Dodano 'session: Session' jako pierwszy argument
 def run_ai_analysis(session: Session, ticker: str, api_client: object) -> dict:
     """Uruchamia wszystkich agentów AI i agreguje ich wyniki."""
     logger.info(f"Running full AI analysis for {ticker}...")
@@ -282,7 +290,6 @@ def run_ai_analysis(session: Session, ticker: str, api_client: object) -> dict:
     final_score_percent = (total_score / total_max_score) * 100 if total_max_score > 0 else 0
     
     # --- ETAP 3: Agregacja Wyników ---
-    # ZMIANA: Logika rekomendacji opiera się teraz na wyniku taktycznym
     if final_score_percent >= 75 and tactical_results['score'] == 5:
         recommendation = "BARDZO SILNY KANDDAT DO KUPNA"
         recommendation_details = "Spółka wykazuje wyjątkową siłę na wielu płaszczyznach. Strażnik Backendu monitoruje ceny wejścia, SL i TP."
@@ -314,3 +321,102 @@ def run_ai_analysis(session: Session, ticker: str, api_client: object) -> dict:
         },
         "analysis_timestamp_utc": datetime.utcnow().isoformat()
     }
+
+
+# ==================================================================
+# KROK 2 (KAT. 2): Dodanie "Mózgu" Agenta Newsowego
+# ==================================================================
+
+def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str) -> dict:
+    """
+    Wywołuje Gemini API, aby przeanalizować pojedynczą wiadomość (z Alpha Vantage)
+    i zwrócić krytyczną klasyfikację (CRITICAL_NEGATIVE, CRITICAL_POSITIVE, NEUTRAL).
+    """
+    if not GEMINI_API_KEY:
+        logger.error("Agent Newsowy: Brak klucza GEMINI_API_KEY. Analiza niemożliwa.")
+        return {"sentiment": "NEUTRAL", "reason": "Brak klucza API Gemini"}
+
+    # Krótka pauza, aby utrzymać się w limitach Gemini (ok. 60 zapytań/min)
+    time.sleep(1.1 + random.uniform(0, 0.5)) 
+    
+    # Precyzyjny prompt trenujący, o którym rozmawialiśmy
+    prompt = f"""
+    Jesteś analitykiem ryzyka daytradingowego. Twoim zadaniem jest ochrona kapitału tradera.
+    Przeanalizuj poniższy nagłówek i streszczenie wiadomości dla spółki {ticker}.
+    Ignoruj standardowy szum rynkowy i analizy cenowe. Skup się wyłącznie na
+    informacjach, które mogą GWAŁTOWNIE i NATYCHMIASTOWO zmienić cenę akcji.
+
+    Wiadomość:
+    Nagłówek: "{headline}"
+    Streszczenie: "{summary}"
+    Źródło: {url}
+
+    Sklasyfikuj tę wiadomość jako JEDNĄ z trzech opcji:
+    1.  `CRITICAL_NEGATIVE`: Wiadomość, która może spowodować natychmiastową panikę lub spadek (np. obniżenie prognoz, złe wyniki finansowe, śledztwo, fatalne dane FDA, rezygnacja CEO, pozew zbiorowy).
+    2.  `CRITICAL_POSITIVE`: Wiadomość, która może spowodować natychmiastową euforię lub wzrost (np. zatwierdzenie FDA, przejęcie, partnerstwo strategiczne, wyniki znacznie lepsze od oczekiwań).
+    3.  `NEUTRAL`: Standardowy szum rynkowy (np. "Analitycy uważają, że...", "Cena akcji wzrosła o X%", "Spółka prezentuje się na konferencji", ogólne analizy sektorowe).
+    """
+
+    # Definicja schematu JSON dla odpowiedzi Gemini
+    sentiment_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "sentiment": {
+                "type": "STRING",
+                "enum": ["CRITICAL_POSITIVE", "CRITICAL_NEGATIVE", "NEUTRAL"],
+            },
+            "reason": {
+                "type": "STRING",
+                "description": "Krótkie (1 zdanie) wyjaśnienie, dlaczego ta wiadomość jest lub nie jest krytyczna."
+            }
+        },
+        "required": ["sentiment", "reason"]
+    }
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": sentiment_schema
+        }
+    }
+
+    max_retries = 3
+    initial_backoff = 3
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(GEMINI_API_URL, headers=API_HEADERS, data=json.dumps(payload), timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            
+            text_content = data.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
+            analysis_json = json.loads(text_content)
+            
+            sentiment = analysis_json.get('sentiment', 'NEUTRAL')
+            reason = analysis_json.get('reason', 'Brak analizy')
+            
+            logger.info(f"Agent Newsowy ({ticker}): Sentyment={sentiment}. Powód: {reason}")
+            return {"sentiment": sentiment, "reason": reason}
+
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                wait = (initial_backoff * (2 ** attempt)) + random.uniform(0, 1)
+                logger.warning(f"Agent Newsowy: Rate limit (429) dla analizy {ticker} (Próba {attempt + 1}/{max_retries}). Ponawiam za {wait:.2f}s...")
+                time.sleep(wait)
+                continue
+            else:
+                logger.error(f"Agent Newsowy: Błąd HTTP (inny niż 429) podczas wywołania Gemini dla {ticker}: {e}", exc_info=True)
+                break
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Agent Newsowy: Błąd sieciowy podczas wywołania Gemini dla {ticker}: {e}", exc_info=True)
+            break
+        except (json.JSONDecodeError, KeyError, IndexError) as e:
+            logger.error(f"Agent Newsowy: Błąd przetwarzania odpowiedzi JSON z Gemini dla {ticker}: {e}", exc_info=True)
+            break
+    
+    logger.error(f"Agent Newsowy: Nie udało się przeanalizować newsa dla {ticker} po {max_retries} próbach.")
+    return {"sentiment": "NEUTRAL", "reason": "Błąd po stronie serwera podczas analizy"}
+# ==================================================================
+# Koniec Krok 2 (KAT. 2)
+# ==================================================================
