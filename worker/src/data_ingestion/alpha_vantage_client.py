@@ -21,7 +21,8 @@ if not API_KEY:
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+    # ZMIANA: Zmniejszamy domyślny limit ze 150 na 120, aby dodać bufor bezpieczeństwa
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 120, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             # Zmieniono z warning na error
             logger.error("API key is missing for AlphaVantageClient instance in WORKER.")
@@ -40,11 +41,12 @@ class AlphaVantageClient:
         if len(self.request_timestamps) >= self.requests_per_minute:
             time_to_wait = 60 - (time.monotonic() - self.request_timestamps[0])
             if time_to_wait > 0:
-                logger.warning(f"Rate limit reached. Sleeping for {time_to_wait:.2f} seconds.")
+                logger.warning(f"Rate limit reached (Rolling Window). Sleeping for {time_to_wait:.2f} seconds.")
                 time.sleep(time_to_wait)
         if self.request_timestamps:
             time_since_last = time.monotonic() - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
+                # To jest główny ogranicznik
                 time.sleep(self.request_interval - time_since_last)
         self.request_timestamps.append(time.monotonic())
 
@@ -52,28 +54,66 @@ class AlphaVantageClient:
         if not self.api_key:
             logger.error("Cannot make Alpha Vantage request: API key is missing.")
             return None
-        self._rate_limiter()
-        params['apikey'] = self.api_key
+            
+        request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
+        
         for attempt in range(self.retries):
+            self._rate_limiter() # Przeniesiono limiter *do* pętli ponawiania
             try:
                 response = requests.get(self.BASE_URL, params=params, timeout=30)
-                response.raise_for_status()
-                data = response.json()
-                # Zmiana logowania na bardziej szczegółowe
-                request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
-                if not data or "Error Message" in data or "Information" in data:
+                
+                # Spróbuj sparsować JSON w pierwszej kolejności
+                try:
+                    data = response.json()
+                except json.JSONDecodeError:
+                    # Jeśli JSON failuje (np. przy CSV), sprawdź status i rzuć błąd
+                    response.raise_for_status() 
+                    # Jeśli to nie-JSON (jak CSV) i status 200, zwróć surowy tekst (tylko dla get_bulk_quotes)
+                    if params.get('datatype') == 'csv':
+                        return response.text
+                    # Jeśli to nie CSV, a JSON się nie udał, to błąd
+                    raise requests.exceptions.RequestException("Response was not valid JSON.")
+
+                # ==================================================================
+                # ZMIANA: Bardziej robustyczna logika sprawdzania błędów w JSON
+                # ==================================================================
+                is_rate_limit_json = False
+                if "Information" in data:
+                    info_text = data["Information"].lower()
+                    # Sprawdzamy kluczowe frazy z logów, które wskazują na błąd limitu
+                    if "frequency" in info_text or "api call volume" in info_text or "please contact premium" in info_text:
+                        is_rate_limit_json = True
+                
+                is_error_msg = "Error Message" in data
+                # ==================================================================
+
+                if is_rate_limit_json:
+                    # To jest kluczowa zmiana: Traktuj błąd JSON jako błąd HTTP 429, aby wymusić ponowienie
+                    logger.warning(f"Rate limit JSON detected for {request_identifier} (Attempt {attempt + 1}/{self.retries}). Retrying...")
+                    # Rzucamy błąd, aby został złapany przez 'except' poniżej i aktywował logikę ponawiania
+                    raise requests.exceptions.HTTPError(f"Rate Limit JSON: {data['Information']}", response=response)
+
+                if not data or is_error_msg:
                     logger.warning(f"API returned an error or empty data for {request_identifier}: {data}")
-                    if "premium" in str(data).lower():
-                         logger.error(f"API call for {request_identifier} failed due to premium limit. Waiting longer.")
-                         time.sleep(20)
+                    # Usunęliśmy logikę "premium", ponieważ jest ona teraz obsługiwana przez 'is_rate_limit_json'
+                    # To jest *faktyczny* błąd (np. zły ticker), więc nie ponawiamy, tylko zwracamy None
                     return None
+                
+                # Jeśli wszystko jest OK (ani błąd HTTP, ani błąd JSON)
+                response.raise_for_status() # Sprawdź błędy 4xx/5xx
                 return data
+
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-                request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
+                # Ta sekcja 'except' jest teraz poprawnie aktywowana przez 'is_rate_limit_json'
                 logger.error(f"Request failed for {request_identifier} (attempt {attempt + 1}/{self.retries}): {e}")
                 if attempt < self.retries - 1:
-                    time.sleep(self.backoff_factor * (2 ** attempt))
-        return None
+                    sleep_time = self.backoff_factor * (2 ** (attempt + 1)) # Zwiększamy backoff
+                    logger.info(f"Retrying in {sleep_time:.2f}s...")
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(f"Max retries reached for {request_identifier}.")
+
+        return None # Zwróć None po wszystkich nieudanych próbach
 
     def get_market_status(self):
         """Pobiera aktualny status rynku z dedykowanego endpointu."""
@@ -83,27 +123,24 @@ class AlphaVantageClient:
     # === Funkcja używana przez Fazę 1 i Faza 3 Monitor ===
     def get_bulk_quotes(self, symbols: list[str]):
         """Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES."""
-        self._rate_limiter()
+        # ZMIANA: _make_request teraz obsługuje także odpowiedzi tekstowe (CSV)
         params = {
             "function": "REALTIME_BULK_QUOTES",
             "symbol": ",".join(symbols),
             "datatype": "csv",
-            "apikey": self.api_key
         }
-        for attempt in range(self.retries):
-            try:
-                response = requests.get(self.BASE_URL, params=params, timeout=30)
-                response.raise_for_status()
-                text_response = response.text
-                if "Error Message" in text_response or "Invalid API call" in text_response:
-                    logger.error(f"Bulk quotes API returned an error: {text_response[:200]}")
-                    return None
-                return text_response
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Bulk quotes request failed (attempt {attempt + 1}/{self.retries}): {e}")
-                if attempt < self.retries - 1:
-                    time.sleep(self.backoff_factor * (2 ** attempt))
+        text_response = self._make_request(params)
+        
+        # Sprawdzenie, czy odpowiedź tekstowa nie zawiera błędu
+        if isinstance(text_response, str):
+            if "Error Message" in text_response or "Invalid API call" in text_response:
+                logger.error(f"Bulk quotes API returned an error: {text_response[:200]}")
+                return None
+            return text_response
+        
+        # Jeśli _make_request zwrócił None (po błędach)
         return None
+
 
     def get_company_overview(self, symbol: str):
         params = {"function": "OVERVIEW", "symbol": symbol}
@@ -232,5 +269,6 @@ class AlphaVantageClient:
             return formatted_quote
             
         except Exception as e:
-            logger.error(f"Błąd podczas konwersji formatu Bulk->GlobalQuote dla {symbol}: {e}", exc_info=True)
+            logger.error(f"Błąd podczas konwersji formatu Bulk->GlobalQuote dla {symbol}: {e}", exc_info:True)
             return None
+
