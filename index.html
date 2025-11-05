@@ -222,6 +222,11 @@
                 transactions: [],
                 liveQuotes: {},
                 workerStatus: { status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 } },
+                // ==========================================================
+                // KROK 5 (Licznik): Dodano stan dla licznika "wyrzuconych"
+                // ==========================================================
+                discardedSignalCount: 0,
+                // ==========================================================
                 activeAnalysisPolling: null,
                 activeQuotePolling: null,
                 activePortfolioPolling: null,
@@ -319,6 +324,11 @@
                 getPhase1Candidates: () => apiRequest('/api/v1/candidates/phase1'),
                 getPhase2Results: () => apiRequest('/api/v1/results/phase2'),
                 getPhase3Signals: () => apiRequest('/api/v1/signals/phase3'),
+                // ==========================================================
+                // KROK 5 (Licznik): Dodanie nowego endpointu API
+                // ==========================================================
+                getDiscardedCount: () => apiRequest('/api/v1/signals/discarded-count-24h'),
+                // ==========================================================
                 requestAIAnalysis: (ticker) => apiRequest('/api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
                 getAIAnalysisResult: (ticker) => apiRequest(`/api/v1/ai-analysis/result/${ticker}`),
                 getLiveQuote: (ticker) => apiRequest(`/api/v1/quote/${ticker}`),
@@ -562,7 +572,56 @@
                     };
                     return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data, market_info)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Strażnika Wejść', 'shield-check', agents.tactical_and_guard)}</div></div>`;
                 },
-                dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Aktywne Sygnały</h3><p id="dashboard-active-signals" class="text-4xl font-extrabold mt-2 text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Sygnały Fazy 3 i Watchlist</p></div></div><h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3><div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div></div>`,
+                
+                // ==========================================================
+                // KROK 5 (Licznik): Modyfikacja renderowania Dashboardu
+                // ==========================================================
+                dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
+                                <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                                    
+                                    <!-- Box 1: Status Silnika (Bez zmian) -->
+                                    <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                        <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
+                                        <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
+                                        <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
+                                    </div>
+                                    
+                                    <!-- Box 2: Postęp Skanowania (Bez zmian) -->
+                                    <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                        <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
+                                        <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
+                                        <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
+                                    </div>
+                                    
+                                    <!-- Box 3: Liczniki Sygnałów (ZMODYFIKOWANY) -->
+                                    <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                        <h3 class="font-semibold text-gray-400 flex items-center">
+                                            <i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały (Aktywne / Wyrzucone)
+                                        </h3>
+                                        <!-- Nowy kontener flex dla dwóch liczników -->
+                                        <div class="flex items-baseline gap-x-4 gap-y-2 mt-2">
+                                            <div>
+                                                <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
+                                                <p class="text-sm text-gray-500 mt-1">Sygnały Aktywne</p>
+                                            </div>
+                                            <div class="border-l border-gray-700 pl-4">
+                                                <p id="dashboard-discarded-signals" class="text-4xl font-extrabold text-gray-500">0</p>
+                                                <p class="text-sm text-gray-500 mt-1">Wyrzucone (24h)</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- Koniec Box 3 -->
+
+                                </div>
+                                <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
+                                <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
+                                    <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
+                                </div>
+                            </div>`,
+                // ==========================================================
+                // Koniec modyfikacji renderera dashboardu
+                // ==========================================================
                 
                 portfolio: (holdings, quotes) => {
                     let totalPortfolioValue = 0;
@@ -647,12 +706,28 @@
 
             // --- GŁÓWNE FUNKCJE KONTROLI APLIKACJI ---
             
+            // ==========================================================
+            // KROK 5 (Licznik): Nowa funkcja do aktualizacji tylko liczników
+            // ==========================================================
+            function updateDashboardCounters() {
+                const activeEl = document.getElementById('dashboard-active-signals');
+                const discardedEl = document.getElementById('dashboard-discarded-signals');
+                
+                if (activeEl) {
+                    activeEl.textContent = state.phase3.length;
+                }
+                if (discardedEl) {
+                    discardedEl.textContent = state.discardedSignalCount;
+                }
+            }
+            // ==========================================================
+
             function updateDashboardUI(statusData) {
                 if (state.currentViewTicker || !document.getElementById('dashboard-view')) return;
                 const ui_dash = {
                     status: document.getElementById('dashboard-worker-status'),
                     phase: document.getElementById('dashboard-current-phase'),
-                    signals: document.getElementById('dashboard-active-signals'),
+                    // USUNIĘTO: 'signals' - jest teraz w updateDashboardCounters
                     progressText: document.getElementById('progress-text'),
                     progressBar: document.getElementById('progress-bar'),
                     scanLog: document.getElementById('scan-log'),
@@ -673,7 +748,7 @@
                     const logContainer = document.getElementById('scan-log-container');
                     if(logContainer) logContainer.scrollTop = 0; 
                 }
-                ui_dash.signals.textContent = state.phase3.length;
+                // USUNIĘTO: 'ui_dash.signals.textContent' - jest teraz w updateDashboardCounters
             }
 
             function displaySystemAlert(message) {
@@ -687,7 +762,13 @@
                     if (message.includes('ALERT ZYSKU')) alertKey = `PROFIT-${ticker || 'UNKNOWN'}`;
                     else if (message.includes('ALARM CENOWY')) alertKey = `PRICE-${ticker || 'UNKNOWN'}`;
                     else if (message.includes('PILNY ALERT')) alertKey = `NEWS-${ticker || 'UNKNOWN'}`;
-                    
+                    // ==========================================================
+                    // KROK 5 (Licznik): Dodanie obsługi alertów dla TP i SL
+                    // ==========================================================
+                    else if (message.includes('TAKE PROFIT')) alertKey = `TP-${ticker || 'UNKNOWN'}`;
+                    else if (message.includes('STOP LOSS')) alertKey = `SL-${ticker || 'UNKNOWN'}`;
+                    // ==========================================================
+
                 } catch(e) { 
                     logger.warn("Nie udało się wygenerować klucza alertu", e);
                 }
@@ -709,7 +790,18 @@
                 } else if (message.includes('ALARM CENOWY') || message.includes('ALERT ZYSKU')) {
                     alertClass = 'bg-yellow-500';
                     alertIcon = 'dollar-sign';
+                // ==========================================================
+                // KROK 5 (Licznik): Dodanie stylów dla alertów TP i SL
+                // ==========================================================
+                } else if (message.includes('TAKE PROFIT')) {
+                    alertClass = 'bg-green-600';
+                    alertIcon = 'trending-up';
+                } else if (message.includes('STOP LOSS')) {
+                    alertClass = 'bg-red-600';
+                    alertIcon = 'trending-down';
                 }
+                // ==========================================================
+
 
                 const alertId = `alert-${Date.now()}`;
                 const alertElement = document.createElement('div');
@@ -784,24 +876,41 @@
                 setTimeout(pollWorkerStatus, 5000);
             }
 
+            // ==========================================================
+            // KROK 5 (Licznik): Modyfikacja odświeżania bocznego paska
+            // ==========================================================
             async function refreshSidebarData() {
                 try {
-                    const [phase1, phase2, phase3] = await Promise.all([
-                        api.getPhase1Candidates(), api.getPhase2Results(), api.getPhase3Signals()
+                    // Dodano api.getDiscardedCount() do Promise.all
+                    const [phase1, phase2, phase3, discardedCountData] = await Promise.all([
+                        api.getPhase1Candidates(), 
+                        api.getPhase2Results(), 
+                        api.getPhase3Signals(),
+                        api.getDiscardedCount() // <-- NOWE WYWOŁANIE
                     ]);
+                    
                     state.phase1 = phase1 || [];
                     state.phase2 = phase2 || [];
                     state.phase3 = phase3 || [];
+                    // Zapisanie wyniku do stanu
+                    state.discardedSignalCount = discardedCountData?.discarded_count_24h ?? 0;
+
+                    // Aktualizacja bocznego paska (bez zmian)
                     ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
                     ui.phase1.count.textContent = state.phase1.length;
                     ui.phase2.list.innerHTML = renderers.phase2List(state.phase2);
                     ui.phase2.count.textContent = state.phase2.length;
                     ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
                     ui.phase3.count.textContent = state.phase3.length;
+                    
+                    // Aktualizacja liczników na głównym panelu
+                    updateDashboardCounters();
+
                     lucide.createIcons();
                 } catch (e) { /* Błędy logowane w apiRequest */ }
-                setTimeout(refreshSidebarData, 15000);
+                setTimeout(refreshSidebarData, 15000); // Interwał bez zmian
             }
+            // ==========================================================
 
             function stopAllPolling() {
                 logger.info("Zatrzymywanie wszystkich aktywnych timerów odpytywania.");
@@ -822,7 +931,9 @@
                  state.currentViewTicker = null;
                  setActiveSidebar(ui.dashboardLink);
                  ui.mainContent.innerHTML = renderers.dashboard();
+                 // Aktualizujemy obie części UI
                  updateDashboardUI(state.workerStatus);
+                 updateDashboardCounters(); // <-- KROK 5: Dodano wywołanie
                  lucide.createIcons();
             }
 
