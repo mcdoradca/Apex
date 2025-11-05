@@ -2,7 +2,7 @@ import logging
 import hashlib
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import text, select
+from sqlalchemy import text, select, func
 
 # Importy z wnętrza projektu
 from ..models import TradingSignal, ProcessedNews, PortfolioHolding
