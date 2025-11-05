@@ -40,6 +40,15 @@ class TradingSignal(Base):
     id = Column(INTEGER, primary_key=True, autoincrement=True)
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+    
+    # ==================================================================
+    # KROK 4a (Licznik): Dodanie kolumny updated_at
+    # Ta kolumna jest niezbędna, aby filtrować sygnały, które 
+    # zostały unieważnione (INVALIDATED) lub zakończone (COMPLETED) 
+    # w ciągu ostatnich 24 godzin.
+    # ==================================================================
+    updated_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+    
     status = Column(VARCHAR(50), default='PENDING')
     entry_price = Column(NUMERIC(12, 2), nullable=True)
     stop_loss = Column(NUMERIC(12, 2), nullable=True)
