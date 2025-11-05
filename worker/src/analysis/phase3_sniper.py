@@ -68,10 +68,13 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
         is_strong_breakout = latest_candle['close'] > (consolidation_high + breakout_atr_multiplier * current_atr)
         if is_consolidating and is_breakout and is_strong_breakout:
             logger.info(f"Breakout setup found for {daily_df.index[-1]}")
+            # ==================================================================
+            # KROK 1 POPRAWKI (STRATEGIA): Zmiana mnożnika ATR dla SL
+            # ==================================================================
             return {
                 "setup_type": "BREAKOUT",
                 "entry_price": latest_candle['high'] + 0.01,
-                "stop_loss": consolidation_high - (0.5 * current_atr), # S/L pod poziomem wybicia
+                "stop_loss": consolidation_high - (0.7 * current_atr), # ZMIANA z 0.5 na 0.7
                 "consolidation_high": consolidation_high,
                 "atr": current_atr
             }
@@ -100,10 +103,13 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
              low_close = (daily_df['low'] - daily_df['close'].shift()).abs()
              tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
              atr = calculate_ema(tr, 14).iloc[-1]
+             # ==================================================================
+             # KROK 1 POPRAWKI (STRATEGIA): Zmiana mnożnika ATR dla SL
+             # ==================================================================
              return {
                  "setup_type": "EMA_BOUNCE",
                  "entry_price": latest_candle['high'] + 0.01,
-                 "stop_loss": latest_candle['low'] - (0.5 * atr), # S/L pod świecą sygnałową
+                 "stop_loss": latest_candle['low'] - (0.7 * atr), # ZMIANA z 0.5 na 0.7
                  "ema_value": latest_ema,
                  "atr": atr
              }
@@ -227,26 +233,26 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
 def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     """
     Zoptymalizowany monitor, który używa JEDNEGO zapytania blokowego do sprawdzenia
-    WSZYSTKICH sygnałów Fazy 3 (PENDING i ACTIVE) pod kątem osiągnięcia ceny wejścia
-    ORAZ pod kątem trafienia w Stop Loss.
+    WSZYSTKICH sygnałów Fazy 3 (PENDING i ACTIVE) pod kątem:
+    1. Osiągnięcia Take Profit (NOWE)
+    2. Osiągnięcia Stop Loss (istniejące)
+    3. Unieważnienia "zużytych" setupów (NOWE)
+    4. Osiągnięcia ceny wejścia (istniejące)
     """
     market_info = get_market_status_and_time(api_client)
     
-    # ==================================================================
-    # ZMIANA: Implementacja rady supportu Alpha Vantage
-    # Sprawdzamy, czy status jest JAWNIE aktywny. Jeśli jest CLOSED lub UNKNOWN,
-    # zatrzymujemy monitor, aby uniknąć fałszywych błędów API.
-    # ==================================================================
     market_status = market_info.get("status")
     if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
         logger.info(f"Market is {market_status}. Skipping Entry Trigger Monitor.")
         return
-    # ==================================================================
         
     logger.info("Running Real-Time Entry Trigger Monitor (Optimized)...")
     
+    # ==================================================================
+    # KROK 2 POPRAWKI (LOGIKA): Pobieramy teraz *WSZYSTKIE* pola
+    # ==================================================================
     all_signals_rows = session.execute(text("""
-        SELECT id, ticker, status, entry_price, entry_zone_bottom, stop_loss 
+        SELECT id, ticker, status, entry_price, entry_zone_bottom, stop_loss, take_profit 
         FROM trading_signals WHERE status IN ('ACTIVE', 'PENDING')
     """)).fetchall()
     
@@ -260,7 +266,6 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     try:
         bulk_data_csv = api_client.get_bulk_quotes(tickers_to_monitor)
         if not bulk_data_csv:
-            # Ten log jest teraz oczekiwany, jeśli API zwróci błąd "apikey invalid"
             logger.warning("Could not get bulk quote data for monitoring (API error or empty response).")
             return
 
@@ -284,46 +289,97 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
 
             current_price = float(current_price) # Upewnijmy się, że to liczba
 
-            # === Logika Strażnika (Backend) ===
-            stop_loss_price = signal_row.stop_loss
-            if stop_loss_price is not None:
-                stop_loss_price = float(stop_loss_price)
+            # === POBRANIE KLUCZOWYCH WARTOŚCI Z SYGNAŁU ===
+            stop_loss_price = float(signal_row.stop_loss) if signal_row.stop_loss is not None else None
+            take_profit_price = float(signal_row.take_profit) if signal_row.take_profit is not None else None
+            entry_price_target = float(signal_row.entry_price) if signal_row.entry_price is not None else float(signal_row.entry_zone_bottom) if signal_row.entry_zone_bottom is not None else None
+
+            # ==================================================================
+            # KROK 2 POPRAWKI (LOGIKA): Monitor Take Profit
+            # ==================================================================
+            if take_profit_price is not None and current_price >= take_profit_price:
+                logger.warning(f"TAKE PROFIT: {ticker} cena LIVE ({current_price}) osiągnęła cel ({take_profit_price}). Zamykanie sygnału.")
                 
-                if current_price < stop_loss_price:
-                    # CENA JEST PONIŻEJ STOP LOSSA!
-                    logger.warning(f"STRAŻNIK (Backend): {ticker} cena LIVE ({current_price}) spadła PONIŻEJ Stop Loss ({stop_loss_price}). Unieważnianie setupu.")
-                    
-                    # Zaktualizuj status w bazie danych
-                    update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes WHERE id = :signal_id")
-                    session.execute(update_stmt, {
-                        'signal_id': signal_row.id,
-                        'notes': f"Setup automatycznie unieważniony przez Strażnika (cena LIVE {current_price} < SL {stop_loss_price})."
-                    })
-                    session.commit()
-                    
-                    # Wyślij pilny alert do UI
-                    alert_msg = f"STOP LOSS: {ticker} ({current_price:.2f}) spadł poniżej SL ({stop_loss_price:.2f}). Setup unieważniony."
-                    update_system_control(session, 'system_alert', alert_msg)
-                    
-                    continue # Przejdź do następnego tickera, ten jest już nieważny
-            # === Koniec Logiki Strażnika ===
+                update_stmt = text("UPDATE trading_signals SET status = 'COMPLETED', notes = :notes WHERE id = :signal_id")
+                session.execute(update_stmt, {
+                    'signal_id': signal_row.id,
+                    'notes': f"Sygnał zakończony (TAKE PROFIT). Cena LIVE {current_price} >= Cel {take_profit_price}."
+                })
+                session.commit()
+                
+                alert_msg = f"TAKE PROFIT: {ticker} ({current_price:.2f}) osiągnął cenę docelową ({take_profit_price:.2f}). Sygnał zakończony."
+                update_system_control(session, 'system_alert', alert_msg)
+                
+                continue # Przejdź do następnego tickera, ten jest zakończony
+            # === Koniec Logiki Take Profit ===
 
 
-            # === Istniejąca Logika Wejścia (uruchomi się tylko, jeśli Strażnik nie zadziałał) ===
-            entry_price_target = signal_row.entry_price if signal_row.entry_price is not None else signal_row.entry_zone_bottom
-            
+            # === Logika Stop Loss (Strażnik) ===
+            if stop_loss_price is not None and current_price <= stop_loss_price:
+                # CENA JEST PONIŻEJ STOP LOSSA!
+                logger.warning(f"STOP LOSS (Strażnik): {ticker} cena LIVE ({current_price}) spadła PONIŻEJ Stop Loss ({stop_loss_price}). Unieważnianie setupu.")
+                
+                update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes WHERE id = :signal_id")
+                session.execute(update_stmt, {
+                    'signal_id': signal_row.id,
+                    'notes': f"Setup automatycznie unieważniony (STOP LOSS). Cena LIVE {current_price} <= SL {stop_loss_price}."
+                })
+                session.commit()
+                
+                alert_msg = f"STOP LOSS: {ticker} ({current_price:.2f}) spadł poniżej SL ({stop_loss_price:.2f}). Setup unieważniony."
+                update_system_control(session, 'system_alert', alert_msg)
+                
+                continue # Przejdź do następnego tickera, ten jest już nieważny
+            # === Koniec Logiki Stop Loss ===
+
+
+            # === Logika Wejścia (uruchomi się tylko, jeśli TP i SL nie zostały trafione) ===
             if entry_price_target is None:
                 continue
             
-            entry_price_target = float(entry_price_target)
-
-            # GŁÓWNY WARUNEK: Czy aktualna cena jest na poziomie wejścia lub niżej?
+            # ==================================================================
+            # KROK 2 POPRAWKI (LOGIKA): Monitor "Zużycia" Setupu (Problem CSTL)
+            # ==================================================================
+            # Sprawdzamy tylko sygnały PENDING (OCZEKUJĄCE)
+            if signal_row.status == 'PENDING':
+                # Definiujemy "zużycie" jako sytuację, gdy cena przeskoczyła 
+                # poziom wejścia i jest już blisko Take Profit (np. > 30% drogi do TP)
+                # To zapobiega wejściu w pozycję ze złym R/R.
+                
+                if take_profit_price is not None:
+                    full_range = take_profit_price - entry_price_target
+                    if full_range > 0: # Upewnij się, że nie dzielimy przez zero
+                        gap_percent = (current_price - entry_price_target) / full_range
+                        
+                        # Jeśli cena jest już 30% drogi do Take Profit, a my jeszcze nie weszliśmy
+                        if gap_percent > 0.30:
+                            logger.warning(f"ZUŻYTY SETUP: {ticker} cena LIVE ({current_price}) jest zbyt daleko od wejścia ({entry_price_target}). Unieważnianie.")
+                            
+                            update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes WHERE id = :signal_id")
+                            session.execute(update_stmt, {
+                                'signal_id': signal_row.id,
+                                'notes': f"Setup unieważniony (ZUŻYTY). Cena LIVE ({current_price}) zbyt daleko od wejścia ({entry_price_target})."
+                            })
+                            session.commit()
+                            
+                            continue # Przejdź do następnego tickera
+            # === Koniec Logiki "Zużycia" ===
+            
+            
+            # === Logika Alarmu Cenowego (Główny warunek wejścia) ===
+            # Ta logika uruchomi się tylko, jeśli:
+            # 1. Nie trafiono TP
+            # 2. Nie trafiono SL
+            # 3. Setup PENDING nie został "zużyty"
+            
+            # GŁÓWNY WARUNEK: Czy aktualna cena jest PONIŻEJ (lub na) ceny wejścia?
+            # (Dla setupów 'long' chcemy kupić po cenie X lub taniej)
             if current_price <= entry_price_target:
-                logger.info(f"TRIGGER! {ticker} current price ({current_price}) is at or below entry price ({entry_price_target}).")
+                logger.info(f"ALARM CENOWY: {ticker} cena LIVE ({current_price}) jest w strefie wejścia (<= {entry_price_target}).")
                 
                 # Jeśli sygnał był PENDING, promuj go na ACTIVE
                 if signal_row.status == 'PENDING':
-                    logger.info(f"Promoting signal for {ticker} from PENDING to ACTIVE.")
+                    logger.info(f"Promowanie sygnału dla {ticker} z PENDING na ACTIVE.")
                     update_stmt = text("UPDATE trading_signals SET status = 'ACTIVE' WHERE id = :signal_id")
                     session.execute(update_stmt, {'signal_id': signal_row.id})
                     session.commit() # Commitujemy od razu zmianę statusu
@@ -362,4 +418,4 @@ def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
         }
     except Exception as e:
         logger.error(f"Error in _find_impulse_and_fib_zone: {e}", exc_info=True)
-        retur
+        return None
