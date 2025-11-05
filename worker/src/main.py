@@ -18,17 +18,15 @@ from .analysis import (
     phase3_sniper, 
     ai_agents, 
     utils,
-    catalyst_monitor # <-- NOWY IMPORT
+    news_agent # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
+    # 'catalyst_monitor' został usunięty
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .data_ingestion.data_initializer import initialize_database_if_empty
 
-# ==================================================================
-# KROK 2 POPRAWKI (STRATEGIA): Wyłączenie Strażnika Wiadomości (błąd "karuzeli")
-# Ustawiamy na 0, aby całkowicie wyłączyć ten wadliwy komponent.
-# ==================================================================
-TICKERS_PER_BATCH = 0
+# USUNIĘTO: Zmienna TICKERS_PER_BATCH nie jest już potrzebna
+# USUNIĘTO: Zmienna catalyst_monitor_running nie jest już potrzebna
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
@@ -41,7 +39,6 @@ if not API_KEY:
     sys.exit(1)
 
 current_state = "IDLE"
-# ZMIANA: Poprawka błędu NameError, api_client musi być zdefiniowany globalnie
 api_client = AlphaVantageClient(api_key=API_KEY)
 
 
@@ -58,12 +55,7 @@ def handle_ai_analysis_request(session):
         session.commit()
 
         try:
-            # ==================================================================
-            #  ZMIANA KROK 3: Przekazanie 'session' do agenta AI,
-            #  aby mógł odczytać status sygnału z bazy danych.
-            # ==================================================================
             results = ai_agents.run_ai_analysis(session, ticker_to_analyze, api_client)
-            # ==================================================================
             
             stmt = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
             session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(results)})
@@ -104,40 +96,45 @@ def run_full_analysis_cycle():
         return
 
     try:
-        # ==================================================================
-        # === NOWA POPRAWKA: Strażnik Statusu Rynku ===
-        # Sprawdzamy status rynku PRZED uruchomieniem Fazy 1.
-        # Skanowanie ma sens tylko wtedy, gdy dane (nawet pre-market) są dostępne.
-        # ==================================================================
         logger.info("Checking market status before starting Phase 1 scan...")
         market_info = utils.get_market_status_and_time(api_client)
         market_status = market_info.get("status")
 
-        if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
-            logger.warning(f"Market status is {market_status}. Full analysis cycle (Phase 1) will not run.")
-            utils.append_scan_log(session, f"Skanowanie Fazy 1 wstrzymane. Rynek jest {market_status}.")
-            # Upewnij się, że stan wraca na IDLE, gdyby został uruchomiony ręcznie
+        # Logika "Strażnika Rynku" dla nocnego skanowania EOD
+        # Logika Fazy 1 została przebudowana, aby używać danych EOD (get_daily_adjusted)
+        # Oznacza to, że może działać *po* zamknięciu rynku.
+        # Musimy jednak zapewnić, że dane EOD z danego dnia są już dostępne.
+        # Uruchamianie o 02:30 CET (po 20:30 ET) powinno być bezpieczne.
+        # Dodajemy kontrolę, aby nie uruchamiać ręcznie w środku dnia.
+        
+        # Pobieramy aktualny czas w NY
+        now_ny = utils.get_current_NY_datetime()
+        ny_hour = now_ny.hour
+        
+        # Sprawdzamy, czy polecenie startu przyszło ręcznie (przez przycisk)
+        is_manual_start = utils.get_system_control_value(session, 'worker_command') == 'START_REQUESTED'
+
+        # Zezwalaj na start tylko w nocy (gdy dane EOD są gotowe) lub gdy rynek jest otwarty
+        # (na potrzeby testów lub ręcznego uruchomienia w ciągu dnia)
+        # Godziny 2:00 - 4:00 CET (20:00 - 22:00 ET) to idealne okno nocne
+        is_eod_window = (now_ny.hour >= 20 or now_ny.hour < 4) 
+        
+        if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"] and not is_eod_window:
+            logger.warning(f"Market status is {market_status} and it's outside EOD window. Full analysis cycle (Phase 1) will not run.")
+            utils.append_scan_log(session, f"Skanowanie Fazy 1 wstrzymane. Rynek jest {market_status} (poza oknem EOD).")
             current_state = "IDLE"
             utils.update_system_control(session, 'worker_status', 'IDLE')
             session.close()
-            return # Zakończ funkcję, nie uruchamiaj skanowania
+            return 
         
-        logger.info(f"Market status is {market_status}. Proceeding with analysis cycle.")
-        # ==================================================================
-        # === Koniec Poprawki ===
-        # ==================================================================
+        logger.info(f"Market status is {market_status} (lub okno EOD). Proceeding with analysis cycle.")
 
         logger.info("Starting full analysis cycle...")
         current_state = "RUNNING"
         utils.update_system_control(session, 'worker_status', 'RUNNING')
         utils.update_system_control(session, 'scan_log', '')
         
-        # ==================================================================
-        # ZMIANA: Usunęliśmy automatyczne wygaszanie sygnałów (EXPIRED)
-        # session.execute(text("UPDATE trading_signals SET status = 'EXPIRED' WHERE status = 'ACTIVE'"))
-        # session.commit()
         logger.info("Trwałe sygnały Fazy 3 są aktywne (nie wygasają co noc).")
-        # ==================================================================
         
         utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
         
@@ -167,97 +164,12 @@ def run_full_analysis_cycle():
         utils.update_system_control(session, 'scan_progress_total', '0')
         session.close()
 
-# ZMIANA: Logika "Karuzeli" (Strażnik)
-catalyst_monitor_running = False
-def run_catalyst_monitor_job():
-    """
-    Uruchamia zadanie monitora katalizatorów (newsów), ale tylko jeśli
-    poprzednie zadanie się zakończyło i rynek jest aktywny.
-    Przetwarza małą paczkę tickerów (TICKERS_PER_BATCH).
-    """
-    global catalyst_monitor_running
-    if catalyst_monitor_running:
-        logger.warning("Catalyst monitor job already running. Skipping this cycle.")
-        return
-        
-    # ==================================================================
-    # KROK 2 POPRAWKI (STRATEGIA): Jeśli paczka = 0, nie uruchamiaj zadania
-    # ==================================================================
-    if TICKERS_PER_BATCH <= 0:
-        logger.info("Catalyst monitor job is disabled (TICKERS_PER_BATCH = 0).")
-        return
-    # ==================================================================
 
-    # ==================================================================
-    # KROK 2 POPRAWKI: "Pre-Check" Czasu w NY
-    # ==================================================================
-    try:
-        now_ny = utils.get_current_NY_datetime()
-        ny_weekday = now_ny.weekday()
-        ny_hour = now_ny.hour
-        # 0=Pon, 4=Pt. Godziny 3:00 - 21:00 ET (bezpieczny bufor dla 4:00 - 20:00)
-        is_market_buffer = (0 <= ny_weekday <= 4) and (3 <= ny_hour <= 21) 
-        
-        if not is_market_buffer:
-            logger.info(f"Catalyst monitor: NY time ({ny_hour}h, Dzień: {ny_weekday}) is outside active buffer. Skipping.")
-            return # Zakończ pracę, nie uruchamiaj logiki
-    except Exception as e:
-        logger.error(f"Error during NY time pre-check in Catalyst monitor: {e}", exc_info=True)
-        # Na wszelki wypadek, kontynuuj i pozwól `get_market_status` zadecydować
-    # ==================================================================
-
-    catalyst_monitor_running = True
-    logger.info("Starting catalyst monitor job (within market buffer)...")
-    session = get_db_session()
-    try:
-        # 1. Sprawdź, czy rynek jest AKTYWNY (teraz pytamy API tylko w dobrych godzinach)
-        market_info = utils.get_market_status_and_time(api_client)
-        market_status = market_info.get("status")
-        
-        if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
-            logger.info(f"Catalyst monitor: Rynek jest {market_status}. Pomijanie cyklu.")
-            return
-
-        # 2. Pobierz wszystkie tickery do monitorowania
-        all_tickers = session.scalars(
-            select(utils.TradingSignal.ticker)
-            .where(utils.TradingSignal.status.in_(['ACTIVE', 'PENDING']))
-            .distinct()
-        ).all()
-        
-        if not all_tickers:
-            logger.info("Catalyst monitor: Brak tickerów Fazy 3 do monitorowania.")
-            return
-
-        total_tickers = len(all_tickers)
-
-        # 3. Pobierz ostatni indeks
-        last_index_str = utils.get_system_control_value(session, 'catalyst_monitor_last_index') or '0'
-        last_index = int(last_index_str)
-
-        # 4. Wybierz paczkę tickerów do przetworzenia
-        tickers_to_process = []
-        for i in range(TICKERS_PER_BATCH):
-            current_index = (last_index + i) % total_tickers
-            tickers_to_process.append(all_tickers[current_index])
-        
-        new_index = (last_index + TICKERS_PER_BATCH) % total_tickers
-        
-        logger.info(f"Catalyst monitor: Przetwarzanie {len(tickers_to_process)}/{total_tickers} tickerów: {', '.join(tickers_to_process)}")
-        
-        # 5. Uruchom przetwarzanie (teraz funkcja catalyst_monitor.run_catalyst_check przyjmuje listę)
-        catalyst_monitor.run_catalyst_check(session, tickers_to_process)
-        
-        # 6. Zapisz nowy indeks
-        utils.update_system_control(session, 'catalyst_monitor_last_index', str(new_index))
-
-    except Exception as e:
-        logger.error(f"Error in catalyst monitor job: {e}", exc_info=True)
-        session.rollback()
-    finally:
-        catalyst_monitor_running = False
-        session.close()
-        logger.info("Catalyst monitor job finished.")
+# ==================================================================
+# KROK 3 (KAT. 2): Usunięcie starej funkcji 'run_catalyst_monitor_job'
+# Cała ta funkcja została zastąpiona przez 'news_agent.py'
+# ==================================================================
+# USUNIĘTO: def run_catalyst_monitor_job(): ...
 
 
 def main_loop():
@@ -273,16 +185,19 @@ def main_loop():
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     
-    # Monitor cen (Strażnik SL) - co 15 sekund
+    # Monitor cen (Strażnik SL/TP) - co 15 sekund
     schedule.every(15).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     
-    # Monitor newsów (Strażnik Katalizatorów) - co 10 minut (logika "Karuzeli")
-    schedule.every(10).minutes.do(run_catalyst_monitor_job)
+    # ==================================================================
+    # KROK 3 (KAT. 2): Aktywacja nowego "Ultra Agenta Newsowego"
+    # Zastępujemy stare wywołanie 'run_catalyst_monitor_job'
+    # ==================================================================
+    # Uruchamiamy nowego agenta co 5 minut (zamiast co 10)
+    schedule.every(5).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Real-Time Entry Trigger Monitor scheduled every 15 seconds.")
-    # ZMIANA: Poprawka błędu NameError (przeniesiono definicję TICKERS_PER_BATCH)
-    logger.info(f"Catalyst News Monitor scheduled every 10 minutes (processing {TICKERS_PER_BATCH} ticker(s) per run).")
+    logger.info("Ultra News Agent (Kategoria 2) scheduled every 5 minutes.") # <-- ZMIANA: Nowy log
 
 
     with get_db_session() as initial_session:
@@ -306,7 +221,6 @@ def main_loop():
                     handle_ai_analysis_request(session)
                     schedule.run_pending()
                 
-                # ZMIANA: Poprawka literówki (heartkey -> heartbeat)
                 utils.report_heartbeat(session) 
             except Exception as loop_error:
                 logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
@@ -317,4 +231,5 @@ if __name__ == "__main__":
     if engine:
         main_loop()
     else:
-        logger.criti
+        logger.critical("Could not connect to database on startup. Worker exiting.")
+        sys.exit(1)
