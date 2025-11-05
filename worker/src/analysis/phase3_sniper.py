@@ -223,7 +223,6 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
 
 
 # --- SEKCJA MONITORA CZASU RZECZYWISTEGO ---
-# (Ta sekcja została zoptymalizowana pod kątem zapytań blokowych)
 
 def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     """
@@ -233,15 +232,19 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     """
     market_info = get_market_status_and_time(api_client)
     
-    if market_info["status"] == "MARKET_CLOSED":
-        # logger.info(f"Market is {market_info['status']}. Skipping Entry Trigger Monitor.") # Mniej "hałasu" w logach
+    # ==================================================================
+    # ZMIANA: Implementacja rady supportu Alpha Vantage
+    # Sprawdzamy, czy status jest JAWNIE aktywny. Jeśli jest CLOSED lub UNKNOWN,
+    # zatrzymujemy monitor, aby uniknąć fałszywych błędów API.
+    # ==================================================================
+    market_status = market_info.get("status")
+    if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
+        logger.info(f"Market is {market_status}. Skipping Entry Trigger Monitor.")
         return
+    # ==================================================================
         
     logger.info("Running Real-Time Entry Trigger Monitor (Optimized)...")
     
-    # ==================================================================
-    #  KROK 2 POPRAWKI: Pobieramy również `stop_loss` z bazy danych
-    # ==================================================================
     all_signals_rows = session.execute(text("""
         SELECT id, ticker, status, entry_price, entry_zone_bottom, stop_loss 
         FROM trading_signals WHERE status IN ('ACTIVE', 'PENDING')
@@ -257,7 +260,8 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     try:
         bulk_data_csv = api_client.get_bulk_quotes(tickers_to_monitor)
         if not bulk_data_csv:
-            logger.warning("Could not get bulk quote data for monitoring.")
+            # Ten log jest teraz oczekiwany, jeśli API zwróci błąd "apikey invalid"
+            logger.warning("Could not get bulk quote data for monitoring (API error or empty response).")
             return
 
         parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
@@ -280,10 +284,7 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
 
             current_price = float(current_price) # Upewnijmy się, że to liczba
 
-            # ==================================================================
-            #  KROK 2 POPRAWKI: Logika Strażnika (Backend)
-            #  Sprawdzamy negację (Stop Loss) PRZED sprawdzeniem wejścia
-            # ==================================================================
+            # === Logika Strażnika (Backend) ===
             stop_loss_price = signal_row.stop_loss
             if stop_loss_price is not None:
                 stop_loss_price = float(stop_loss_price)
@@ -361,4 +362,4 @@ def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
         }
     except Exception as e:
         logger.error(f"Error in _find_impulse_and_fib_zone: {e}", exc_info=True)
-        return None
+        retur
