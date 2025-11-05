@@ -163,6 +163,19 @@ def run_news_agent_cycle(session: Session, api_client: object):
                     # Wyślij pilny alert do UI (i w przyszłości na Telegram)
                     alert_msg = f"PILNY ALERT NEWSOWY: {ticker} | {sentiment} | {headline}"
                     update_system_control(session, 'system_alert', alert_msg)
+                
+                # ==================================================================
+                # NOWA POPRAWKA (zgodnie z Pana sugestią): Reakcja na Pozytywny News
+                # ==================================================================
+                elif sentiment == 'CRITICAL_POSITIVE':
+                    critical_alerts += 1 # Traktujemy to również jako alert
+                    logger.warning(f"Agent Newsowy: KRYTYCZNY POZYTYWNY NEWS DLA {ticker}! Wysyłanie alertu.")
+                    
+                    # Dla pozytywnego newsa NIE unieważniamy sygnału,
+                    # ale wysyłamy alert, aby trader mógł podjąć decyzję.
+                    alert_msg = f"PILNY ALERT NEWSOWY: {ticker} | {sentiment} | {headline}"
+                    update_system_control(session, 'system_alert', alert_msg)
+                # ==================================================================
         
         logger.info(f"Agent Newsowy: Cykl zakończony. Przetworzono {processed_items} nowych wiadomości. Wygenerowano {critical_alerts} alertów krytycznych.")
 
