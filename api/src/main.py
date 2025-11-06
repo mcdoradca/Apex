@@ -160,6 +160,25 @@ def get_discarded_signals_count(db: Session = Depends(get_db)):
 # ==========================================================
 
 
+# ==========================================================
+# KROK 5 (Wirtualny Agent): Endpoint API do pobierania raportu
+# ==========================================================
+@app.get("/api/v1/virtual-agent/report", response_model=schemas.VirtualAgentReport, summary="Pobiera pełny raport Wirtualnego Agenta")
+def get_virtual_agent_report_endpoint(db: Session = Depends(get_db)):
+    """
+    Zwraca pełny raport Wirtualnego Agenta, zawierający zagregowane
+    statystyki (Win Rate, P/L, Profit Factor) oraz listę
+    wszystkich zamkniętych wirtualnych transakcji.
+    """
+    try:
+        report = crud.get_virtual_agent_report(db)
+        return report
+    except Exception as e:
+        logger.error(f"Error fetching virtual agent report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Nie można pobrać raportu Wirtualnego Agenta.")
+# ==========================================================
+
+
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
 def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
     try:
