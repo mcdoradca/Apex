@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 # ==================================================================
-# KROK 2 (KAT. 2): Dodatkowe importy dla Agenta Newsowego
+# KROK 1 (KAT. 2): Dodatkowe importy dla Agenta Newsowego
 # ==================================================================
 import requests
 import json
@@ -11,16 +11,19 @@ import random
 # ==================================================================
 from sqlalchemy.orm import Session
 from datetime import datetime
+# ZMIANA: Importujemy 'utils', aby użyć nowej funkcji
 from . import utils
 from .utils import (
     safe_float, get_market_status_and_time, standardize_df_columns, 
-    calculate_rsi, calculate_bbands, get_relevant_signal_from_db
+    calculate_rsi, calculate_bbands,
+    # Poprawka: Import funkcji get_relevant_signal_from_db był w 'utils', ale nie tutaj
+    get_relevant_signal_from_db 
 )
 
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# KROK 2 (KAT. 2): Konfiguracja API Gemini dla Agenta Newsowego
+# KROK 1 (KAT. 2): Konfiguracja API Gemini dla Agenta Newsowego
 # ==================================================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
@@ -33,6 +36,7 @@ API_HEADERS = {'Content-Type': 'application/json'}
 
 
 # --- AGENT 1: ANALIZA MOMENTUM I SIŁY WZGLĘDNEJ ---
+# (Bez zmian)
 def _run_momentum_agent(ticker: str, daily_df: pd.DataFrame, qqq_perf: float) -> dict:
     score = 0
     max_score = 4
@@ -81,6 +85,7 @@ def _run_momentum_agent(ticker: str, daily_df: pd.DataFrame, qqq_perf: float) ->
 
 
 # --- AGENT 2: ANALIZA KOMPRESJI ENERGII ---
+# (Bez zmian)
 def _run_volatility_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
     score = 0
     max_score = 3
@@ -124,6 +129,7 @@ def _run_volatility_agent(ticker: str, daily_df: pd.DataFrame) -> dict:
 
 
 # --- AGENT 3: ANALIZA SENTYMENTU ---
+# (Bez zmian)
 def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
     score = 0
     max_score = 3
@@ -164,6 +170,7 @@ def _run_sentiment_agent(ticker: str, api_client: object) -> dict:
 
 
 # --- AGENT 4: AGENT STRAŻNIKA WEJŚĆ (NOWA LOGIKA) ---
+# (Logika zgodna z wdrożonymi poprawkami F-3)
 def _run_tactical_agent(session: Session, ticker: str) -> dict:
     """
     Agent, który odczytuje AKTUALNY stan setupu (ACTIVE, PENDING, INVALIDATED)
@@ -324,7 +331,8 @@ def run_ai_analysis(session: Session, ticker: str, api_client: object) -> dict:
 
 
 # ==================================================================
-# KROK 2 (KAT. 2): Dodanie "Mózgu" Agenta Newsowego
+# KROK 1 (KAT. 2): Dodanie "Mózgu" Agenta Newsowego
+# Ta funkcja będzie wywoływana przez nowego Agenta (news_agent.py)
 # ==================================================================
 
 def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str) -> dict:
@@ -418,5 +426,123 @@ def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str)
     logger.error(f"Agent Newsowy: Nie udało się przeanalizować newsa dla {ticker} po {max_retries} próbach.")
     return {"sentiment": "NEUTRAL", "reason": "Błąd po stronie serwera podczas analizy"}
 # ==================================================================
-# Koniec Krok 2 (KAT. 2)
+# Koniec Krok 1 (KAT. 2)
+# ==================================================================
+
+
+# ==================================================================
+# KROK C (FAZA 0): Dodanie "Mózgu" Agenta Makroekonomicznego
+# ==================================================================
+def _run_macro_analysis_agent(cpi: dict, fed_rate: dict, yield_10y: dict, unemployment: dict) -> dict:
+    """
+    Wywołuje Gemini API, aby przeanalizować kluczowe wskaźniki makro
+    i zwrócić sentyment rynkowy ('RISK_ON' lub 'RISK_OFF').
+    """
+    if not GEMINI_API_KEY:
+        logger.error("Agent Makro: Brak klucza GEMINI_API_KEY. Analiza niemożliwa. Ustawiam domyślny 'RISK_ON'.")
+        return {"sentiment": "RISK_ON", "reason": "Brak klucza API Gemini, Faza 0 domyślnie przepuszcza skanowanie."}
+
+    # Krótka pauza, aby utrzymać się w limitach Gemini
+    time.sleep(1.1 + random.uniform(0, 0.5)) 
+    
+    # Przygotowanie danych wejściowych dla promptu
+    try:
+        # Przetwarzamy dane, aby uzyskać najnowsze wartości
+        latest_cpi_value = cpi.get('data', [{}])[0].get('value', 'N/A')
+        latest_cpi_date = cpi.get('data', [{}])[0].get('date', 'N/A')
+        
+        latest_fed_rate_value = fed_rate.get('data', [{}])[0].get('value', 'N/A')
+        latest_fed_rate_date = fed_rate.get('data', [{}])[0].get('date', 'N/A')
+        
+        latest_yield_value = yield_10y.get('data', [{}])[0].get('value', 'N/A')
+        latest_yield_date = yield_10y.get('data', [{}])[0].get('date', 'N/A')
+
+        latest_unemployment_value = unemployment.get('data', [{}])[0].get('value', 'N/A')
+        latest_unemployment_date = unemployment.get('data', [{}])[0].get('date', 'N/A')
+
+    except Exception as e:
+        logger.error(f"Agent Makro: Błąd parsowania danych wejściowych: {e}. Ustawiam domyślny 'RISK_ON'.")
+        return {"sentiment": "RISK_ON", "reason": f"Błąd parsowania danych wejściowych: {e}"}
+
+    # Precyzyjny prompt trenujący
+    prompt = f"""
+    Jesteś głównym analitykiem makroekonomicznym w funduszu hedgingowym typu 'long-only' skupionym na akcjach wzrostowych (Nasdaq).
+    Twoim zadaniem jest ochrona kapitału funduszu. Masz określić, czy otoczenie rynkowe sprzyja podejmowaniu ryzyka.
+
+    Przeanalizuj poniższe 4 kluczowe wskaźniki makroekonomiczne dla USA:
+
+    1.  Inflacja (CPI, roczna): {latest_cpi_value}% (z dnia: {latest_cpi_date})
+    2.  Stopy Procentowe (FED Funds Rate): {latest_fed_rate_value}% (z dnia: {latest_fed_rate_date})
+    3.  Rentowność Obligacji (10-letnie): {latest_yield_value}% (z dnia: {latest_yield_date})
+    4.  Stopa Bezrobocia: {latest_unemployment_value}% (z dnia: {latest_unemployment_date})
+
+    Cel FED dla inflacji to 2.0%. Cel dla bezrobocia to ~4.0%.
+
+    Sklasyfikuj obecne środowisko jako JEDNĄ z dwóch opcji:
+    1.  `RISK_ON`: Środowisko sprzyjające. Inflacja jest pod kontrolą (blisko 2-3%), stopy FED są stabilne lub spadają, rentowność obligacji jest niska/stabilna, bezrobocie jest niskie. Można agresywnie kupować akcje wzrostowe.
+    2.  `RISK_OFF`: Środowisko niebezpieczne. Inflacja jest wysoka (> 3.5%) lub szybko rośnie, stopy FED rosną, rentowność obligacji gwałtownie rośnie (np. > 4.5%), lub bezrobocie rośnie. Należy wstrzymać nowe zakupy i chronić kapitał.
+    """
+
+    # Definicja schematu JSON dla odpowiedzi Gemini
+    macro_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "sentiment": {
+                "type": "STRING",
+                "enum": ["RISK_ON", "RISK_OFF"],
+            },
+            "reason": {
+                "type": "STRING",
+                "description": "Krótkie (1 zdanie) wyjaśnienie, dlaczego podjąłeś taką decyzję."
+            }
+        },
+        "required": ["sentiment", "reason"]
+    }
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": macro_schema
+        }
+    }
+
+    max_retries = 3
+    initial_backoff = 3
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(GEMINI_API_URL, headers=API_HEADERS, data=json.dumps(payload), timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            
+            text_content = data.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
+            analysis_json = json.loads(text_content)
+            
+            sentiment = analysis_json.get('sentiment', 'RISK_ON') # Bezpieczny domyślny
+            reason = analysis_json.get('reason', 'Brak analizy')
+            
+            logger.info(f"Agent Makro (Faza 0): Sentyment={sentiment}. Powód: {reason}")
+            return {"sentiment": sentiment, "reason": reason}
+
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                wait = (initial_backoff * (2 ** attempt)) + random.uniform(0, 1)
+                logger.warning(f"Agent Makro: Rate limit (429) (Próba {attempt + 1}/{max_retries}). Ponawiam za {wait:.2f}s...")
+                time.sleep(wait)
+                continue
+            else:
+                logger.error(f"Agent Makro: Błąd HTTP (inny niż 429) podczas wywołania Gemini: {e}", exc_info=True)
+                break
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Agent Makro: Błąd sieciowy podczas wywołania Gemini: {e}", exc_info=True)
+            break
+        except (json.JSONDecodeError, KeyError, IndexError) as e:
+            logger.error(f"Agent Makro: Błąd przetwarzania odpowiedzi JSON z Gemini: {e}", exc_info=True)
+            break
+    
+    logger.error(f"Agent Makro: Nie udało się przeanalizować danych makro po {max_retries} próbach. Ustawiam domyślny 'RISK_ON'.")
+    return {"sentiment": "RISK_ON", "reason": "Błąd po stronie serwera podczas analizy makro."}
+# ==================================================================
+# Koniec Krok C (FAZA 0)
 # ==================================================================
