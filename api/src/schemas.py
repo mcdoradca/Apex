@@ -58,6 +58,13 @@ class AIAnalysisRequestResponse(BaseModel):
 class OnDemandRequest(BaseModel):
     ticker: str
 
+# ==========================================================
+# === NOWY SCHEMAT (Krok 1 - Uruchomienie Backtestu) ===
+# ==========================================================
+class BacktestRequest(BaseModel):
+    period_name: str = Field(..., description="Nazwa okresu do testowania, np. TRUMP_2019")
+# ==========================================================
+
 class Progress(BaseModel):
     processed: int
     total: int
