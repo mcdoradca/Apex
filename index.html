@@ -103,6 +103,11 @@
                     <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
                     <a href="#portfolio-view" id="portfolio-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="briefcase" class="mr-3 w-5 h-5"></i><span>Portfel</span></a>
                     <a href="#transactions-view" id="transactions-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="history" class="mr-3 w-5 h-5"></i><span>Transakcje</span></a>
+                    <!-- ========================================================== -->
+                    <!-- KROK 5 (Frontend): Nowy link nawigacyjny -->
+                    <!-- ========================================================== -->
+                    <a href="#agent-report-view" id="agent-report-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="clipboard-check" class="mr-3 w-5 h-5"></i><span>Wydajność Agenta</span></a>
+                    <!-- ========================================================== -->
                 </nav>
                  <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
                     <div class="pl-2 mt-2 border-l border-gray-700 space-y-2">
@@ -252,6 +257,11 @@
                 dashboardLink: document.getElementById('dashboard-link'),
                 portfolioLink: document.getElementById('portfolio-link'),
                 transactionsLink: document.getElementById('transactions-link'),
+                // ==========================================================
+                // KROK 5 (Frontend): Nowy selektor
+                // ==========================================================
+                agentReportLink: document.getElementById('agent-report-link'),
+                // ==========================================================
                 heartbeatStatus: document.getElementById('heartbeat-status'),
                 alertContainer: document.getElementById('system-alert-container'),
                 phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
@@ -337,7 +347,12 @@
                 getPortfolio: () => apiRequest('/api/v1/portfolio'),
                 buyStock: (data) => apiRequest('/api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
                 sellStock: (data) => apiRequest('/api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
-                getTransactionHistory: () => apiRequest('/api/v1/transactions')
+                getTransactionHistory: () => apiRequest('/api/v1/transactions'),
+                // ==========================================================
+                // KROK 5 (Frontend): Nowy endpoint API
+                // ==========================================================
+                getVirtualAgentReport: () => apiRequest('/api/v1/virtual-agent/report')
+                // ==========================================================
             };
             console.log("Full API object defined.");
 
@@ -700,7 +715,158 @@
                         return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${transactionDate}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${typeClass}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${profitLossClass}">${t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
                     }).join('');
                     return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+                },
+                
+                // ==========================================================
+                // KROK 5 (Frontend): Nowy renderer dla raportu agenta
+                // ==========================================================
+                agentReport: (report) => {
+                    const { stats, trades } = report;
+                    
+                    const getProfitClass = (val) => val > 0 ? 'text-green-500' : (val < 0 ? 'text-red-500' : 'text-gray-400');
+                    const getProfitIcon = (val) => val > 0 ? 'trending-up' : (val < 0 ? 'trending-down' : 'minus');
+                    const getStatusClass = (status) => {
+                        if (status === 'CLOSED_TP') return 'bg-green-600/20 text-green-300';
+                        if (status === 'CLOSED_SL') return 'bg-red-600/20 text-red-300';
+                        if (status === 'CLOSED_EXPIRED') return 'bg-yellow-600/20 text-yellow-300';
+                        return 'bg-gray-600/20 text-gray-300';
+                    };
+                    const getStatusText = (status) => {
+                        const map = {
+                            'CLOSED_TP': 'Take Profit',
+                            'CLOSED_SL': 'Stop Loss',
+                            'CLOSED_EXPIRED': 'Wygasła (7 dni)'
+                        };
+                        return map[status] || status;
+                    };
+                    const getSetupName = (setupType) => {
+                        const map = {
+                            'FIB_H1': 'Fibonacci H1',
+                            'EMA_BOUNCE': 'EMA Bounce',
+                            'BREAKOUT': 'Breakout',
+                            'OTHER': 'Inny',
+                            'UNKNOWN': 'Nieznany'
+                        };
+                        return map[setupType] || setupType;
+                    };
+                    
+                    // 1. Renderowanie Kluczowych Wskaźników
+                    const statsCards = `
+                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
+                                <h4 class="text-sm font-semibold text-gray-400">Całkowity Z/S</h4>
+                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.total_p_l_percent)}">${stats.total_p_l_percent.toFixed(2)}%</p>
+                            </div>
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
+                                <h4 class="text-sm font-semibold text-gray-400">Transakcje</h4>
+                                <p class="text-3xl font-bold mt-2 text-white">${stats.total_trades}</p>
+                            </div>
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
+                                <h4 class="text-sm font-semibold text-gray-400">Skuteczność</h4>
+                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.win_rate_percent - 50)}">${stats.win_rate_percent.toFixed(1)}%</p>
+                            </div>
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
+                                <h4 class="text-sm font-semibold text-gray-400">Profit Factor</h4>
+                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.profit_factor - 1)}">${stats.profit_factor.toFixed(2)}</p>
+                            </div>
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
+                                <h4 class="text-sm font-semibold text-gray-400">Średnia Transakcja</h4>
+                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.average_p_l_percent)}">${stats.average_p_l_percent.toFixed(2)}%</p>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // 2. Renderowanie Podsumowania wg Strategii
+                    const setupRows = Object.entries(stats.by_setup).map(([setupType, setupData]) => {
+                        const pClass = getProfitClass(setupData.total_p_l_percent);
+                        const wrClass = getProfitClass(setupData.win_rate_percent - 50);
+                        return `
+                            <tr class="border-b border-gray-800 hover:bg-[#1f2937]">
+                                <td class="p-3 font-bold text-sky-400">${getSetupName(setupType)}</td>
+                                <td class="p-3 text-right">${setupData.total_trades}</td>
+                                <td class="p-3 text-right font-semibold ${wrClass}">${setupData.win_rate_percent.toFixed(1)}%</td>
+                                <td class="p-3 text-right font-semibold ${pClass}">${setupData.total_p_l_percent.toFixed(2)}%</td>
+                            </tr>
+                        `;
+                    }).join('');
+
+                    const setupTable = `
+                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Podsumowanie wg Strategii</h3>
+                        <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 mb-8">
+                            <table class="w-full text-sm text-left text-gray-300">
+                                <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                                    <tr>
+                                        <th scope="col" class="p-3">Typ Strategii</th>
+                                        <th scope="col" class="p-3 text-right">Liczba Transakcji</th>
+                                        <th scope="col" class="p-3 text-right">Skuteczność</th>
+                                        <th scope="col" class="p-3 text-right">Całkowity Z/S (%)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${setupRows.length > 0 ? setupRows : `<tr><td colspan="4" class="p-4 text-center text-gray-500">Brak zamkniętych transakcji do analizy.</td></tr>`}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                    
+                    // 3. Renderowanie Historii Transakcji
+                    const tradeRows = trades.map(t => {
+                        const pClass = getProfitClass(t.final_profit_loss_percent);
+                        const pIcon = getProfitIcon(t.final_profit_loss_percent);
+                        const sClass = getStatusClass(t.status);
+                        
+                        return `
+                            <tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs">
+                                <td class="p-3 font-bold text-sky-400">${t.ticker}</td>
+                                <td class="p-3 text-gray-400">${getSetupName(t.setup_type)}</td>
+                                <td class="p-3 text-gray-400">${new Date(t.open_date).toLocaleString('pl-PL')}</td>
+                                <td class="p-3 text-gray-400">${t.close_date ? new Date(t.close_date).toLocaleString('pl-PL') : '---'}</td>
+                                <td class="p-3 text-right">${t.entry_price.toFixed(2)}</td>
+                                <td class="p-3 text-right">${t.close_price ? t.close_price.toFixed(2) : '---'}</td>
+                                <td class="p-3 text-right font-bold ${pClass} flex justify-end items-center gap-1">
+                                    <i data-lucide="${pIcon}" class="w-4 h-4"></i>
+                                    ${t.final_profit_loss_percent ? t.final_profit_loss_percent.toFixed(2) + '%' : '---'}
+                                </td>
+                                <td class="p-3 text-center">
+                                    <span class="px-2 py-1 font-semibold rounded-full text-xs ${sClass}">
+                                        ${getStatusText(t.status)}
+                                    </span>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('');
+
+                    const tradeTable = `
+                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Historia Zamkniętych Transakcji</h3>
+                        <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
+                            <table class="w-full text-sm text-left text-gray-300">
+                                <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                                    <tr>
+                                        <th scope="col" class="p-3">Ticker</th>
+                                        <th scope="col" class="p-3">Strategia</th>
+                                        <th scope="col" class="p-3">Data Otwarcia</th>
+                                        <th scope="col" class="p-3">Data Zamknięcia</th>
+                                        <th scope="col" class="p-3 text-right">Cena Wejścia</th>
+                                        <th scope="col" class="p-3 text-right">Cena Zamknięcia</th>
+                                        <th scope="col" class="p-3 text-right">Z/S (%)</th>
+                                        <th scope="col" class="p-3 text-center">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tradeRows.length > 0 ? tradeRows : `<tr><td colspan="8" class="p-4 text-center text-gray-500">Brak zamkniętych transakcji.</td></tr>`}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+
+                    return `<div id="agent-report-view" class="max-w-6xl mx-auto">
+                                <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
+                                ${statsCards}
+                                ${setupTable}
+                                ${tradeTable}
+                            </div>`;
                 }
+                // ==========================================================
             };
             console.log("Renderers defined.");
 
@@ -969,6 +1135,24 @@
                      ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania transakcji: ${e.message}</div>`;
                 }
             }
+            
+            // ==========================================================
+            // KROK 5 (Frontend): Nowa funkcja widoku
+            // ==========================================================
+            async function showAgentReport() {
+                 stopAllPolling();
+                 state.currentViewTicker = null;
+                 setActiveSidebar(ui.agentReportLink);
+                 ui.mainContent.innerHTML = renderers.loading("Ładowanie raportu wydajności agenta...");
+                 try {
+                     const report = await api.getVirtualAgentReport();
+                     ui.mainContent.innerHTML = renderers.agentReport(report);
+                     lucide.createIcons();
+                 } catch (e) {
+                      ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania raportu: ${e.message}</div>`;
+                 }
+            }
+            // ==========================================================
 
             async function pollPortfolioQuotes() {
                  if (state.currentViewTicker) {
@@ -1267,6 +1451,12 @@
             ui.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); showDashboard(); });
             ui.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); showPortfolio(); });
             ui.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); showTransactions(); });
+            // ==========================================================
+            // KROK 5 (Frontend): Nowy listener
+            // ==========================================================
+            ui.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); showAgentReport(); });
+            // ==========================================================
+
 
             ['start', 'pause', 'resume'].forEach(action => {
                 document.getElementById(`${action}-btn`).addEventListener('click', async () => {
