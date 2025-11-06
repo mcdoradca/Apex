@@ -161,11 +161,14 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
         is_in_zone = impulse_result["entry_zone_bottom"] <= current_price <= impulse_result["entry_zone_top"]
         if is_in_zone:
             take_profit = float(impulse_result['impulse_high'])
+            # Ustaw stop loss na dnie impulsu
+            stop_loss = float(impulse_result['impulse_low'])
             return {
                 "signal": True, "status": "PENDING",
                 "ticker": ticker,
                 "entry_zone_bottom": float(impulse_result['entry_zone_bottom']),
                 "entry_zone_top": float(impulse_result['entry_zone_top']),
+                "stop_loss": stop_loss, # <-- Dodano SL dla setupu Fib
                 "take_profit": take_profit,
                 "notes": f"Setup EOD (OCZEKUJĄCY): Cena ({current_price:.2f}) w strefie Fib. Oczekuje na sygnał intraday H1."
             }
@@ -233,7 +236,7 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
                     logger.info(f"Sygnał {ticker} zapisany jako PENDING. Monitor RT przejmie obserwację.")
                 elif trade_setup['status'] == 'ACTIVE': 
                     # Ta logika jest zachowana na wypadek, gdyby jakaś strategia *celowo* generowała ACTIVE
-                    alert_msg = f"NOWY SYGNAŁ AKTYWNY (EOD): {ticker} gotowy do wejścia!"
+                    alert_msg = f"NOWY SYGNAł AKTYWNY (EOD): {ticker} gotowy do wejścia!"
                     update_system_control(session, 'system_alert', alert_msg)
             else:
                 append_scan_log(session, f"INFO (F3): {ticker} - {trade_setup.get('reason')}")
@@ -245,24 +248,181 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
 
 # --- SEKCJA MONITORA CZASU RZECZYWISTEGO ---
 
+# ==================================================================
+# NOWA FUNKCJA (KROK 1): Helper do sprawdzania potwierdzenia H1
+# ==================================================================
+def _check_h1_confirmation(ticker: str, api_client: AlphaVantageClient) -> bool:
+    """
+    Pobiera dane H1 (60min) i sprawdza, czy ostatnia zamknięta świeca
+    zamknęła się powyżej rosnącej 9-okresowej EMA H1.
+    """
+    try:
+        # Pobieramy dane intraday (H1)
+        h1_data_raw = api_client.get_intraday(ticker, interval='60min', outputsize='compact', extended_hours=False)
+        if not h1_data_raw or 'Time Series (60min)' not in h1_data_raw:
+            logger.warning(f"[Monitor Fib H1] Brak danych H1 dla {ticker}.")
+            return False
+        
+        # Przetwarzamy dane
+        df = pd.DataFrame.from_dict(h1_data_raw['Time Series (60min)'], orient='index')
+        df = standardize_df_columns(df) # Sortuje rosnąco i konwertuje na liczby
+        
+        if len(df) < 11: # Potrzebujemy 9 dla EMA + 2 do sprawdzenia (ostatnia zamknięta i ta przed nią)
+            logger.warning(f"[Monitor Fib H1] Za mało danych H1 dla {ticker} (tylko {len(df)} świec).")
+            return False
+
+        # Obliczamy EMA(9) na danych H1
+        ema9 = calculate_ema(df['close'], 9)
+        
+        # Sprawdzamy OSTATNIĄ ZAMKNIĘTĄ ŚWIECĘ (indeks -2),
+        # ponieważ świeca -1 może się jeszcze tworzyć.
+        last_closed_candle = df.iloc[-2]
+        last_closed_ema = ema9.iloc[-2]
+        prev_ema = ema9.iloc[-3]
+        
+        # Definicja sygnału:
+        # 1. EMA(9) na H1 musi rosnąć (ostatnia zamknięta > poprzednia)
+        is_ema_rising = last_closed_ema > prev_ema
+        # 2. Ostatnia zamknięta świeca H1 musi zamknąć się POWYŻEJ EMA(9)
+        is_closed_above_ema = last_closed_candle['close'] > last_closed_ema
+        
+        if is_ema_rising and is_closed_above_ema:
+            logger.info(f"[Monitor Fib H1] Potwierdzenie H1 ZNALEZIONE dla {ticker}.")
+            return True
+        else:
+            logger.info(f"[Monitor Fib H1] Brak potwierdzenia H1 dla {ticker} (EMA rośnie: {is_ema_rising}, Zamknięcie > EMA: {is_closed_above_ema}).")
+            return False
+            
+    except Exception as e:
+        logger.error(f"[Monitor Fib H1] Błąd podczas sprawdzania potwierdzenia H1 dla {ticker}: {e}", exc_info=True)
+        return False
+# ==================================================================
+# KONIEC NOWEJ FUNKCJI
+# ==================================================================
+
+
+# ==================================================================
+# NOWA FUNKCJA (KROK 1): Monitor potwierdzeń Fib H1 (Wolny)
+# ==================================================================
+def monitor_fib_confirmations(session: Session, api_client: AlphaVantageClient):
+    """
+    Wolniejszy monitor (uruchamiany np. co 15 minut), który sprawdza
+    potwierdzenia H1 dla sygnałów Fib (PENDING), które są w strefie wejścia.
+    """
+    market_info = get_market_status_and_time(api_client)
+    market_status = market_info.get("status")
+    
+    # Ten monitor może działać rzadziej, ale też tylko gdy rynek jest aktywny
+    if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
+        logger.info(f"Market is {market_status}. Skipping H1 Fib Confirmation Monitor.")
+        return
+        
+    logger.info("Running H1 Fib Confirmation Monitor (Slow Monitor)...")
+    
+    try:
+        # Krok 1: Znajdź wszystkie sygnały PENDING, które są setupami Fib
+        # (Rozpoznajemy je po tym, że entry_zone_top NIE JEST NULLEM, a entry_price JEST NULLEM)
+        fib_signals_rows = session.execute(text("""
+            SELECT id, ticker, entry_zone_bottom, entry_zone_top 
+            FROM trading_signals 
+            WHERE status = 'PENDING' 
+              AND entry_zone_top IS NOT NULL 
+              AND entry_price IS NULL
+        """)).fetchall()
+
+        if not fib_signals_rows:
+            logger.info("[Monitor Fib H1] Brak sygnałów Fib (PENDING) do monitorowania.")
+            return
+
+        tickers_to_monitor = [row.ticker for row in fib_signals_rows]
+        logger.info(f"[Monitor Fib H1] Monitorowanie {len(tickers_to_monitor)} sygnałów Fib: {', '.join(tickers_to_monitor)}")
+
+        # Krok 2: Pobierz aktualne ceny dla tych tickerów (1 zapytanie API)
+        bulk_data_csv = api_client.get_bulk_quotes(tickers_to_monitor)
+        if not bulk_data_csv:
+            logger.warning("[Monitor Fib H1] Nie można pobrać danych bulk quote dla monitorowania Fib.")
+            return
+
+        parsed_data = _parse_bulk_quotes_csv(bulk_data_csv)
+        if not parsed_data:
+            logger.warning("[Monitor Fib H1] Nie udało się sparsować danych bulk quote.")
+            return
+
+        # Krok 3: Iteruj i sprawdzaj
+        for signal in fib_signals_rows:
+            ticker = signal.ticker
+            quote_data = parsed_data.get(ticker)
+            
+            if not quote_data or quote_data.get('price') is None:
+                logger.warning(f"[Monitor Fib H1] Brak ceny dla {ticker} w odpowiedzi bulk.")
+                continue
+
+            current_price = float(quote_data['price'])
+            zone_bottom = float(signal.entry_zone_bottom)
+            zone_top = float(signal.entry_zone_top)
+
+            # Krok 4: Sprawdź, czy cena jest w strefie Fib
+            if zone_bottom <= current_price <= zone_top:
+                logger.info(f"[Monitor Fib H1] {ticker} jest w strefie Fib ({current_price:.2f}). Sprawdzanie potwierdzenia H1...")
+                
+                # Krok 5: TYLKO jeśli jest w strefie, wykonaj drogie zapytanie H1 (N zapytań API)
+                try:
+                    has_confirmation = _check_h1_confirmation(ticker, api_client)
+                    
+                    if has_confirmation:
+                        logger.warning(f"[Monitor Fib H1] POTWIERDZENIE H1 ZNALEZIONE dla {ticker}! Aktywowanie sygnału.")
+                        
+                        # Krok 6: Aktywuj sygnał
+                        update_stmt = text("""
+                            UPDATE trading_signals 
+                            SET status = 'ACTIVE', 
+                                notes = :notes, 
+                                updated_at = NOW() 
+                            WHERE id = :signal_id
+                        """)
+                        session.execute(update_stmt, {
+                            'signal_id': signal.id,
+                            'notes': f"Sygnał Fib aktywowany. Potwierdzenie H1 (cena {current_price:.2f} w strefie)."
+                        })
+                        session.commit()
+                        
+                        # Krok 7: Wyślij alerty
+                        alert_msg = f"ALARM CENOWY (Fib H1): {ticker} ({current_price:.2f}) potwierdził setup H1 w strefie Fib!"
+                        update_system_control(session, 'system_alert', alert_msg)
+                        send_telegram_alert(f"🔔 ALARM CENOWY (Fib H1) 🔔\n{alert_msg}")
+                    
+                except Exception as e:
+                    logger.error(f"[Monitor Fib H1] Błąd podczas przetwarzania H1 dla {ticker}: {e}", exc_info=True)
+                    # Kontynuuj pętlę, nie zatrzymuj monitora
+            
+            # Jeśli cena nie jest w strefie, po prostu zignoruj i sprawdź następnym razem
+
+    except Exception as e:
+        logger.error(f"Krytyczny błąd w monitorze Fib H1: {e}", exc_info=True)
+        session.rollback()
+# ==================================================================
+# KONIEC NOWEGO MONITORA
+# ==================================================================
+
+
 def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
 # ... (bez zmian) ...
     """
-    Zoptymalizowany monitor, który używa JEDNEGO zapytania blokowego do sprawdzenia
-    WSZYSTKICH sygnałów Fazy 3 (PENDING i ACTIVE) pod kątem:
-    1. Osiągnięcia Take Profit (NOWE)
-    2. Osiągnięcia Stop Loss (istniejące)
-    3. Unieważnienia "zużytych" setupów (NOWE)
-    4. Osiągnięcia ceny wejścia (istniejące)
+    Zoptymalizowany monitor (SZYBKI - co 10s), który używa JEDNEGO zapytania blokowego.
+    TERAZ OBSŁUGUJE TYLKO:
+    1. Osiągnięcia Take Profit (Wszystkie)
+    2. Osiągnięcia Stop Loss (Wszystkie)
+    3. Unieważnienia "zużytych" setupów (Wszystkie PENDING)
+    4. Osiągnięcia ceny wejścia (TYLKO Breakout / EMA)
     """
     market_info = get_market_status_and_time(api_client)
     
     market_status = market_info.get("status")
     if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
-        logger.info(f"Market is {market_status}. Skipping Entry Trigger Monitor.")
+        logger.info(f"Market is {market_status}. Skipping Entry Trigger Monitor (Fast).")
         return
         
-    logger.info("Running Real-Time Entry Trigger Monitor (Optimized)...")
+    logger.info("Running Real-Time Entry Trigger Monitor (Fast - SL/TP/Entry)...")
     
     # ==================================================================
     # KROK 2 POPRAWKI (LOGIKA): Pobieramy teraz *WSZYSTKIE* pola
@@ -277,7 +437,7 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
         return
 
     tickers_to_monitor = [row.ticker for row in all_signals_rows]
-    logger.info(f"Monitoring {len(tickers_to_monitor)} tickers using 1 bulk request.")
+    logger.info(f"Monitoring {len(tickers_to_monitor)} tickers using 1 bulk request (Fast Monitor).")
     
     try:
         bulk_data_csv = api_client.get_bulk_quotes(tickers_to_monitor)
@@ -386,19 +546,26 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                 # To zapobiega wejściu w pozycję ze złym R/R.
                 
                 if take_profit_price is not None:
-                    full_range = take_profit_price - entry_price_target
-                    if full_range > 0: # Upewnij się, że nie dzielimy przez zero
-                        gap_percent = (current_price - entry_price_target) / full_range
+                    # Dla setupów Fib, cena startowa jest wyższa niż cel, więc range jest negatywny.
+                    # Dla Breakout/EMA, cena startowa jest niższa. Musimy obsłużyć oba.
+                    
+                    # Użyjmy ceny wejścia dla Breakout/EMA, a strefy dla Fib
+                    entry_activation_price = float(signal_row.entry_price) if signal_row.entry_price is not None else float(signal_row.entry_zone_top)
+                    
+                    full_range = take_profit_price - entry_activation_price
+                    
+                    if full_range > 0: # Tylko dla setupów long (Breakout/EMA/Fib)
+                        gap_percent = (current_price - entry_activation_price) / full_range
                         
                         # Jeśli cena jest już 30% drogi do Take Profit, a my jeszcze nie weszliśmy
                         if gap_percent > 0.30:
-                            logger.warning(f"ZUŻYTY SETUP: {ticker} cena LIVE ({current_price}) jest zbyt daleko od wejścia ({entry_price_target}). Unieważnianie.")
+                            logger.warning(f"ZUŻYTY SETUP: {ticker} cena LIVE ({current_price}) jest zbyt daleko od wejścia ({entry_activation_price}). Unieważnianie.")
                             
                             # Krok 4c: Dodano ", updated_at = NOW()"
                             update_stmt = text("UPDATE trading_signals SET status = 'INVALIDATED', notes = :notes, updated_at = NOW() WHERE id = :signal_id")
                             session.execute(update_stmt, {
                                 'signal_id': signal_row.id,
-                                'notes': f"Setup unieważniony (ZUŻYTY). Cena LIVE ({current_price}) zbyt daleko od wejścia ({entry_price_target})."
+                                'notes': f"Setup unieważniony (ZUŻYTY). Cena LIVE ({current_price}) zbyt daleko od wejścia ({entry_activation_price})."
                             })
                             session.commit()
                             
@@ -406,37 +573,41 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
             # === Koniec Logiki "Zużycia" ===
             
             
-            # === Logika Alarmu Cenowego (Główny warunek wejścia) ===
-            # Ta logika uruchomi się tylko, jeśli:
-            # 1. Nie trafiono TP
-            # 2. Nie trafiono SL
-            # 3. Setup PENDING nie został "zużyty"
+            # ==================================================================
+            # ZMODYFIKOWANA LOGIKA ALARMU CENOWEGO (KROK 1)
+            # ==================================================================
             
             # GŁÓWNY WARUNEK: Czy aktualna cena jest PONIŻEJ (lub na) ceny wejścia?
-            # (Dla setupów 'long' chcemy kupić po cenie X lub taniej)
-            # POPRAWKA (Problem 3): Ta logika zadziała teraz dla PENDING
             if current_price <= entry_price_target:
                 
-                # Jeśli sygnał był PENDING, promuj go na ACTIVE
+                # Sprawdzamy tylko sygnały PENDING
                 if signal_row.status == 'PENDING':
-                    logger.info(f"ALARM CENOWY: {ticker} cena LIVE ({current_price}) jest w strefie wejścia (<= {entry_price_target}).")
-                    logger.info(f"Promowanie sygnału dla {ticker} z PENDING na ACTIVE.")
                     
-                    # Krok 4c: Dodano ", updated_at = NOW()"
-                    update_stmt = text("UPDATE trading_signals SET status = 'ACTIVE', updated_at = NOW() WHERE id = :signal_id")
-                    session.execute(update_stmt, {'signal_id': signal_row.id})
-                    session.commit() # Commitujemy od razu zmianę statusu
+                    # *** NOWY WARUNEK ***
+                    # Aktywuj TYLKO jeśli jest to setup Breakout/EMA (mają 'entry_price')
+                    # Setupy Fib (entry_price IS NULL) będą ignorowane przez ten monitor.
+                    if signal_row.entry_price is not None:
+                        logger.info(f"ALARM CENOWY (Breakout/EMA): {ticker} cena LIVE ({current_price}) jest w strefie wejścia (<= {entry_price_target}).")
+                        logger.info(f"Promowanie sygnału dla {ticker} z PENDING na ACTIVE.")
+                        
+                        # Krok 4c: Dodano ", updated_at = NOW()"
+                        update_stmt = text("UPDATE trading_signals SET status = 'ACTIVE', updated_at = NOW() WHERE id = :signal_id")
+                        session.execute(update_stmt, {'signal_id': signal_row.id})
+                        session.commit() # Commitujemy od razu zmianę statusu
+                        
+                        # Zawsze generuj alert, gdy cena jest w strefie wejścia
+                        alert_msg = f"ALARM CENOWY: {ticker} ({current_price:.2f}) osiągnął strefę wejścia!"
+                        update_system_control(session, 'system_alert', alert_msg)
+                        # ==================================================================
+                        # KROK 2 (KAT. 1): Wysyłanie alertu na Telegram
+                        # ==================================================================
+                        send_telegram_alert(f"🔔 ALARM CENOWY 🔔\n{alert_msg}")
+                        # ==================================================================
                     
-                    # Zawsze generuj alert, gdy cena jest w strefie wejścia
-                    alert_msg = f"ALARM CENOWY: {ticker} ({current_price:.2f}) osiągnął strefę wejścia!"
-                    update_system_control(session, 'system_alert', alert_msg)
-                    # ==================================================================
-                    # KROK 2 (KAT. 1): Wysyłanie alertu na Telegram
-                    # ==================================================================
-                    send_telegram_alert(f"🔔 ALARM CENOWY 🔔\n{alert_msg}")
-                    # ==================================================================
-                
-                # Jeśli status był już ACTIVE (np. cena ponownie spadła do strefy), nie wysyłaj alertu ponownie.
+                    # Jeśli to setup Fib (entry_price is NULL), zignoruj.
+                    elif signal_row.entry_zone_top is not None:
+                        logger.info(f"[Monitor Szybki] INFO: {ticker} ({current_price:.2f}) jest w strefie Fib. Oczekiwanie na monitor H1.")
+                        # Celowo nie robimy nic i nie wysyłamy alertu
         
     except Exception as e:
         logger.error(f"Error during bulk monitoring: {e}", exc_info=True)
@@ -458,8 +629,11 @@ def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
         high_point_price = df_after_low['high'].max()
         if low_point_price <= 0: return None
         impulse_strength = (high_point_price - low_point_price) / low_point_price
-        if impulse_strength < 0.10:
+        if impulse_strength < 0.10: # Wymagamy minimum 10% impulsu
+            logger.info(f"Impuls dla {daily_df.index[-1]} zbyt słaby ({impulse_strength:.2%}).")
             return None
+            
+        logger.info(f"Znaleziono silny impuls ({impulse_strength:.2%}) dla {daily_df.index[-1]} od {low_point_date_loc}.")
         return {
             "impulse_high": high_point_price,
             "impulse_low": low_point_price,
