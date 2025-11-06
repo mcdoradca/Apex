@@ -134,13 +134,13 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (Breakout)."}
         take_profit = breakout_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
         return {
-            "signal": True, "status": "ACTIVE",
+            "signal": True, "status": "PENDING", # <-- POPRAWKA (Problem 3): Zmiana z "ACTIVE" na "PENDING"
             "ticker": ticker,
             "entry_price": float(breakout_setup['entry_price']),
             "stop_loss": float(breakout_setup['stop_loss']),
             "take_profit": float(take_profit),
             "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
-            "notes": f"Setup EOD (AKTYWNY): Wybicie z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}."
+            "notes": f"Setup EOD (OCZEKUJĄCY): Wybicie z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}." # <-- Notatka zaktualizowana
         }
     ema_bounce_setup = _find_ema_bounce_setup(daily_df)
     if ema_bounce_setup:
@@ -148,13 +148,13 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (EMA Bounce)."}
         take_profit = ema_bounce_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
         return {
-            "signal": True, "status": "ACTIVE",
+            "signal": True, "status": "PENDING", # <-- POPRAWKA (Problem 3): Zmiana z "ACTIVE" na "PENDING"
             "ticker": ticker,
             "entry_price": float(ema_bounce_setup['entry_price']),
             "stop_loss": float(ema_bounce_setup['stop_loss']),
             "take_profit": float(take_profit),
             "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
-            "notes": f"Setup EOD (AKTYWNY): Odbicie od rosnącej EMA{Phase3Config.EMA_PERIOD}. EMA={ema_bounce_setup['ema_value']:.2f}."
+            "notes": f"Setup EOD (OCZEKUJĄCY): Odbicie od rosnącej EMA{Phase3Config.EMA_PERIOD}. EMA={ema_bounce_setup['ema_value']:.2f}." # <-- Notatka zaktualizowana
         }
     impulse_result = _find_impulse_and_fib_zone(daily_df)
     if impulse_result:
@@ -225,7 +225,14 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
                 log_prefix = f"NOWY SYGNAŁ (F3): {ticker} [{trade_setup['status']}]"
                 log_message = f"{log_prefix} | {trade_setup.get('notes', 'Brak notatek.')}"
                 append_scan_log(session, log_message)
-                if trade_setup['status'] == 'ACTIVE':
+                
+                # POPRAWKA (Problem 3): Alert EOD jest teraz mniej pilny, bo sygnał jest PENDING
+                if trade_setup['status'] == 'PENDING':
+                    # Nie generujemy już alertu 'system_alert', aby uniknąć fałszywych alarmów w nocy.
+                    # Alert wygeneruje monitor czasu rzeczywistego, gdy cena faktycznie wejdzie w strefę.
+                    logger.info(f"Sygnał {ticker} zapisany jako PENDING. Monitor RT przejmie obserwację.")
+                elif trade_setup['status'] == 'ACTIVE': 
+                    # Ta logika jest zachowana na wypadek, gdyby jakaś strategia *celowo* generowała ACTIVE
                     alert_msg = f"NOWY SYGNAŁ AKTYWNY (EOD): {ticker} gotowy do wejścia!"
                     update_system_control(session, 'system_alert', alert_msg)
             else:
@@ -261,7 +268,7 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     # KROK 2 POPRAWKI (LOGIKA): Pobieramy teraz *WSZYSTKIE* pola
     # ==================================================================
     all_signals_rows = session.execute(text("""
-        SELECT id, ticker, status, entry_price, entry_zone_bottom, stop_loss, take_profit 
+        SELECT id, ticker, status, entry_price, entry_zone_bottom, entry_zone_top, stop_loss, take_profit 
         FROM trading_signals WHERE status IN ('ACTIVE', 'PENDING')
     """)).fetchall()
     
@@ -301,7 +308,16 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
             # === POBRANIE KLUCZOWYCH WARTOŚCI Z SYGNAŁU ===
             stop_loss_price = float(signal_row.stop_loss) if signal_row.stop_loss is not None else None
             take_profit_price = float(signal_row.take_profit) if signal_row.take_profit is not None else None
-            entry_price_target = float(signal_row.entry_price) if signal_row.entry_price is not None else float(signal_row.entry_zone_bottom) if signal_row.entry_zone_bottom is not None else None
+            
+            # POPRAWKA (Problem 3): Logika ceny wejścia musi obsługiwać setupy (Breakout/EMA) i (Fib)
+            # Dla Breakout/EMA: entry_price
+            # Dla Fib: entry_zone_top (chcemy wejść, gdy cena spadnie *do* strefy)
+            entry_price_target = None
+            if signal_row.entry_price is not None:
+                entry_price_target = float(signal_row.entry_price) # Dla Breakout/EMA
+            elif signal_row.entry_zone_top is not None:
+                entry_price_target = float(signal_row.entry_zone_top) # Dla Fib
+            
 
             # ==================================================================
             # KROK 3 i 4c POPRAWKI (LOGIKA): Monitor Take Profit
@@ -398,11 +414,12 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
             
             # GŁÓWNY WARUNEK: Czy aktualna cena jest PONIŻEJ (lub na) ceny wejścia?
             # (Dla setupów 'long' chcemy kupić po cenie X lub taniej)
+            # POPRAWKA (Problem 3): Ta logika zadziała teraz dla PENDING
             if current_price <= entry_price_target:
-                logger.info(f"ALARM CENOWY: {ticker} cena LIVE ({current_price}) jest w strefie wejścia (<= {entry_price_target}).")
                 
                 # Jeśli sygnał był PENDING, promuj go na ACTIVE
                 if signal_row.status == 'PENDING':
+                    logger.info(f"ALARM CENOWY: {ticker} cena LIVE ({current_price}) jest w strefie wejścia (<= {entry_price_target}).")
                     logger.info(f"Promowanie sygnału dla {ticker} z PENDING na ACTIVE.")
                     
                     # Krok 4c: Dodano ", updated_at = NOW()"
@@ -410,14 +427,16 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                     session.execute(update_stmt, {'signal_id': signal_row.id})
                     session.commit() # Commitujemy od razu zmianę statusu
                     
-                # Zawsze generuj alert, gdy cena jest w strefie wejścia
-                alert_msg = f"ALARM CENOWY: {ticker} ({current_price:.2f}) osiągnął strefę wejścia!"
-                update_system_control(session, 'system_alert', alert_msg)
-                # ==================================================================
-                # KROK 2 (KAT. 1): Wysyłanie alertu na Telegram
-                # ==================================================================
-                send_telegram_alert(f"🔔 ALARM CENOWY 🔔\n{alert_msg}")
-                # ==================================================================
+                    # Zawsze generuj alert, gdy cena jest w strefie wejścia
+                    alert_msg = f"ALARM CENOWY: {ticker} ({current_price:.2f}) osiągnął strefę wejścia!"
+                    update_system_control(session, 'system_alert', alert_msg)
+                    # ==================================================================
+                    # KROK 2 (KAT. 1): Wysyłanie alertu na Telegram
+                    # ==================================================================
+                    send_telegram_alert(f"🔔 ALARM CENOWY 🔔\n{alert_msg}")
+                    # ==================================================================
+                
+                # Jeśli status był już ACTIVE (np. cena ponownie spadła do strefy), nie wysyłaj alertu ponownie.
         
     except Exception as e:
         logger.error(f"Error during bulk monitoring: {e}", exc_info=True)
