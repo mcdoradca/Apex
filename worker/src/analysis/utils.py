@@ -17,6 +17,15 @@ import requests
 from urllib.parse import quote_plus # Do kodowania wiadomości URL
 # ==================================================================
 
+# ==================================================================
+# NOWA POPRAWKA (Problem "Spamu 1600 Alertów")
+# ==================================================================
+import hashlib
+# Globalna pamięć podręczna dla wysłanych alertów (w ramach jednej sesji workera)
+# Przechowuje hashe wysłanych wiadomości, aby uniknąć duplikatów.
+_ALERT_MEMORY_CACHE = set()
+# ==================================================================
+
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +42,47 @@ if not TELEGRAM_CHAT_ID:
 # ==================================================================
 
 # ==================================================================
-# KROK 1 (KAT. 1): Centralna funkcja wysyłania alertów
+# NOWA POPRAWKA: Funkcja czyszcząca pamięć alertów
+# ==================================================================
+def clear_alert_memory_cache():
+    """
+    Czyści pamięć podręczną wysłanych alertów.
+    Wywoływane raz na cykl (np. co 24h) przez main.py.
+    """
+    global _ALERT_MEMORY_CACHE
+    logger.info(f"Clearing alert memory cache. Removed {_ALERT_MEMORY_CACHE} cached alerts.")
+    _ALERT_MEMORY_CACHE.clear()
+# ==================================================================
+
+
+# ==================================================================
+# ZMODYFIKOWANA FUNKCJA: Centralna funkcja wysyłania alertów
 # ==================================================================
 def send_telegram_alert(message: str):
     """
     Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
-    Używa prostego zapytania GET, aby uniknąć dodatkowych zależności.
+    NOWA LOGIKA: Wysyła wiadomość tylko raz, używając pamięci podręcznej.
     """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        # Nie wysyłaj, jeśli nie skonfigurowano (ostrzeżenie już poszło przy starcie)
+        # Nie wysyłaj, jeśli nie skonfigurowano
         return
 
-    # Kodowanie wiadomości, aby była bezpieczna dla URL (obsługa spacji, nowych linii, itp.)
+    # ==================================================================
+    # NOWA POPRAWKA (Problem "Spamu 1600 Alertów")
+    # ==================================================================
+    # Tworzymy unikalny klucz (hash) dla treści wiadomości
+    alert_key = hashlib.sha256(message.encode('utf-8')).hexdigest()
+    
+    global _ALERT_MEMORY_CACHE
+    if alert_key in _ALERT_MEMORY_CACHE:
+        # Ten *dokładny* alert został już wysłany w tym cyklu.
+        logger.info(f"Suppressing duplicate alert: {message[:50]}...")
+        return # Cicho ignoruj
+    # ==================================================================
+    # Koniec Poprawki
+    # ==================================================================
+
+    # Kodowanie wiadomości, aby była bezpieczna dla URL
     encoded_message = quote_plus(message)
     
     # Formatowanie URL
@@ -55,8 +93,14 @@ def send_telegram_alert(message: str):
         response = requests.get(url, timeout=5)
         response.raise_for_status() # Sprawdź błędy HTTP (np. 400, 404, 500)
         
-        if response.json().get('ok'):
+        response_data = response.json()
+        if response_data.get('ok'):
             logger.info(f"Pomyślnie wysłano alert Telegram: {message[:50]}...")
+            # ==================================================================
+            # NOWA POPRAWKA: Dodaj alert do pamięci, aby go nie powtarzać
+            # ==================================================================
+            _ALERT_MEMORY_CACHE.add(alert_key)
+            # ==================================================================
         else:
             logger.error(f"Telegram API zwrócił błąd: {response.text}")
     except requests.exceptions.RequestException as e:
