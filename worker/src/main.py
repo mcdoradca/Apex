@@ -19,7 +19,8 @@ from .analysis import (
     ai_agents, 
     utils,
     news_agent, # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
-    phase0_macro_agent # <-- POPRAWKA: Import Fazy 0
+    phase0_macro_agent, # <-- POPRAWKA: Import Fazy 0
+    virtual_agent # <-- KROK 4 (Wirtualny Agent): Import nowego modułu
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -260,10 +261,18 @@ def main_loop():
     # POPRAWKA 3 (Problem 1: Częstotliwość): Uruchamiamy agenta newsowego co 2 minuty (było 5)
     schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
     
+    # ==================================================================
+    # KROK 4 (Wirtualny Agent): Aktywacja dobowego monitora agenta
+    # ==================================================================
+    # Uruchamiamy o 23:00 CET, po zamknięciu rynku, ale przed głównym skanem
+    schedule.every().day.at("23:00", "Europe/Warsaw").do(lambda: virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client))
+    # ==================================================================
+    
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
     logger.info("Real-Time Entry Trigger Monitor scheduled every 10 seconds.")
-    logger.info("H1 Fib Confirmation Monitor scheduled every 15 minutes.") # <-- NOWY LOG
+    logger.info("H1 Fib Confirmation Monitor scheduled every 15 minutes.")
     logger.info("Ultra News Agent (Kategoria 2) scheduled every 2 minutes.")
+    logger.info("🤖 Virtual Agent Monitor scheduled every day at 23:00 CET.") # <-- NOWY LOG
 
 
     with get_db_session() as initial_session:
