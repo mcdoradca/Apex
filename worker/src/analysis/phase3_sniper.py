@@ -14,7 +14,11 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .utils import (
     update_scan_progress, append_scan_log, safe_float, 
     update_system_control, get_market_status_and_time,
-    calculate_ema, standardize_df_columns
+    calculate_ema, standardize_df_columns,
+    # ==================================================================
+    # KROK 2 (KAT. 1): Import funkcji alertów Telegram
+    # ==================================================================
+    send_telegram_alert
 )
 from ..config import Phase3Config
 
@@ -22,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 # KROK 7 ZMIANA: Dodajemy parser CSV (skopiowany z phase1_scanner.py dla spójności)
 def _parse_bulk_quotes_csv(csv_text: str) -> dict:
+# ... (bez zmian) ...
     """Przetwarza odpowiedź CSV z REALTIME_BULK_QUOTES na słownik danych."""
     if not csv_text or "symbol" not in csv_text:
         logger.warning("[Monitor F3] Otrzymane dane CSV (Bulk Quotes) są puste lub nieprawidłowe.")
@@ -48,7 +53,7 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
 # (Ta część jest już zoptymalizowana i pozostaje bez zmian)
 
 def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, breakout_atr_multiplier=1.0) -> dict | None:
-    # ... (bez zmian) ...
+# ... (bez zmian) ...
     try:
         if len(daily_df) < min_consolidation_days + 2: return None
         high_low = daily_df['high'] - daily_df['low']
@@ -84,7 +89,7 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
         return None
 
 def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
-    # ... (bez zmian) ...
+# ... (bez zmian) ...
     try:
         if len(daily_df) < ema_period + 3: return None
         daily_df['ema'] = calculate_ema(daily_df['close'], ema_period) # Używamy funkcji z utils
@@ -119,7 +124,7 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
         return None
 
 def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
-    # ... (bez zmian) ...
+# ... (bez zmian) ...
     if daily_df.empty or len(daily_df) < 21:
          return {"signal": False, "reason": "Niewystarczająca historia danych dziennych (otrzymana z Fazy 2)."}
     current_price = daily_df['close'].iloc[-1]
@@ -169,7 +174,7 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
     return {"signal": False, "reason": "Brak setupu EOD (Fib/Breakout/EMA Bounce)."}
 
 def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.DataFrame]], get_current_state, api_client: AlphaVantageClient):
-    # ... (bez zmian) ...
+# ... (bez zmian) ...
     logger.info("Running Phase 3: End-of-Day Tactical Planning...")
     append_scan_log(session, "Faza 3: Skanowanie EOD w poszukiwaniu setupów...")
     successful_setups = 0
@@ -234,6 +239,7 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
 # --- SEKCJA MONITORA CZASU RZECZYWISTEGO ---
 
 def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
+# ... (bez zmian) ...
     """
     Zoptymalizowany monitor, który używa JEDNEGO zapytania blokowego do sprawdzenia
     WSZYSTKICH sygnałów Fazy 3 (PENDING i ACTIVE) pod kątem:
@@ -313,6 +319,11 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                 
                 alert_msg = f"TAKE PROFIT: {ticker} ({current_price:.2f}) osiągnął cenę docelową ({take_profit_price:.2f}). Sygnał zakończony."
                 update_system_control(session, 'system_alert', alert_msg)
+                # ==================================================================
+                # KROK 2 (KAT. 1): Wysyłanie alertu na Telegram
+                # ==================================================================
+                send_telegram_alert(f"✅ TAKE PROFIT ✅\n{alert_msg}")
+                # ==================================================================
                 
                 continue # Przejdź do następnego tickera, ten jest zakończony
             # === Koniec Logiki Take Profit ===
@@ -335,6 +346,11 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                 
                 alert_msg = f"STOP LOSS: {ticker} ({current_price:.2f}) spadł poniżej SL ({stop_loss_price:.2f}). Setup unieważniony."
                 update_system_control(session, 'system_alert', alert_msg)
+                # ==================================================================
+                # KROK 2 (KAT. 1): Wysyłanie alertu na Telegram
+                # ==================================================================
+                send_telegram_alert(f"🛑 STOP LOSS 🛑\n{alert_msg}")
+                # ==================================================================
                 
                 continue # Przejdź do następnego tickera, ten jest już nieważny
             # === Koniec Logiki Stop Loss ===
@@ -397,6 +413,11 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                 # Zawsze generuj alert, gdy cena jest w strefie wejścia
                 alert_msg = f"ALARM CENOWY: {ticker} ({current_price:.2f}) osiągnął strefę wejścia!"
                 update_system_control(session, 'system_alert', alert_msg)
+                # ==================================================================
+                # KROK 2 (KAT. 1): Wysyłanie alertu na Telegram
+                # ==================================================================
+                send_telegram_alert(f"🔔 ALARM CENOWY 🔔\n{alert_msg}")
+                # ==================================================================
         
     except Exception as e:
         logger.error(f"Error during bulk monitoring: {e}", exc_info=True)
@@ -404,7 +425,7 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
 
 
 def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
-    # ... (bez zmian) ...
+# ... (bez zmian) ...
     try:
         if len(daily_df) < 21: return None
         recent_df = daily_df.iloc[-21:]
