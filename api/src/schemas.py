@@ -131,3 +131,41 @@ class AIAnalysisResult(BaseModel):
     analysis_timestamp_utc: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+# ==========================================================
+# === KROK 5 (Wirtualny Agent): Schematy dla Wyników Agenta ===
+# ==========================================================
+
+class VirtualTrade(BaseModel):
+    """Schemat dla pojedynczej wirtualnej transakcji (wiersz z tabeli)"""
+    id: int
+    signal_id: Optional[int] = None
+    ticker: str
+    status: str
+    setup_type: Optional[str] = None
+    entry_price: float
+    stop_loss: float
+    take_profit: Optional[float] = None
+    open_date: datetime
+    close_date: Optional[datetime] = None
+    close_price: Optional[float] = None
+    final_profit_loss_percent: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VirtualAgentStats(BaseModel):
+    """Schemat dla zagregowanych statystyk wydajności"""
+    total_trades: int
+    win_rate_percent: float
+    total_p_l_percent: float
+    average_p_l_percent: float
+    average_win_percent: float
+    average_loss_percent: float
+    profit_factor: float
+    by_setup: Dict[str, Any] # Miejsce na statystyki per-strategia (np. {'EMA_BOUNCE': {'win_rate': 50.0, ...}})
+
+class VirtualAgentReport(BaseModel):
+    """Główny schemat odpowiedzi, łączący statystyki i listę transakcji"""
+    stats: VirtualAgentStats
+    trades: List[VirtualTrade]
