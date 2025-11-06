@@ -21,6 +21,11 @@ from .utils import (
     send_telegram_alert
 )
 from ..config import Phase3Config
+# ==================================================================
+# KROK 2 (Wirtualny Agent): Import nowego modułu
+# ==================================================================
+from . import virtual_agent
+# ==================================================================
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +145,7 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
             "stop_loss": float(breakout_setup['stop_loss']),
             "take_profit": float(take_profit),
             "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
-            "notes": f"Setup EOD (OCZEKUJĄCY): Wybicie z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}." # <-- Notatka zaktualizowana
+            "notes": f"Setup EOD (OCZEKUJĄCY): Breakout z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}." # <-- Notatka zaktualizowana
         }
     ema_bounce_setup = _find_ema_bounce_setup(daily_df)
     if ema_bounce_setup:
@@ -323,12 +328,11 @@ def monitor_fib_confirmations(session: Session, api_client: AlphaVantageClient):
         # Krok 1: Znajdź wszystkie sygnały PENDING, które są setupami Fib
         # (Rozpoznajemy je po tym, że entry_zone_top NIE JEST NULLEM, a entry_price JEST NULLEM)
         fib_signals_rows = session.execute(text("""
-            SELECT id, ticker, entry_zone_bottom, entry_zone_top 
-            FROM trading_signals 
+            SELECT * FROM trading_signals 
             WHERE status = 'PENDING' 
               AND entry_zone_top IS NOT NULL 
               AND entry_price IS NULL
-        """)).fetchall()
+        """)).fetchall() # <-- ZMIANA: Pobieramy * (wszystkie kolumny)
 
         if not fib_signals_rows:
             logger.info("[Monitor Fib H1] Brak sygnałów Fib (PENDING) do monitorowania.")
@@ -386,6 +390,16 @@ def monitor_fib_confirmations(session: Session, api_client: AlphaVantageClient):
                         })
                         session.commit()
                         
+                        # ==================================================================
+                        # KROK 2 (Wirtualny Agent): Uruchomienie "Wirtualnego Zakupu"
+                        # ==================================================================
+                        try:
+                            # Przekazujemy cały obiekt 'signal' (Row proxy)
+                            virtual_agent.open_virtual_trade(session, signal)
+                        except Exception as e:
+                            logger.error(f"[Virtual Agent] Nie udało się uruchomić open_virtual_trade dla {ticker} (Fib): {e}", exc_info=True)
+                        # ==================================================================
+
                         # Krok 7: Wyślij alerty
                         alert_msg = f"ALARM CENOWY (Fib H1): {ticker} ({current_price:.2f}) potwierdził setup H1 w strefie Fib!"
                         update_system_control(session, 'system_alert', alert_msg)
@@ -428,9 +442,8 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
     # KROK 2 POPRAWKI (LOGIKA): Pobieramy teraz *WSZYSTKIE* pola
     # ==================================================================
     all_signals_rows = session.execute(text("""
-        SELECT id, ticker, status, entry_price, entry_zone_bottom, entry_zone_top, stop_loss, take_profit 
-        FROM trading_signals WHERE status IN ('ACTIVE', 'PENDING')
-    """)).fetchall()
+        SELECT * FROM trading_signals WHERE status IN ('ACTIVE', 'PENDING')
+    """)).fetchall() # <-- ZMIANA: Pobieramy * (wszystkie kolumny)
     
     if not all_signals_rows:
         logger.info("No ACTIVE or PENDING signals to monitor.")
@@ -594,6 +607,16 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
                         update_stmt = text("UPDATE trading_signals SET status = 'ACTIVE', updated_at = NOW() WHERE id = :signal_id")
                         session.execute(update_stmt, {'signal_id': signal_row.id})
                         session.commit() # Commitujemy od razu zmianę statusu
+
+                        # ==================================================================
+                        # KROK 2 (Wirtualny Agent): Uruchomienie "Wirtualnego Zakupu"
+                        # ==================================================================
+                        try:
+                            # Przekazujemy cały obiekt 'signal_row' (Row proxy)
+                            virtual_agent.open_virtual_trade(session, signal_row)
+                        except Exception as e:
+                            logger.error(f"[Virtual Agent] Nie udało się uruchomić open_virtual_trade dla {ticker} (Breakout/EMA): {e}", exc_info=True)
+                        # ==================================================================
                         
                         # Zawsze generuj alert, gdy cena jest w strefie wejścia
                         alert_msg = f"ALARM CENOWY: {ticker} ({current_price:.2f}) osiągnął strefę wejścia!"
