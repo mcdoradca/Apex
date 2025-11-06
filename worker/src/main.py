@@ -214,15 +214,21 @@ def main_loop():
     schedule.every(10).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     
     # ==================================================================
+    # NOWA POPRAWKA (KROK 1 - Fib): Dodanie wolnego monitora H1
+    # ==================================================================
+    schedule.every(15).minutes.do(lambda: phase3_sniper.monitor_fib_confirmations(get_db_session(), api_client))
+    # ==================================================================
+
+    # ==================================================================
     # KROK 3 (KAT. 2): Aktywacja nowego "Ultra Agenta Newsowego"
-    # Zastępujemy stare wywołanie 'run_catalyst_monitor_job'
     # ==================================================================
     # POPRAWKA 3 (Problem 1: Częstotliwość): Uruchamiamy agenta newsowego co 2 minuty (było 5)
     schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 10 seconds.") # <-- ZMIANA: Nowy log
-    logger.info("Ultra News Agent (Kategoria 2) scheduled every 2 minutes.") # <-- ZMIANA: Nowy log
+    logger.info("Real-Time Entry Trigger Monitor scheduled every 10 seconds.")
+    logger.info("H1 Fib Confirmation Monitor scheduled every 15 minutes.") # <-- NOWY LOG
+    logger.info("Ultra News Agent (Kategoria 2) scheduled every 2 minutes.")
 
 
     with get_db_session() as initial_session:
@@ -246,7 +252,7 @@ def main_loop():
                     handle_ai_analysis_request(session)
                     schedule.run_pending()
                 
-                utils.report_heartbeat(session) 
+                utils.report_heartTbeat(session) 
             except Exception as loop_error:
                 logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
         
