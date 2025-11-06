@@ -18,8 +18,8 @@ from .analysis import (
     phase3_sniper, 
     ai_agents, 
     utils,
-    news_agent # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
-    # 'catalyst_monitor' został usunięty
+    news_agent, # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
+    phase0_macro_agent # <-- POPRAWKA: Import Fazy 0
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -96,6 +96,31 @@ def run_full_analysis_cycle():
         return
 
     try:
+        # ==================================================================
+        # POPRAWKA 1 (Problem 2): Uruchomienie Agenta Fazy 0 (Makro)
+        # ==================================================================
+        logger.info("Starting Phase 0: Macro Agent...")
+        utils.update_system_control(session, 'current_phase', 'PHASE_0')
+        utils.append_scan_log(session, "Faza 0: Uruchamianie Agenta Makro...")
+        
+        macro_sentiment = phase0_macro_agent.run_macro_analysis(session, api_client)
+        
+        if macro_sentiment == 'RISK_OFF':
+            logger.warning("Phase 0 returned RISK_OFF. Halting full analysis cycle.")
+            utils.append_scan_log(session, "Faza 0: RISK_OFF. Skanowanie EOD wstrzymane.")
+            # Zakończ cykl, ale ustaw status na IDLE (to nie jest błąd)
+            current_state = "IDLE"
+            utils.update_system_control(session, 'worker_status', 'IDLE')
+            utils.update_system_control(session, 'current_phase', 'NONE')
+            session.close()
+            return
+        
+        logger.info("Phase 0 returned RISK_ON. Proceeding with scan.")
+        utils.append_scan_log(session, "Faza 0: RISK_ON. Warunki sprzyjające, kontynuacja skanowania.")
+        # ==================================================================
+        # Koniec Poprawki 1
+        # ==================================================================
+
         logger.info("Checking market status before starting Phase 1 scan...")
         market_info = utils.get_market_status_and_time(api_client)
         market_status = market_info.get("status")
@@ -185,19 +210,19 @@ def main_loop():
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     
-    # Monitor cen (Strażnik SL/TP) - co 15 sekund
-    schedule.every(15).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
+    # POPRAWKA 2 (Problem 5: Latencja): Monitor cen (Strażnik SL/TP) - co 10 sekund (było 15)
+    schedule.every(10).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
     
     # ==================================================================
     # KROK 3 (KAT. 2): Aktywacja nowego "Ultra Agenta Newsowego"
     # Zastępujemy stare wywołanie 'run_catalyst_monitor_job'
     # ==================================================================
-    # Uruchamiamy nowego agenta co 5 minut (zamiast co 10)
-    schedule.every(5).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
+    # POPRAWKA 3 (Problem 1: Częstotliwość): Uruchamiamy agenta newsowego co 2 minuty (było 5)
+    schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 15 seconds.")
-    logger.info("Ultra News Agent (Kategoria 2) scheduled every 5 minutes.") # <-- ZMIANA: Nowy log
+    logger.info("Real-Time Entry Trigger Monitor scheduled every 10 seconds.") # <-- ZMIANA: Nowy log
+    logger.info("Ultra News Agent (Kategoria 2) scheduled every 2 minutes.") # <-- ZMIANA: Nowy log
 
 
     with get_db_session() as initial_session:
