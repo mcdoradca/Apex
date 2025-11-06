@@ -9,12 +9,70 @@ from pandas import Series as pd_Series
 # ZMIANA: Dodajemy import 'Optional'
 from typing import Optional
 
+# ==================================================================
+# KROK 1 (KAT. 1): Dodanie importów dla Telegrama
+# ==================================================================
+import os
+import requests
+from urllib.parse import quote_plus # Do kodowania wiadomości URL
+# ==================================================================
+
+
 logger = logging.getLogger(__name__)
+
+# ==================================================================
+# KROK 1 (KAT. 1): Konfiguracja kluczy Telegrama
+# ==================================================================
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+if not TELEGRAM_BOT_TOKEN:
+    logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram alerts are DISABLED.")
+if not TELEGRAM_CHAT_ID:
+    logger.warning("TELEGRAM_CHAT_ID not found. Telegram alerts are DISABLED.")
+# ==================================================================
+
+# ==================================================================
+# KROK 1 (KAT. 1): Centralna funkcja wysyłania alertów
+# ==================================================================
+def send_telegram_alert(message: str):
+    """
+    Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
+    Używa prostego zapytania GET, aby uniknąć dodatkowych zależności.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        # Nie wysyłaj, jeśli nie skonfigurowano (ostrzeżenie już poszło przy starcie)
+        return
+
+    # Kodowanie wiadomości, aby była bezpieczna dla URL (obsługa spacji, nowych linii, itp.)
+    encoded_message = quote_plus(message)
+    
+    # Formatowanie URL
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={encoded_message}"
+    
+    try:
+        # Użyj niskiego timeoutu (5s), aby nie blokować pętli workera
+        response = requests.get(url, timeout=5)
+        response.raise_for_status() # Sprawdź błędy HTTP (np. 400, 404, 500)
+        
+        if response.json().get('ok'):
+            logger.info(f"Pomyślnie wysłano alert Telegram: {message[:50]}...")
+        else:
+            logger.error(f"Telegram API zwrócił błąd: {response.text}")
+    except requests.exceptions.RequestException as e:
+        # Złap błędy sieciowe (timeout, brak połączenia)
+        logger.error(f"Nie można wysłać alertu Telegram: {e}")
+    except Exception as e:
+        # Złap inne błędy (np. JSON decode error)
+        logger.error(f"Nieoczekiwany błąd podczas wysyłania alertu Telegram: {e}")
+# ==================================================================
+
 
 # ==================================================================
 # KROK 1 ZMIANY: Wydzielenie funkcji czasu nowojorskiego
 # ==================================================================
 def get_current_NY_datetime() -> datetime:
+# ... (reszta pliku 'utils.py' bez zmian) ...
     """Zwraca aktualny obiekt datetime dla strefy czasowej Nowego Jorku."""
     try:
         tz = pytz.timezone('US/Eastern')
@@ -266,14 +324,14 @@ def calculate_ema(series: pd_Series, period: int) -> pd_Series:
 # ==================================================================
 def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
     """
-    Pobiera najnowszy istotny sygnał (AKTYWNY, OCZEKUJĄCY lub UNIEWAŻNIONY)
+    Pobiera najnowszy istotny sygnał (AKTYWNY, OCZEKUJĄCY, UNIEWAŻNIONY lub ZAKOŃCZONY)
     dla danego tickera z bazy danych.
     """
     try:
         stmt = text("""
             SELECT * FROM trading_signals
             WHERE ticker = :ticker
-            AND status IN ('ACTIVE', 'PENDING', 'INVALIDATED')
+            AND status IN ('ACTIVE', 'PENDING', 'INVALIDATED', 'COMPLETED')
             ORDER BY generation_date DESC
             LIMIT 1;
         """)
@@ -281,4 +339,4 @@ def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
         return result
     except Exception as e:
         logger.error(f"Error fetching relevant signal for {ticker}: {e}", exc_info=True)
-        
+        return None # Dodano return None w przypadku błędu
