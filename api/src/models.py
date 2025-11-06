@@ -138,3 +138,43 @@ class TransactionHistory(Base):
     profit_loss_usd = Column(NUMERIC(14, 2), nullable=True, comment="Zrealizowany zysk/strata w USD dla transakcji sprzedaży")
 
 # === KONIEC DODANYCH MODELI ===
+
+# ==================================================================
+# === NOWY MODEL (KROK 1): Wirtualny Agent (Backtesting) ===
+# ==================================================================
+class VirtualTrade(Base):
+    """
+    Przechowuje wyniki Wirtualnego Agenta (Paper Tradingu).
+    Każdy wiersz to jedna "wirtualna" transakcja oparta na sygnale.
+    """
+    __tablename__ = 'virtual_trades'
+
+    id = Column(INTEGER, primary_key=True, autoincrement=True)
+    
+    # Powiązanie z sygnałem, który wygenerował tę transakcję
+    signal_id = Column(INTEGER, ForeignKey('trading_signals.id', ondelete='SET NULL'), nullable=True)
+    
+    ticker = Column(VARCHAR(50), nullable=False, index=True)
+    
+    # Status wirtualnej transakcji
+    # OPEN = W toku
+    # CLOSED_TP = Zamknięta na Take Profit
+    # CLOSED_SL = Zamknięta na Stop Loss
+    # CLOSED_EXPIRED = Zamknięta po 7 dniach (manualnie przez agenta)
+    status = Column(VARCHAR(50), nullable=False, default='OPEN', index=True)
+    
+    # Informacje o setupie (skopiowane dla łatwiejszej analizy)
+    setup_type = Column(VARCHAR(100), nullable=True, comment="Np. EMA_BOUNCE, FIB_H1")
+    entry_price = Column(NUMERIC(12, 2), nullable=False)
+    stop_loss = Column(NUMERIC(12, 2), nullable=False)
+    take_profit = Column(NUMERIC(12, 2), nullable=True)
+    
+    # Daty
+    open_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), comment="Data aktywacji sygnału")
+    close_date = Column(PG_TIMESTAMP(timezone=True), nullable=True, comment="Data zamknięcia pozycji")
+    
+    # Wynik
+    close_price = Column(NUMERIC(12, 2), nullable=True, comment="Cena, po której pozycja została zamknięta")
+    final_profit_loss_percent = Column(NUMERIC(8, 2), nullable=True, comment="Ostateczny zysk/strata w %")
+
+# === KONIEC NOWEGO MODELU ===
