@@ -1,266 +1,386 @@
-import os
-import time
-import schedule
 import logging
-import sys
-import json
-from datetime import datetime, timezone, timedelta # Dodano timedelta
-from dotenv import load_dotenv
-from sqlalchemy import text, select, func
+from sqlalchemy.orm import Session
+from sqlalchemy import text, Row
+from datetime import datetime, timezone
+import pytz
+# Importy dla Pandas, których potrzebujemy do obliczeń
+import pandas as pd
+from pandas import Series as pd_Series
+# ZMIANA: Dodajemy import 'Optional'
+from typing import Optional
 
-from .models import Base
-from .database import get_db_session, engine
+# ==================================================================
+# KROK 1 (KAT. 1): Dodanie importów dla Telegrama
+# ==================================================================
+import os
+import requests
+from urllib.parse import quote_plus # Do kodowania wiadomości URL
+# ==================================================================
 
-# KROK 1: Importujemy nasz nowy monitor
-from .analysis import (
-    phase1_scanner, 
-    phase2_engine, 
-    phase3_sniper, 
-    ai_agents, 
-    utils,
-    news_agent, # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
-    phase0_macro_agent # <-- POPRAWKA: Import Fazy 0
-)
-from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
-from .data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .data_ingestion.data_initializer import initialize_database_if_empty
+# ==================================================================
+# NOWA POPRAWKA (Problem "Spamu 1600 Alertów")
+# ==================================================================
+import hashlib
+# Globalna pamięć podręczna dla wysłanych alertów (w ramach jednej sesji workera)
+# Przechowuje hashe wysłanych wiadomości, aby uniknąć duplikatów.
+_ALERT_MEMORY_CACHE = set()
+# ==================================================================
 
-# USUNIĘTO: Zmienna TICKERS_PER_BATCH nie jest już potrzebna
-# USUNIĘTO: Zmienna catalyst_monitor_running nie jest już potrzebna
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
+# ==================================================================
+# KROK 1 (KAT. 1): Konfiguracja kluczy Telegrama
+# ==================================================================
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not API_KEY:
-    logger.critical("ALPHAVANTAGE_API_KEY environment variable not set. Exiting.")
-    sys.exit(1)
+if not TELEGRAM_BOT_TOKEN:
+    logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram alerts are DISABLED.")
+if not TELEGRAM_CHAT_ID:
+    logger.warning("TELEGRAM_CHAT_ID not found. Telegram alerts are DISABLED.")
+# ==================================================================
 
-current_state = "IDLE"
-api_client = AlphaVantageClient(api_key=API_KEY)
-
-
-def handle_ai_analysis_request(session):
-    """Sprawdza i wykonuje nową analizę AI na żądanie."""
-    ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
-    if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
-        logger.info(f"AI analysis request received for: {ticker_to_analyze}.")
-        utils.update_system_control(session, 'ai_analysis_request', 'PROCESSING')
-        
-        temp_result = {"status": "PROCESSING", "message": "Rozpoczynanie analizy przez agentów AI..."}
-        stmt_temp = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
-        session.execute(stmt_temp, {'ticker': ticker_to_analyze, 'data': json.dumps(temp_result)})
-        session.commit()
-
-        try:
-            results = ai_agents.run_ai_analysis(session, ticker_to_analyze, api_client)
-            
-            stmt = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
-            session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(results)})
-            session.commit()
-            logger.info(f"Successfully saved AI analysis for {ticker_to_analyze}.")
-        except Exception as e:
-            logger.error(f"Error during AI analysis for {ticker_to_analyze}: {e}", exc_info=True)
-            error_result = {"status": "ERROR", "message": str(e), "ticker": ticker_to_analyze}
-            stmt_err = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
-            session.execute(stmt_err, {'ticker': ticker_to_analyze, 'data': json.dumps(error_result)})
-            session.commit()
-        finally:
-             utils.update_system_control(session, 'ai_analysis_request', 'NONE')
+# ==================================================================
+# NOWA POPRAWKA: Funkcja czyszcząca pamięć alertów
+# ==================================================================
+def clear_alert_memory_cache():
+    """
+    Czyści pamięć podręczną wysłanych alertów.
+    Wywoływane raz na cykl (np. co 24h) przez main.py.
+    """
+    global _ALERT_MEMORY_CACHE
+    logger.info(f"Clearing alert memory cache. Removed {_ALERT_MEMORY_CACHE} cached alerts.")
+    _ALERT_MEMORY_CACHE.clear()
+# ==================================================================
 
 
-def run_full_analysis_cycle():
-    global current_state
-    session = get_db_session()
-    try:
-        logger.info("Cleaning tables before new analysis cycle...")
-        # Czyścimy tylko przestarzałe dane Fazy 1 i Fazy 2
-        session.execute(text("DELETE FROM phase2_results WHERE analysis_date < CURRENT_DATE - INTERVAL '1 day';"))
-        session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date < CURRENT_DATE - INTERVAL '1 day';"))
-        # Czyścimy stare wiadomości, aby umożliwić ponowną analizę
-        session.execute(text("DELETE FROM processed_news WHERE processed_at < NOW() - INTERVAL '3 days';"))
-        # Czyścimy unieważnione sygnały starsze niż 3 dni
-        session.execute(text("DELETE FROM trading_signals WHERE status = 'INVALIDATED' AND generation_date < NOW() - INTERVAL '3 days';"))
-        
-        session.commit()
-        logger.info("Daily tables cleaned. Proceeding with analysis.")
-    except Exception as e:
-        logger.error(f"Could not clean tables before run: {e}", exc_info=True)
-        session.rollback()
- 
-    if utils.get_system_control_value(session, 'worker_status') == 'RUNNING':
-        logger.warning("Analysis cycle already in progress. Skipping scheduled run.")
-        session.close()
+# ==================================================================
+# ZMODYFIKOWANA FUNKCJA: Centralna funkcja wysyłania alertów
+# ==================================================================
+def send_telegram_alert(message: str):
+    """
+    Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
+    NOWA LOGIKA: Wysyła wiadomość tylko raz, używając pamięci podręcznej.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        # Nie wysyłaj, jeśli nie skonfigurowano
         return
 
+    # ==================================================================
+    # NOWA POPRAWKA (Problem "Spamu 1600 Alertów")
+    # ==================================================================
+    # Tworzymy unikalny klucz (hash) dla treści wiadomości
+    alert_key = hashlib.sha256(message.encode('utf-8')).hexdigest()
+    
+    global _ALERT_MEMORY_CACHE
+    if alert_key in _ALERT_MEMORY_CACHE:
+        # Ten *dokładny* alert został już wysłany w tym cyklu.
+        logger.info(f"Suppressing duplicate alert: {message[:50]}...")
+        return # Cicho ignoruj
+    # ==================================================================
+    # Koniec Poprawki
+    # ==================================================================
+
+    # Kodowanie wiadomości, aby była bezpieczna dla URL
+    encoded_message = quote_plus(message)
+    
+    # Formatowanie URL
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={encoded_message}"
+    
     try:
-        # ==================================================================
-        # POPRAWKA 1 (Problem 2): Uruchomienie Agenta Fazy 0 (Makro)
-        # ==================================================================
-        logger.info("Starting Phase 0: Macro Agent...")
-        utils.update_system_control(session, 'current_phase', 'PHASE_0')
-        utils.append_scan_log(session, "Faza 0: Uruchamianie Agenta Makro...")
+        # Użyj niskiego timeoutu (5s), aby nie blokować pętli workera
+        response = requests.get(url, timeout=5)
+        response.raise_for_status() # Sprawdź błędy HTTP (np. 400, 404, 500)
         
-        macro_sentiment = phase0_macro_agent.run_macro_analysis(session, api_client)
-        
-        if macro_sentiment == 'RISK_OFF':
-            logger.warning("Phase 0 returned RISK_OFF. Halting full analysis cycle.")
-            utils.append_scan_log(session, "Faza 0: RISK_OFF. Skanowanie EOD wstrzymane.")
-            # Zakończ cykl, ale ustaw status na IDLE (to nie jest błąd)
-            current_state = "IDLE"
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE')
-            session.close()
-            return
-        
-        logger.info("Phase 0 returned RISK_ON. Proceeding with scan.")
-        utils.append_scan_log(session, "Faza 0: RISK_ON. Warunki sprzyjające, kontynuacja skanowania.")
-        # ==================================================================
-        # Koniec Poprawki 1
-        # ==================================================================
-
-        logger.info("Checking market status before starting Phase 1 scan...")
-        market_info = utils.get_market_status_and_time(api_client)
-        market_status = market_info.get("status")
-
-        # Logika "Strażnika Rynku" dla nocnego skanowania EOD
-        # Logika Fazy 1 została przebudowana, aby używać danych EOD (get_daily_adjusted)
-        # Oznacza to, że może działać *po* zamknięciu rynku.
-        # Musimy jednak zapewnić, że dane EOD z danego dnia są już dostępne.
-        # Uruchamianie o 02:30 CET (po 20:30 ET) powinno być bezpieczne.
-        # Dodajemy kontrolę, aby nie uruchamiać ręcznie w środku dnia.
-        
-        # Pobieramy aktualny czas w NY
-        now_ny = utils.get_current_NY_datetime()
-        ny_hour = now_ny.hour
-        
-        # Sprawdzamy, czy polecenie startu przyszło ręcznie (przez przycisk)
-        is_manual_start = utils.get_system_control_value(session, 'worker_command') == 'START_REQUESTED'
-
-        # Zezwalaj na start tylko w nocy (gdy dane EOD są gotowe) lub gdy rynek jest otwarty
-        # (na potrzeby testów lub ręcznego uruchomienia w ciągu dnia)
-        # Godziny 2:00 - 4:00 CET (20:00 - 22:00 ET) to idealne okno nocne
-        is_eod_window = (now_ny.hour >= 20 or now_ny.hour < 4) 
-        
-        if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"] and not is_eod_window:
-            logger.warning(f"Market status is {market_status} and it's outside EOD window. Full analysis cycle (Phase 1) will not run.")
-            utils.append_scan_log(session, f"Skanowanie Fazy 1 wstrzymane. Rynek jest {market_status} (poza oknem EOD).")
-            current_state = "IDLE"
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            session.close()
-            return 
-        
-        logger.info(f"Market status is {market_status} (lub okno EOD). Proceeding with analysis cycle.")
-
-        logger.info("Starting full analysis cycle...")
-        current_state = "RUNNING"
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
-        utils.update_system_control(session, 'scan_log', '')
-        
-        logger.info("Trwałe sygnały Fazy 3 są aktywne (nie wygasają co noc).")
-        
-        utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
-        
-        utils.update_system_control(session, 'current_phase', 'PHASE_1')
-        candidate_tickers = phase1_scanner.run_scan(session, lambda: current_state, api_client)
-        if not candidate_tickers:
-            raise Exception("Phase 1 found no candidates. Halting cycle.")
-
-        utils.update_system_control(session, 'current_phase', 'PHASE_2')
-        qualified_data = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
-        if not qualified_data:
-            raise Exception("Phase 2 qualified no stocks. Halting cycle.")
-
-        utils.update_system_control(session, 'current_phase', 'PHASE_3')
-        phase3_sniper.run_tactical_planning(session, qualified_data, lambda: current_state, api_client)
-
-        utils.append_scan_log(session, "Cykl analizy zakończony pomyślnie.")
+        response_data = response.json()
+        if response_data.get('ok'):
+            logger.info(f"Pomyślnie wysłano alert Telegram: {message[:50]}...")
+            # ==================================================================
+            # NOWA POPRAWKA: Dodaj alert do pamięci, aby go nie powtarzać
+            # ==================================================================
+            _ALERT_MEMORY_CACHE.add(alert_key)
+            # ==================================================================
+        else:
+            logger.error(f"Telegram API zwrócił błąd: {response.text}")
+    except requests.exceptions.RequestException as e:
+        # Złap błędy sieciowe (timeout, brak połączenia)
+        logger.error(f"Nie można wysłać alertu Telegram: {e}")
     except Exception as e:
-        logger.error(f"An error occurred during the analysis: {e}", exc_info=True)
-        utils.update_system_control(session, 'worker_status', 'ERROR')
-        utils.append_scan_log(session, f"BŁĄD KRYTYCZNY: {e}")
-    finally:
-        current_state = "IDLE"
-        utils.update_system_control(session, 'worker_status', 'IDLE')
-        utils.update_system_control(session, 'current_phase', 'NONE')
-        utils.update_system_control(session, 'scan_progress_processed', '0')
-        utils.update_system_control(session, 'scan_progress_total', '0')
-        session.close()
+        # Złap inne błędy (np. JSON decode error)
+        logger.error(f"Nieoczekiwany błąd podczas wysyłania alertu Telegram: {e}")
+# ==================================================================
 
 
 # ==================================================================
-# KROK 3 (KAT. 2): Usunięcie starej funkcji 'run_catalyst_monitor_job'
-# Cała ta funkcja została zastąpiona przez 'news_agent.py'
+# KROK 1 ZMIANY: Wydzielenie funkcji czasu nowojorskiego
 # ==================================================================
-# USUNIĘTO: def run_catalyst_monitor_job(): ...
+def get_current_NY_datetime() -> datetime:
+# ... (reszta pliku 'utils.py' bez zmian) ...
+    """Zwraca aktualny obiekt datetime dla strefy czasowej Nowego Jorku."""
+    try:
+        tz = pytz.timezone('US/Eastern')
+        return datetime.now(tz)
+    except Exception as e:
+        logger.error(f"Error getting New York time: {e}", exc_info=True)
+        # Zwróć czas UTC jako awaryjny
+        return datetime.now(timezone.utc)
+# ==================================================================
 
+def get_market_status_and_time(api_client) -> dict:
+    """
+    Sprawdza status giełdy NASDAQ używając dedykowanego endpointu API
+    i zwraca czas w Nowym Jorku.
+    """
+    # 1. Zawsze pobieraj aktualny czas dla celów wyświetlania
+    try:
+        # ZMIANA: Używamy nowej, wydzielonej funkcji
+        now_ny = get_current_NY_datetime()
+        time_ny_str = now_ny.strftime('%H:%M:%S ET')
+        date_ny_str = now_ny.strftime('%Y-%m-%d')
+    except Exception as e:
+        logger.error(f"Error formatting New York time: {e}")
+        time_ny_str = "N/A"
+        date_ny_str = "N/A"
 
-def main_loop():
-    global current_state, api_client
-    logger.info("Worker started. Initializing...")
-    
-    with get_db_session() as session:
-        logger.info("Verifying database tables for Worker...")
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database tables verified.")
-
-        initialize_database_if_empty(session, api_client)
-        
-    schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
-    
-    # POPRAWKA 2 (Problem 5: Latencja): Monitor cen (Strażnik SL/TP) - co 10 sekund (było 15)
-    schedule.every(10).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
-    
-    # ==================================================================
-    # NOWA POPRAWKA (KROK 1 - Fib): Dodanie wolnego monitora H1
-    # ==================================================================
-    schedule.every(15).minutes.do(lambda: phase3_sniper.monitor_fib_confirmations(get_db_session(), api_client))
-    # ==================================================================
-
-    # ==================================================================
-    # KROK 3 (KAT. 2): Aktywacja nowego "Ultra Agenta Newsowego"
-    # ==================================================================
-    # POPRAWKA 3 (Problem 1: Częstotliwość): Uruchamiamy agenta newsowego co 2 minuty (było 5)
-    schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
-    
-    logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 10 seconds.")
-    logger.info("H1 Fib Confirmation Monitor scheduled every 15 minutes.") # <-- NOWY LOG
-    logger.info("Ultra News Agent (Kategoria 2) scheduled every 2 minutes.")
-
-
-    with get_db_session() as initial_session:
-        utils.update_system_control(initial_session, 'worker_status', 'IDLE')
-        utils.update_system_control(initial_session, 'worker_command', 'NONE')
-        utils.update_system_control(initial_session, 'ai_analysis_request', 'NONE')
-        utils.update_system_control(initial_session, 'current_phase', 'NONE')
-        utils.update_system_control(initial_session, 'system_alert', 'NONE')
-        utils.report_heartbeat(initial_session)
-
-    while True:
-        with get_db_session() as session:
-            try:
-                command_triggered_run, new_state = utils.check_for_commands(session, current_state)
-                current_state = new_state
-
-                if command_triggered_run:
-                    run_full_analysis_cycle()
+    # 2. Pobierz oficjalny status rynku z API
+    try:
+        status_data = api_client.get_market_status()
+        if status_data and status_data.get('markets'):
+            us_market = next((m for m in status_data['markets'] if m.get('region') == 'United States'), None)
+            if us_market:
+                api_status = us_market.get('current_status', 'unknown').lower()
                 
-                if current_state != "PAUSED":
-                    handle_ai_analysis_request(session)
-                    schedule.run_pending()
+                # 3. Przetłumacz status API na wewnętrzny status aplikacji
+                status_map = {
+                    "open": "MARKET_OPEN",
+                    "closed": "MARKET_CLOSED",
+                    "pre-market": "PRE_MARKET",
+                    "post-market": "AFTER_MARKET"
+                }
+                app_status = status_map.get(api_status, "UNKNOWN")
                 
-                utils.report_heartTbeat(session) 
-            except Exception as loop_error:
-                logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
+                return {"status": app_status, "time_ny": time_ny_str, "date_ny": date_ny_str}
         
-        time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
+        logger.warning("Could not determine market status from API response.")
+        return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
 
-if __name__ == "__main__":
-    if engine:
-        main_loop()
-    else:
-        logger.critical("Could not connect to database on startup. Worker exiting.")
-        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error getting market status from API: {e}")
+        return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
+
+def update_system_control(session: Session, key: str, value: str):
+    """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
+    try:
+        stmt = text("""
+            INSERT INTO system_control (key, value, updated_at)
+            VALUES (:key, :value, NOW())
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = NOW();
+        """)
+        session.execute(stmt, [{'key': key, 'value': str(value)}])
+        session.commit()
+    except Exception as e:
+        logger.error(f"Error updating system_control for key {key}: {e}")
+        session.rollback()
+
+def get_system_control_value(session: Session, key: str) -> str | None:
+    """Odczytuje pojedynczą wartość z tabeli system_control."""
+    try:
+        result = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
+        return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Error getting system_control value for key {key}: {e}")
+        return None
+
+def update_scan_progress(session: Session, processed: int, total: int):
+    """Aktualizuje postęp skanowania w bazie danych."""
+    update_system_control(session, 'scan_progress_processed', str(processed))
+    update_system_control(session, 'scan_progress_total', str(total))
+
+def append_scan_log(session: Session, message: str):
+    """Dodaje nową linię do logu skanowania w bazie danych."""
+    try:
+        current_log_result = session.execute(text("SELECT value FROM system_control WHERE key = 'scan_log'")).fetchone()
+        current_log = current_log_result[0] if current_log_result else ""
+        
+        timestamp = datetime.now(timezone.utc).strftime('%H:%M:%S')
+        log_message = f"[{timestamp}] {message}\n"
+        
+        new_log = log_message + current_log
+        
+        if len(new_log) > 15000:
+            new_log = new_log[:15000]
+
+        stmt = text("""
+            UPDATE system_control
+            SET value = :new_log
+            WHERE key = 'scan_log';
+        """)
+        session.execute(stmt, {'new_log': new_log})
+        session.commit()
+    except Exception as e:
+        logger.error(f"Error appending to scan_log: {e}")
+        session.rollback()
+
+
+def clear_scan_log(session: Session):
+    """Czyści log skanowania w bazie danych."""
+    update_system_control(session, 'scan_log', '')
+
+
+def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]:
+    """Sprawdza i reaguje na polecenia z bazy danych."""
+    command = get_system_control_value(session, 'worker_command')
+    should_run_now = False
+    new_state = current_state
+
+    if command == "START_REQUESTED":
+        logger.info("Start command received, triggering immediate analysis cycle.")
+        update_system_control(session, 'worker_command', 'NONE')
+        should_run_now = True
+    elif command == "PAUSE_REQUESTED" and current_state == "RUNNING":
+        new_state = "PAUSED"
+        update_system_control(session, 'worker_status', 'PAUSED')
+        update_system_control(session, 'worker_command', 'NONE')
+        logger.info("Worker paused by command.")
+    elif command == "RESUME_REQUESTED" and current_state == "PAUSED":
+        new_state = "RUNNING"
+        update_system_control(session, 'worker_status', 'RUNNING')
+        update_system_control(session, 'worker_command', 'NONE')
+        logger.info("Worker resumed by command.")
+        
+    return should_run_now, new_state
+
+def report_heartbeat(session: Session):
+    """Raportuje 'życie' workera do bazy danych."""
+    update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
+
+def safe_float(value) -> float | None:
+    """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            value = value.replace(',', '').replace('%', '')
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+def get_performance(data: dict, days: int) -> float | None:
+    """Oblicza zwrot procentowy w danym okresie na podstawie słownika."""
+    try:
+        time_series = data.get('Time Series (Daily)')
+        if not time_series or len(time_series) < days + 1:
+            return None
+        
+        dates = sorted(time_series.keys(), reverse=True)
+        
+        end_price = safe_float(time_series[dates[0]]['4. close'])
+        start_price = safe_float(time_series[dates[days]]['4. close'])
+        
+        if start_price is None or end_price is None or start_price == 0:
+            return None
+        
+        return ((end_price - start_price) / start_price) * 100
+    except (IndexError, KeyError, TypeError) as e:
+        logger.warning(f"Could not calculate performance: {e}")
+        return None
+
+# --- NARZĘDZIA DO OPTYMALIZACJI API ---
+
+def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Standaryzuje nazwy kolumn z API ('1. open' -> 'open') i konwertuje na typy numeryczne."""
+    if df.empty:
+        return df
+    
+    # Sprawdź, czy kolumny już są w poprawnym formacie
+    if 'open' in df.columns and 'close' in df.columns:
+        return df # Już przetworzone
+
+    try:
+        df.columns = [col.split('. ')[-1] for col in df.columns]
+    except Exception as e:
+        logger.error(f"Error standardizing columns (might already be standard): {e}. Columns: {df.columns}")
+        # Kontynuujmy, próbując konwertować
+    
+    # Konwertuj kluczowe kolumny na numeryczne
+    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df.sort_index(inplace=True) # Upewnij się, że dane są posortowane od najstarszych do najnowszych
+    return df
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
+    """Oblicza ATR (Average True Range) na podstawie DataFrame OHLC."""
+    if df.empty or len(df) < period:
+        return pd.Series(dtype=float)
+    
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['close'].shift()).abs()
+    
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    # Używamy EMA (ewm) do wygładzenia TR, co jest standardem dla ATR
+    atr = tr.ewm(span=period, adjust=False).mean()
+    return atr
+
+def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
+    """Oblicza RSI (Relative Strength Index)."""
+    if series.empty or len(series) < period:
+        return pd.Series(dtype=float)
+        
+    delta = series.diff(1)
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> tuple:
+    """Oblicza Bollinger Bands (Środkowa, Górna, Dolna) oraz Szerokość Wstęgi (BBW)."""
+    if series.empty or len(series) < period:
+        return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
+
+    middle_band = series.rolling(window=period).mean()
+    std_dev = series.rolling(window=period).std()
+    
+    upper_band = middle_band + (std_dev * num_std)
+    lower_band = middle_band - (std_dev * num_std)
+    
+    # Oblicz BBW (Szerokość Wstęg Bollingera) jako procent środkowej wstęgi
+    bbw = (upper_band - lower_band) / middle_band
+    
+    return middle_band, upper_band, lower_band, bbw
+
+# --- POPRAWKA: Dodanie brakującej funkcji ---
+def calculate_ema(series: pd_Series, period: int) -> pd_Series:
+    """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
+    if series.empty or len(series) < period:
+        return pd.Series(dtype=float)
+    return series.ewm(span=period, adjust=False).mean()
+
+
+# ==================================================================
+#  NOWA FUNKCJA POMOCNICZA DLA AGENTA STRAŻNIKA
+# ==================================================================
+def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
+    """
+    Pobiera najnowszy istotny sygnał (AKTYWNY, OCZEKUJĄCY, UNIEWAŻNIONY lub ZAKOŃCZONY)
+    dla danego tickera z bazy danych.
+    """
+    try:
+        stmt = text("""
+            SELECT * FROM trading_signals
+            WHERE ticker = :ticker
+            AND status IN ('ACTIVE', 'PENDING', 'INVALIDATED', 'COMPLETED')
+            ORDER BY generation_date DESC
+            LIMIT 1;
+        """)
+        result = session.execute(stmt, {'ticker': ticker}).fetchone()
+        return result
+    except Exception as e:
+        logger.error(f"Error fetching relevant signal for {ticker}: {e}", exc_info=True)
+        return None # Dodano return None w przypadku błędu
