@@ -7,11 +7,14 @@ from datetime import date, datetime, timezone, timedelta
 import logging
 # NOWY IMPORT dla typów Decimal, które są lepsze do obliczeń finansowych
 from decimal import Decimal, ROUND_HALF_UP
+# NOWY IMPORT dla statystyk
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
 # Funkcja pomocnicza do bezpiecznej konwersji na Decimal
 def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
+# ... (bez zmian) ...
     """Konwertuje float lub str na Decimal z określoną precyzją."""
     if value is None:
         return None
@@ -27,6 +30,7 @@ def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
 # ==========================================================
 
 def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
+# ... (bez zmian) ...
     """
     Pobiera wszystkie aktualnie otwarte pozycje z portfela,
     dołączając docelową cenę (take_profit) z aktywnych lub oczekujących sygnałów.
@@ -56,10 +60,12 @@ def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
     return holdings_with_tp
 
 def get_transaction_history(db: Session, limit: int = 100) -> List[models.TransactionHistory]:
+# ... (bez zmian) ...
     """Pobiera historię ostatnich transakcji."""
     return db.query(models.TransactionHistory).order_by(desc(models.TransactionHistory.transaction_date)).limit(limit).all()
 
 def record_buy_transaction(db: Session, buy_request: schemas.BuyRequest) -> models.PortfolioHolding:
+# ... (bez zmian) ...
     """Rejestruje transakcję KUPNA i aktualizuje/tworzy pozycję w portfelu."""
     ticker = buy_request.ticker.strip().upper()
     quantity_bought = buy_request.quantity
@@ -146,6 +152,7 @@ def record_buy_transaction(db: Session, buy_request: schemas.BuyRequest) -> mode
 
 
 def record_sell_transaction(db: Session, sell_request: schemas.SellRequest) -> Optional[models.PortfolioHolding]:
+# ... (bez zmian) ...
     """
     Rejestruje transakcję SPRZEDAŻY, aktualizuje pozycję w portfelu (lub ją usuwa)
     i zwraca zaktualizowaną pozycję lub None, jeśli została zamknięta.
@@ -225,6 +232,7 @@ def record_sell_transaction(db: Session, sell_request: schemas.SellRequest) -> O
 # ==========================================================
 
 def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
+# ... (bez zmian) ...
     """Pobiera wszystkich kandydatów z Fazy 1 z najnowszego dnia analizy."""
     # Używamy >= CURRENT_DATE, bo analysis_date to timestamp
     candidates_from_db = db.query(models.Phase1Candidate).filter(
@@ -244,6 +252,7 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
     ]
 
 def get_phase2_results(db: Session) -> List[Dict[str, Any]]:
+# ... (bez zmian) ...
     """Pobiera wszystkie wyniki Fazy 2 (tylko zakwalifikowane) z najnowszego dnia analizy."""
     latest_date = db.query(func.max(models.Phase2Result.analysis_date)).scalar()
     if not latest_date:
@@ -267,6 +276,7 @@ def get_phase2_results(db: Session) -> List[Dict[str, Any]]:
     ]
 
 def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
+# ... (bez zmian) ...
     """Pobiera aktywne i oczekujące sygnały (Wyniki Fazy 3)."""
     signals_from_db = db.query(models.TradingSignal).filter(
         models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
@@ -293,6 +303,7 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
 # KROK 4d (Licznik): Dodanie nowej funkcji do zliczania "wyrzuconych"
 # ==================================================================
 def get_discarded_signals_count_24h(db: Session) -> int:
+# ... (bez zmian) ...
     """
     Zlicza sygnały, które zostały unieważnione (INVALIDATED) lub
     zakończone (COMPLETED) w ciągu ostatnich 24 godzin.
@@ -322,18 +333,21 @@ def get_discarded_signals_count_24h(db: Session) -> int:
 # ==================================================================
 
 def delete_phase1_candidate(db: Session, ticker: str):
+# ... (bez zmian) ...
     # Nieużywane?
     db.query(models.Phase1Candidate).filter(models.Phase1Candidate.ticker == ticker).delete(synchronize_session=False)
     db.commit()
     return {"message": f"Candidate {ticker} from Phase 1 deleted."}
 
 def delete_phase2_result(db: Session, ticker: str):
+# ... (bez zmian) ...
     # Nieużywane?
     db.query(models.Phase2Result).filter(models.Phase2Result.ticker == ticker).delete(synchronize_session=False)
     db.commit()
     return {"message": f"Result {ticker} from Phase 2 deleted."}
 
 def delete_trading_signal(db: Session, signal_id: int):
+# ... (bez zmian) ...
     # Zmieniamy status zamiast usuwać fizycznie?
     signal = db.query(models.TradingSignal).filter(models.TradingSignal.id == signal_id).first()
     if signal and signal.status in ['ACTIVE', 'PENDING']:
@@ -346,10 +360,12 @@ def delete_trading_signal(db: Session, signal_id: int):
     return None
 
 def get_system_control_value(db: Session, key: str) -> Optional[str]:
+# ... (bez zmian) ...
     result = db.query(models.SystemControl.value).filter(models.SystemControl.key == key).first()
     return result[0] if result else None
 
 def set_system_control_value(db: Session, key: str, value: str):
+# ... (bez zmian) ...
     stmt = text("""
         INSERT INTO system_control (key, value, updated_at)
         VALUES (:key, :value, NOW())
@@ -365,10 +381,12 @@ def set_system_control_value(db: Session, key: str, value: str):
         raise
 
 def get_ai_analysis_result(db: Session, ticker: str) -> Optional[Dict[str, Any]]:
+# ... (bez zmian) ...
     result = db.query(models.AIAnalysisResult).filter(models.AIAnalysisResult.ticker == ticker).first()
     return result.analysis_data if result else None
 
 def delete_ai_analysis_result(db: Session, ticker: str):
+# ... (bez zmian) ...
     """Usuwa istniejący wynik analizy AI dla danego tickera."""
     try:
         deleted_count = db.query(models.AIAnalysisResult).filter(models.AIAnalysisResult.ticker == ticker).delete(synchronize_session=False)
@@ -379,3 +397,109 @@ def delete_ai_analysis_result(db: Session, ticker: str):
         logger.error(f"Error deleting AI analysis result for {ticker}: {e}", exc_info=True)
         db.rollback()
         # Nie rzucamy błędu, bo to nie jest krytyczne dla zlecenia analizy
+
+# ==================================================================
+# === NOWE FUNKCJE (KROK 5): Pobieranie Raportu Wirtualnego Agenta ===
+# ==================================================================
+
+def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualAgentStats:
+    """Funkcja pomocnicza do obliczania statystyk na podstawie listy transakcji."""
+    
+    total_trades = len(trades_list)
+    if total_trades == 0:
+        # Zwróć puste, domyślne statystyki
+        return schemas.VirtualAgentStats(
+            total_trades=0, win_rate_percent=0, total_p_l_percent=0,
+            average_p_l_percent=0, average_win_percent=0, average_loss_percent=0,
+            profit_factor=0, by_setup={}
+        )
+
+    wins = 0
+    losses = 0
+    total_p_l = Decimal(0)
+    total_win_p_l = Decimal(0)
+    total_loss_p_l = Decimal(0)
+    
+    # defaultdict ułatwia grupowanie statystyk per setup
+    setup_stats = defaultdict(lambda: {
+        'trades': 0, 'wins': 0, 'total_p_l': Decimal(0)
+    })
+
+    for trade in trades_list:
+        # Upewnijmy się, że final_profit_loss_percent nie jest None
+        if trade.final_profit_loss_percent is None:
+            total_trades -= 1 # Ta transakcja nie jest jeszcze w pełni obliczona
+            continue
+
+        p_l = Decimal(trade.final_profit_loss_percent)
+        
+        total_p_l += p_l
+        setup_type = trade.setup_type or "UNKNOWN"
+        setup_stats[setup_type]['trades'] += 1
+        setup_stats[setup_type]['total_p_l'] += p_l
+
+        if p_l > 0:
+            wins += 1
+            total_win_p_l += p_l
+            setup_stats[setup_type]['wins'] += 1
+        elif p_l < 0:
+            losses += 1
+            total_loss_p_l += p_l # total_loss_p_l będzie ujemne
+
+    # Obliczenia końcowe
+    win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+    avg_p_l = total_p_l / total_trades if total_trades > 0 else 0
+    avg_win = total_win_p_l / wins if wins > 0 else 0
+    avg_loss = total_loss_p_l / losses if losses > 0 else 0
+    # Profit Factor = (Całkowity zysk z wygranych) / (Całkowita strata z przegranych)
+    profit_factor = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0 # abs bo total_loss jest ujemne
+
+    # Przetwarzanie statystyk per setup
+    by_setup_processed = {}
+    for setup, data in setup_stats.items():
+        by_setup_processed[setup] = {
+            'total_trades': data['trades'],
+            'win_rate_percent': (data['wins'] / data['trades']) * 100 if data['trades'] > 0 else 0,
+            'total_p_l_percent': float(data['total_p_l'])
+        }
+
+    return schemas.VirtualAgentStats(
+        total_trades=total_trades,
+        win_rate_percent=float(win_rate),
+        total_p_l_percent=float(total_p_l),
+        average_p_l_percent=float(avg_p_l),
+        average_win_percent=float(avg_win),
+        average_loss_percent=float(avg_loss),
+        profit_factor=profit_factor,
+        by_setup=by_setup_processed
+    )
+
+
+def get_virtual_agent_report(db: Session) -> schemas.VirtualAgentReport:
+    """
+    Pobiera wszystkie *zamknięte* wirtualne transakcje i oblicza
+    szczegółowe statystyki wydajności.
+    """
+    try:
+        # Pobieramy tylko te, które są zamknięte (mają wynik)
+        closed_trades = db.query(models.VirtualTrade).filter(
+            models.VirtualTrade.status != 'OPEN'
+        ).order_by(desc(models.VirtualTrade.close_date)).all()
+        
+        # Oblicz statystyki
+        stats = _calculate_stats(closed_trades)
+        
+        # Zwróć pełny raport
+        return schemas.VirtualAgentReport(
+            stats=stats,
+            trades=closed_trades # Pydantic automatycznie skonwertuje listę modeli ORM
+        )
+    except Exception as e:
+        logger.error(f"Nie można wygenerować raportu Wirtualnego Agenta: {e}", exc_info=True)
+        # Zwróć pusty raport w razie błędu
+        empty_stats = _calculate_stats([])
+        return schemas.VirtualAgentReport(stats=empty_stats, trades=[])
+
+# ==================================================================
+# === KONIEC NOWYCH FUNKCJI (KROK 5) ===
+# ==================================================================
