@@ -20,7 +20,8 @@ from .analysis import (
     utils,
     news_agent, # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
     phase0_macro_agent, # <-- POPRAWKA: Import Fazy 0
-    virtual_agent # <-- KROK 4 (Wirtualny Agent): Import nowego modułu
+    virtual_agent, # <-- KROK 4 (Wirtualny Agent): Import nowego modułu
+    backtest_engine # <-- NOWY IMPORT (Krok 2 - Backtest)
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -44,6 +45,7 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 
 
 def handle_ai_analysis_request(session):
+# ... (bez zmian) ...
     """Sprawdza i wykonuje nową analizę AI na żądanie."""
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
@@ -71,8 +73,49 @@ def handle_ai_analysis_request(session):
         finally:
              utils.update_system_control(session, 'ai_analysis_request', 'NONE')
 
+# ==================================================================
+# === NOWA FUNKCJA (Krok 2 - Backtest) ===
+# ==================================================================
+def handle_backtest_request(session, api_client) -> str:
+    """
+    Sprawdza i wykonuje nowe zlecenie backtestu historycznego.
+    Zwraca 'BUSY', jeśli backtest jest w toku, lub 'IDLE', jeśli nie.
+    """
+    period_to_test = utils.get_system_control_value(session, 'backtest_request')
+    
+    if period_to_test and period_to_test not in ['NONE', 'PROCESSING']:
+        logger.warning(f"Zlecenie Backtestu Historycznego otrzymane dla: {period_to_test}.")
+        # Zablokuj workera na czas testu
+        utils.update_system_control(session, 'worker_status', 'RUNNING')
+        utils.update_system_control(session, 'current_phase', 'BACKTESTING')
+        utils.update_system_control(session, 'backtest_request', 'PROCESSING')
+        utils.append_scan_log(session, f"Rozpoczynanie Backtestu Historycznego dla '{period_to_test}'...")
+
+        try:
+            # Uruchom silnik backtestu (to jest operacja blokująca)
+            backtest_engine.run_historical_backtest(session, api_client, period_to_test)
+            
+            logger.info(f"Backtest Historyczny dla {period_to_test} zakończony pomyślnie.")
+            utils.append_scan_log(session, f"Backtest Historyczny dla '{period_to_test}' zakończony.")
+        except Exception as e:
+            logger.error(f"Krytyczny błąd podczas Backtestu Historycznego dla {period_to_test}: {e}", exc_info=True)
+            utils.append_scan_log(session, f"BŁĄD KRYTYCZNY Backtestu: {e}")
+        finally:
+            # Zawsze resetuj flagi po zakończeniu (nawet po błędzie)
+            utils.update_system_control(session, 'worker_status', 'IDLE')
+            utils.update_system_control(session, 'current_phase', 'NONE')
+            utils.update_system_control(session, 'backtest_request', 'NONE')
+            return 'IDLE' # Właśnie skończyliśmy
+
+    elif period_to_test == 'PROCESSING':
+        return 'BUSY' # Backtest wciąż działa
+        
+    return 'IDLE' # Brak zlecenia
+# ==================================================================
+
 
 def run_full_analysis_cycle():
+# ... (bez zmian) ...
     global current_state
 
     # ==================================================================
@@ -228,12 +271,12 @@ def run_full_analysis_cycle():
 
 # ==================================================================
 # KROK 3 (KAT. 2): Usunięcie starej funkcji 'run_catalyst_monitor_job'
-# Cała ta funkcja została zastąpiona przez 'news_agent.py'
 # ==================================================================
 # USUNIĘTO: def run_catalyst_monitor_job(): ...
 
 
 def main_loop():
+# ... (bez zmian) ...
     global current_state, api_client
     logger.info("Worker started. Initializing...")
     
@@ -281,22 +324,44 @@ def main_loop():
         utils.update_system_control(initial_session, 'ai_analysis_request', 'NONE')
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'system_alert', 'NONE')
+        utils.update_system_control(initial_session, 'backtest_request', 'NONE') # <-- NOWA WARTOŚĆ (Krok 2)
         utils.report_heartbeat(initial_session)
 
     while True:
         with get_db_session() as session:
             try:
+                # ==================================================================
+                # === NOWA LOGIKA PĘTLI GŁÓWNEJ (Krok 2 - Backtest) ===
+                # ==================================================================
+                
+                # Krok 1: Sprawdź komendy ręczne (Start/Stop)
                 command_triggered_run, new_state = utils.check_for_commands(session, current_state)
                 current_state = new_state
+                
+                # Krok 2: Sprawdź, czy zlecono backtest (ma najwyższy priorytet)
+                backtest_status = handle_backtest_request(session, api_client)
+                
+                if backtest_status == 'BUSY' or current_state == 'PAUSED':
+                    # Jeśli trwa backtest LUB system jest zapauzowany,
+                    # nie rób nic innego, tylko raportuj heartbeat i śpij.
+                    utils.report_heartbeat(session) 
+                    time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
+                    continue # Pomiń resztę pętli
 
+                # Krok 3: Jeśli system jest wolny (IDLE), uruchom normalne operacje
                 if command_triggered_run:
+                    # Uruchomiono ręcznie pełny cykl EOD
                     run_full_analysis_cycle()
                 
-                if current_state != "PAUSED":
-                    handle_ai_analysis_request(session)
-                    schedule.run_pending()
+                # Uruchom normalne, zaplanowane zadania (monitory)
+                # i analizy na żądanie (AI)
+                handle_ai_analysis_request(session)
+                schedule.run_pending()
                 
                 utils.report_heartbeat(session) 
+                # ==================================================================
+                # === KONIEC NOWEJ LOGIKI PĘTLI GŁÓWNEJ ===
+                # ==================================================================
             except Exception as loop_error:
                 logger.error(f"Error in main worker loop: {loop_error}", exc_info=True)
         
