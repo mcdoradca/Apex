@@ -23,12 +23,11 @@ logger = logging.getLogger(__name__)
 # === Środowisko Backtestingu ===
 # ==================================================================
 
-# Reprezentatywna próbka kluczowych tickerów Nasdaq do testów
-# (Możemy ją rozszerzyć, ale zaczynamy od tej grupy)
-BACKTEST_TICKERS = [
-    'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'TSLA', 'META', 
-    'NFLX', 'AMD', 'INTC', 'CSCO', 'QCOM', 'PYPL', 'ADBE'
-]
+# ==================================================================
+# ZMIANA (Problem 3): Usunięcie listy BACKTEST_TICKERS
+# Lista będzie teraz pobierana dynamicznie z bazy danych (Faza 1).
+# BACKTEST_TICKERS = [ ... ]
+# ==================================================================
 
 # Okresy "reżimów rynkowych" do testów (zgodnie z sugestią)
 # (Rok 2019: stabilna hossa; Rok 2022: bessa/rynek niedźwiedzia)
@@ -123,7 +122,12 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
     for i in range(50, len(historical_data)):
         # Tworzymy "widok" danych, który widziałby analityk danego dnia
         # (czyli wszystkie dane *do* tego dnia)
-        df_view = historical_data.iloc[i-50 : i] 
+        
+        # ==================================================================
+        # NAPRAWA (Problem 2): Używamy .copy(), aby uniknąć SettingWithCopyWarning
+        # ==================================================================
+        df_view = historical_data.iloc[i-50 : i].copy()
+        # ==================================================================
         
         # --- TESTOWANIE STRATEGII EOD ---
         # (Na razie pomijamy Fib H1, ponieważ wymagałoby to pobierania
@@ -161,7 +165,13 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
                 "take_profit": setup_base['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
             }
             
-            logger.info(f"    [Backtest] ZNALEZIONO SETUP: {ticker} | {historical_data.index[i].date()} | {setup_full['setup_type']}")
+            # ==================================================================
+            # NAPRAWA (Problem 1): Używamy .name.date() zamiast .date()
+            # Indeks to teraz obiekt DatetimeIndex, więc [i] da nam Timestamp
+            # ==================================================================
+            log_date = historical_data.index[i].date()
+            logger.info(f"    [Backtest] ZNALEZIONO SETUP: {ticker} | {log_date} | {setup_full['setup_type']}")
+            # ==================================================================
             
             # Rozwiąż transakcję (sprawdź przyszłość)
             trade_result = _resolve_trade(historical_data, i, setup_full, MAX_HOLD_DAYS, period_name)
@@ -204,7 +214,32 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, pe
         logger.error(f"Nie udało się wyczyścić starych wyników backtestu: {e}", exc_info=True)
         session.rollback()
 
-    for ticker in BACKTEST_TICKERS:
+    # ==================================================================
+    # ZMIANA (Problem 3): Pobieramy listę tickerów dynamicznie z Fazy 1
+    # ==================================================================
+    try:
+        tickers_to_test_rows = session.execute(text("SELECT ticker FROM phase1_candidates ORDER BY ticker")).fetchall()
+        tickers_to_test = [row[0] for row in tickers_to_test_rows]
+        
+        if not tickers_to_test:
+            log_msg = f"[Backtest] BŁĄD: Brak tickerów na liście Fazy 1 do przetestowania. Uruchom najpierw skanowanie EOD."
+            logger.error(log_msg)
+            append_scan_log(session, log_msg)
+            return
+
+        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów z Fazy 1 do przetestowania historycznego (np. {tickers_to_test[0]}, {tickers_to_test[1]}, ...)."
+        logger.info(log_msg)
+        append_scan_log(session, log_msg)
+        
+    except Exception as e:
+        log_msg = f"[Backtest] BŁĄD: Nie można pobrać listy tickerów z Fazy 1: {e}"
+        logger.error(log_msg, exc_info=True)
+        append_scan_log(session, log_msg)
+        return
+    # ==================================================================
+
+
+    for ticker in tickers_to_test:
         try:
             log_msg = f"[Backtest] Pobieranie pełnych danych historycznych dla {ticker}..."
             logger.info(log_msg)
@@ -220,6 +255,12 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, pe
             # Krok 2: Przetwórz i posortuj dane
             full_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
             full_df = standardize_df_columns(full_df) # To sortuje rosnąco
+            
+            # ==================================================================
+            # NAPRAWA (Problem 1): Konwertujemy indeks na obiekty Datetime
+            # ==================================================================
+            full_df.index = pd.to_datetime(full_df.index)
+            # ==================================================================
             
             # Krok 3: Wytnij tylko interesujący nas okres
             historical_data_slice = full_df.loc[start_date:end_date]
