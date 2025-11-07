@@ -68,14 +68,15 @@ async def startup_event():
             'scan_log': 'Czekam na rozpoczęcie skanowania...',
             'last_heartbeat': datetime.now(timezone.utc).isoformat(),
             'ai_analysis_request': 'NONE',
-            'system_alert': 'NONE'
+            'system_alert': 'NONE',
+            'backtest_request': 'NONE' # <-- NOWA WARTOŚĆ (Krok 1)
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
                 crud.set_system_control_value(db, key, value)
         logger.info("Initial system control values verified.")
         if not api_av_client.api_key:
-             logger.warning("ALPHAVANTAGE_API_KEY environment variable is not set. The /quote endpoint will not work.")
+             logger.warning("ALPHAVANTAGE_API_KEY environment variable not set. The /quote endpoint will not work.")
 
     except Exception as e:
         logger.error(f"Could not initialize system_control values: {e}", exc_info=True)
@@ -176,6 +177,38 @@ def get_virtual_agent_report_endpoint(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error fetching virtual agent report: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Nie można pobrać raportu Wirtualnego Agenta.")
+# ==========================================================
+
+# ==========================================================
+# === NOWY ENDPOINT (Krok 2 - Uruchomienie Backtestu) ===
+# ==========================================================
+@app.post("/api/v1/backtest/request", status_code=202, response_model=Dict[str, str])
+def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get_db)):
+    """
+    Wysyła zlecenie do Workera, aby uruchomił backtest historyczny
+    dla określonego okresu (np. TRUMP_2019).
+    """
+    period_name = request.period_name.strip().upper()
+    logger.info(f"Backtest request received for period: {period_name}.")
+    
+    # Sprawdź, czy worker jest zajęty
+    worker_status = crud.get_system_control_value(db, "worker_status")
+    if worker_status == 'RUNNING':
+            raise HTTPException(status_code=409, detail="Worker jest obecnie zajęty (RUNNING). Spróbuj ponownie, gdy będzie w stanie IDLE.")
+            
+    # Sprawdź, czy backtest już nie jest w toku
+    current_backtest = crud.get_system_control_value(db, "backtest_request")
+    if current_backtest and current_backtest != 'NONE':
+            raise HTTPException(status_code=409, detail=f"Backtest jest już w toku lub zlecony: {current_backtest}.")
+
+    try:
+        # Ustaw flagę, którą odczyta worker
+        crud.set_system_control_value(db, key="backtest_request", value=period_name)
+        logger.info(f"Backtest request for {period_name} has been sent to the worker.")
+        return {"message": f"Zlecenie backtestu dla '{period_name}' zostało wysłane do workera."}
+    except Exception as e:
+        logger.error(f"Error processing backtest request for {period_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania backtestu.")
 # ==========================================================
 
 
