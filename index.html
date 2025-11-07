@@ -317,6 +317,14 @@
                         const errorText = await response.text();
                         logger.error(`API Error ${response.status} for ${url}: ${errorText}`);
                         if (response.status === 404) throw new Error(`404 - Not Found`);
+                        // ==========================================================
+                        // KROK 3 (Frontend): Lepsza obsługa błędu 409
+                        // ==========================================================
+                        if (response.status === 409) {
+                            const errorJson = JSON.parse(errorText);
+                            throw new Error(errorJson.detail || `Konflikt: Zasób jest zajęty.`);
+                        }
+                        // ==========================================================
                         throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
                     }
                     if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
@@ -351,7 +359,15 @@
                 // ==========================================================
                 // KROK 5 (Frontend): Nowy endpoint API
                 // ==========================================================
-                getVirtualAgentReport: () => apiRequest('/api/v1/virtual-agent/report')
+                getVirtualAgentReport: () => apiRequest('/api/v1/virtual-agent/report'),
+                // ==========================================================
+                // KROK 3 (Frontend): Nowy endpoint API
+                // ==========================================================
+                requestBacktest: (periodName) => apiRequest('/api/v1/backtest/request', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ period_name: periodName }) 
+                })
                 // ==========================================================
             };
             console.log("Full API object defined.");
@@ -579,7 +595,7 @@
                     const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
                     let rec_color = "bg-gray-500";
                     if (recommendation === "BARDZO SILNY KANDDAT DO KUPNA") rec_color = "bg-green-500";
-                    else if (recommendation === "SILNY KANDYDAT DO OBSERWACJI") rec_color = "bg-sky-500";
+                    else if (recommendation === "SILNY KANDDAT DO OBSERWACJI") rec_color = "bg-sky-500";
                     else if (recommendation === "INTERESUJĄCY KANDYDAT") rec_color = "bg-yellow-500";
                     const createAgentCard = (agentName, icon, agentData) => {
                          if (!agentData) return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg text-gray-500">Brak danych dla Agenta: ${agentName}</div>`;
@@ -737,6 +753,8 @@
                             'CLOSED_SL': 'Stop Loss',
                             'CLOSED_EXPIRED': 'Wygasła (7 dni)'
                         };
+                        // Dodajemy obsługę wyników backtestu
+                        if (status.startsWith('BACKTEST')) return 'Backtest';
                         return map[status] || status;
                     };
                     const getSetupName = (setupType) => {
@@ -747,6 +765,13 @@
                             'OTHER': 'Inny',
                             'UNKNOWN': 'Nieznany'
                         };
+                        // Dodajemy obsługę wyników backtestu
+                        if (setupType.startsWith('BACKTEST_')) {
+                            const parts = setupType.split('_');
+                            const period = parts[1]; // np. TRUMP_2019
+                            const strategy = parts.slice(2).join('_'); // np. EMA_BOUNCE
+                            return `${getSetupName(strategy)} (${period})`;
+                        }
                         return map[setupType] || setupType;
                     };
                     
@@ -797,7 +822,7 @@
                                 <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
                                     <tr>
                                         <th scope="col" class="p-3">Typ Strategii</th>
-                                        <th scope="col" class="p-3 text-right">Liczba Transakcji</th>
+                                        <th scope="col" class-"p-3 text-right">Liczba Transakcji</th>
                                         <th scope="col" class="p-3 text-right">Skuteczność</th>
                                         <th scope="col" class="p-3 text-right">Całkowity Z/S (%)</th>
                                     </tr>
@@ -808,6 +833,32 @@
                             </table>
                         </div>
                     `;
+                    
+                    // ==========================================================
+                    // KROK 3 (Frontend): Nowa sekcja - Uruchomienie Backtestu
+                    // ==========================================================
+                    const backtestRunner = `
+                        <div class="bg-[#161B22] border border-gray-700 rounded-lg p-6 mb-8">
+                            <h3 class="text-xl font-bold text-gray-300 mb-4">Uruchom Backtest Historyczny</h3>
+                            <p class="text-sm text-gray-400 mb-4">
+                                Uruchom symulację strategii (EMA Bounce, Breakout) na danych historycznych.
+                                Silnik przetestuje 14 kluczowych tickerów Nasdaq w wybranym okresie.
+                                Worker musi być w stanie 'IDLE'. Operacja może potrwać kilka minut.
+                            </p>
+                            <div class="flex flex-wrap gap-4">
+                                <button data-period="TRUMP_2019" class="run-backtest-btn flex items-center bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50">
+                                    <i data-lucide="play-circle" class="mr-2 h-5 w-5"></i>
+                                    Testuj 2019 (Trump)
+                                </button>
+                                <button data-period="BIDEN_2022" class="run-backtest-btn flex items-center bg-teal-600/20 hover:bg-teal-600/40 text-teal-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50">
+                                    <i data-lucide="play-circle" class="mr-2 h-5 w-5"></i>
+                                    Testuj 2022 (Biden)
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    // ==========================================================
+                    
                     
                     // 3. Renderowanie Historii Transakcji
                     const tradeRows = trades.map(t => {
@@ -863,6 +914,7 @@
                                 <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
                                 ${statsCards}
                                 ${setupTable}
+                                ${backtestRunner} <!-- Dodano nowy blok HTML -->
                                 ${tradeTable}
                             </div>`;
                 }
@@ -934,6 +986,11 @@
                     else if (message.includes('TAKE PROFIT')) alertKey = `TP-${ticker || 'UNKNOWN'}`;
                     else if (message.includes('STOP LOSS')) alertKey = `SL-${ticker || 'UNKNOWN'}`;
                     // ==========================================================
+                    // ==========================================================
+                    // KROK 3 (Frontend): Dodanie obsługi alertów Backtestu
+                    // ==========================================================
+                    else if (message.includes('BACKTEST')) alertKey = `BACKTEST-JOB`;
+                    // ==========================================================
 
                 } catch(e) { 
                     logger.warn("Nie udało się wygenerować klucza alertu", e);
@@ -965,6 +1022,17 @@
                 } else if (message.includes('STOP LOSS')) {
                     alertClass = 'bg-red-600';
                     alertIcon = 'trending-down';
+                }
+                // ==========================================================
+                // ==========================================================
+                // KROK 3 (Frontend): Dodanie stylów dla alertów Backtestu
+                // ==========================================================
+                 else if (message.includes('BACKTEST') && message.includes('Zlecenie')) {
+                    alertClass = 'bg-indigo-600';
+                    alertIcon = 'history';
+                } else if (message.includes('BACKTEST') && message.includes('BŁĄD')) {
+                    alertClass = 'bg-red-600';
+                    alertIcon = 'alert-triangle';
                 }
                 // ==========================================================
 
@@ -1027,16 +1095,30 @@
                     if (statusData.status === 'RUNNING') statusClass = 'bg-green-600/20 text-green-400';
                     else if (statusData.status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
                     else if (statusData.status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
+                    
+                    // ==========================================================
+                    // KROK 3 (Frontend): Specjalny status dla Backtestingu
+                    // ==========================================================
+                    if (statusData.phase === 'BACKTESTING') {
+                        statusClass = 'bg-indigo-600/20 text-indigo-400 animate-pulse';
+                    }
+                    // ==========================================================
+                    
                     ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass}`;
-                    ui.workerStatusText.textContent = statusData.status;
+                    ui.workerStatusText.textContent = statusData.phase === 'BACKTESTING' ? 'BACKTESTING' : statusData.status;
+                    
                     if (statusData.last_heartbeat_utc) {
                         const diffSeconds = (new Date() - new Date(statusData.last_heartbeat_utc)) / 1000;
                         ui.heartbeatStatus.className = `text-xs ${diffSeconds > 30 ? 'text-red-500' : 'text-green-500'}`;
                         ui.heartbeatStatus.textContent = diffSeconds > 30 ? 'PRZERWANY' : new Date(statusData.last_heartbeat_utc).toLocaleTimeString();
                     }
-                    ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
-                    ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
+                    
+                    // Blokuj przyciski, jeśli worker jest zajęty CZYMKOLWIEK (Running lub Backtesting)
+                    const isBusy = statusData.status === 'RUNNING' || statusData.phase === 'BACKTESTING';
+                    ui.startBtn.disabled = isBusy || statusData.status === 'PAUSED';
+                    ui.pauseBtn.disabled = !isBusy || statusData.phase === 'BACKTESTING'; // Nie można pauzować backtestu
                     ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
+                    
                     updateDashboardUI(statusData);
                 } catch (e) { /* Błędy logowane w apiRequest */ }
                 setTimeout(pollWorkerStatus, 5000);
@@ -1398,6 +1480,11 @@
                 const watchlistBtn = e.target.closest('#add-to-watchlist-btn');
                 const buyBtn = e.target.closest('#buy-stock-btn');
                 const sellBtn = e.target.closest('.sell-stock-btn');
+                // ==========================================================
+                // KROK 3 (Frontend): Nowy listener dla przycisków backtestu
+                // ==========================================================
+                const backtestBtn = e.target.closest('.run-backtest-btn');
+                // ==========================================================
 
                 if (watchlistBtn) {
                     const ticker = watchlistBtn.dataset.ticker;
@@ -1426,6 +1513,33 @@
                      const quantity = parseInt(sellBtn.dataset.quantity, 10);
                      if (ticker && !isNaN(quantity)) showSellModal(ticker, quantity);
                 }
+                // ==========================================================
+                // KROK 3 (Frontend): Obsługa kliknięcia przycisku backtestu
+                // ==========================================================
+                else if (backtestBtn) {
+                    const period = backtestBtn.dataset.period;
+                    if (!period) return;
+                    
+                    logger.info(`Zlecanie backtestu dla okresu: ${period}`);
+                    backtestBtn.disabled = true;
+                    backtestBtn.innerHTML = `<i data-lucide="loader-2" class="mr-2 h-5 w-5 animate-spin"></i>Zlecanie...`;
+                    lucide.createIcons();
+                    
+                    try {
+                        const response = await api.requestBacktest(period);
+                        displaySystemAlert(`BACKTEST: Zlecenie dla '${period}' wysłane do workera.`);
+                        backtestBtn.innerHTML = `<i data-lucide="check" class="mr-2 h-5 w-5"></i>Zlecono`;
+                        // Odśwież status workera, aby pokazać 'BACKTESTING'
+                        pollWorkerStatus();
+                    } catch (error) {
+                        logger.error(`Błąd zlecania backtestu: ${error.message}`);
+                        displaySystemAlert(`BACKTEST BŁĄD: ${error.message}`);
+                        backtestBtn.disabled = false;
+                        backtestBtn.innerHTML = `<i data-lucide="play-circle" class="mr-2 h-5 w-5"></i>Testuj ${period.split('_')[1]}`;
+                        lucide.createIcons();
+                    }
+                }
+                // ==========================================================
             });
 
             // ZMIANA: Dodano 'closeSidebar()' do kliknięć na elementy listy
