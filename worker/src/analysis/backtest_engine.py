@@ -23,12 +23,6 @@ logger = logging.getLogger(__name__)
 # === Środowisko Backtestingu ===
 # ==================================================================
 
-# ==================================================================
-# ZMIANA (Problem 3): Usunięcie listy BACKTEST_TICKERS
-# Lista będzie teraz pobierana dynamicznie z bazy danych (Faza 1).
-# BACKTEST_TICKERS = [ ... ]
-# ==================================================================
-
 # Okresy "reżimów rynkowych" do testów (zgodnie z sugestią)
 # (Rok 2019: stabilna hossa; Rok 2022: bessa/rynek niedźwiedzia)
 BACKTEST_PERIODS = {
@@ -90,19 +84,25 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         # Oblicz P/L %
         p_l_percent = ((close_price - entry_price) / entry_price) * 100
         
-        # Stwórz obiekt VirtualTrade
+        # ==================================================================
+        # === POPRAWKA BŁĘDU (Problem "np.float64") ===
+        # Konwertujemy wszystkie liczby z (potencjalnie) numpy.float64
+        # na natywne typy Pythona (float) przed wysłaniem do bazy.
+        # ==================================================================
         trade = models.VirtualTrade(
             ticker=setup['ticker'],
             status=status,
             setup_type=f"BACKTEST_{period_name}_{setup['setup_type']}",
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
+            entry_price=float(entry_price),
+            stop_loss=float(stop_loss),
+            take_profit=float(take_profit),
             open_date=historical_data.index[entry_index].to_pydatetime(), # Data znalezienia setupu
             close_date=candle.name.to_pydatetime(), # Data zamknięcia
-            close_price=close_price,
-            final_profit_loss_percent=p_l_percent
+            close_price=float(close_price),
+            final_profit_loss_percent=float(p_l_percent)
         )
+        # ==================================================================
+        
         return trade
 
     except Exception as e:
