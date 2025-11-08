@@ -69,7 +69,12 @@ async def startup_event():
             'last_heartbeat': datetime.now(timezone.utc).isoformat(),
             'ai_analysis_request': 'NONE',
             'system_alert': 'NONE',
-            'backtest_request': 'NONE' # <-- NOWA WARTOŚĆ (Krok 1)
+            'backtest_request': 'NONE',
+            # ==========================================================
+            # === NOWA WARTOŚĆ (Krok 4 - Mega Agent) ===
+            # ==========================================================
+            'ai_optimizer_report': 'NONE'
+            # ==========================================================
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -214,6 +219,54 @@ def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get
     except Exception as e:
         logger.error(f"Error processing backtest request for {year_to_test}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania backtestu.")
+# ==========================================================
+
+
+# ==========================================================
+# === NOWE ENDPOINTY (Krok 4 - Mega Agent) ===
+# ==========================================================
+
+@app.post("/api/v1/ai-optimizer/request", status_code=202, response_model=Dict[str, str])
+def request_ai_optimizer(request: schemas.AIOptimizerRequest, db: Session = Depends(get_db)):
+    """
+    Wysyła zlecenie do Workera, aby uruchomił Mega Agenta AI
+    do analizy wszystkich wyników wirtualnych transakcji.
+    """
+    logger.info("Zlecenie Mega Agenta AI otrzymane.")
+
+    # Sprawdź, czy worker jest zajęty
+    worker_status = crud.get_system_control_value(db, "worker_status")
+    if worker_status == 'RUNNING':
+            raise HTTPException(status_code=409, detail="Worker jest obecnie zajęty (RUNNING). Spróbuj ponownie, gdy będzie w stanie IDLE.")
+            
+    # Sprawdź, czy inna analiza AI (Optimizer lub Backtest) już nie jest w toku
+    current_optimizer = crud.get_system_control_value(db, "ai_optimizer_request")
+    current_backtest = crud.get_system_control_value(db, "backtest_request")
+    if (current_optimizer and current_optimizer != 'NONE') or (current_backtest and current_backtest != 'NONE'):
+            raise HTTPException(status_code=409, detail=f"Inna analiza (Backtest lub AI Optimizer) jest już w toku.")
+
+    try:
+        # Ustaw flagę, którą odczyta worker
+        crud.set_system_control_value(db, key="ai_optimizer_request", value='REQUESTED')
+        crud.set_system_control_value(db, key="ai_optimizer_report", value='PROCESSING') # Oznacz jako przetwarzanie
+        logger.info("Zlecenie Mega Agenta AI zostało wysłane do workera.")
+        return {"message": "Zlecenie analizy Mega Agenta AI zostało wysłane do workera."}
+    except Exception as e:
+        logger.error(f"Błąd podczas zlecania Mega Agenta AI: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania analizy AI.")
+
+@app.get("/api/v1/ai-optimizer/report", response_model=schemas.AIOptimizerReport, summary="Pobiera ostatni raport Mega Agenta AI")
+def get_ai_optimizer_report_endpoint(db: Session = Depends(get_db)):
+    """
+    Pobiera ostatni wygenerowany raport tekstowy Mega Agenta AI
+    z bazy danych.
+    """
+    try:
+        report = crud.get_ai_optimizer_report(db)
+        return report
+    except Exception as e:
+        logger.error(f"Błąd podczas pobierania raportu Mega Agenta AI: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Nie można pobrać raportu Mega Agenta AI.")
 # ==========================================================
 
 
