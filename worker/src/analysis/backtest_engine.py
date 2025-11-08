@@ -23,13 +23,14 @@ logger = logging.getLogger(__name__)
 # === Środowisko Backtestingu ===
 # ==================================================================
 
-# Okresy "reżimów rynkowych" do testów (zgodnie z sugestią)
-# (Rok 2019: stabilna hossa; Rok 2022: bessa/rynek niedźwiedzia)
-BACKTEST_PERIODS = {
-    "TRUMP_2019": ('2019-01-01', '2019-12-31'),
-    "BIDEN_2022": ('2022-01-01', '2022-12-31'),
-    # Możemy tu dodawać kolejne, np. "COVID_2020"
-}
+# ==================================================================
+# ZMIANA (Dynamiczny Rok): Usunięcie statycznych okresów
+# ==================================================================
+# BACKTEST_PERIODS = {
+#     "TRUMP_2019": ('2019-01-01', '2019-12-31'),
+#     "BIDEN_2022": ('2022-01-01', '2022-12-31'),
+# }
+# ==================================================================
 
 # Horyzont czasowy dla strategii (zgodnie z naszym celem 7 dni)
 MAX_HOLD_DAYS = 7
@@ -38,7 +39,7 @@ MAX_HOLD_DAYS = 7
 # === Silnik Symulacji ===
 # ==================================================================
 
-def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, period_name: str) -> models.VirtualTrade | None:
+def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str) -> models.VirtualTrade | None:
     """
     "Spogląda w przyszłość" (w danych historycznych), aby zobaczyć, jak
     dana transakcja by się zakończyła.
@@ -92,7 +93,8 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         trade = models.VirtualTrade(
             ticker=setup['ticker'],
             status=status,
-            setup_type=f"BACKTEST_{period_name}_{setup['setup_type']}",
+            # ZMIANA (Dynamiczny Rok): Tworzymy dynamiczny setup_type
+            setup_type=f"BACKTEST_{year}_{setup['setup_type']}",
             entry_price=float(entry_price),
             stop_loss=float(stop_loss),
             take_profit=float(take_profit),
@@ -110,7 +112,7 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         return None
 
 
-def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFrame, period_name: str):
+def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFrame, year: str):
     """
     Iteruje dzień po dniu przez historyczny DataFrame, szuka setupów
     i przekazuje je do rozwiązania.
@@ -174,7 +176,7 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
             # ==================================================================
             
             # Rozwiąż transakcję (sprawdź przyszłość)
-            trade_result = _resolve_trade(historical_data, i, setup_full, MAX_HOLD_DAYS, period_name)
+            trade_result = _resolve_trade(historical_data, i, setup_full, MAX_HOLD_DAYS, year)
             
             if trade_result:
                 session.add(trade_result)
@@ -186,28 +188,48 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
     logger.info(f"  [Backtest] Symulacja dla {ticker} zakończona. Znaleziono i zapisano {trades_found} transakcji.")
 
 
-def run_historical_backtest(session: Session, api_client: AlphaVantageClient, period_name: str):
+def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str):
     """
     Główna funkcja uruchamiająca backtest historyczny dla
     zdefiniowanego okresu i listy tickerów.
     """
     
-    if period_name not in BACKTEST_PERIODS:
-        logger.error(f"Nieznany okres backtestu: {period_name}. Dostępne: {list(BACKTEST_PERIODS.keys())}")
+    # ==================================================================
+    # ZMIANA (Dynamiczny Rok): Walidacja i dynamiczne ustawianie dat
+    # ==================================================================
+    try:
+        # Walidacja, czy 'year' to 4-cyfrowa liczba
+        if not (year.isdigit() and len(year) == 4):
+            raise ValueError(f"Otrzymano nieprawidłowy rok: {year}")
+        
+        # Sprawdzenie, czy rok nie jest z przyszłości
+        current_year = datetime.now(timezone.utc).year
+        if int(year) > current_year:
+             raise ValueError(f"Nie można testować przyszłości: {year}")
+        
+        # Ustawiamy dynamicznie daty
+        start_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
+        
+    except Exception as e:
+        logger.error(f"[Backtest] Błąd walidacji roku: {e}", exc_info=True)
+        append_scan_log(session, f"[Backtest] BŁĄD: Nieprawidłowy format roku: {year}")
         return
         
-    start_date, end_date = BACKTEST_PERIODS[period_name]
+    log_msg = f"BACKTEST HISTORYCZNY: Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
+    # ==================================================================
     
-    log_msg = f"BACKTEST HISTORYCZNY: Rozpoczynanie testu dla okresu '{period_name}' ({start_date} do {end_date})"
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
     # Wyczyść stare wyniki dla tego okresu testowego, aby uniknąć duplikatów
     try:
-        logger.info(f"Czyszczenie starych wyników dla okresu: BACKTEST_{period_name}_%")
+        # ZMIANA (Dynamiczny Rok): Używamy dynamicznego prefiksu
+        period_prefix = f"BACKTEST_{year}_%"
+        logger.info(f"Czyszczenie starych wyników dla okresu: {period_prefix}")
         session.execute(
             text("DELETE FROM virtual_trades WHERE setup_type LIKE :period"),
-            {'period': f'BACKTEST_{period_name}_%'}
+            {'period': period_prefix}
         )
         session.commit()
     except Exception as e:
@@ -267,17 +289,17 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, pe
             historical_data_slice = full_df.loc[start_date:end_date]
             
             if historical_data_slice.empty or len(historical_data_slice) < 50:
-                logger.warning(f"[Backtest] Niewystarczająca ilość danych dla {ticker} w okresie {period_name}. Pomijanie.")
+                logger.warning(f"[Backtest] Niewystarczająca ilość danych dla {ticker} w okresie {year}. Pomijanie.")
                 continue
 
             # Krok 4: Uruchom symulator
-            _simulate_trades(session, ticker, historical_data_slice, period_name)
+            _simulate_trades(session, ticker, historical_data_slice, year)
 
         except Exception as e:
             logger.error(f"[Backtest] Błąd krytyczny podczas przetwarzania {ticker}: {e}", exc_info=True)
             session.rollback()
             append_scan_log(session, f"BŁĄD Backtestu dla {ticker}: {e}")
 
-    log_msg = f"BACKTEST HISTORYCZNY: Zakończono test dla okresu '{period_name}'."
+    log_msg = f"BACKTEST HISTORYCZNY: Zakończono test dla roku '{year}'."
     logger.info(log_msg)
     append_scan_log(session, log_msg)
