@@ -180,17 +180,22 @@ def get_virtual_agent_report_endpoint(db: Session = Depends(get_db)):
 # ==========================================================
 
 # ==========================================================
-# === NOWY ENDPOINT (Krok 2 - Uruchomienie Backtestu) ===
+# === ZMIANA (Dynamiczny Rok): Endpoint Zlecenia Backtestu ===
 # ==========================================================
 @app.post("/api/v1/backtest/request", status_code=202, response_model=Dict[str, str])
 def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get_db)):
     """
     Wysyła zlecenie do Workera, aby uruchomił backtest historyczny
-    dla określonego okresu (np. TRUMP_2019).
+    dla określonego ROKU (np. "2010").
     """
-    period_name = request.period_name.strip().upper()
-    logger.info(f"Backtest request received for period: {period_name}.")
+    # Zmieniono 'period_name' na 'year'
+    year_to_test = request.year.strip()
+    logger.info(f"Backtest request received for year: {year_to_test}.")
     
+    # Prosta walidacja roku (logika workera sprawdzi to dokładniej)
+    if not (year_to_test.isdigit() and len(year_to_test) == 4):
+         raise HTTPException(status_code=400, detail="Nieprawidłowy format roku. Oczekiwano 4 cyfr, np. '2010'.")
+
     # Sprawdź, czy worker jest zajęty
     worker_status = crud.get_system_control_value(db, "worker_status")
     if worker_status == 'RUNNING':
@@ -203,11 +208,11 @@ def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get
 
     try:
         # Ustaw flagę, którą odczyta worker
-        crud.set_system_control_value(db, key="backtest_request", value=period_name)
-        logger.info(f"Backtest request for {period_name} has been sent to the worker.")
-        return {"message": f"Zlecenie backtestu dla '{period_name}' zostało wysłane do workera."}
+        crud.set_system_control_value(db, key="backtest_request", value=year_to_test)
+        logger.info(f"Backtest request for {year_to_test} has been sent to the worker.")
+        return {"message": f"Zlecenie backtestu dla roku '{year_to_test}' zostało wysłane do workera."}
     except Exception as e:
-        logger.error(f"Error processing backtest request for {period_name}: {e}", exc_info=True)
+        logger.error(f"Error processing backtest request for {year_to_test}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania backtestu.")
 # ==========================================================
 
