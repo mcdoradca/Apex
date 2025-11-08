@@ -58,14 +58,6 @@ class AIAnalysisRequestResponse(BaseModel):
 class OnDemandRequest(BaseModel):
     ticker: str
 
-# ==========================================================
-# === ZMIANA (Dynamiczny Rok): Schemat Zlecenia Backtestu ===
-# ==========================================================
-class BacktestRequest(BaseModel):
-    # Zmieniono 'period_name' na 'year'
-    year: str = Field(..., description="Rok do testowania (np. 2010)", min_length=4, max_length=4)
-# ==========================================================
-
 class Progress(BaseModel):
     processed: int
     total: int
@@ -106,13 +98,13 @@ class Phase2Result(BaseModel):
 class TradingSignal(BaseModel):
     id: int
     ticker: str
-    generation_date: str
+    generation_date: datetime # Zmieniono na datetime dla spójności
     status: str
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
-    signal_candle_timestamp: Optional[str] = None
+    signal_candle_timestamp: Optional[datetime] = None # Zmieniono na datetime
     entry_zone_bottom: Optional[float] = None
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
@@ -140,20 +132,19 @@ class AIAnalysisResult(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 # ==========================================================
-# === KROK 5 (Wirtualny Agent): Schematy dla Wyników Agenta ===
+# KROK 5 (Wirtualny Agent): Schematy Raportu
 # ==========================================================
 
 class VirtualTrade(BaseModel):
-    """Schemat dla pojedynczej wirtualnej transakcji (wiersz z tabeli)"""
     id: int
-    signal_id: Optional[int] = None
     ticker: str
     status: str
-    setup_type: Optional[str] = None
+    setup_type: str
     entry_price: float
     stop_loss: float
-    take_profit: Optional[float] = None
+    take_profit: float
     open_date: datetime
     close_date: Optional[datetime] = None
     close_price: Optional[float] = None
@@ -161,19 +152,39 @@ class VirtualTrade(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-
 class VirtualAgentStats(BaseModel):
-    """Schemat dla zagregowanych statystyk wydajności"""
     total_trades: int
     win_rate_percent: float
     total_p_l_percent: float
-    average_p_l_percent: float
-    average_win_percent: float
-    average_loss_percent: float
     profit_factor: float
-    by_setup: Dict[str, Any] # Miejsce na statystyki per-strategia (np. {'EMA_BOUNCE': {'win_rate': 50.0, ...}})
+    by_setup: Dict[str, Any] # Tu będą statystyki dla każdego setup_type
 
 class VirtualAgentReport(BaseModel):
-    """Główny schemat odpowiedzi, łączący statystyki i listę transakcji"""
     stats: VirtualAgentStats
     trades: List[VirtualTrade]
+
+
+# ==========================================================
+# ZMIANA (Dynamiczny Rok): Schemat Zlecenia Backtestu
+# ==========================================================
+class BacktestRequest(BaseModel):
+    year: str = Field(..., description="Rok do przetestowania, np. '2010'")
+
+# ==========================================================
+# === NOWE SCHEMATY (Krok 2 - Mega Agent) ===
+# ==========================================================
+
+class AIOptimizerRequest(BaseModel):
+    """
+    Puste ciało, sam fakt wysłania tego żądania
+    jest traktowany jako zlecenie analizy.
+    """
+    pass
+
+class AIOptimizerReport(BaseModel):
+    """
+    Schemat odpowiedzi zwracający raport tekstowy od Mega Agenta.
+    """
+    status: str # np. 'DONE', 'PROCESSING', 'NONE'
+    report_text: Optional[str] = None
+    last_updated: Optional[datetime] = None
