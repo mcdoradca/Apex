@@ -306,10 +306,13 @@
 
             // --- KONFIGURACJA API ---
             // ==========================================================
-            // ZMIANA (Dynamiczny Rok): Używamy nowej nazwy endpointu
+            // === NAPRAWA BŁĘDU (Awaria Logowania) ===
+            // Przywracamy poprawny, absolutny URL do serwera API,
+            // bazując na nazwie serwisu z render.yaml i Twoim adresie frontendu.
             // ==========================================================
-            const API_BASE_URL = "/"; // Używamy ścieżki względnej
+            const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
             // ==========================================================
+            
             const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms
             const QUOTE_POLL_INTERVAL = 15000;       // ms
             const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund na odświeżenie portfela
@@ -323,7 +326,12 @@
             };
 
             const apiRequest = async (endpoint, options = {}) => {
-                const url = `${API_BASE_URL}${endpoint}`; // Usunięto podwójny slash
+                // ==========================================================
+                // NAPRAWA BŁĘDU: Zapewniamy, że endpoint jest poprawnie
+                // dołączany, nawet jeśli jest pusty (dla '/')
+                // ==========================================================
+                const url = endpoint ? `${API_BASE_URL}/${endpoint}` : API_BASE_URL;
+                // ==========================================================
                 try {
                     const response = await fetch(url, options);
                     if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
@@ -387,6 +395,11 @@
                     headers: { 'Content-Type': 'application/json' }, 
                     body: JSON.stringify({ year: year }) // Wysyłamy { "year": "2010" }
                 }),
+                // ==========================================================
+                // ==========================================================
+                // NAPRAWA BŁĘDU: Endpoint do sprawdzania statusu
+                // ==========================================================
+                getApiRootStatus: () => apiRequest(''), // Testuje główny endpoint API ('/')
                 // ==========================================================
             };
             console.log("Full API object defined.");
@@ -892,8 +905,8 @@
                 if (activeEl) {
                     activeEl.textContent = state.phase3.length;
                 }
-                if (discardEl) {
-                    discardEl.textContent = state.discardedSignalCount;
+                if (discardedEl) {
+                    discardedEl.textContent = state.discardedSignalCount;
                 }
             }
             // ==========================================================
@@ -1566,13 +1579,22 @@
             const intervalId = setInterval(async () => {
                 logger.info("Sprawdzanie statusu API...");
                 try {
-                    // Używamy endpointu GET / (lub HEAD /), który nie wymaga bazy danych
-                    await apiRequest(''); // Testuje sam endpoint '/'
-                    logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
-                    clearInterval(intervalId);
-                    ui.loginStatusText.textContent = 'System gotowy.';
-                    ui.loginButton.disabled = false;
-                    ui.loginButton.textContent = 'Wejdź do Aplikacji';
+                    // ==========================================================
+                    // NAPRAWA BŁĘDU: Używamy nowego, poprawnego endpointu
+                    // ==========================================================
+                    const statusData = await api.getApiRootStatus(); // Testuje główny endpoint API ('/')
+                    // ==========================================================
+                    
+                    if (statusData && statusData.status === "APEX Predator API is running") {
+                        logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
+                        clearInterval(intervalId);
+                        ui.loginStatusText.textContent = 'System gotowy.';
+                        ui.loginButton.disabled = false;
+                        ui.loginButton.textContent = 'Wejdź do Aplikacji';
+                    } else {
+                         logger.warn("API zwróciło 200 OK, ale nieprawidłowe dane:", statusData);
+                         ui.loginStatusText.textContent = 'Problem z odp. API...';
+                    }
                 } catch (e) {
                     logger.error("Błąd podczas sprawdzania statusu API:", e.message);
                     ui.loginStatusText.textContent = 'Backend nie gotowy...';
