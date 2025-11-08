@@ -403,6 +403,7 @@ def delete_ai_analysis_result(db: Session, ticker: str):
 # ==================================================================
 
 def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualAgentStats:
+# ... (bez zmian) ...
     """Funkcja pomocnicza do obliczania statystyk na podstawie listy transakcji."""
     
     total_trades = len(trades_list)
@@ -410,7 +411,6 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
         # Zwróć puste, domyślne statystyki
         return schemas.VirtualAgentStats(
             total_trades=0, win_rate_percent=0, total_p_l_percent=0,
-            average_p_l_percent=0, average_win_percent=0, average_loss_percent=0,
             profit_factor=0, by_setup={}
         )
 
@@ -422,7 +422,7 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
     
     # defaultdict ułatwia grupowanie statystyk per setup
     setup_stats = defaultdict(lambda: {
-        'trades': 0, 'wins': 0, 'total_p_l': Decimal(0)
+        'trades': 0, 'wins': 0, 'total_p_l': Decimal(0), 'total_loss_p_l': Decimal(0), 'total_win_p_l': Decimal(0)
     })
 
     for trade in trades_list:
@@ -442,17 +442,16 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
             wins += 1
             total_win_p_l += p_l
             setup_stats[setup_type]['wins'] += 1
+            setup_stats[setup_type]['total_win_p_l'] += p_l
         elif p_l < 0:
             losses += 1
             total_loss_p_l += p_l # total_loss_p_l będzie ujemne
+            setup_stats[setup_type]['total_loss_p_l'] += p_l
 
     # Obliczenia końcowe
     win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
-    avg_p_l = total_p_l / total_trades if total_trades > 0 else 0
-    avg_win = total_win_p_l / wins if wins > 0 else 0
-    avg_loss = total_loss_p_l / losses if losses > 0 else 0
     # Profit Factor = (Całkowity zysk z wygranych) / (Całkowita strata z przegranych)
-    profit_factor = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0 # abs bo total_loss jest ujemne
+    profit_factor = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0.0 # abs bo total_loss jest ujemne
 
     # Przetwarzanie statystyk per setup
     by_setup_processed = {}
@@ -460,22 +459,21 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
         by_setup_processed[setup] = {
             'total_trades': data['trades'],
             'win_rate_percent': (data['wins'] / data['trades']) * 100 if data['trades'] > 0 else 0,
-            'total_p_l_percent': float(data['total_p_l'])
+            'total_p_l_percent': float(data['total_p_l']),
+            'profit_factor': float(abs(data['total_win_p_l'] / data['total_loss_p_l'])) if data['total_loss_p_l'] != 0 else 0.0
         }
 
     return schemas.VirtualAgentStats(
         total_trades=total_trades,
         win_rate_percent=float(win_rate),
         total_p_l_percent=float(total_p_l),
-        average_p_l_percent=float(avg_p_l),
-        average_win_percent=float(avg_win),
-        average_loss_percent=float(avg_loss),
         profit_factor=profit_factor,
         by_setup=by_setup_processed
     )
 
 
 def get_virtual_agent_report(db: Session) -> schemas.VirtualAgentReport:
+# ... (bez zmian) ...
     """
     Pobiera wszystkie *zamknięte* wirtualne transakcje i oblicza
     szczegółowe statystyki wydajności.
@@ -502,4 +500,38 @@ def get_virtual_agent_report(db: Session) -> schemas.VirtualAgentReport:
 
 # ==================================================================
 # === KONIEC NOWYCH FUNKCJI (KROK 5) ===
+# ==================================================================
+
+# ==================================================================
+# === NOWA FUNKCJA (Krok 3 - Mega Agent) ===
+# ==================================================================
+def get_ai_optimizer_report(db: Session) -> schemas.AIOptimizerReport:
+    """
+    Pobiera ostatni wygenerowany raport Mega Agenta z bazy danych.
+    """
+    try:
+        # Pobieramy wiersz z tabeli system_control
+        report_row = db.query(models.SystemControl).filter(
+            models.SystemControl.key == 'ai_optimizer_report'
+        ).first()
+
+        if not report_row or not report_row.value or report_row.value == 'NONE':
+            return schemas.AIOptimizerReport(status="NONE")
+        
+        if report_row.value == 'PROCESSING':
+             return schemas.AIOptimizerReport(status="PROCESSING", last_updated=report_row.updated_at)
+
+        # Jeśli mamy raport, zwracamy go
+        return schemas.AIOptimizerReport(
+            status="DONE",
+            report_text=report_row.value,
+            last_updated=report_row.updated_at
+        )
+        
+    except Exception as e:
+        logger.error(f"Nie można pobrać raportu Mega Agenta: {e}", exc_info=True)
+        return schemas.AIOptimizerReport(
+            status="ERROR",
+            report_text=f"Błąd serwera podczas odczytu raportu: {e}"
+        )
 # ==================================================================
