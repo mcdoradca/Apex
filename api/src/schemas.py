@@ -59,10 +59,11 @@ class OnDemandRequest(BaseModel):
     ticker: str
 
 # ==========================================================
-# === NOWY SCHEMAT (Krok 1 - Uruchomienie Backtestu) ===
+# === ZMIANA (Dynamiczny Rok): Schemat Zlecenia Backtestu ===
 # ==========================================================
 class BacktestRequest(BaseModel):
-    period_name: str = Field(..., description="Nazwa okresu do testowania, np. TRUMP_2019")
+    # Zmieniono 'period_name' na 'year'
+    year: str = Field(..., description="Rok do testowania (np. 2010)", min_length=4, max_length=4)
 # ==========================================================
 
 class Progress(BaseModel):
