@@ -81,7 +81,8 @@ def handle_backtest_request(session, api_client) -> str:
     Sprawdza i wykonuje nowe zlecenie backtestu historycznego.
     Zwraca 'BUSY', jeśli backtest jest w toku, lub 'IDLE', jeśli nie.
     """
-    period_to_test = utils.get_system_control_value(session, 'backtest_request')
+    # ZMIANA (Dynamiczny Rok): Ta zmienna będzie teraz zawierać rok, np. "2010"
+    period_to_test = utils.get_system_control_value(session, 'backtest_request') 
     
     if period_to_test and period_to_test not in ['NONE', 'PROCESSING']:
         logger.warning(f"Zlecenie Backtestu Historycznego otrzymane dla: {period_to_test}.")
@@ -93,7 +94,8 @@ def handle_backtest_request(session, api_client) -> str:
 
         try:
             # Uruchom silnik backtestu (to jest operacja blokująca)
-            backtest_engine.run_historical_backtest(session, api_client, period_to_test)
+            # ZMIANA (Dynamiczny Rok): Przekazujemy rok (np. "2010") do silnika
+            backtest_engine.run_historical_backtest(session, api_client, period_to_test) 
             
             logger.info(f"Backtest Historyczny dla {period_to_test} zakończony pomyślnie.")
             utils.append_scan_log(session, f"Backtest Historyczny dla '{period_to_test}' zakończony.")
