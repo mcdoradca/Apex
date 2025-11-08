@@ -215,24 +215,25 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, pe
         session.rollback()
 
     # ==================================================================
-    # ZMIANA (Problem 3): Pobieramy listę tickerów dynamicznie z Fazy 1
+    # ZMIANA (Logika Doboru Spółek): Pobieramy listę tickerów z Fazy 3 (Sygnały)
     # ==================================================================
     try:
-        tickers_to_test_rows = session.execute(text("SELECT ticker FROM phase1_candidates ORDER BY ticker")).fetchall()
+        # Pobieramy unikalne tickery z listy sygnałów (Twoje 33 spółki)
+        tickers_to_test_rows = session.execute(text("SELECT DISTINCT ticker FROM trading_signals ORDER BY ticker")).fetchall()
         tickers_to_test = [row[0] for row in tickers_to_test_rows]
         
         if not tickers_to_test:
-            log_msg = f"[Backtest] BŁĄD: Brak tickerów na liście Fazy 1 do przetestowania. Uruchom najpierw skanowanie EOD."
+            log_msg = f"[Backtest] BŁĄD: Brak tickerów na liście Fazy 3 (trading_signals) do przetestowania. Uruchom najpierw skanowanie EOD."
             logger.error(log_msg)
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów z Fazy 1 do przetestowania historycznego (np. {tickers_to_test[0]}, {tickers_to_test[1]}, ...)."
+        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów z Fazy 3 do przetestowania historycznego (np. {tickers_to_test[0]}, {tickers_to_test[1]}, ...)."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
     except Exception as e:
-        log_msg = f"[Backtest] BŁĄD: Nie można pobrać listy tickerów z Fazy 1: {e}"
+        log_msg = f"[Backtest] BŁĄD: Nie można pobrać listy tickerów z Fazy 3: {e}"
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
