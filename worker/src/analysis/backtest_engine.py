@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 # ==================================================================
 
 # Horyzont czasowy dla strategii (zgodnie z naszym celem 7 dni)
-MAX_HOLD_DAYS = 7
+# ZMIANA: Usunięto globalny MAX_HOLD_DAYS, teraz będzie brany z konfiguracji
+# MAX_HOLD_DAYS = 7
 
 # ==================================================================
 # === Silnik Symulacji ===
@@ -132,51 +133,73 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
         # ==================================================================
         
         # --- TESTOWANIE STRATEGII EOD ---
-        # (Na razie pomijamy Fib H1, ponieważ wymagałoby to pobierania
-        # historycznych danych intraday miesiąc po miesiącu, co jest
-        # znacznie bardziej złożone i wolniejsze)
         
         setups_to_test = []
+        
+        # ==================================================================
+        # === ZMIANA (Wdrożenie Sugestii AI) ===
+        # ==================================================================
         
         # Test 1: EMA Bounce
         ema_setup = _find_ema_bounce_setup(df_view)
         if ema_setup:
-            setups_to_test.append(ema_setup)
+            # Użyj parametrów specyficznych dla EMA Bounce
+            risk = ema_setup['entry_price'] - ema_setup['stop_loss']
+            if risk > 0:
+                rr_ratio = Phase3Config.EmaBounce.TARGET_RR_RATIO
+                max_hold = Phase3Config.EmaBounce.MAX_HOLD_DAYS # <-- Sugestia AI #3
+                
+                setup_full = {
+                    "ticker": ticker,
+                    "setup_type": ema_setup['setup_type'], # "EMA_BOUNCE"
+                    "entry_price": ema_setup['entry_price'],
+                    "stop_loss": ema_setup['stop_loss'],
+                    "take_profit": ema_setup['entry_price'] + (rr_ratio * risk),
+                    "max_hold_days": max_hold
+                }
+                setups_to_test.append(setup_full)
 
         # Test 2: Breakout
         breakout_setup = _find_breakout_setup(df_view)
         if breakout_setup:
-            setups_to_test.append(breakout_setup)
+            # Użyj parametrów specyficznych dla Breakout
+            risk = breakout_setup['entry_price'] - breakout_setup['stop_loss']
+            if risk > 0:
+                rr_ratio = Phase3Config.Breakout.TARGET_RR_RATIO # <-- Sugestia AI #1
+                max_hold = Phase3Config.Breakout.MAX_HOLD_DAYS
+                
+                setup_full = {
+                    "ticker": ticker,
+                    "setup_type": breakout_setup['setup_type'], # "BREAKOUT"
+                    "entry_price": breakout_setup['entry_price'],
+                    "stop_loss": breakout_setup['stop_loss'],
+                    "take_profit": breakout_setup['entry_price'] + (rr_ratio * risk),
+                    "max_hold_days": max_hold
+                }
+                setups_to_test.append(setup_full)
+        
+        # Test 3: FibH1 (na razie bez zmian w parametrach)
+        # TODO: W przyszłości dodać symulację H1
             
-        # ... W przyszłości możemy tu dodać `_find_impulse_and_fib_zone`
-        # i specjalną logikę do pobierania H1 dla tego dnia ...
+        # ==================================================================
+        # === KONIEC ZMIAN ===
+        # ==================================================================
+
 
         # Przetwórz znalezione setupy
-        for setup_base in setups_to_test:
-            # Uzupełnij setup o dane, których _find_... nie zwraca
-            # (Musimy odtworzyć logikę z `find_end_of_day_setup`)
-            risk = setup_base['entry_price'] - setup_base['stop_loss']
-            if risk <= 0:
-                continue # Błędny setup
+        for setup_full in setups_to_test:
             
-            setup_full = {
-                "ticker": ticker,
-                "setup_type": setup_base['setup_type'],
-                "entry_price": setup_base['entry_price'],
-                "stop_loss": setup_base['stop_loss'],
-                "take_profit": setup_base['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
-            }
-            
-            # ==================================================================
-            # NAPRAWA (Problem 1): Używamy .name.date() zamiast .date()
-            # Indeks to teraz obiekt DatetimeIndex, więc [i] da nam Timestamp
-            # ==================================================================
             log_date = historical_data.index[i].date()
             logger.info(f"    [Backtest] ZNALEZIONO SETUP: {ticker} | {log_date} | {setup_full['setup_type']}")
-            # ==================================================================
             
             # Rozwiąż transakcję (sprawdź przyszłość)
-            trade_result = _resolve_trade(historical_data, i, setup_full, MAX_HOLD_DAYS, year)
+            trade_result = _resolve_trade(
+                historical_data, 
+                i, 
+                setup_full, 
+                setup_full['max_hold_days'], # Przekaż specyficzny czas trzymania
+                year
+            )
             
             if trade_result:
                 session.add(trade_result)
