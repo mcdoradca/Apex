@@ -21,7 +21,8 @@ from .analysis import (
     news_agent, # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
     phase0_macro_agent, # <-- POPRAWKA: Import Fazy 0
     virtual_agent, # <-- KROK 4 (Wirtualny Agent): Import nowego modułu
-    backtest_engine # <-- NOWY IMPORT (Krok 2 - Backtest)
+    backtest_engine, # <-- NOWY IMPORT (Krok 2 - Backtest)
+    ai_optimizer # <-- NOWY IMPORT (Krok 5 - Mega Agent)
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -77,6 +78,7 @@ def handle_ai_analysis_request(session):
 # === NOWA FUNKCJA (Krok 2 - Backtest) ===
 # ==================================================================
 def handle_backtest_request(session, api_client) -> str:
+# ... (bez zmian) ...
     """
     Sprawdza i wykonuje nowe zlecenie backtestu historycznego.
     Zwraca 'BUSY', jeśli backtest jest w toku, lub 'IDLE', jeśli nie.
@@ -111,6 +113,47 @@ def handle_backtest_request(session, api_client) -> str:
 
     elif period_to_test == 'PROCESSING':
         return 'BUSY' # Backtest wciąż działa
+        
+    return 'IDLE' # Brak zlecenia
+# ==================================================================
+
+# ==================================================================
+# === NOWA FUNKCJA (Krok 5 - Mega Agent) ===
+# ==================================================================
+def handle_ai_optimizer_request(session) -> str:
+    """
+    Sprawdza i wykonuje nowe zlecenie analizy Mega Agenta AI.
+    Zwraca 'BUSY', jeśli analiza jest w toku, lub 'IDLE', jeśli nie.
+    """
+    request_status = utils.get_system_control_value(session, 'ai_optimizer_request') 
+    
+    if request_status and request_status == 'REQUESTED':
+        logger.warning("🤖 Zlecenie Mega Agenta AI otrzymane. Rozpoczynanie...")
+        # Zablokuj workera na czas analizy
+        utils.update_system_control(session, 'worker_status', 'RUNNING')
+        utils.update_system_control(session, 'current_phase', 'AI_OPTIMIZING')
+        utils.update_system_control(session, 'ai_optimizer_request', 'PROCESSING')
+        utils.append_scan_log(session, "Rozpoczynanie analizy przez Mega Agenta AI...")
+
+        try:
+            # Uruchom silnik Mega Agenta (to jest operacja blokująca)
+            ai_optimizer.run_ai_optimization_analysis(session)
+            
+            logger.info("🤖 Analiza Mega Agenta AI zakończona pomyślnie.")
+            utils.append_scan_log(session, "🤖 Analiza Mega Agenta AI zakończona.")
+        except Exception as e:
+            logger.error(f"Krytyczny błąd podczas analizy Mega Agenta AI: {e}", exc_info=True)
+            utils.append_scan_log(session, f"BŁĄD KRYTYCZNY Mega Agenta: {e}")
+            utils.update_system_control(session, 'ai_optimizer_report', f"BŁĄD KRYTYCZNY: {e}")
+        finally:
+            # Zawsze resetuj flagi po zakończeniu (nawet po błędzie)
+            utils.update_system_control(session, 'worker_status', 'IDLE')
+            utils.update_system_control(session, 'current_phase', 'NONE')
+            utils.update_system_control(session, 'ai_optimizer_request', 'NONE') # Ustaw na NONE, a nie PROCESSING
+            return 'IDLE' # Właśnie skończyliśmy
+
+    elif request_status == 'PROCESSING':
+        return 'BUSY' # Analiza wciąż działa
         
     return 'IDLE' # Brak zlecenia
 # ==================================================================
@@ -327,24 +370,30 @@ def main_loop():
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'system_alert', 'NONE')
         utils.update_system_control(initial_session, 'backtest_request', 'NONE') # <-- NOWA WARTOŚĆ (Krok 2)
+        # ==================================================================
+        # === NOWA WARTOŚĆ (Krok 5 - Mega Agent) ===
+        # ==================================================================
+        utils.update_system_control(initial_session, 'ai_optimizer_request', 'NONE')
+        # ==================================================================
         utils.report_heartbeat(initial_session)
 
     while True:
         with get_db_session() as session:
             try:
                 # ==================================================================
-                # === NOWA LOGIKA PĘTLI GŁÓWNEJ (Krok 2 - Backtest) ===
+                # === NOWA LOGIKA PĘTLI GŁÓWNEJ (Krok 5 - Mega Agent) ===
                 # ==================================================================
                 
                 # Krok 1: Sprawdź komendy ręczne (Start/Stop)
                 command_triggered_run, new_state = utils.check_for_commands(session, current_state)
                 current_state = new_state
                 
-                # Krok 2: Sprawdź, czy zlecono backtest (ma najwyższy priorytet)
+                # Krok 2: Sprawdź zlecenia o wysokim priorytecie (blokujące)
                 backtest_status = handle_backtest_request(session, api_client)
+                optimizer_status = handle_ai_optimizer_request(session)
                 
-                if backtest_status == 'BUSY' or current_state == 'PAUSED':
-                    # Jeśli trwa backtest LUB system jest zapauzowany,
+                if backtest_status == 'BUSY' or optimizer_status == 'BUSY' or current_state == 'PAUSED':
+                    # Jeśli trwa backtest LUB analiza AI LUB system jest zapauzowany,
                     # nie rób nic innego, tylko raportuj heartbeat i śpij.
                     utils.report_heartbeat(session) 
                     time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
