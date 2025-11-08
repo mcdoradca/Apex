@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func, cast, String
 from decimal import Decimal
 from collections import defaultdict
+# ==================================================================
+# === POPRAWKA BŁĘDU (NameError) ===
+# ==================================================================
+from datetime import datetime, timezone
+# ==================================================================
 
 # Używamy modeli zdefiniowanych w głównym module
 from .. import models
@@ -207,6 +212,10 @@ def run_ai_optimization_analysis(session: Session):
         # Krok 4: Zapisz pełny raport (lokalne statystyki + analiza AI) w bazie
         
         # Tworzymy ostateczny raport do zapisania (dla UI)
+        # ==================================================================
+        # === POPRAWKA BŁĘDU (NameError) ===
+        # Ta linia teraz zadziała, ponieważ 'datetime' i 'timezone' są zaimportowane
+        # ==================================================================
         final_report_text = f"ANALIZA MEGA AGENTA (z dnia {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')})\n\n"
         final_report_text += "=== SUGESTIE OPTYMALIZACYJNE (od AI) ===\n\n"
         final_report_text += ai_analysis_report
