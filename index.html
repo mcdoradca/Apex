@@ -772,14 +772,34 @@
                     const stats = report.stats;
                     const trades = report.trades;
                     
+                    // ==========================================================
+                    // === NAPRAWA BŁĘDU 'toFixed' ===
+                    // Modyfikujemy funkcje formatujące, aby były "null-safe"
+                    // ==========================================================
                     const formatPercent = (val) => {
+                        // Sprawdź, czy 'val' jest poprawną liczbą
+                        if (typeof val !== 'number' || isNaN(val)) {
+                            return `<span class="text-gray-500">---</span>`;
+                        }
                         const color = val >= 0 ? 'text-green-500' : 'text-red-500';
                         return `<span class="${color}">${val.toFixed(2)}%</span>`;
                     };
                     const formatProfitFactor = (val) => {
+                         // Sprawdź, czy 'val' jest poprawną liczbą
+                         if (typeof val !== 'number' || isNaN(val)) {
+                            return `<span class="text-gray-500">---</span>`;
+                        }
                          const color = val >= 1 ? 'text-green-500' : 'text-red-500';
                          return `<span class="${color}">${val.toFixed(2)}</span>`;
                     };
+                    // Funkcja do bezpiecznego formatowania liczb (jak cena)
+                    const formatNumber = (val) => {
+                        if (typeof val !== 'number' || isNaN(val)) {
+                            return `<span class="text-gray-500">---</span>`;
+                        }
+                        return val.toFixed(2);
+                    };
+                    // ==========================================================
 
                     const createStatCard = (label, value, icon) => {
                         return `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
@@ -820,15 +840,20 @@
                     // --- Tabela historii transakcji ---
                     const tradeRows = trades.map(t => {
                         const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
+                        // ==========================================================
+                        // === NAPRAWA BŁĘDU 'toFixed' ===
+                        // Używamy nowych, bezpiecznych funkcji formatujących
+                        // ==========================================================
                         return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs">
                                     <td class="p-2 font-mono text-gray-400">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
                                     <td class="p-2 font-bold text-sky-400">${t.ticker}</td>
                                     <td class="p-2 text-gray-300">${t.setup_type}</td>
                                     <td class="p-2 text-right ${statusClass}">${t.status}</td>
-                                    <td class="p-2 text-right font-mono">${t.entry_price.toFixed(2)}</td>
-                                    <td class="p-2 text-right font-mono">${t.close_price ? t.close_price.toFixed(2) : '---'}</td>
+                                    <td class="p-2 text-right font-mono">${formatNumber(t.entry_price)}</td>
+                                    <td class="p-2 text-right font-mono">${formatNumber(t.close_price)}</td>
                                     <td class="p-2 text-right font-mono">${formatPercent(t.final_profit_loss_percent)}</td>
                                 </tr>`;
+                        // ==========================================================
                     }).join('');
 
                     const tradeTable = trades.length > 0 ?
