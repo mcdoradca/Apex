@@ -55,10 +55,8 @@ def _parse_bulk_quotes_csv(csv_text: str) -> dict:
 
 
 # --- SEKCJA SKANERA NOCNEGO (EOD) ---
-# (Ta część jest już zoptymalizowana i pozostaje bez zmian)
 
 def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, breakout_atr_multiplier=1.0) -> dict | None:
-# ... (bez zmian) ...
     try:
         if len(daily_df) < min_consolidation_days + 2: return None
         high_low = daily_df['high'] - daily_df['low']
@@ -76,15 +74,19 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
         latest_candle = daily_df.iloc[-1]
         is_breakout = latest_candle['close'] > consolidation_high
         is_strong_breakout = latest_candle['close'] > (consolidation_high + breakout_atr_multiplier * current_atr)
+        
         if is_consolidating and is_breakout and is_strong_breakout:
             logger.info(f"Breakout setup found for {daily_df.index[-1]}")
+            
             # ==================================================================
-            # KROK 1 POPRAWKI (STRATEGIA): Zmiana mnożnika ATR dla SL
+            # ZMIANA (Sugestia AI): Używamy mnożnika z nowej konfiguracji
             # ==================================================================
+            stop_loss = consolidation_high - (Phase3Config.Breakout.ATR_MULTIPLIER_FOR_SL * current_atr)
+            
             return {
                 "setup_type": "BREAKOUT",
                 "entry_price": latest_candle['high'] + 0.01,
-                "stop_loss": consolidation_high - (0.7 * current_atr), # ZMIANA z 0.5 na 0.7
+                "stop_loss": stop_loss,
                 "consolidation_high": consolidation_high,
                 "atr": current_atr
             }
@@ -93,9 +95,14 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
         logger.error(f"Error in _find_breakout_setup: {e}")
         return None
 
-def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
-# ... (bez zmian) ...
+def _find_ema_bounce_setup(daily_df: pd.DataFrame) -> dict | None:
     try:
+        # ==================================================================
+        # ZMIANA (Sugestia AI): Używamy okresu EMA z nowej konfiguracji
+        # ==================================================================
+        ema_period = Phase3Config.EmaBounce.EMA_PERIOD
+        # ==================================================================
+
         if len(daily_df) < ema_period + 3: return None
         daily_df['ema'] = calculate_ema(daily_df['close'], ema_period) # Używamy funkcji z utils
         is_ema_rising = daily_df['ema'].iloc[-1] > daily_df['ema'].iloc[-2] > daily_df['ema'].iloc[-3]
@@ -106,20 +113,38 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
                       (latest_candle['open'] <= latest_ema * 1.01)
         closed_above_ema = latest_candle['close'] > latest_ema
         is_bullish_candle = latest_candle['close'] > latest_candle['open']
+        
         if is_ema_rising and touched_ema and closed_above_ema and is_bullish_candle:
-             logger.info(f"EMA Bounce setup found for {daily_df.index[-1]}")
+             
+             # --- Obliczanie ATR ---
              high_low = daily_df['high'] - daily_df['low']
              high_close = (daily_df['high'] - daily_df['close'].shift()).abs()
              low_close = (daily_df['low'] - daily_df['close'].shift()).abs()
              tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
              atr = calculate_ema(tr, 14).iloc[-1]
+             if atr == 0 or latest_candle['close'] == 0:
+                 return None # Błąd danych
+             
              # ==================================================================
-             # KROK 1 POPRAWKI (STRATEGIA): Zmiana mnożnika ATR dla SL
+             # ZMIANA (Sugestia AI 2): Filtr minimalnej zmienności ATR
              # ==================================================================
+             atr_percent = atr / latest_candle['close']
+             if atr_percent < Phase3Config.EmaBounce.MIN_ATR_PERCENT_FILTER:
+                 logger.info(f"EMA Bounce dla {daily_df.index[-1]} pominięty. ATR% ({atr_percent:.2%}) jest poniżej progu {Phase3Config.EmaBounce.MIN_ATR_PERCENT_FILTER:.2%}")
+                 return None
+             # ==================================================================
+
+             logger.info(f"EMA Bounce setup found for {daily_df.index[-1]}")
+             
+             # ==================================================================
+             # ZMIANA (Sugestia AI): Używamy mnożnika z nowej konfiguracji
+             # ==================================================================
+             stop_loss = latest_candle['low'] - (Phase3Config.EmaBounce.ATR_MULTIPLIER_FOR_SL * atr)
+             
              return {
                  "setup_type": "EMA_BOUNCE",
                  "entry_price": latest_candle['high'] + 0.01,
-                 "stop_loss": latest_candle['low'] - (0.7 * atr), # ZMIANA z 0.5 na 0.7
+                 "stop_loss": stop_loss,
                  "ema_value": latest_ema,
                  "atr": atr
              }
@@ -129,56 +154,79 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame, ema_period=9) -> dict | None:
         return None
 
 def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
-# ... (bez zmian) ...
     if daily_df.empty or len(daily_df) < 21:
          return {"signal": False, "reason": "Niewystarczająca historia danych dziennych (otrzymana z Fazy 2)."}
     current_price = daily_df['close'].iloc[-1]
+    
     breakout_setup = _find_breakout_setup(daily_df)
     if breakout_setup:
         risk = breakout_setup['entry_price'] - breakout_setup['stop_loss']
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (Breakout)."}
-        take_profit = breakout_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
+        
+        # ==================================================================
+        # ZMIANA (Sugestia AI 1): Używamy R/R specyficznego dla Breakout
+        # ==================================================================
+        rr_ratio = Phase3Config.Breakout.TARGET_RR_RATIO
+        take_profit = breakout_setup['entry_price'] + (rr_ratio * risk)
+        # ==================================================================
+        
         return {
-            "signal": True, "status": "PENDING", # <-- POPRAWKA (Problem 3): Zmiana z "ACTIVE" na "PENDING"
+            "signal": True, "status": "PENDING",
             "ticker": ticker,
             "entry_price": float(breakout_setup['entry_price']),
             "stop_loss": float(breakout_setup['stop_loss']),
             "take_profit": float(take_profit),
-            "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
-            "notes": f"Setup EOD (OCZEKUJĄCY): Breakout z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}." # <-- Notatka zaktualizowana
+            "risk_reward_ratio": rr_ratio, # Zapisujemy poprawny R/R
+            "notes": f"Setup EOD (OCZEKUJĄCY): Breakout z konsolidacji. Opór: {breakout_setup['consolidation_high']:.2f}."
         }
+        
     ema_bounce_setup = _find_ema_bounce_setup(daily_df)
     if ema_bounce_setup:
         risk = ema_bounce_setup['entry_price'] - ema_bounce_setup['stop_loss']
         if risk <= 0: return {"signal": False, "reason": "Błąd kalkulacji ryzyka (EMA Bounce)."}
-        take_profit = ema_bounce_setup['entry_price'] + (Phase3Config.TARGET_RR_RATIO * risk)
+        
+        # ==================================================================
+        # ZMIANA (Sugestia AI 1): Używamy R/R specyficznego dla EMA Bounce
+        # ==================================================================
+        rr_ratio = Phase3Config.EmaBounce.TARGET_RR_RATIO
+        take_profit = ema_bounce_setup['entry_price'] + (rr_ratio * risk)
+        # ==================================================================
+        
         return {
-            "signal": True, "status": "PENDING", # <-- POPRAWKA (Problem 3): Zmiana z "ACTIVE" na "PENDING"
+            "signal": True, "status": "PENDING",
             "ticker": ticker,
             "entry_price": float(ema_bounce_setup['entry_price']),
             "stop_loss": float(ema_bounce_setup['stop_loss']),
             "take_profit": float(take_profit),
-            "risk_reward_ratio": Phase3Config.TARGET_RR_RATIO,
-            "notes": f"Setup EOD (OCZEKUJĄCY): Odbicie od rosnącej EMA{Phase3Config.EMA_PERIOD}. EMA={ema_bounce_setup['ema_value']:.2f}." # <-- Notatka zaktualizowana
+            "risk_reward_ratio": rr_ratio,
+            "notes": f"Setup EOD (OCZEKUJĄCY): Odbicie od rosnącej EMA{Phase3Config.EmaBounce.EMA_PERIOD}. EMA={ema_bounce_setup['ema_value']:.2f}."
         }
+        
     impulse_result = _find_impulse_and_fib_zone(daily_df)
     if impulse_result:
         is_in_zone = impulse_result["entry_zone_bottom"] <= current_price <= impulse_result["entry_zone_top"]
         if is_in_zone:
             take_profit = float(impulse_result['impulse_high'])
-            # Ustaw stop loss na dnie impulsu
             stop_loss = float(impulse_result['impulse_low'])
+            
+            # Oblicz R/R dla Fiba (używając górnej granicy strefy jako wejścia)
+            risk = impulse_result['entry_zone_top'] - stop_loss
+            reward = take_profit - impulse_result['entry_zone_top']
+            rr_ratio = (reward / risk) if risk > 0 else 0
+            
             return {
                 "signal": True, "status": "PENDING",
                 "ticker": ticker,
                 "entry_zone_bottom": float(impulse_result['entry_zone_bottom']),
                 "entry_zone_top": float(impulse_result['entry_zone_top']),
-                "stop_loss": stop_loss, # <-- Dodano SL dla setupu Fib
+                "stop_loss": stop_loss, 
                 "take_profit": take_profit,
+                "risk_reward_ratio": rr_ratio, # Zapisujemy obliczony R/R
                 "notes": f"Setup EOD (OCZEKUJĄCY): Cena ({current_price:.2f}) w strefie Fib. Oczekuje na sygnał intraday H1."
             }
         else:
              return {"signal": False, "reason": f"Fib: Cena ({current_price:.2f}) poza strefą."}
+             
     return {"signal": False, "reason": "Brak setupu EOD (Fib/Breakout/EMA Bounce)."}
 
 def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.DataFrame]], get_current_state, api_client: AlphaVantageClient):
@@ -257,6 +305,7 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
 # NOWA FUNKCJA (KROK 1): Helper do sprawdzania potwierdzenia H1
 # ==================================================================
 def _check_h1_confirmation(ticker: str, api_client: AlphaVantageClient) -> bool:
+# ... (bez zmian) ...
     """
     Pobiera dane H1 (60min) i sprawdza, czy ostatnia zamknięta świeca
     zamknęła się powyżej rosnącej 9-okresowej EMA H1.
@@ -310,6 +359,7 @@ def _check_h1_confirmation(ticker: str, api_client: AlphaVantageClient) -> bool:
 # NOWA FUNKCJA (KROK 1): Monitor potwierdzeń Fib H1 (Wolny)
 # ==================================================================
 def monitor_fib_confirmations(session: Session, api_client: AlphaVantageClient):
+# ... (bez zmian) ...
     """
     Wolniejszy monitor (uruchamiany np. co 15 minut), który sprawdza
     potwierdzenia H1 dla sygnałów Fib (PENDING), które są w strefie wejścia.
