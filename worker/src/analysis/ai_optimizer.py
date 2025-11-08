@@ -53,7 +53,7 @@ def _calculate_statistics(trades: list[models.VirtualTrade]) -> (dict, str):
     if not stats_by_setup:
         return {}, "Brak zakończonych transakcji do analizy."
 
-    text_report_lines = ["PODSUMOWANIE WYNIKÓW HISTORYCZNYCH:\n"]
+    text_report_lines = ["PODSUMOWANIE WYNIKÓW HISTORYCZNYCH I BIEŻĄCYCH:\n"]
     full_stats = {}
 
     for setup_name, results in stats_by_setup.items():
