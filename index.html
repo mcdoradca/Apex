@@ -48,6 +48,16 @@
         .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
         .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
         .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
+        /* Usuwanie strzałek w input[type=number] */
+        .modal-input[type=number]::-webkit-inner-spin-button,
+        .modal-input[type=number]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        .modal-input[type=number] {
+            -moz-appearance: textfield;
+        }
+        
         .modal-button { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 600; transition: background-color 0.2s; }
         .modal-button-primary { background-color: #0ea5e9; color: white; }
         .modal-button-primary:hover { background-color: #0284c7; }
@@ -258,7 +268,7 @@
                 portfolioLink: document.getElementById('portfolio-link'),
                 transactionsLink: document.getElementById('transactions-link'),
                 // ==========================================================
-                // KROK 5 (Frontend): Nowy selektor
+                // KROK 5 (Frontend): Nowy selektor linku
                 // ==========================================================
                 agentReportLink: document.getElementById('agent-report-link'),
                 // ==========================================================
@@ -295,7 +305,11 @@
             console.log("UI Selectors defined.");
 
             // --- KONFIGURACJA API ---
-            const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
+            // ==========================================================
+            // ZMIANA (Dynamiczny Rok): Używamy nowej nazwy endpointu
+            // ==========================================================
+            const API_BASE_URL = "/"; // Używamy ścieżki względnej
+            // ==========================================================
             const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms
             const QUOTE_POLL_INTERVAL = 15000;       // ms
             const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund na odświeżenie portfela
@@ -309,22 +323,27 @@
             };
 
             const apiRequest = async (endpoint, options = {}) => {
-                const url = `${API_BASE_URL}${endpoint}`;
+                const url = `${API_BASE_URL}${endpoint}`; // Usunięto podwójny slash
                 try {
                     const response = await fetch(url, options);
                     if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
                     if (!response.ok) {
-                        const errorText = await response.text();
-                        logger.error(`API Error ${response.status} for ${url}: ${errorText}`);
-                        if (response.status === 404) throw new Error(`404 - Not Found`);
-                        // ==========================================================
-                        // KROK 3 (Frontend): Lepsza obsługa błędu 409
-                        // ==========================================================
-                        if (response.status === 409) {
-                            const errorJson = JSON.parse(errorText);
-                            throw new Error(errorJson.detail || `Konflikt: Zasób jest zajęty.`);
+                        // Próba sparsowania błędu JSON od FastAPI
+                        let errorText = response.statusText;
+                        try {
+                            const errorJson = await response.json();
+                            errorText = errorJson.detail || errorText;
+                        } catch (e) {
+                            // Jeśli to nie JSON, użyj tekstu
+                            errorText = await response.text() || errorText;
                         }
-                        // ==========================================================
+                        
+                        logger.error(`API Error ${response.status} for ${url}: ${errorText}`);
+                        if (response.status === 404) throw new Error(`404 - Nie znaleziono zasobu`);
+                        if (response.status === 409) throw new Error(`409 - Konflikt: Worker jest zajęty.`);
+                        if (response.status === 400) throw new Error(`400 - Błędne żądanie: ${errorText}`);
+                        if (response.status === 422) throw new Error(`422 - Błąd walidacji: ${errorText}`);
+                        
                         throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
                     }
                     if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
@@ -337,37 +356,37 @@
             };
 
             const api = {
-                getWorkerStatus: () => apiRequest('/api/v1/worker/status'),
-                sendWorkerControl: (action) => apiRequest(`/api/v1/worker/control/${action}`, { method: 'POST' }),
-                getPhase1Candidates: () => apiRequest('/api/v1/candidates/phase1'),
-                getPhase2Results: () => apiRequest('/api/v1/results/phase2'),
-                getPhase3Signals: () => apiRequest('/api/v1/signals/phase3'),
+                getWorkerStatus: () => apiRequest('api/v1/worker/status'),
+                sendWorkerControl: (action) => apiRequest(`api/v1/worker/control/${action}`, { method: 'POST' }),
+                getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
+                getPhase2Results: () => apiRequest('api/v1/results/phase2'),
+                getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
                 // ==========================================================
                 // KROK 5 (Licznik): Dodanie nowego endpointu API
                 // ==========================================================
-                getDiscardedCount: () => apiRequest('/api/v1/signals/discarded-count-24h'),
+                getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
                 // ==========================================================
-                requestAIAnalysis: (ticker) => apiRequest('/api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-                getAIAnalysisResult: (ticker) => apiRequest(`/api/v1/ai-analysis/result/${ticker}`),
-                getLiveQuote: (ticker) => apiRequest(`/api/v1/quote/${ticker}`),
-                addToWatchlist: (ticker) => apiRequest(`/api/v1/watchlist/${ticker}`, { method: 'POST' }),
-                getSystemAlert: () => apiRequest('/api/v1/system/alert'),
-                getPortfolio: () => apiRequest('/api/v1/portfolio'),
-                buyStock: (data) => apiRequest('/api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
-                sellStock: (data) => apiRequest('/api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
-                getTransactionHistory: () => apiRequest('/api/v1/transactions'),
+                requestAIAnalysis: (ticker) => apiRequest('api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
+                getAIAnalysisResult: (ticker) => apiRequest(`api/v1/ai-analysis/result/${ticker}`),
+                getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
+                addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
+                getSystemAlert: () => apiRequest('api/v1/system/alert'),
+                getPortfolio: () => apiRequest('api/v1/portfolio'),
+                buyStock: (data) => apiRequest('api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+                sellStock: (data) => apiRequest('api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+                getTransactionHistory: () => apiRequest('api/v1/transactions'),
                 // ==========================================================
-                // KROK 5 (Frontend): Nowy endpoint API
+                // KROK 5 (Frontend): Nowy endpoint API dla Raportu
                 // ==========================================================
-                getVirtualAgentReport: () => apiRequest('/api/v1/virtual-agent/report'),
+                getVirtualAgentReport: () => apiRequest('api/v1/virtual-agent/report'),
                 // ==========================================================
-                // KROK 3 (Frontend): Nowy endpoint API
+                // ZMIANA (Dynamiczny Rok): Nowa definicja endpointu
                 // ==========================================================
-                requestBacktest: (periodName) => apiRequest('/api/v1/backtest/request', { 
+                requestBacktest: (year) => apiRequest('api/v1/backtest/request', { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' }, 
-                    body: JSON.stringify({ period_name: periodName }) 
-                })
+                    body: JSON.stringify({ year: year }) // Wysyłamy { "year": "2010" }
+                }),
                 // ==========================================================
             };
             console.log("Full API object defined.");
@@ -595,7 +614,7 @@
                     const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
                     let rec_color = "bg-gray-500";
                     if (recommendation === "BARDZO SILNY KANDDAT DO KUPNA") rec_color = "bg-green-500";
-                    else if (recommendation === "SILNY KANDDAT DO OBSERWACJI") rec_color = "bg-sky-500";
+                    else if (recommendation === "SILNY KANDYDAT DO OBSERWACJI") rec_color = "bg-sky-500";
                     else if (recommendation === "INTERESUJĄCY KANDYDAT") rec_color = "bg-yellow-500";
                     const createAgentCard = (agentName, icon, agentData) => {
                          if (!agentData) return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg text-gray-500">Brak danych dla Agenta: ${agentName}</div>`;
@@ -734,187 +753,126 @@
                 },
                 
                 // ==========================================================
-                // KROK 5 (Frontend): Nowy renderer dla raportu agenta
+                // KROK 5 (Frontend): Nowy renderer dla raportu
                 // ==========================================================
                 agentReport: (report) => {
-                    const { stats, trades } = report;
+                    const stats = report.stats;
+                    const trades = report.trades;
                     
-                    const getProfitClass = (val) => val > 0 ? 'text-green-500' : (val < 0 ? 'text-red-500' : 'text-gray-400');
-                    const getProfitIcon = (val) => val > 0 ? 'trending-up' : (val < 0 ? 'trending-down' : 'minus');
-                    const getStatusClass = (status) => {
-                        if (status === 'CLOSED_TP') return 'bg-green-600/20 text-green-300';
-                        if (status === 'CLOSED_SL') return 'bg-red-600/20 text-red-300';
-                        if (status === 'CLOSED_EXPIRED') return 'bg-yellow-600/20 text-yellow-300';
-                        return 'bg-gray-600/20 text-gray-300';
+                    const formatPercent = (val) => {
+                        const color = val >= 0 ? 'text-green-500' : 'text-red-500';
+                        return `<span class="${color}">${val.toFixed(2)}%</span>`;
                     };
-                    const getStatusText = (status) => {
-                        const map = {
-                            'CLOSED_TP': 'Take Profit',
-                            'CLOSED_SL': 'Stop Loss',
-                            'CLOSED_EXPIRED': 'Wygasła (7 dni)'
-                        };
-                        // Dodajemy obsługę wyników backtestu
-                        if (status.startsWith('BACKTEST')) return 'Backtest';
-                        return map[status] || status;
+                    const formatProfitFactor = (val) => {
+                         const color = val >= 1 ? 'text-green-500' : 'text-red-500';
+                         return `<span class="${color}">${val.toFixed(2)}</span>`;
                     };
-                    const getSetupName = (setupType) => {
-                        const map = {
-                            'FIB_H1': 'Fibonacci H1',
-                            'EMA_BOUNCE': 'EMA Bounce',
-                            'BREAKOUT': 'Breakout',
-                            'OTHER': 'Inny',
-                            'UNKNOWN': 'Nieznany'
-                        };
-                        // Dodajemy obsługę wyników backtestu
-                        if (setupType.startsWith('BACKTEST_')) {
-                            const parts = setupType.split('_');
-                            const period = parts[1]; // np. TRUMP_2019
-                            const strategy = parts.slice(2).join('_'); // np. EMA_BOUNCE
-                            return `${getSetupName(strategy)} (${period})`;
-                        }
-                        return map[setupType] || setupType;
-                    };
-                    
-                    // 1. Renderowanie Kluczowych Wskaźników
-                    const statsCards = `
-                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
-                                <h4 class="text-sm font-semibold text-gray-400">Całkowity Z/S</h4>
-                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.total_p_l_percent)}">${stats.total_p_l_percent.toFixed(2)}%</p>
-                            </div>
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
-                                <h4 class="text-sm font-semibold text-gray-400">Transakcje</h4>
-                                <p class="text-3xl font-bold mt-2 text-white">${stats.total_trades}</p>
-                            </div>
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
-                                <h4 class="text-sm font-semibold text-gray-400">Skuteczność</h4>
-                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.win_rate_percent - 50)}">${stats.win_rate_percent.toFixed(1)}%</p>
-                            </div>
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
-                                <h4 class="text-sm font-semibold text-gray-400">Profit Factor</h4>
-                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.profit_factor - 1)}">${stats.profit_factor.toFixed(2)}</p>
-                            </div>
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700 text-center">
-                                <h4 class="text-sm font-semibold text-gray-400">Średnia Transakcja</h4>
-                                <p class="text-3xl font-bold mt-2 ${getProfitClass(stats.average_p_l_percent)}">${stats.average_p_l_percent.toFixed(2)}%</p>
-                            </div>
-                        </div>
-                    `;
-                    
-                    // 2. Renderowanie Podsumowania wg Strategii
-                    const setupRows = Object.entries(stats.by_setup).map(([setupType, setupData]) => {
-                        const pClass = getProfitClass(setupData.total_p_l_percent);
-                        const wrClass = getProfitClass(setupData.win_rate_percent - 50);
-                        return `
-                            <tr class="border-b border-gray-800 hover:bg-[#1f2937]">
-                                <td class="p-3 font-bold text-sky-400">${getSetupName(setupType)}</td>
-                                <td class="p-3 text-right">${setupData.total_trades}</td>
-                                <td class="p-3 text-right font-semibold ${wrClass}">${setupData.win_rate_percent.toFixed(1)}%</td>
-                                <td class="p-3 text-right font-semibold ${pClass}">${setupData.total_p_l_percent.toFixed(2)}%</td>
-                            </tr>
-                        `;
-                    }).join('');
 
-                    const setupTable = `
-                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Podsumowanie wg Strategii</h3>
-                        <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 mb-8">
+                    const createStatCard = (label, value, icon) => {
+                        return `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                    <h3 class="font-semibold text-gray-400 flex items-center text-sm">
+                                        <i data-lucide="${icon}" class="w-4 h-4 mr-2 text-sky-400"></i>${label}
+                                    </h3>
+                                    <p class="text-3xl font-extrabold mt-2 text-white">${value}</p>
+                                </div>`;
+                    };
+                    
+                    // --- Tabela statystyk per strategia ---
+                    const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => {
+                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
+                                    <td class="p-3 font-semibold text-sky-400">${setupName}</td>
+                                    <td class="p-3 text-right">${setupStats.total_trades}</td>
+                                    <td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td>
+                                    <td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td>
+                                    <td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td>
+                                </tr>`;
+                    }).join('');
+                    
+                    const setupTable = setupRows.length > 0 ? 
+                        `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
                             <table class="w-full text-sm text-left text-gray-300">
                                 <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
                                     <tr>
-                                        <th scope="col" class="p-3">Typ Strategii</th>
-                                        <th scope="col" class-"p-3 text-right">Liczba Transakcji</th>
-                                        <th scope="col" class="p-3 text-right">Skuteczność</th>
-                                        <th scope="col" class="p-3 text-right">Całkowity Z/S (%)</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${setupRows.length > 0 ? setupRows : `<tr><td colspan="4" class="p-4 text-center text-gray-500">Brak zamkniętych transakcji do analizy.</td></tr>`}
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
-                    
-                    // ==========================================================
-                    // KROK 3 (Frontend): Nowa sekcja - Uruchomienie Backtestu
-                    // ==========================================================
-                    const backtestRunner = `
-                        <div class="bg-[#161B22] border border-gray-700 rounded-lg p-6 mb-8">
-                            <h3 class="text-xl font-bold text-gray-300 mb-4">Uruchom Backtest Historyczny</h3>
-                            <p class="text-sm text-gray-400 mb-4">
-                                Uruchom symulację strategii (EMA Bounce, Breakout) na danych historycznych.
-                                Silnik przetestuje 14 kluczowych tickerów Nasdaq w wybranym okresie.
-                                Worker musi być w stanie 'IDLE'. Operacja może potrwać kilka minut.
-                            </p>
-                            <div class="flex flex-wrap gap-4">
-                                <button data-period="TRUMP_2019" class="run-backtest-btn flex items-center bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50">
-                                    <i data-lucide="play-circle" class="mr-2 h-5 w-5"></i>
-                                    Testuj 2019 (Trump)
-                                </button>
-                                <button data-period="BIDEN_2022" class="run-backtest-btn flex items-center bg-teal-600/20 hover:bg-teal-600/40 text-teal-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors disabled:opacity-50">
-                                    <i data-lucide="play-circle" class="mr-2 h-5 w-5"></i>
-                                    Testuj 2022 (Biden)
-                                </button>
-                            </div>
-                        </div>
-                    `;
-                    // ==========================================================
-                    
-                    
-                    // 3. Renderowanie Historii Transakcji
-                    const tradeRows = trades.map(t => {
-                        const pClass = getProfitClass(t.final_profit_loss_percent);
-                        const pIcon = getProfitIcon(t.final_profit_loss_percent);
-                        const sClass = getStatusClass(t.status);
-                        
-                        return `
-                            <tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs">
-                                <td class="p-3 font-bold text-sky-400">${t.ticker}</td>
-                                <td class="p-3 text-gray-400">${getSetupName(t.setup_type)}</td>
-                                <td class="p-3 text-gray-400">${new Date(t.open_date).toLocaleString('pl-PL')}</td>
-                                <td class="p-3 text-gray-400">${t.close_date ? new Date(t.close_date).toLocaleString('pl-PL') : '---'}</td>
-                                <td class="p-3 text-right">${t.entry_price.toFixed(2)}</td>
-                                <td class="p-3 text-right">${t.close_price ? t.close_price.toFixed(2) : '---'}</td>
-                                <td class="p-3 text-right font-bold ${pClass} flex justify-end items-center gap-1">
-                                    <i data-lucide="${pIcon}" class="w-4 h-4"></i>
-                                    ${t.final_profit_loss_percent ? t.final_profit_loss_percent.toFixed(2) + '%' : '---'}
-                                </td>
-                                <td class="p-3 text-center">
-                                    <span class="px-2 py-1 font-semibold rounded-full text-xs ${sClass}">
-                                        ${getStatusText(t.status)}
-                                    </span>
-                                </td>
-                            </tr>
-                        `;
-                    }).join('');
-
-                    const tradeTable = `
-                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Historia Zamkniętych Transakcji</h3>
-                        <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
-                            <table class="w-full text-sm text-left text-gray-300">
-                                <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
-                                    <tr>
-                                        <th scope="col" class="p-3">Ticker</th>
                                         <th scope="col" class="p-3">Strategia</th>
-                                        <th scope="col" class="p-3">Data Otwarcia</th>
-                                        <th scope="col" class="p-3">Data Zamknięcia</th>
-                                        <th scope="col" class="p-3 text-right">Cena Wejścia</th>
-                                        <th scope="col" class="p-3 text-right">Cena Zamknięcia</th>
-                                        <th scope="col" class="p-3 text-right">Z/S (%)</th>
-                                        <th scope="col" class="p-3 text-center">Status</th>
+                                        <th scope="col" class="p-3 text-right">Ilość Transakcji</th>
+                                        <th scope="col" class="p-3 text-right">Win Rate (%)</th>
+                                        <th scope="col" class="p-3 text-right">Całkowity P/L (%)</th>
+                                        <th scope="col" class="p-3 text-right">Profit Factor</th>
                                     </tr>
                                 </thead>
-                                <tbody>
-                                    ${tradeRows.length > 0 ? tradeRows : `<tr><td colspan="8" class="p-4 text-center text-gray-500">Brak zamkniętych transakcji.</td></tr>`}
-                                </tbody>
+                                <tbody>${setupRows}</tbody>
                             </table>
+                         </div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
+
+                    // --- Tabela historii transakcji ---
+                    const tradeRows = trades.map(t => {
+                        const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
+                        return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs">
+                                    <td class="p-2 font-mono text-gray-400">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
+                                    <td class="p-2 font-bold text-sky-400">${t.ticker}</td>
+                                    <td class="p-2 text-gray-300">${t.setup_type}</td>
+                                    <td class="p-2 text-right ${statusClass}">${t.status}</td>
+                                    <td class="p-2 text-right font-mono">${t.entry_price.toFixed(2)}</td>
+                                    <td class="p-2 text-right font-mono">${t.close_price ? t.close_price.toFixed(2) : '---'}</td>
+                                    <td class="p-2 text-right font-mono">${formatPercent(t.final_profit_loss_percent)}</td>
+                                </tr>`;
+                    }).join('');
+
+                    const tradeTable = trades.length > 0 ?
+                         `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-96 overflow-y-auto">
+                            <table class="w-full text-sm text-left text-gray-300">
+                                <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0">
+                                    <tr>
+                                        <th scope="col" class="p-2">Data Otwarcia</th>
+                                        <th scope="col" class="p-2">Ticker</th>
+                                        <th scope="col" class="p-2">Strategia</th>
+                                        <th scope="col" class="p-2 text-right">Status Zamknięcia</th>
+                                        <th scope="col" class="p-2 text-right">Cena Wejścia</th>
+                                        <th scope="col" class="p-2 text-right">Cena Zamknięcia</th>
+                                        <th scope="col" class="p-2 text-right">P/L (%)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${tradeRows}</tbody>
+                            </table>
+                         </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
+                    
+                    // ==========================================================
+                    // ZMIANA (Dynamiczny Rok): Nowy interfejs Backtestingu
+                    // ==========================================================
+                    const backtestSection = `
+                        <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
+                            <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
+                            <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku. Testy zostaną uruchomione na liście Twoich aktualnych sygnałów z Fazy 3.</p>
+                            <div class="flex items-start gap-3">
+                                <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}">
+                                <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                                    <i data-lucide="play" class="w-4 h-4 mr-2"></i>
+                                    Uruchom Test Roczny
+                                </button>
+                            </div>
+                            <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
                         </div>
                     `;
+                    // ==========================================================
 
                     return `<div id="agent-report-view" class="max-w-6xl mx-auto">
                                 <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
-                                ${statsCards}
+                                
+                                <h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie Strategie)</h3>
+                                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                                    ${createStatCard('Całkowity P/L (%)', formatPercent(stats.total_p_l_percent), 'percent')}
+                                    ${createStatCard('Win Rate (%)', formatPercent(stats.win_rate_percent), 'target')}
+                                    ${createStatCard('Profit Factor', formatProfitFactor(stats.profit_factor), 'ratio')}
+                                    ${createStatCard('Ilość Transakcji', stats.total_trades, 'bar-chart-2')}
+                                </div>
+                                
+                                <h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>
                                 ${setupTable}
-                                ${backtestRunner} <!-- Dodano nowy blok HTML -->
+                                
+                                <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Uruchom Backtesting</h3>
+                                ${backtestSection}
+
+                                <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji</h3>
                                 ${tradeTable}
                             </div>`;
                 }
@@ -925,7 +883,7 @@
             // --- GŁÓWNE FUNKCJE KONTROLI APLIKACJI ---
             
             // ==========================================================
-            // KROK 5 (Licznik): Nowa funkcja do aktualizacji tylko liczników
+            // KROK 5 (Licznik): Nowa funkcja do aktualizacji only liczników
             // ==========================================================
             function updateDashboardCounters() {
                 const activeEl = document.getElementById('dashboard-active-signals');
@@ -934,8 +892,8 @@
                 if (activeEl) {
                     activeEl.textContent = state.phase3.length;
                 }
-                if (discardedEl) {
-                    discardedEl.textContent = state.discardedSignalCount;
+                if (discardEl) {
+                    discardEl.textContent = state.discardedSignalCount;
                 }
             }
             // ==========================================================
@@ -986,11 +944,6 @@
                     else if (message.includes('TAKE PROFIT')) alertKey = `TP-${ticker || 'UNKNOWN'}`;
                     else if (message.includes('STOP LOSS')) alertKey = `SL-${ticker || 'UNKNOWN'}`;
                     // ==========================================================
-                    // ==========================================================
-                    // KROK 3 (Frontend): Dodanie obsługi alertów Backtestu
-                    // ==========================================================
-                    else if (message.includes('BACKTEST')) alertKey = `BACKTEST-JOB`;
-                    // ==========================================================
 
                 } catch(e) { 
                     logger.warn("Nie udało się wygenerować klucza alertu", e);
@@ -1022,17 +975,6 @@
                 } else if (message.includes('STOP LOSS')) {
                     alertClass = 'bg-red-600';
                     alertIcon = 'trending-down';
-                }
-                // ==========================================================
-                // ==========================================================
-                // KROK 3 (Frontend): Dodanie stylów dla alertów Backtestu
-                // ==========================================================
-                 else if (message.includes('BACKTEST') && message.includes('Zlecenie')) {
-                    alertClass = 'bg-indigo-600';
-                    alertIcon = 'history';
-                } else if (message.includes('BACKTEST') && message.includes('BŁĄD')) {
-                    alertClass = 'bg-red-600';
-                    alertIcon = 'alert-triangle';
                 }
                 // ==========================================================
 
@@ -1095,30 +1037,16 @@
                     if (statusData.status === 'RUNNING') statusClass = 'bg-green-600/20 text-green-400';
                     else if (statusData.status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
                     else if (statusData.status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
-                    
-                    // ==========================================================
-                    // KROK 3 (Frontend): Specjalny status dla Backtestingu
-                    // ==========================================================
-                    if (statusData.phase === 'BACKTESTING') {
-                        statusClass = 'bg-indigo-600/20 text-indigo-400 animate-pulse';
-                    }
-                    // ==========================================================
-                    
                     ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass}`;
-                    ui.workerStatusText.textContent = statusData.phase === 'BACKTESTING' ? 'BACKTESTING' : statusData.status;
-                    
+                    ui.workerStatusText.textContent = statusData.status;
                     if (statusData.last_heartbeat_utc) {
                         const diffSeconds = (new Date() - new Date(statusData.last_heartbeat_utc)) / 1000;
                         ui.heartbeatStatus.className = `text-xs ${diffSeconds > 30 ? 'text-red-500' : 'text-green-500'}`;
                         ui.heartbeatStatus.textContent = diffSeconds > 30 ? 'PRZERWANY' : new Date(statusData.last_heartbeat_utc).toLocaleTimeString();
                     }
-                    
-                    // Blokuj przyciski, jeśli worker jest zajęty CZYMKOLWIEK (Running lub Backtesting)
-                    const isBusy = statusData.status === 'RUNNING' || statusData.phase === 'BACKTESTING';
-                    ui.startBtn.disabled = isBusy || statusData.status === 'PAUSED';
-                    ui.pauseBtn.disabled = !isBusy || statusData.phase === 'BACKTESTING'; // Nie można pauzować backtestu
+                    ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
+                    ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
                     ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
-                    
                     updateDashboardUI(statusData);
                 } catch (e) { /* Błędy logowane w apiRequest */ }
                 setTimeout(pollWorkerStatus, 5000);
@@ -1219,20 +1147,20 @@
             }
             
             // ==========================================================
-            // KROK 5 (Frontend): Nowa funkcja widoku
+            // KROK 5 (Frontend): Nowa funkcja do pokazywania raportu
             // ==========================================================
             async function showAgentReport() {
-                 stopAllPolling();
-                 state.currentViewTicker = null;
-                 setActiveSidebar(ui.agentReportLink);
-                 ui.mainContent.innerHTML = renderers.loading("Ładowanie raportu wydajności agenta...");
-                 try {
-                     const report = await api.getVirtualAgentReport();
-                     ui.mainContent.innerHTML = renderers.agentReport(report);
-                     lucide.createIcons();
-                 } catch (e) {
-                      ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania raportu: ${e.message}</div>`;
-                 }
+                stopAllPolling();
+                state.currentViewTicker = null;
+                setActiveSidebar(ui.agentReportLink);
+                ui.mainContent.innerHTML = renderers.loading("Ładowanie raportu Wirtualnego Agenta...");
+                try {
+                    const report = await api.getVirtualAgentReport();
+                    ui.mainContent.innerHTML = renderers.agentReport(report);
+                    lucide.createIcons();
+                } catch (e) {
+                     ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania raportu agenta: ${e.message}</div>`;
+                }
             }
             // ==========================================================
 
@@ -1467,6 +1395,53 @@
             }
             console.log("Modal functions defined.");
             
+            // ==========================================================
+            // ZMIANA (Dynamiczny Rok): Nowa funkcja do obsługi backtestu
+            // ==========================================================
+            async function handleYearBacktestRequest() {
+                const yearInput = document.getElementById('backtest-year-input');
+                const yearBtn = document.getElementById('run-backtest-year-btn');
+                const statusMsg = document.getElementById('backtest-status-message');
+                if (!yearInput || !yearBtn || !statusMsg) return;
+
+                const year = yearInput.value.trim();
+                const currentYear = new Date().getFullYear();
+
+                // Walidacja
+                if (!year || year.length !== 4 || !/^\d{4}$/.test(year) || parseInt(year) < 2000 || parseInt(year) > currentYear) {
+                    statusMsg.className = 'text-sm mt-3 text-red-400';
+                    statusMsg.textContent = `Błąd: Wprowadź poprawny rok (np. 2000 - ${currentYear}).`;
+                    return;
+                }
+
+                yearBtn.disabled = true;
+                yearBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Zlecanie...`;
+                lucide.createIcons();
+                statusMsg.className = 'text-sm mt-3 text-sky-400';
+                statusMsg.textContent = `Zlecanie testu dla roku ${year}...`;
+
+                try {
+                    const response = await api.requestBacktest(year); // Używamy nowej funkcji API
+                    statusMsg.className = 'text-sm mt-3 text-green-400';
+                    statusMsg.textContent = response.message || `Zlecono test dla ${year}. Worker rozpoczął pracę.`;
+                    // Opcjonalnie: odśwież logi na dashboardzie
+                    setTimeout(() => {
+                        if (document.getElementById('dashboard-view')) {
+                            pollWorkerStatus();
+                        }
+                    }, 2000);
+                } catch (e) {
+                    statusMsg.className = 'text-sm mt-3 text-red-400';
+                    statusMsg.textContent = `Błąd zlecenia: ${e.message}`;
+                } finally {
+                    yearBtn.disabled = false;
+                    yearBtn.innerHTML = `<i data-lucide="play" class="w-4 h-4 mr-2"></i> Uruchom Test Roczny`;
+                    lucide.createIcons();
+                }
+            }
+            // ==========================================================
+            
+            
             // --- Handlery Zdarzeń (Dodawane od razu) ---
             ui.tickerInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
@@ -1480,10 +1455,14 @@
                 const watchlistBtn = e.target.closest('#add-to-watchlist-btn');
                 const buyBtn = e.target.closest('#buy-stock-btn');
                 const sellBtn = e.target.closest('.sell-stock-btn');
+                
                 // ==========================================================
-                // KROK 3 (Frontend): Nowy listener dla przycisków backtestu
+                // ZMIANA (Dynamiczny Rok): Nowy listener
                 // ==========================================================
-                const backtestBtn = e.target.closest('.run-backtest-btn');
+                const backtestYearBtn = e.target.closest('#run-backtest-year-btn');
+                if (backtestYearBtn) {
+                    handleYearBacktestRequest();
+                }
                 // ==========================================================
 
                 if (watchlistBtn) {
@@ -1513,33 +1492,6 @@
                      const quantity = parseInt(sellBtn.dataset.quantity, 10);
                      if (ticker && !isNaN(quantity)) showSellModal(ticker, quantity);
                 }
-                // ==========================================================
-                // KROK 3 (Frontend): Obsługa kliknięcia przycisku backtestu
-                // ==========================================================
-                else if (backtestBtn) {
-                    const period = backtestBtn.dataset.period;
-                    if (!period) return;
-                    
-                    logger.info(`Zlecanie backtestu dla okresu: ${period}`);
-                    backtestBtn.disabled = true;
-                    backtestBtn.innerHTML = `<i data-lucide="loader-2" class="mr-2 h-5 w-5 animate-spin"></i>Zlecanie...`;
-                    lucide.createIcons();
-                    
-                    try {
-                        const response = await api.requestBacktest(period);
-                        displaySystemAlert(`BACKTEST: Zlecenie dla '${period}' wysłane do workera.`);
-                        backtestBtn.innerHTML = `<i data-lucide="check" class="mr-2 h-5 w-5"></i>Zlecono`;
-                        // Odśwież status workera, aby pokazać 'BACKTESTING'
-                        pollWorkerStatus();
-                    } catch (error) {
-                        logger.error(`Błąd zlecania backtestu: ${error.message}`);
-                        displaySystemAlert(`BACKTEST BŁĄD: ${error.message}`);
-                        backtestBtn.disabled = false;
-                        backtestBtn.innerHTML = `<i data-lucide="play-circle" class="mr-2 h-5 w-5"></i>Testuj ${period.split('_')[1]}`;
-                        lucide.createIcons();
-                    }
-                }
-                // ==========================================================
             });
 
             // ZMIANA: Dodano 'closeSidebar()' do kliknięć na elementy listy
@@ -1566,11 +1518,10 @@
             ui.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); showPortfolio(); });
             ui.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); showTransactions(); });
             // ==========================================================
-            // KROK 5 (Frontend): Nowy listener
+            // KROK 5 (Frontend): Nowy listener dla linku
             // ==========================================================
             ui.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); showAgentReport(); });
             // ==========================================================
-
 
             ['start', 'pause', 'resume'].forEach(action => {
                 document.getElementById(`${action}-btn`).addEventListener('click', async () => {
@@ -1615,17 +1566,13 @@
             const intervalId = setInterval(async () => {
                 logger.info("Sprawdzanie statusu API...");
                 try {
-                    const statusData = await api.getWorkerStatus();
-                    if (statusData && statusData.status) {
-                        logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
-                        clearInterval(intervalId);
-                        ui.loginStatusText.textContent = 'System gotowy.';
-                        ui.loginButton.disabled = false;
-                        ui.loginButton.textContent = 'Wejdź do Aplikacji';
-                    } else {
-                         logger.warn("API zwróciło 200 OK, ale nieprawidłowe dane:", statusData);
-                         ui.loginStatusText.textContent = 'Problem z odp. API...';
-                    }
+                    // Używamy endpointu GET / (lub HEAD /), który nie wymaga bazy danych
+                    await apiRequest(''); // Testuje sam endpoint '/'
+                    logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
+                    clearInterval(intervalId);
+                    ui.loginStatusText.textContent = 'System gotowy.';
+                    ui.loginButton.disabled = false;
+                    ui.loginButton.textContent = 'Wejdź do Aplikacji';
                 } catch (e) {
                     logger.error("Błąd podczas sprawdzania statusu API:", e.message);
                     ui.loginStatusText.textContent = 'Backend nie gotowy...';
