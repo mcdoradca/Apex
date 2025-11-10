@@ -545,10 +545,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     # === NOWY KROK: Pobierz dane makro (VIX, SPY) raz ===
     # ==================================================================
     try:
-        logger.info("[Backtest] Pobieranie danych makro (VIX, SPY) na potrzeby reżimu rynkowego...")
+        # === POPRAWKA: Zmieniamy 'VIX' na 'VXX' ===
+        logger.info("[Backtest] Pobieranie danych makro (VXX, SPY) na potrzeby reżimu rynkowego...")
         
-        # Pobieramy dane VIX
-        vix_raw = api_client.get_daily_adjusted('VIX', outputsize='full')
+        # Pobieramy dane VXX (ETF śledzący VIX)
+        vix_raw = api_client.get_daily_adjusted('VXX', outputsize='full')
         vix_df = pd.DataFrame.from_dict(vix_raw['Time Series (Daily)'], orient='index')
         vix_df = standardize_df_columns(vix_df)
         vix_df.index = pd.to_datetime(vix_df.index)
@@ -564,10 +565,10 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         spy_df['ema_200'] = calculate_ema(spy_df['close'], period=200)
         _backtest_cache["spy_data"] = spy_df
         
-        logger.info("[Backtest] Dane makro VIX i SPY pomyślnie załadowane i zapisane w cache.")
+        logger.info("[Backtest] Dane makro VXX i SPY pomyślnie załadowane i zapisane w cache.")
 
     except Exception as e:
-        log_msg = f"[Backtest] BŁĄD KRYTYCZNY: Nie można pobrać danych makro VIX/SPY: {e}. Zatrzymywanie."
+        log_msg = f"[Backtest] BŁĄD KRYTYCZNY: Nie można pobrać danych makro VXX/SPY: {e}. Zatrzymywanie."
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
