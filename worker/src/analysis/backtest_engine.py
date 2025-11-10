@@ -11,15 +11,16 @@ from .utils import (
     calculate_ema, 
     get_current_NY_datetime,
     append_scan_log,
+    calculate_rsi,
+    calculate_macd,
     # ==================================================================
     # === NOWY IMPORT (Strategy Battle Royale) ===
+    # Potrzebujemy `calculate_atr` bezpośrednio tutaj
     # ==================================================================
-    calculate_rsi,
-    calculate_macd
-    # ==================================================================
+    calculate_atr
 )
-# Importujemy nasze istniejące strategie EOD do przetestowania
-from .phase3_sniper import _find_ema_bounce_setup, _find_breakout_setup, _find_impulse_and_fib_zone
+# Importujemy *tylko* setup Breakout, EMA zrobimy lokalnie
+from .phase3_sniper import _find_breakout_setup, _find_impulse_and_fib_zone
 from .. import models
 from ..config import Phase3Config
 
@@ -29,16 +30,8 @@ logger = logging.getLogger(__name__)
 # === Środowisko Backtestingu ===
 # ==================================================================
 
-# Okresy "reżimów rynkowych" do testów (zgodnie z sugestią)
-# (Rok 2019: stabilna hossa; Rok 2022: bessa/rynek niedźwiedzia)
-BACKTEST_PERIODS = {
-    "TRUMP_2019": ('2019-01-01', '2019-12-31'),
-    "BIDEN_2022": ('2022-01-01', '2022-12-31'),
-    # Możemy tu dodawać kolejne, np. "COVID_2020"
-}
-
-# Horyzont czasowy dla strategii (zgodnie z naszym celem 7 dni)
-# ZMIANA: Usunięto globalny MAX_HOLD_DAYS, teraz będzie brany z konfiguracji
+# Horyzont czasowy dla strategii
+MAX_HOLD_DAYS_DEFAULT = 7
 
 # ==================================================================
 # === Silnik Symulacji ===
@@ -90,15 +83,9 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         # Oblicz P/L %
         p_l_percent = ((close_price - entry_price) / entry_price) * 100
         
-        # ==================================================================
-        # === POPRAWKA BŁĘDU (Problem "np.float64") ===
-        # Konwertujemy wszystkie liczby z (potencjalnie) numpy.float64
-        # na natywne typy Pythona (float) przed wysłaniem do bazy.
-        # ==================================================================
         trade = models.VirtualTrade(
             ticker=setup['ticker'],
             status=status,
-            # ZMIANA (Dynamiczny Rok): Tworzymy dynamiczny setup_type
             setup_type=f"BACKTEST_{year}_{setup['setup_type']}",
             entry_price=float(entry_price),
             stop_loss=float(stop_loss),
@@ -108,13 +95,56 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             close_price=float(close_price),
             final_profit_loss_percent=float(p_l_percent)
         )
-        # ==================================================================
         
         return trade
 
     except Exception as e:
         logger.error(f"[Backtest] Błąd podczas rozwiązywania transakcji: {e}", exc_info=True)
         return None
+
+# ==================================================================
+# === NOWA FUNKCJA (Strategy Battle Royale) ===
+# Kopiujemy logikę EMA Bounce z phase3_sniper, ale usuwamy z niej
+# filtr ATR, aby mieć czystą bazę do testów.
+# ==================================================================
+def _find_base_ema_bounce(daily_df: pd.DataFrame) -> dict | None:
+    """
+    Znajduje *podstawowy* setup EMA Bounce (bez filtra ATR),
+    aby służył jako grupa kontrolna do testowania filtrów.
+    """
+    try:
+        ema_period = Phase3Config.EmaBounce.EMA_PERIOD
+        if len(daily_df) < ema_period + 3: return None
+        
+        # Ta linia modyfikuje kopię (df_view), co jest bezpieczne
+        daily_df['ema'] = calculate_ema(daily_df['close'], ema_period) 
+        
+        is_ema_rising = daily_df['ema'].iloc[-1] > daily_df['ema'].iloc[-2] > daily_df['ema'].iloc[-3]
+        latest_candle = daily_df.iloc[-1]
+        prev_candle = daily_df.iloc[-2]
+        latest_ema = daily_df['ema'].iloc[-1]
+        touched_ema = (prev_candle['low'] <= daily_df['ema'].iloc[-2] * 1.01) or \
+                      (latest_candle['open'] <= latest_ema * 1.01)
+        closed_above_ema = latest_candle['close'] > latest_ema
+        is_bullish_candle = latest_candle['close'] > latest_candle['open']
+        
+        if is_ema_rising and touched_ema and closed_above_ema and is_bullish_candle:
+             atr = calculate_atr(daily_df, 14).iloc[-1]
+             if atr == 0: return None
+             
+             stop_loss = latest_candle['low'] - (Phase3Config.EmaBounce.ATR_MULTIPLIER_FOR_SL * atr)
+             
+             return {
+                 "setup_type": "EMA_BOUNCE", # Nazwa bazowa
+                 "entry_price": latest_candle['high'] + 0.01,
+                 "stop_loss": stop_loss,
+                 "atr_percent": (atr / latest_candle['close']) # Zwracamy ATR% do filtrowania
+             }
+        return None
+    except Exception as e:
+        logger.error(f"Error in _find_base_ema_bounce: {e}")
+        return None
+# ==================================================================
 
 
 def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFrame, year: str):
@@ -125,77 +155,78 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
     logger.info(f"  [Backtest] Rozpoczynanie symulacji dla {ticker} (dni: {len(historical_data)})...")
     trades_found = 0
     
+    # Obliczamy wskaźniki dla CAŁEGO historycznego DF tylko raz (bardzo wydajne)
+    historical_data['rsi_14'] = calculate_rsi(historical_data['close'], period=14)
+    historical_data['macd_line'], historical_data['signal_line'] = calculate_macd(historical_data['close'])
+
     # Zaczynamy od 50, aby mieć wystarczająco danych dla wskaźników (EMA, ATR)
     for i in range(50, len(historical_data)):
         # Tworzymy "widok" danych, który widziałby analityk danego dnia
-        # (czyli wszystkie dane *do* tego dnia)
-        
         df_view = historical_data.iloc[i-50 : i].copy()
         
-        # ==================================================================
-        # === NOWA LOGIKA (Strategy Battle Royale) ===
-        # ==================================================================
-        
-        # Oblicz wskaźniki (RSI i MACD) dla nowych strategii
-        rsi_series = calculate_rsi(df_view['close'], period=14)
-        macd_line, signal_line = calculate_macd(df_view['close'])
-
-        # Sprawdź, czy mamy wystarczająco danych
-        if rsi_series.empty or macd_line.empty:
-            continue
-
-        latest_rsi = rsi_series.iloc[-1]
-        latest_macd = macd_line.iloc[-1]
-        latest_signal = signal_line.iloc[-1]
+        # Pobieramy wskaźniki obliczone wcześniej dla *tego* dnia (indeks -1 w df_view)
+        latest_indicators = df_view.iloc[-1]
+        latest_rsi = latest_indicators['rsi_14']
+        latest_macd = latest_indicators['macd_line']
+        latest_signal = latest_indicators['signal_line']
         
         # --- TESTOWANIE STRATEGII EOD ---
         setups_to_test = []
         
+        # ==================================================================
+        # === ZMIANA (Strategy Battle Royale) ===
+        # ==================================================================
+        
         # === Test 1: EMA Bounce (Wszystkie warianty) ===
-        ema_setup = _find_ema_bounce_setup(df_view)
+        # Używamy nowej, bazowej funkcji bez filtra ATR
+        ema_setup = _find_base_ema_bounce(df_view) 
+        
         if ema_setup:
-            # Użyj parametrów specyficznych dla EMA Bounce
             risk = ema_setup['entry_price'] - ema_setup['stop_loss']
             if risk > 0:
                 rr_ratio = Phase3Config.EmaBounce.TARGET_RR_RATIO
                 max_hold = Phase3Config.EmaBounce.MAX_HOLD_DAYS # <-- Sugestia AI #3
                 
-                # --- Wariant 1: Bazowa strategia EMA_BOUNCE ---
-                setups_to_test.append({
+                # Przygotuj bazowy setup
+                base_setup = {
                     "ticker": ticker,
-                    "setup_type": "EMA_BOUNCE", # Oryginalna
                     "entry_price": ema_setup['entry_price'],
                     "stop_loss": ema_setup['stop_loss'],
                     "take_profit": ema_setup['entry_price'] + (rr_ratio * risk),
                     "max_hold_days": max_hold
+                }
+                
+                # --- Wariant 1: Bazowa strategia (stara logika, dla porównania) ---
+                # Zapisujemy ją, aby mieć punkt odniesienia
+                setups_to_test.append({
+                    **base_setup, 
+                    "setup_type": "EMA_BOUNCE" 
                 })
 
-                # --- Wariant 2: Nowa Strategia EMA + RSI < 40 ---
-                if latest_rsi < 40:
+                # --- Wariant 2: Sugestia AI (Filtr ATR > 20%) ---
+                if ema_setup['atr_percent'] > Phase3Config.EmaBounce.MIN_ATR_PERCENT_FILTER:
                     setups_to_test.append({
-                        "ticker": ticker,
-                        "setup_type": "EMA_RSI_40", # Nowa
-                        "entry_price": ema_setup['entry_price'],
-                        "stop_loss": ema_setup['stop_loss'],
-                        "take_profit": ema_setup['entry_price'] + (rr_ratio * risk),
-                        "max_hold_days": max_hold
+                        **base_setup,
+                        "setup_type": "EMA_ATR_FILTER" # NOWA NAZWA
                     })
                 
-                # --- Wariant 3: Nowa Strategia EMA + MACD Cross ---
+                # --- Wariant 3: Nasz Pomysł (Filtr RSI < 40) ---
+                if latest_rsi < 40:
+                    setups_to_test.append({
+                        **base_setup,
+                        "setup_type": "EMA_RSI_40", # NOWA NAZWA
+                    })
+                
+                # --- Wariant 4: Nasz Pomysł (Filtr MACD Cross) ---
                 if latest_macd > latest_signal:
                     setups_to_test.append({
-                        "ticker": ticker,
-                        "setup_type": "EMA_MACD_CROSS", # Nowa
-                        "entry_price": ema_setup['entry_price'],
-                        "stop_loss": ema_setup['stop_loss'],
-                        "take_profit": ema_setup['entry_price'] + (rr_ratio * risk),
-                        "max_hold_days": max_hold
+                        **base_setup,
+                        "setup_type": "EMA_MACD_CROSS", # NOWA NAZWA
                     })
 
         # === Test 2: Breakout (bez zmian) ===
         breakout_setup = _find_breakout_setup(df_view)
         if breakout_setup:
-            # Użyj parametrów specyficznych dla Breakout
             risk = breakout_setup['entry_price'] - breakout_setup['stop_loss']
             if risk > 0:
                 rr_ratio = Phase3Config.Breakout.TARGET_RR_RATIO # <-- Sugestia AI #1
@@ -209,9 +240,6 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
                     "take_profit": breakout_setup['entry_price'] + (rr_ratio * risk),
                     "max_hold_days": max_hold
                 })
-        
-        # Test 3: FibH1 (na razie pominięty)
-        # TODO: W przyszłości dodać symulację H1
             
         # ==================================================================
         # === KONIEC ZMIAN ===
@@ -249,20 +277,14 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     zdefiniowanego okresu i listy tickerów.
     """
     
-    # ==================================================================
-    # ZMIANA (Dynamiczny Rok): Walidacja i dynamiczne ustawianie dat
-    # ==================================================================
     try:
-        # Walidacja, czy 'year' to 4-cyfrowa liczba
         if not (year.isdigit() and len(year) == 4):
             raise ValueError(f"Otrzymano nieprawidłowy rok: {year}")
         
-        # Sprawdzenie, czy rok nie jest z przyszłości
         current_year = datetime.now(timezone.utc).year
         if int(year) > current_year:
              raise ValueError(f"Nie można testować przyszłości: {year}")
         
-        # Ustawiamy dynamicznie daty
         start_date = f"{year}-01-01"
         end_date = f"{year}-12-31"
         
@@ -272,30 +294,37 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
         
     log_msg = f"BACKTEST HISTORYCZNY: Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
-    # ==================================================================
     
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
     # Wyczyść stare wyniki dla tego okresu testowego, aby uniknąć duplikatów
     try:
-        # ZMIANA (Dynamiczny Rok): Używamy dynamicznego prefiksu
-        period_prefix = f"BACKTEST_{year}_%"
-        logger.info(f"Czyszczenie starych wyników dla okresu: {period_prefix}")
-        session.execute(
-            text("DELETE FROM virtual_trades WHERE setup_type LIKE :period"),
-            {'period': period_prefix}
-        )
+        # ZMIANA: Usuwamy teraz WSZYSTKIE strategie EMA, aby móc je przetestować od nowa
+        period_prefix_base = f"BACKTEST_{year}_"
+        prefixes_to_delete = [
+            f"{period_prefix_base}EMA_BOUNCE",
+            f"{period_prefix_base}EMA_RSI_40",
+            f"{period_prefix_base}EMA_MACD_CROSS",
+            f"{period_prefix_base}EMA_ATR_FILTER",
+            f"{period_prefix_base}BREAKOUT" # Czyścimy też breakout
+        ]
+        
+        logger.info(f"Czyszczenie starych wyników dla okresu: {year}...")
+        
+        # Używamy pętli do czyszczenia (bezpieczniejsze niż skomplikowany LIKE)
+        for prefix in prefixes_to_delete:
+            session.execute(
+                text("DELETE FROM virtual_trades WHERE setup_type = :prefix"),
+                {'prefix': prefix}
+            )
+        
         session.commit()
     except Exception as e:
         logger.error(f"Nie udało się wyczyścić starych wyników backtestu: {e}", exc_info=True)
         session.rollback()
 
-    # ==================================================================
-    # ZMIANA (Logika Doboru Spółek): Pobieramy listę tickerów z Fazy 3 (Sygnały)
-    # ==================================================================
     try:
-        # Pobieramy unikalne tickery z listy sygnałów (Twoje 33 spółki)
         tickers_to_test_rows = session.execute(text("SELECT DISTINCT ticker FROM trading_signals ORDER BY ticker")).fetchall()
         tickers_to_test = [row[0] for row in tickers_to_test_rows]
         
@@ -314,7 +343,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
-    # ==================================================================
 
 
     for ticker in tickers_to_test:
@@ -323,24 +351,17 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             logger.info(log_msg)
             append_scan_log(session, log_msg)
             
-            # Krok 1: Pobierz PEŁNE dane EOD (20+ lat) - 1 zapytanie API
             price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
             
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 logger.warning(f"[Backtest] Brak danych historycznych dla {ticker}. Pomijanie.")
                 continue
 
-            # Krok 2: Przetwórz i posortuj dane
             full_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
             full_df = standardize_df_columns(full_df) # To sortuje rosnąco
             
-            # ==================================================================
-            # NAPRAWA (Problem 1): Konwertujemy indeks na obiekty Datetime
-            # ==================================================================
             full_df.index = pd.to_datetime(full_df.index)
-            # ==================================================================
             
-            # Krok 3: Wytnij tylko interesujący nas okres
             historical_data_slice = full_df.loc[start_date:end_date]
             
             if historical_data_slice.empty or len(historical_data_slice) < 50:
