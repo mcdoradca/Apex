@@ -15,15 +15,7 @@ from typing import Optional
 import os
 import requests
 from urllib.parse import quote_plus # Do kodowania wiadomości URL
-# ==================================================================
-
-# ==================================================================
-# NOWA POPRAWKA (Problem "Spamu 1600 Alertów")
-# ==================================================================
-import hashlib
-# Globalna pamięć podręczna dla wysłanych alertów (w ramach jednej sesji workera)
-# Przechowuje hashe wysłanych wiadomości, aby uniknąć duplikatów.
-_ALERT_MEMORY_CACHE = set()
+import hashlib # <-- NOWY IMPORT (Krok Anti-Spam)
 # ==================================================================
 
 
@@ -42,47 +34,41 @@ if not TELEGRAM_CHAT_ID:
 # ==================================================================
 
 # ==================================================================
-# NOWA POPRAWKA: Funkcja czyszcząca pamięć alertów
+# ZMIANA (Problem "Spamu 1600 Alertów")
 # ==================================================================
+# Zestaw (set) przechowujący skróty (hashe) już wysłanych wiadomości.
+# Jest to pamięć tymczasowa, która zostanie wyczyszczona przy restarcie workera
+# lub przez wywołanie clear_alert_memory_cache().
+_sent_alert_hashes = set()
+
 def clear_alert_memory_cache():
-    """
-    Czyści pamięć podręczną wysłanych alertów.
-    Wywoływane raz na cykl (np. co 24h) przez main.py.
-    """
-    global _ALERT_MEMORY_CACHE
-    logger.info(f"Clearing alert memory cache. Removed {_ALERT_MEMORY_CACHE} cached alerts.")
-    _ALERT_MEMORY_CACHE.clear()
-# ==================================================================
+    """Czyści pamięć podręczną wysłanych alertów Telegrama."""
+    global _sent_alert_hashes
+    logger.info(f"Czyszczenie pamięci podręcznej alertów. Usunięto {len(_sent_alert_hashes)} wpisów.")
+    _sent_alert_hashes = set()
 
-
-# ==================================================================
-# ZMODYFIKOWANA FUNKCJA: Centralna funkcja wysyłania alertów
-# ==================================================================
 def send_telegram_alert(message: str):
     """
     Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
-    NOWA LOGIKA: Wysyła wiadomość tylko raz, używając pamięci podręcznej.
+    NOWA LOGIKA: Wysyła wiadomość tylko wtedy, jeśli nie została wysłana 
+    wcześniej w tym cyklu (od ostatniego czyszczenia pamięci).
     """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        # Nie wysyłaj, jeśli nie skonfigurowano
+        # Nie wysyłaj, jeśli nie skonfigurowano (ostrzeżenie już poszło przy starcie)
         return
 
-    # ==================================================================
-    # NOWA POPRAWKA (Problem "Spamu 1600 Alertów")
-    # ==================================================================
-    # Tworzymy unikalny klucz (hash) dla treści wiadomości
-    alert_key = hashlib.sha256(message.encode('utf-8')).hexdigest()
-    
-    global _ALERT_MEMORY_CACHE
-    if alert_key in _ALERT_MEMORY_CACHE:
-        # Ten *dokładny* alert został już wysłany w tym cyklu.
-        logger.info(f"Suppressing duplicate alert: {message[:50]}...")
-        return # Cicho ignoruj
-    # ==================================================================
-    # Koniec Poprawki
-    # ==================================================================
+    # 1. Stwórz skrót (hash) wiadomości, aby ją unikalnie zidentyfikować
+    message_hash = hashlib.sha256(message.encode('utf-8')).hexdigest()
 
-    # Kodowanie wiadomości, aby była bezpieczna dla URL
+    # 2. Sprawdź, czy ten skrót jest już w naszej pamięci podręcznej
+    if message_hash in _sent_alert_hashes:
+        logger.info(f"Alert został już wysłany (pomijanie duplikatu): {message[:50]}...")
+        return # Nie wysyłaj ponownie tej samej wiadomości
+    
+    # 3. Jeśli nie, wyślij wiadomość i dodaj skrót do pamięci
+    logger.info(f"Wysyłanie NOWEGO alertu Telegram: {message[:50]}...")
+
+    # Kodowanie wiadomości, aby była bezpieczna dla URL (obsługa spacji, nowych linii, itp.)
     encoded_message = quote_plus(message)
     
     # Formatowanie URL
@@ -93,14 +79,10 @@ def send_telegram_alert(message: str):
         response = requests.get(url, timeout=5)
         response.raise_for_status() # Sprawdź błędy HTTP (np. 400, 404, 500)
         
-        response_data = response.json()
-        if response_data.get('ok'):
+        if response.json().get('ok'):
             logger.info(f"Pomyślnie wysłano alert Telegram: {message[:50]}...")
-            # ==================================================================
-            # NOWA POPRAWKA: Dodaj alert do pamięci, aby go nie powtarzać
-            # ==================================================================
-            _ALERT_MEMORY_CACHE.add(alert_key)
-            # ==================================================================
+            # 4. Dodaj do pamięci TYLKO po pomyślnym wysłaniu
+            _sent_alert_hashes.add(message_hash)
         else:
             logger.error(f"Telegram API zwrócił błąd: {response.text}")
     except requests.exceptions.RequestException as e:
@@ -109,6 +91,8 @@ def send_telegram_alert(message: str):
     except Exception as e:
         # Złap inne błędy (np. JSON decode error)
         logger.error(f"Nieoczekiwany błąd podczas wysyłania alertu Telegram: {e}")
+# ==================================================================
+# KONIEC ZMIAN (Anti-Spam)
 # ==================================================================
 
 
@@ -128,6 +112,7 @@ def get_current_NY_datetime() -> datetime:
 # ==================================================================
 
 def get_market_status_and_time(api_client) -> dict:
+# ... (bez zmian) ...
     """
     Sprawdza status giełdy NASDAQ używając dedykowanego endpointu API
     i zwraca czas w Nowym Jorku.
@@ -170,6 +155,7 @@ def get_market_status_and_time(api_client) -> dict:
         return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
 
 def update_system_control(session: Session, key: str, value: str):
+# ... (bez zmian) ...
     """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
     try:
         stmt = text("""
@@ -185,6 +171,7 @@ def update_system_control(session: Session, key: str, value: str):
         session.rollback()
 
 def get_system_control_value(session: Session, key: str) -> str | None:
+# ... (bez zmian) ...
     """Odczytuje pojedynczą wartość z tabeli system_control."""
     try:
         result = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
@@ -194,11 +181,13 @@ def get_system_control_value(session: Session, key: str) -> str | None:
         return None
 
 def update_scan_progress(session: Session, processed: int, total: int):
+# ... (bez zmian) ...
     """Aktualizuje postęp skanowania w bazie danych."""
     update_system_control(session, 'scan_progress_processed', str(processed))
     update_system_control(session, 'scan_progress_total', str(total))
 
 def append_scan_log(session: Session, message: str):
+# ... (bez zmian) ...
     """Dodaje nową linię do logu skanowania w bazie danych."""
     try:
         current_log_result = session.execute(text("SELECT value FROM system_control WHERE key = 'scan_log'")).fetchone()
@@ -225,11 +214,13 @@ def append_scan_log(session: Session, message: str):
 
 
 def clear_scan_log(session: Session):
+# ... (bez zmian) ...
     """Czyści log skanowania w bazie danych."""
     update_system_control(session, 'scan_log', '')
 
 
 def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]:
+# ... (bez zmian) ...
     """Sprawdza i reaguje na polecenia z bazy danych."""
     command = get_system_control_value(session, 'worker_command')
     should_run_now = False
@@ -253,10 +244,12 @@ def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]
     return should_run_now, new_state
 
 def report_heartbeat(session: Session):
+# ... (bez zmian) ...
     """Raportuje 'życie' workera do bazy danych."""
     update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
 def safe_float(value) -> float | None:
+# ... (bez zmian) ...
     """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
     if value is None:
         return None
@@ -268,6 +261,7 @@ def safe_float(value) -> float | None:
         return None
 
 def get_performance(data: dict, days: int) -> float | None:
+# ... (bez zmian) ...
     """Oblicza zwrot procentowy w danym okresie na podstawie słownika."""
     try:
         time_series = data.get('Time Series (Daily)')
@@ -290,6 +284,7 @@ def get_performance(data: dict, days: int) -> float | None:
 # --- NARZĘDZIA DO OPTYMALIZACJI API ---
 
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+# ... (bez zmian) ...
     """Standaryzuje nazwy kolumn z API ('1. open' -> 'open') i konwertuje na typy numeryczne."""
     if df.empty:
         return df
@@ -313,6 +308,7 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza ATR (Average True Range) na podstawie DataFrame OHLC."""
     if df.empty or len(df) < period:
         return pd.Series(dtype=float)
@@ -327,6 +323,7 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
     return atr
 
 def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza RSI (Relative Strength Index)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -340,6 +337,7 @@ def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
     return rsi
 
 def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> tuple:
+# ... (bez zmian) ...
     """Oblicza Bollinger Bands (Środkowa, Górna, Dolna) oraz Szerokość Wstęgi (BBW)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
@@ -357,6 +355,7 @@ def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> t
 
 # --- POPRAWKA: Dodanie brakującej funkcji ---
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -364,9 +363,33 @@ def calculate_ema(series: pd_Series, period: int) -> pd_Series:
 
 
 # ==================================================================
+# === NOWA FUNKCJA (Dla "Strategy Battle Royale") ===
+# ==================================================================
+def calculate_macd(series: pd_Series, short_period=12, long_period=26, signal_period=9) -> tuple:
+    """
+    Oblicza linię MACD (EMA(12) - EMA(26)) oraz linię Sygnału (EMA(9) z MACD).
+    Zwraca (macd_line, signal_line).
+    """
+    if series.empty or len(series) < long_period:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+    
+    short_ema = calculate_ema(series, short_period)
+    long_ema = calculate_ema(series, long_period)
+    
+    macd_line = short_ema - long_ema
+    signal_line = calculate_ema(macd_line, signal_period)
+    
+    return macd_line, signal_line
+# ==================================================================
+# === KONIEC NOWEJ FUNKCJI ===
+# ==================================================================
+
+
+# ==================================================================
 #  NOWA FUNKCJA POMOCNICZA DLA AGENTA STRAŻNIKA
 # ==================================================================
 def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
+# ... (bez zmian) ...
     """
     Pobiera najnowszy istotny sygnał (AKTYWNY, OCZEKUJĄCY, UNIEWAŻNIONY lub ZAKOŃCZONY)
     dla danego tickera z bazy danych.
