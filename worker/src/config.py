@@ -1,10 +1,13 @@
 # Centralny plik konfiguracyjny dla parametrów analitycznych Silnika.
 
-# === FAZA 1: Parametry Skanera Impulsu (zgodnie z dokumentem optymalizacji) ===
-# --- ZMODYFIKOWANO 19.10.2025 w celu poszerzenia lejka dla strategii "małych zysków" ---
+# ==================================================================
+# === ZMIANA (NA TWOJE ŻĄDANIE): Zmiana zakresu cenowego Fazy 1 ===
+# ==================================================================
 class Phase1Config:
-    MIN_PRICE = 1.00
-    MAX_PRICE = 75.00 # Bez zmian
+    # Zmieniono z 1.00 na 0.50
+    MIN_PRICE = 0.50
+    # Zmieniono z 75.00 na 40.00
+    MAX_PRICE = 40.00 
     MIN_VOLUME = 500000 # Bez zmian
     # ZMNIEJSZONO: z 2.0% do 1.5%, aby wychwycić wcześniejsze ruchy.
     MIN_DAY_CHANGE_PERCENT = 1.5
@@ -13,6 +16,7 @@ class Phase1Config:
     # ZWIĘKSZONO: z 0.10 do 0.12, aby dopuścić nieco bardziej zmienne akcje.
     MAX_VOLATILITY_ATR_PERCENT = 0.12  # 12%
     MIN_RELATIVE_STRENGTH = 1.5 # vs QQQ, 5-dniowa (Bez zmian na razie)
+# ==================================================================
 
 # === FAZA 2: Parametry Silnika Scoringowego (zgodnie z dokumentem optymalizacji) ===
 # --- ZMODYFIKOWANO 19.10.2025 w celu poszerzenia lejka ---
