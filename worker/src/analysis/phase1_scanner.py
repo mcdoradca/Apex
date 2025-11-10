@@ -1,5 +1,5 @@
 import logging
-import time # <-- Dodano import 'time'
+import time
 import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -80,9 +80,14 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
             change_percent = ((current_price - prev_close) / prev_close) * 100
 
+            # ==================================================================
+            # === POPRAWKA (Twoje polecenie): Użycie zakresu cen z config.py ===
+            # ==================================================================
             # 5. Zastosuj FILTRY PODSTAWOWE (cena, wolumen, zmiana%)
             if not (Phase1Config.MIN_PRICE <= current_price <= Phase1Config.MAX_PRICE):
                 continue
+            # ==================================================================
+            
             if current_volume < Phase1Config.MIN_VOLUME:
                 continue
             if change_percent < Phase1Config.MIN_DAY_CHANGE_PERCENT:
@@ -140,9 +145,17 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     logger.info(f"Phase 1 (EOD Scan) completed. Found {len(final_candidates)} final candidates.")
     append_scan_log(session, f"Faza 1 (Skan EOD) zakończona. Znaleziono {len(final_candidates)} ostatecznych kandydatów.")
     
+    # ==================================================================
+    # === POPRAWKA (Twój błąd): Zapisywanie wyników do bazy ===
+    # Ta sekcja jest kluczowa, aby UI pokazywało "Faza 1: Kandydaci (X)"
+    # ==================================================================
     if final_candidates:
         try:
-            # Używamy tej samej logiki zapisu do bazy co wcześniej
+            # Najpierw wyczyść starych kandydatów z Fazy 1
+            session.execute(text("DELETE FROM phase1_candidates"))
+            logger.info("Cleared old Phase 1 candidates.")
+
+            # Wstaw nowych kandydatów
             insert_stmt = text("""
                 INSERT INTO phase1_candidates (ticker, price, volume, change_percent, score, analysis_date)
                 VALUES (:ticker, :price, :volume, :change_percent, :score, NOW())
@@ -158,6 +171,15 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             append_scan_log(session, f"Zapisano {len(final_candidates)} kandydatów Fazy 1 w bazie danych.")
         except Exception as e:
             logger.error(f"Failed to save candidates to database: {e}", exc_info=True)
+            session.rollback()
+    else:
+        # Jeśli nie znaleziono żadnych, wyczyść starych kandydatów
+        try:
+            session.execute(text("DELETE FROM phase1_candidates"))
+            session.commit()
+            logger.info("Cleared old Phase 1 candidates (0 new found).")
+        except Exception as e:
+            logger.error(f"Failed to clear old candidates: {e}", exc_info=True)
             session.rollback()
     
     return [c['ticker'] for c in final_candidates]
