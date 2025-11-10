@@ -10,7 +10,13 @@ from .utils import (
     standardize_df_columns, 
     calculate_ema, 
     get_current_NY_datetime,
-    append_scan_log
+    append_scan_log,
+    # ==================================================================
+    # === NOWY IMPORT (Strategy Battle Royale) ===
+    # ==================================================================
+    calculate_rsi,
+    calculate_macd
+    # ==================================================================
 )
 # Importujemy nasze istniejące strategie EOD do przetestowania
 from .phase3_sniper import _find_ema_bounce_setup, _find_breakout_setup, _find_impulse_and_fib_zone
@@ -23,18 +29,16 @@ logger = logging.getLogger(__name__)
 # === Środowisko Backtestingu ===
 # ==================================================================
 
-# ==================================================================
-# ZMIANA (Dynamiczny Rok): Usunięcie statycznych okresów
-# ==================================================================
-# BACKTEST_PERIODS = {
-#     "TRUMP_2019": ('2019-01-01', '2019-12-31'),
-#     "BIDEN_2022": ('2022-01-01', '2022-12-31'),
-# }
-# ==================================================================
+# Okresy "reżimów rynkowych" do testów (zgodnie z sugestią)
+# (Rok 2019: stabilna hossa; Rok 2022: bessa/rynek niedźwiedzia)
+BACKTEST_PERIODS = {
+    "TRUMP_2019": ('2019-01-01', '2019-12-31'),
+    "BIDEN_2022": ('2022-01-01', '2022-12-31'),
+    # Możemy tu dodawać kolejne, np. "COVID_2020"
+}
 
 # Horyzont czasowy dla strategii (zgodnie z naszym celem 7 dni)
 # ZMIANA: Usunięto globalny MAX_HOLD_DAYS, teraz będzie brany z konfiguracji
-# MAX_HOLD_DAYS = 7
 
 # ==================================================================
 # === Silnik Symulacji ===
@@ -77,7 +81,7 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
                 status = 'CLOSED_TP'
                 break
         else:
-            # Sprawdzenie 3: Jeśli pętla się zakończyła (minęło 7 dni), zamykamy po cenie zamknięcia ostatniego dnia
+            # Sprawdzenie 3: Jeśli pętla się zakończyła (minęło max_hold_days), zamykamy po cenie zamknięcia ostatniego dnia
             candle = historical_data.iloc[entry_index + max_hold_days]
             close_price = candle['close']
             status = 'CLOSED_EXPIRED'
@@ -126,21 +130,28 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
         # Tworzymy "widok" danych, który widziałby analityk danego dnia
         # (czyli wszystkie dane *do* tego dnia)
         
-        # ==================================================================
-        # NAPRAWA (Problem 2): Używamy .copy(), aby uniknąć SettingWithCopyWarning
-        # ==================================================================
         df_view = historical_data.iloc[i-50 : i].copy()
+        
         # ==================================================================
+        # === NOWA LOGIKA (Strategy Battle Royale) ===
+        # ==================================================================
+        
+        # Oblicz wskaźniki (RSI i MACD) dla nowych strategii
+        rsi_series = calculate_rsi(df_view['close'], period=14)
+        macd_line, signal_line = calculate_macd(df_view['close'])
+
+        # Sprawdź, czy mamy wystarczająco danych
+        if rsi_series.empty or macd_line.empty:
+            continue
+
+        latest_rsi = rsi_series.iloc[-1]
+        latest_macd = macd_line.iloc[-1]
+        latest_signal = signal_line.iloc[-1]
         
         # --- TESTOWANIE STRATEGII EOD ---
-        
         setups_to_test = []
         
-        # ==================================================================
-        # === ZMIANA (Wdrożenie Sugestii AI) ===
-        # ==================================================================
-        
-        # Test 1: EMA Bounce
+        # === Test 1: EMA Bounce (Wszystkie warianty) ===
         ema_setup = _find_ema_bounce_setup(df_view)
         if ema_setup:
             # Użyj parametrów specyficznych dla EMA Bounce
@@ -149,17 +160,39 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
                 rr_ratio = Phase3Config.EmaBounce.TARGET_RR_RATIO
                 max_hold = Phase3Config.EmaBounce.MAX_HOLD_DAYS # <-- Sugestia AI #3
                 
-                setup_full = {
+                # --- Wariant 1: Bazowa strategia EMA_BOUNCE ---
+                setups_to_test.append({
                     "ticker": ticker,
-                    "setup_type": ema_setup['setup_type'], # "EMA_BOUNCE"
+                    "setup_type": "EMA_BOUNCE", # Oryginalna
                     "entry_price": ema_setup['entry_price'],
                     "stop_loss": ema_setup['stop_loss'],
                     "take_profit": ema_setup['entry_price'] + (rr_ratio * risk),
                     "max_hold_days": max_hold
-                }
-                setups_to_test.append(setup_full)
+                })
 
-        # Test 2: Breakout
+                # --- Wariant 2: Nowa Strategia EMA + RSI < 40 ---
+                if latest_rsi < 40:
+                    setups_to_test.append({
+                        "ticker": ticker,
+                        "setup_type": "EMA_RSI_40", # Nowa
+                        "entry_price": ema_setup['entry_price'],
+                        "stop_loss": ema_setup['stop_loss'],
+                        "take_profit": ema_setup['entry_price'] + (rr_ratio * risk),
+                        "max_hold_days": max_hold
+                    })
+                
+                # --- Wariant 3: Nowa Strategia EMA + MACD Cross ---
+                if latest_macd > latest_signal:
+                    setups_to_test.append({
+                        "ticker": ticker,
+                        "setup_type": "EMA_MACD_CROSS", # Nowa
+                        "entry_price": ema_setup['entry_price'],
+                        "stop_loss": ema_setup['stop_loss'],
+                        "take_profit": ema_setup['entry_price'] + (rr_ratio * risk),
+                        "max_hold_days": max_hold
+                    })
+
+        # === Test 2: Breakout (bez zmian) ===
         breakout_setup = _find_breakout_setup(df_view)
         if breakout_setup:
             # Użyj parametrów specyficznych dla Breakout
@@ -168,17 +201,16 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
                 rr_ratio = Phase3Config.Breakout.TARGET_RR_RATIO # <-- Sugestia AI #1
                 max_hold = Phase3Config.Breakout.MAX_HOLD_DAYS
                 
-                setup_full = {
+                setups_to_test.append({
                     "ticker": ticker,
-                    "setup_type": breakout_setup['setup_type'], # "BREAKOUT"
+                    "setup_type": "BREAKOUT",
                     "entry_price": breakout_setup['entry_price'],
                     "stop_loss": breakout_setup['stop_loss'],
                     "take_profit": breakout_setup['entry_price'] + (rr_ratio * risk),
                     "max_hold_days": max_hold
-                }
-                setups_to_test.append(setup_full)
+                })
         
-        # Test 3: FibH1 (na razie bez zmian w parametrach)
+        # Test 3: FibH1 (na razie pominięty)
         # TODO: W przyszłości dodać symulację H1
             
         # ==================================================================
