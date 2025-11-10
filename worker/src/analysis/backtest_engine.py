@@ -12,6 +12,9 @@ from .utils import (
     calculate_ema, 
     get_current_NY_datetime,
     append_scan_log,
+    # === POPRAWKA: Dodanie brakującego importu ===
+    update_scan_progress,
+    # ============================================
     calculate_rsi,
     calculate_macd,
     calculate_atr,
@@ -307,7 +310,8 @@ def _calculate_aqm_score(
         # Zmieniamy mnożenie (które dawało < 0.3) na sumę ważoną (która da > 0.6)
         # ==================================================================
         
-        # final_aqm_score = qps_score * ves_score * mrs_score * tcs_score # <-- BŁĄD
+        # final_aqm_score = qps_score * ves_score * mrs_score * tcs_score 
+        # ^^^ POPRZEDNI BŁĄD LOGICZNY ^^^
         
         # POPRAWKA: Używamy sumy ważonej zgodnie z wagami z PDF (str. 13-17)
         final_aqm_score = (qps_score * 0.40) + (ves_score * 0.30) + (mrs_score * 0.20) + (tcs_score * 0.10)
@@ -332,7 +336,8 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
     Iteruje dzień po dniu przez historyczny DataFrame, szuka setupów
     (STARYCH ORAZ NOWEGO AQM) i przekazuje je do rozwiązania.
     """
-    logger.info(f"  [Backtest] Rozpoczynanie symulacji dla {ticker} (dni: {len(historical_data)})...")
+    # ZMIANA: Przeniesiono logowanie do pętli wyższego poziomu
+    # logger.info(f"  [Backtest] Rozpoczynanie symulacji dla {ticker} (dni: {len(historical_data)})...")
     trades_found = 0
     
     # Pobierz sektor dla tego tickera (raz)
@@ -469,7 +474,8 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
     # Zapisz wszystkie znalezione transakcje dla tego tickera
     if trades_found > 0:
         session.commit()
-    logger.info(f"  [Backtest] Symulacja dla {ticker} zakończona. Znaleziono i zapisano {trades_found} transakcji.")
+    # ZMIANA: Usunięto logowanie z tego miejsca, aby było mniej "głośne"
+    # logger.info(f"  [Backtest] Symulacja dla {ticker} zakończona. Znaleziono i zapisano {trades_found} transakcji.")
 
 
 def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str):
@@ -595,13 +601,23 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     # ==================================================================
 
 
-    for ticker in tickers_to_test:
+    total_count = len(tickers_to_test) # Całkowita liczba tickerów
+    
+    for i, ticker in enumerate(tickers_to_test):
+        
+        processed_count = i + 1 # Aktualny numer (zaczyna się od 1)
+
         try:
-            log_msg = f"[Backtest] Przetwarzanie {ticker} ({tickers_to_test.index(ticker)+1}/{len(tickers_to_test)})..."
-            # ZMIANA: Zmniejszamy "głośność" logów - logujemy tylko co 10 tickerów
-            if tickers_to_test.index(ticker) % 10 == 0:
+            log_msg = f"[Backtest] Przetwarzanie {ticker} ({processed_count}/{total_count})..."
+            
+            # === POPRAWKA UI ===
+            # Aktualizuj logi i postęp UI co 10 tickerów
+            if processed_count % 10 == 0:
                 logger.info(log_msg)
                 append_scan_log(session, log_msg)
+                # Wywołanie funkcji aktualizującej UI
+                update_scan_progress(session, processed_count, total_count)
+            # ===================
             
             # === ZMIANA: Pobieramy DANE DZIENNE i TYGODNIOWE ===
             price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
@@ -639,6 +655,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             logger.error(f"[Backtest] Błąd krytyczny podczas przetwarzania {ticker}: {e}", exc_info=True)
             session.rollback()
             append_scan_log(session, f"BŁĄD Backtestu dla {ticker}: {e}")
+
+    # === POPRAWKA UI ===
+    # Ustaw ostateczny postęp na 100% po zakończeniu pętli
+    update_scan_progress(session, total_count, total_count)
+    # ===================
 
     log_msg = f"BACKTEST HISTORYCZNY: Zakończono test dla roku '{year}'."
     logger.info(log_msg)
