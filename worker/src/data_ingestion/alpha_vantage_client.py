@@ -336,3 +336,39 @@ class AlphaVantageClient:
     # ==================================================================
     # Koniec Krok B (FAZA 0)
     # ==================================================================
+
+    # ==================================================================
+    # === NOWE ENDPOINTY DLA LOGIKI AQM (ZGODNIE Z PDF str. 19) ===
+    # ==================================================================
+
+    def get_time_series_weekly(self, symbol: str, outputsize: str = 'full'):
+        """Pobiera dane 'TIME_SERIES_WEEKLY_ADJUSTED'."""
+        logger.info(f"Pobieranie danych WEEKLY dla {symbol}...")
+        params = {
+            "function": "TIME_SERIES_WEEKLY_ADJUSTED", 
+            "symbol": symbol, 
+            "outputsize": outputsize
+        }
+        return self._make_request(params)
+
+    def get_obv(self, symbol: str, interval: str = 'daily'):
+        """Pobiera dane On-Balance Volume (OBV)."""
+        logger.info(f"Pobieranie danych OBV ({interval}) dla {symbol}...")
+        params = {
+            "function": "OBV", 
+            "symbol": symbol, 
+            "interval": interval,
+            # (Uwaga: Alpha Vantage może wymagać 'time_period' dla OBV, ale API twierdzi, że nie.
+            # Jeśli zawiedzie, dodamy tu 'time_period=10' jako domyślny.)
+        }
+        return self._make_request(params)
+
+    def get_sector_performance(self):
+        """Pobiera dane o wydajności sektorów (SECTOR)."""
+        logger.info("Pobieranie danych SECTOR_PERFORMANCE...")
+        params = {"function": "SECTOR"}
+        return self._make_request(params)
+    
+    # ==================================================================
+    # === KONIEC NOWYCH ENDPOINTÓW AQM ===
+    # ==================================================================
