@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import pytz
 # Importy dla Pandas, których potrzebujemy do obliczeń
 import pandas as pd
+# KROK 2 (AQM): Dodajemy numpy do obliczeń wektorowych
+import numpy as np
 from pandas import Series as pd_Series
 # ZMIANA: Dodajemy import 'Optional'
 from typing import Optional
@@ -100,7 +102,6 @@ def send_telegram_alert(message: str):
 # KROK 1 ZMIANY: Wydzielenie funkcji czasu nowojorskiego
 # ==================================================================
 def get_current_NY_datetime() -> datetime:
-# ... (reszta pliku 'utils.py' bez zmian) ...
     """Zwraca aktualny obiekt datetime dla strefy czasowej Nowego Jorku."""
     try:
         tz = pytz.timezone('US/Eastern')
@@ -112,7 +113,6 @@ def get_current_NY_datetime() -> datetime:
 # ==================================================================
 
 def get_market_status_and_time(api_client) -> dict:
-# ... (bez zmian) ...
     """
     Sprawdza status giełdy NASDAQ używając dedykowanego endpointu API
     i zwraca czas w Nowym Jorku.
@@ -155,7 +155,6 @@ def get_market_status_and_time(api_client) -> dict:
         return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
 
 def update_system_control(session: Session, key: str, value: str):
-# ... (bez zmian) ...
     """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
     try:
         stmt = text("""
@@ -171,7 +170,6 @@ def update_system_control(session: Session, key: str, value: str):
         session.rollback()
 
 def get_system_control_value(session: Session, key: str) -> str | None:
-# ... (bez zmian) ...
     """Odczytuje pojedynczą wartość z tabeli system_control."""
     try:
         result = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
@@ -181,13 +179,11 @@ def get_system_control_value(session: Session, key: str) -> str | None:
         return None
 
 def update_scan_progress(session: Session, processed: int, total: int):
-# ... (bez zmian) ...
     """Aktualizuje postęp skanowania w bazie danych."""
     update_system_control(session, 'scan_progress_processed', str(processed))
     update_system_control(session, 'scan_progress_total', str(total))
 
 def append_scan_log(session: Session, message: str):
-# ... (bez zmian) ...
     """Dodaje nową linię do logu skanowania w bazie danych."""
     try:
         current_log_result = session.execute(text("SELECT value FROM system_control WHERE key = 'scan_log'")).fetchone()
@@ -214,13 +210,11 @@ def append_scan_log(session: Session, message: str):
 
 
 def clear_scan_log(session: Session):
-# ... (bez zmian) ...
     """Czyści log skanowania w bazie danych."""
     update_system_control(session, 'scan_log', '')
 
 
 def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]:
-# ... (bez zmian) ...
     """Sprawdza i reaguje na polecenia z bazy danych."""
     command = get_system_control_value(session, 'worker_command')
     should_run_now = False
@@ -244,12 +238,10 @@ def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]
     return should_run_now, new_state
 
 def report_heartbeat(session: Session):
-# ... (bez zmian) ...
     """Raportuje 'życie' workera do bazy danych."""
     update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
 def safe_float(value) -> float | None:
-# ... (bez zmian) ...
     """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
     if value is None:
         return None
@@ -261,7 +253,6 @@ def safe_float(value) -> float | None:
         return None
 
 def get_performance(data: dict, days: int) -> float | None:
-# ... (bez zmian) ...
     """Oblicza zwrot procentowy w danym okresie na podstawie słownika."""
     try:
         time_series = data.get('Time Series (Daily)')
@@ -284,7 +275,6 @@ def get_performance(data: dict, days: int) -> float | None:
 # --- NARZĘDZIA DO OPTYMALIZACJI API ---
 
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
-# ... (bez zmian) ...
     """Standaryzuje nazwy kolumn z API ('1. open' -> 'open') i konwertuje na typy numeryczne."""
     if df.empty:
         return df
@@ -308,7 +298,6 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza ATR (Average True Range) na podstawie DataFrame OHLC."""
     if df.empty or len(df) < period:
         return pd.Series(dtype=float)
@@ -323,7 +312,6 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
     return atr
 
 def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza RSI (Relative Strength Index)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -337,7 +325,6 @@ def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
     return rsi
 
 def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> tuple:
-# ... (bez zmian) ...
     """Oblicza Bollinger Bands (Środkowa, Górna, Dolna) oraz Szerokość Wstęgi (BBW)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
@@ -355,7 +342,6 @@ def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> t
 
 # --- POPRAWKA: Dodanie brakującej funkcji ---
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -386,10 +372,59 @@ def calculate_macd(series: pd_Series, short_period=12, long_period=26, signal_pe
 
 
 # ==================================================================
+# === NOWE FUNKCJE DLA AQM (Volume Entropy Score, PDF str. 14-15) ===
+# ==================================================================
+
+def calculate_obv(df: pd.DataFrame) -> pd_Series:
+    """Oblicza On-Balance Volume (OBV) używając metody wektorowej."""
+    if 'close' not in df.columns or 'volume' not in df.columns:
+        logger.error("Brak kolumn 'close' lub 'volume' do obliczenia OBV.")
+        return pd.Series(dtype=float)
+    
+    # Używamy numpy.sign() na różnicy ceny
+    price_diff = df['close'].diff()
+    direction = np.sign(price_diff).fillna(0) # 0 dla NaN (pierwszy wiersz) i dla braku zmiany
+    
+    # Mnożymy wolumen przez kierunek
+    directional_volume = df['volume'] * direction
+    
+    # OBV to skumulowana suma
+    return directional_volume.cumsum()
+
+def calculate_ad(df: pd.DataFrame) -> pd_Series:
+    """Oblicza Linię Akumulacji/Dystrybucji (A/D Line)."""
+    if not all(col in df.columns for col in ['high', 'low', 'close', 'volume']):
+        logger.error("Brak kolumn 'high', 'low', 'close', 'volume' do obliczenia A/D.")
+        return pd.Series(dtype=float)
+
+    # 1. Money Flow Multiplier
+    high_low_diff = df['high'] - df['low']
+    
+    # Użyj wektoryzacji numpy, aby uniknąć dzielenia przez zero
+    # where(warunek, jeśli_prawda, jeśli_fałsz)
+    mfm = np.where(
+        high_low_diff == 0, 
+        0.0, # Jeśli high == low, MFM = 0
+        ((df['close'] - df['low']) - (df['high'] - df['close'])) / high_low_diff
+    )
+    
+    # 2. Money Flow Volume
+    mfv = mfm * df['volume']
+    
+    # 3. A/D Line (skumulowana suma)
+    ad_line = mfv.cumsum()
+    
+    return ad_line
+
+# ==================================================================
+# === KONIEC NOWYCH FUNKCJI AQM ===
+# ==================================================================
+
+
+# ==================================================================
 #  NOWA FUNKCJA POMOCNICZA DLA AGENTA STRAŻNIKA
 # ==================================================================
 def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
-# ... (bez zmian) ...
     """
     Pobiera najnowszy istotny sygnał (AKTYWNY, OCZEKUJĄCY, UNIEWAŻNIONY lub ZAKOŃCZONY)
     dla danego tickera z bazy danych.
