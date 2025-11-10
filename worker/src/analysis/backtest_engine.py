@@ -307,7 +307,8 @@ def _calculate_aqm_score(
         
         # ==================================================================
         # === KRYTYCZNA POPRAWKA (Suma ważona vs Iloczyn) ===
-        # Zmieniamy mnożenie (które dawało < 0.3) na sumę ważoną (która da > 0.6)
+        # Naprawiono błąd logiczny, który powodował brak wyników AQM.
+        # Używamy SUMY WAŻONEJ (40/30/20/10) zamiast iloczynu.
         # ==================================================================
         
         # final_aqm_score = qps_score * ves_score * mrs_score * tcs_score 
@@ -538,31 +539,30 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     try:
         # ==================================================================
-        # === KRYTYCZNA ZMIANA LOGIKI TESTOWANIA (NAPRAWIONA) ===
-        # Poprzednio: Testowaliśmy *tylko* na liście tickerów wygenerowanej przez
-        #             STARY skaner Fazy 3 (z `trading_signals`).
-        # Obecnie: Testujemy na WSZYSTKICH spółkach z bazy `companies`,
-        #          aby dać strategii AQM szansę na znalezienie własnych kandydatów.
+        # === ZMIANA KRYTYCZNA (NA TWOJE ŻĄDANIE) ===
+        # Zmieniamy źródło danych z 'companies' (4133 spółki)
+        # na 'phase1_candidates', aby drastycznie przyspieszyć test.
         # ==================================================================
-        log_msg_tickers = "[Backtest] Pobieranie PEŁNEJ listy tickerów z tabeli 'companies' do walidacji..."
+        log_msg_tickers = "[Backtest] Pobieranie listy tickerów ze skanera 'phase1_candidates'..."
         logger.info(log_msg_tickers)
         append_scan_log(session, log_msg_tickers)
         
-        tickers_to_test_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
+        # Używamy DISTINCT, aby pobrać unikalne tickery, jeśli Faza 1 działała wielokrotnie
+        tickers_to_test_rows = session.execute(text("SELECT DISTINCT ticker FROM phase1_candidates ORDER BY ticker")).fetchall()
         tickers_to_test = [row[0] for row in tickers_to_test_rows]
         
         if not tickers_to_test:
-            log_msg = f"[Backtest] BŁĄD: Tabela 'companies' jest pusta. Brak tickerów do przetestowania."
+            log_msg = f"[Backtest] BŁĄD: Tabela 'phase1_candidates' jest pusta. Uruchom najpierw skaner Fazy 1 (przycisk 'Start')."
             logger.error(log_msg)
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów w 'companies' do przetestowania historycznego (np. {tickers_to_test[0]}, {tickers_to_test[1]}, ...)."
+        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów w 'phase1_candidates' do przetestowania historycznego (np. {tickers_to_test[0]}, ...)."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
     except Exception as e:
-        log_msg = f"[Backtest] BŁĄD: Nie można pobrać listy tickerów z 'companies': {e}"
+        log_msg = f"[Backtest] BŁĄD: Nie można pobrać listy tickerów z 'phase1_candidates': {e}"
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
@@ -611,8 +611,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             log_msg = f"[Backtest] Przetwarzanie {ticker} ({processed_count}/{total_count})..."
             
             # === POPRAWKA UI ===
-            # Aktualizuj logi i postęp UI co 10 tickerów
-            if processed_count % 10 == 0:
+            # Aktualizuj logi i postęp UI co 10 tickerów (lub co 1, jeśli lista jest krótka)
+            if processed_count % 10 == 0 or total_count < 50:
                 logger.info(log_msg)
                 append_scan_log(session, log_msg)
                 # Wywołanie funkcji aktualizującej UI
