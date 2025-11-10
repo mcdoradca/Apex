@@ -302,8 +302,17 @@ def _calculate_aqm_score(
         # Ignorujemy w backteście (zbyt skomplikowane do symulacji)
         tcs_score = 1.0 
         
-        # --- Finalny Score (z PDF str 18 - mnożenie) ---
-        final_aqm_score = qps_score * ves_score * mrs_score * tcs_score
+        # ==================================================================
+        # === KRYTYCZNA POPRAWKA (Suma ważona vs Iloczyn) ===
+        # Zmieniamy mnożenie (które dawało < 0.3) na sumę ważoną (która da > 0.6)
+        # ==================================================================
+        
+        # final_aqm_score = qps_score * ves_score * mrs_score * tcs_score # <-- BŁĄD
+        
+        # POPRAWKA: Używamy sumy ważonej zgodnie z wagami z PDF (str. 13-17)
+        final_aqm_score = (qps_score * 0.40) + (ves_score * 0.30) + (mrs_score * 0.20) + (tcs_score * 0.10)
+        
+        # ==================================================================
         
         components = {
             "QPS": qps_score, "VES": ves_score, "MRS": mrs_score, "TCS": tcs_score
@@ -522,21 +531,32 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         session.rollback()
 
     try:
-        tickers_to_test_rows = session.execute(text("SELECT DISTINCT ticker FROM trading_signals ORDER BY ticker")).fetchall()
+        # ==================================================================
+        # === KRYTYCZNA ZMIANA LOGIKI TESTOWANIA (NAPRAWIONA) ===
+        # Poprzednio: Testowaliśmy *tylko* na liście tickerów wygenerowanej przez
+        #             STARY skaner Fazy 3 (z `trading_signals`).
+        # Obecnie: Testujemy na WSZYSTKICH spółkach z bazy `companies`,
+        #          aby dać strategii AQM szansę na znalezienie własnych kandydatów.
+        # ==================================================================
+        log_msg_tickers = "[Backtest] Pobieranie PEŁNEJ listy tickerów z tabeli 'companies' do walidacji..."
+        logger.info(log_msg_tickers)
+        append_scan_log(session, log_msg_tickers)
+        
+        tickers_to_test_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
         tickers_to_test = [row[0] for row in tickers_to_test_rows]
         
         if not tickers_to_test:
-            log_msg = f"[Backtest] BŁĄD: Brak tickerów na liście Fazy 3 (trading_signals) do przetestowania. Uruchom najpierw skanowanie EOD."
+            log_msg = f"[Backtest] BŁĄD: Tabela 'companies' jest pusta. Brak tickerów do przetestowania."
             logger.error(log_msg)
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów z Fazy 3 do przetestowania historycznego (np. {tickers_to_test[0]}, {tickers_to_test[1]}, ...)."
+        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów w 'companies' do przetestowania historycznego (np. {tickers_to_test[0]}, {tickers_to_test[1]}, ...)."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
     except Exception as e:
-        log_msg = f"[Backtest] BŁĄD: Nie można pobrać listy tickerów z Fazy 3: {e}"
+        log_msg = f"[Backtest] BŁĄD: Nie można pobrać listy tickerów z 'companies': {e}"
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
@@ -577,9 +597,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     for ticker in tickers_to_test:
         try:
-            log_msg = f"[Backtest] Pobieranie pełnych danych historycznych dla {ticker}..."
-            logger.info(log_msg)
-            append_scan_log(session, log_msg)
+            log_msg = f"[Backtest] Przetwarzanie {ticker} ({tickers_to_test.index(ticker)+1}/{len(tickers_to_test)})..."
+            # ZMIANA: Zmniejszamy "głośność" logów - logujemy tylko co 10 tickerów
+            if tickers_to_test.index(ticker) % 10 == 0:
+                logger.info(log_msg)
+                append_scan_log(session, log_msg)
             
             # === ZMIANA: Pobieramy DANE DZIENNE i TYGODNIOWE ===
             price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
@@ -587,7 +609,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
                not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw:
-                logger.warning(f"[Backtest] Brak danych historycznych (Dziennych lub Tygodniowych) dla {ticker}. Pomijanie.")
+                # logger.warning(f"[Backtest] Brak danych historycznych (Dziennych lub Tygodniowych) dla {ticker}. Pomijanie.")
                 continue
 
             # Przetwarzanie danych DZIENNYCH
@@ -607,7 +629,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             if historical_data_slice.empty or len(historical_data_slice) < 200 or \
                weekly_data_slice.empty or len(weekly_data_slice) < 50:
-                logger.warning(f"[Backtest] Niewystarczająca ilość danych dla {ticker} w okresie {year} (D: {len(historical_data_slice)}, W: {len(weekly_data_slice)}). Pomijanie.")
+                # logger.warning(f"[Backtest] Niewystarczająca ilość danych dla {ticker} w okresie {year} (D: {len(historical_data_slice)}, W: {len(weekly_data_slice)}). Pomijanie.")
                 continue
 
             # Krok 4: Uruchom symulator (przekazujemy oba DataFrame)
