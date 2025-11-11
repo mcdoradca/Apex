@@ -88,6 +88,12 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             
             if current_price is None or current_volume is None or prev_close is None or prev_close == 0:
                 continue
+                
+            # === POPRAWKA BŁĘDU NaN ===
+            # Sprawdź, czy pandas nie zwrócił 'NaN'
+            if pd.isna(current_price) or pd.isna(current_volume) or pd.isna(prev_close):
+                logger.warning(f"Skipping {ticker} due to NaN data in latest candle.")
+                continue
 
             change_percent = ((current_price - prev_close) / prev_close) * 100
 
@@ -102,7 +108,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 
             # 6. Zastosuj FILTRY ZAAWANSOWANE (RVol i ATR)
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if avg_volume == 0: continue
+            if avg_volume == 0 or pd.isna(avg_volume): continue
             
             volume_ratio = current_volume / avg_volume
             if volume_ratio < Phase1Config.MIN_VOLUME_RATIO:
@@ -131,7 +137,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             candidate_data = {
                 'ticker': ticker, 
                 'price': current_price,
-                'volume': int(current_volume),
+                'volume': int(current_volume), # Bezpieczne, bo sprawdziliśmy NaN
                 'change_percent': change_percent,
                 'score': 1 
             }
