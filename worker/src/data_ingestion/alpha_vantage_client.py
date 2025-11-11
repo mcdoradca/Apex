@@ -307,8 +307,10 @@ class AlphaVantageClient:
     def get_fed_funds_rate(self, interval: str = 'monthly'):
         """Pobiera dane o stopach procentowych FED (Premium)."""
         logger.info("Agent Makro: Pobieranie danych FED FUNDS RATE...")
+        # === POPRAWKA BŁĘDU (z logów) ===
+        # Prawidłowa nazwa funkcji API to 'FEDERAL_FUNDS_RATE'
         params = {
-            "function": "FED_FUNDS_RATE",
+            "function": "FEDERAL_FUNDS_RATE",
             "interval": interval,
             "datatype": "json"
         }
