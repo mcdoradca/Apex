@@ -54,51 +54,99 @@ AQM_STRATEGY_PARAMS = {
 # === Silnik Symulacji ===
 # ==================================================================
 
-def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str) -> models.VirtualTrade | None:
+# ==================================================================
+# === KROK 2a (REWOLUCJA): Modyfikacja silnika pod kątem SHORT ===
+# ==================================================================
+def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
     """
     "Spogląda w przyszłość" (w danych historycznych), aby zobaczyć, jak
     dana transakcja by się zakończyła.
+    Obsługuje teraz transakcje 'LONG' i 'SHORT'.
     """
     try:
         entry_price = setup['entry_price']
         stop_loss = setup['stop_loss']
         take_profit = setup['take_profit']
         
-        # Iterujemy przez N kolejnych dni (świec) po wejściu
-        for i in range(1, max_hold_days + 1):
-            if entry_index + i >= len(historical_data):
-                # Koniec danych historycznych, zamykamy po ostatniej cenie
-                candle = historical_data.iloc[-1]
+        close_price = entry_price # Domyślna cena zamknięcia, jeśli nic się nie stanie
+        status = 'CLOSED_EXPIRED' # Domyślny status
+
+        if direction == 'LONG':
+            # === LOGIKA DLA POZYCJI DŁUGIEJ (LONG) ===
+            for i in range(1, max_hold_days + 1):
+                if entry_index + i >= len(historical_data):
+                    candle = historical_data.iloc[-1]
+                    close_price = candle['close']
+                    status = 'CLOSED_EXPIRED'
+                    break
+                
+                candle = historical_data.iloc[entry_index + i]
+                day_low = candle['low']
+                day_high = candle['high']
+
+                # Sprawdzenie 1: Czy trafiono Stop Loss? (Sprawdzamy Low dnia)
+                if day_low <= stop_loss:
+                    # logger.info(f"    [Backtest] ZAMKNIĘCIE (SL): {candle.name.date()} @ {stop_loss:.2f}")
+                    close_price = stop_loss
+                    status = 'CLOSED_SL'
+                    break
+                    
+                # Sprawdzenie 2: Czy trafiono Take Profit? (Sprawdzamy High dnia)
+                if day_high >= take_profit:
+                    # logger.info(f"    [Backtest] ZAMKNIĘCIE (TP): {candle.name.date()} @ {take_profit:.2f}")
+                    close_price = take_profit
+                    status = 'CLOSED_TP'
+                    break
+            else:
+                # Sprawdzenie 3: Jeśli pętla się zakończyła (minęło max_hold_days)
+                candle = historical_data.iloc[entry_index + max_hold_days]
                 close_price = candle['close']
                 status = 'CLOSED_EXPIRED'
-                break
-            
-            candle = historical_data.iloc[entry_index + i]
-            day_low = candle['low']
-            day_high = candle['high']
+                # logger.info(f"    [Backtest] ZAMKNIĘCIE (Wygasło): {candle.name.date()} @ {close_price:.2f}")
 
-            # Sprawdzenie 1: Czy trafiono Stop Loss? (Sprawdzamy Low dnia)
-            if day_low <= stop_loss:
-                logger.info(f"    [Backtest] ZAMKNIĘCIE (SL): {candle.name.date()} @ {stop_loss:.2f}")
-                close_price = stop_loss
-                status = 'CLOSED_SL'
-                break
+            # Oblicz P/L % dla LONG
+            p_l_percent = ((close_price - entry_price) / entry_price) * 100
+        
+        elif direction == 'SHORT':
+            # === LOGIKA DLA POZYCJI KRÓTKIEJ (SHORT) ===
+            for i in range(1, max_hold_days + 1):
+                if entry_index + i >= len(historical_data):
+                    candle = historical_data.iloc[-1]
+                    close_price = candle['close']
+                    status = 'CLOSED_EXPIRED'
+                    break
                 
-            # Sprawdzenie 2: Czy trafiono Take Profit? (Sprawdzamy High dnia)
-            if day_high >= take_profit:
-                logger.info(f"    [Backtest] ZAMKNIĘCIE (TP): {candle.name.date()} @ {take_profit:.2f}")
-                close_price = take_profit
-                status = 'CLOSED_TP'
-                break
-        else:
-            # Sprawdzenie 3: Jeśli pętla się zakończyła (minęło max_hold_days), zamykamy po cenie zamknięcia ostatniego dnia
-            candle = historical_data.iloc[entry_index + max_hold_days]
-            close_price = candle['close']
-            status = 'CLOSED_EXPIRED'
-            logger.info(f"    [Backtest] ZAMKNIĘCIE (Wygasło): {candle.name.date()} @ {close_price:.2f}")
+                candle = historical_data.iloc[entry_index + i]
+                day_low = candle['low']
+                day_high = candle['high']
 
-        # Oblicz P/L %
-        p_l_percent = ((close_price - entry_price) / entry_price) * 100
+                # Sprawdzenie 1: Czy trafiono Stop Loss? (Cena WZROSŁA do SL)
+                if day_high >= stop_loss:
+                    # logger.info(f"    [Backtest] ZAMKNIĘCIE (SL-Short): {candle.name.date()} @ {stop_loss:.2f}")
+                    close_price = stop_loss
+                    status = 'CLOSED_SL'
+                    break
+                    
+                # Sprawdzenie 2: Czy trafiono Take Profit? (Cena SPADŁA do TP)
+                if day_low <= take_profit:
+                    # logger.info(f"    [Backtest] ZAMKNIĘCIE (TP-Short): {candle.name.date()} @ {take_profit:.2f}")
+                    close_price = take_profit
+                    status = 'CLOSED_TP'
+                    break
+            else:
+                # Sprawdzenie 3: Jeśli pętla się zakończyła (minęło max_hold_days)
+                candle = historical_data.iloc[entry_index + max_hold_days]
+                close_price = candle['close']
+                status = 'CLOSED_EXPIRED'
+                # logger.info(f"    [Backtest] ZAMKNIĘCIE (Wygasło-Short): {candle.name.date()} @ {close_price:.2f}")
+
+            # Oblicz P/L % dla SHORT (odwrotna logika)
+            p_l_percent = ((entry_price - close_price) / entry_price) * 100
+        
+        else:
+            logger.error(f"Nieznany kierunek transakcji: {direction}")
+            return None
+
         
         trade = models.VirtualTrade(
             ticker=setup['ticker'],
@@ -118,14 +166,13 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
     except Exception as e:
         logger.error(f"[Backtest] Błąd podczas rozwiązywania transakcji: {e}", exc_info=True)
         return None
+# ==================================================================
+# === KONIEC MODYFIKACJI SILNIKA ===
+# ==================================================================
+
 
 # ==================================================================
-# === KROK 1 (REWOLUCJA): Usunięto funkcję _find_base_ema_bounce ===
-# ==================================================================
-
-
-# ==================================================================
-# === NOWE FUNKCJE POMOCNICZE DLA BACKTESTU AQM ===
+# === FUNKCJE POMOCNICZE DLA BACKTESTU AQM (BEZ ZMIAN) ===
 # ==================================================================
 
 # Słownik cache dla danych makro (VIX, SPY) i sektorów
@@ -398,7 +445,12 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
                 i, 
                 setup_full, 
                 setup_full['max_hold_days'],
-                year
+                year,
+                # ==================================================================
+                # === KROK 2a (REWOLUCJA): Aktualizacja wywołania AQM ===
+                # ==================================================================
+                direction='LONG' # AQM jest strategią tylko na wzrosty
+                # ==================================================================
             )
             
             if trade_result:
