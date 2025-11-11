@@ -505,36 +505,31 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
-    # Wyczyść stare wyniki dla tego okresu testowego, aby uniknąć duplikatów
+    # ==================================================================
+    # === POPRAWKA LOGIKI CZYSZCZENIA (Twoja obserwacja) ===
+    # Zastępujemy skomplikowaną, ręczną listę 'prefixes_to_delete'
+    # jedną, globalną komendą DELETE...LIKE, aby poprawnie
+    # "zastępować" wyniki, a nie "dopisywać".
+    # ==================================================================
     try:
-        # ZMIANA: Usuwamy teraz WSZYSTKIE strategie EMA, aby móc je przetestować od nowa
-        # ORAZ NOWE STRATEGIE AQM
-        period_prefix_base = f"BACKTEST_{year}_"
-        prefixes_to_delete = [
-            f"{period_prefix_base}EMA_BOUNCE",
-            f"{period_prefix_base}EMA_RSI_40",
-            f"{period_prefix_base}EMA_MACD_CROSS",
-            f"{period_prefix_base}EMA_ATR_FILTER",
-            f"{period_prefix_base}BREAKOUT",
-            # === NOWE TYPY STRATEGII AQM ===
-            f"{period_prefix_base}AQM_SCORE_BULL",
-            f"{period_prefix_base}AQM_SCORE_VOLATILE",
-            f"{period_prefix_base}AQM_SCORE_BEAR"
-        ]
+        # Definiujemy wzorzec LIKE (np. 'BACKTEST_2022_%')
+        like_pattern = f"BACKTEST_{year}_%"
         
-        logger.info(f"Czyszczenie starych wyników dla okresu: {year}...")
+        logger.info(f"Czyszczenie WSZYSTKICH starych wyników dla wzorca: {like_pattern}...")
         
-        # Używamy pętli do czyszczenia (bezpieczniejsze niż skomplikowany LIKE)
-        for prefix in prefixes_to_delete:
-            session.execute(
-                text("DELETE FROM virtual_trades WHERE setup_type = :prefix"),
-                {'prefix': prefix}
-            )
+        # Wykonujemy jedno, globalne polecenie DELETE
+        delete_stmt = text("DELETE FROM virtual_trades WHERE setup_type LIKE :pattern")
+        result = session.execute(delete_stmt, {'pattern': like_pattern})
         
         session.commit()
+        logger.info(f"Pomyślnie usunięto {result.rowcount} starych wpisów backtestu dla roku {year}.")
+        
     except Exception as e:
         logger.error(f"Nie udało się wyczyścić starych wyników backtestu: {e}", exc_info=True)
         session.rollback()
+    # ==================================================================
+    # === KONIEC POPRAWKI CZYSZCZENIA ===
+    # ==================================================================
 
     try:
         # ==================================================================
