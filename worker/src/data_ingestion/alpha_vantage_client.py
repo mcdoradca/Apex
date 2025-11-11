@@ -291,21 +291,26 @@ class AlphaVantageClient:
             return None
 
     # ==================================================================
-    # KROK B (FAZA 0): Dodanie 4 nowych funkcji dla danych makroekonomicznych
+    # === GŁÓWNA NAPRAWA BŁĘDU FAZY 0 ===
+    # Zastąpiłem funkcję `get_cpi` funkcją `get_inflation_rate`.
+    # `get_cpi` zwracała BŁĘDNIE poziom indeksu (np. 324.8).
+    # `get_inflation_rate` zwraca POPRAWNIE roczną stopę procentową (np. 3.0).
     # ==================================================================
-
-    def get_cpi(self, interval: str = 'monthly', region: str = "United States"):
-        """Pobiera dane o inflacji (CPI) (Premium)."""
-        # === POPRAWKA "PUŁAPKI" (Hiperinflacja 324.8%) ===
-        # Dodajemy 'region', aby filtrować tylko dane z USA
-        logger.info(f"Agent Makro: Pobieranie danych CPI dla {region}...")
+    def get_inflation_rate(self, interval: str = 'monthly'):
+        """
+        Pobiera dane o ROCZNEJ STOPIE INFLACJI (procentowej) (Premium).
+        Zastępuje błędną funkcję get_cpi.
+        """
+        logger.info("Agent Makro: Pobieranie danych INFLATION (roczna stopa procentowa)...")
         params = {
-            "function": "CPI",
+            "function": "INFLATION",
             "interval": interval,
-            "datatype": "json",
-            "region": region # <-- KLUCZOWA POPRAWKA
+            "datatype": "json"
         }
         return self._make_request(params)
+    # ==================================================================
+    # === KONIEC GŁÓWNEJ NAPRAWY ===
+    # ==================================================================
 
     def get_fed_funds_rate(self, interval: str = 'monthly'):
         """Pobiera dane o stopach procentowych FED (Premium)."""
