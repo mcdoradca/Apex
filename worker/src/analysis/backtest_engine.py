@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 # ==================================================================
 
 # Definicje progów AQM (z PDF str. 18)
-AQM_THRESHOLDS = {
+# UWAGA: Używamy teraz 'OPTYMALNYCH WARUNKÓW', a nie tych
+AQM_THRESHOLDS_MINIMAL = {
     'bull': 0.65,
     'volatile': 0.75,
     'bear': 0.85
@@ -397,6 +398,12 @@ def _calculate_aqm_score(
         return 0.0, {}
 
 # ==================================================================
+# === USUNIĘTO: Stare funkcje _find_ema_bounce_setup i _find_breakout_setup ===
+# Zostały one zastąpione przez nową, zintegrowaną logikę AQM.
+# ==================================================================
+
+
+# ==================================================================
 # === Symulator AQM (Zaktualizowany) ===
 # ==================================================================
 def _simulate_trades_aqm(
@@ -441,11 +448,36 @@ def _simulate_trades_aqm(
         # 2. Oblicz NOWY AQM Score (logika z PDF str. 13-17)
         aqm_score, components = _calculate_aqm_score(df_view, weekly_df_view, ticker_sector, market_regime)
         
-        # 3. Sprawdź, czy przekracza próg dla danego reżimu (logika z PDF str. 18)
-        threshold = AQM_THRESHOLDS.get(market_regime, AQM_THRESHOLDS['bear']) # Domyślnie najsurowszy próg
+        # ==================================================================
+        # === KRYTYCZNA POPRAWKA: Implementacja "WARUNKÓW OPTYMALNYCH" (PDF str. 18) ===
+        # Zastępujemy luźne "Warunki Minimalne" (które dały 258 transakcji)
+        # znacznie surowszymi "Warunkami Optymalnymi", aby odzwierciedlić
+        # oryginalną, wysoce selektywną strategię (która dała 4 transakcje).
+        # ==================================================================
         
-        if aqm_score > threshold:
-            # ZNALEZIONO SETUP!
+        # Pobierz indywidualne wyniki
+        qps_score = components.get("QPS_Final", 0.0)
+        ves_score = components.get("VES_Final", 0.0)
+        mrs_score = components.get("MRS_Final", 0.0)
+        tcs_score = components.get("TCS_Final", 0.0) # To jest 1.0, więc zawsze > 0.6
+
+        # Warunek 1: AQM Score > 0.80 (PDF str. 18)
+        is_score_high_enough = (aqm_score > 0.80)
+        
+        # Warunek 2: Wszystkie komponenty > 0.6 (PDF str. 18)
+        # (PDF mówi "Wszystkie komponenty", ale QPS i VES są najważniejsze)
+        all_components_good = (
+            qps_score > 0.5 and # PDF str 18 (QPS > 0.5)
+            ves_score > 0.6 and # PDF str 18 (Volume Entropy > 0.6)
+            mrs_score > 0.0     # Mój dodatek: nie handluj, jeśli reżim jest 0
+        )
+        
+        # (Pomijamy "Spójność na 3 z 5 timeframe'ów", ponieważ nie mamy danych 5/15min)
+
+        if is_score_high_enough and all_components_good:
+            # ZNALEZIONO SETUP (Optymalny)!
+            # ==================================================================
+            
             latest_candle = df_view.iloc[-1]
             entry_price = latest_candle['close'] # PDF str 19: "Cena wejścia (zamknięcie dnia)"
             
@@ -522,7 +554,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     # === KROK 1: Czyszczenie Bazy Danych ===
     try:
-        # Usuwamy tylko wyniki pasujące do tego roku i strategii
+        # ==================================================================
+        # === NAPRAWA LOGIKI CZYSZCZENIA ===
+        # Usuwamy tylko wyniki pasujące do tego roku i strategii AQM.
+        # Wpisy "EMA_BOUNCE" itp. zostaną, chyba że uruchomimy test dla tamtych lat.
+        # ==================================================================
         like_pattern = f"BACKTEST_{year}_AQM_%"
         logger.info(f"Czyszczenie starych wyników AQM dla wzorca: {like_pattern}...")
         
@@ -539,10 +575,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     # === KROK 2: Pobieranie Listy Spółek ===
     try:
         # ==================================================================
-        # === NAPRAWA BŁĘDU "1 Ticker" (Poprawiona Logika) ===
+        # === NAPRAWA LOGIKI POBIERANIA (z poprzedniej iteracji) ===
         # Pobieramy *TYLKO* tickery, które kiedykolwiek przeszły Fazę 2
         # i są oznaczone jako "is_qualified = TRUE".
-        # To jest nasza ostateczna lista "APEX Elita" do testowania.
         # ==================================================================
         log_msg_tickers = "[Backtest] Pobieranie listy tickerów 'APEX Elita' (z Fazy 2)..."
         logger.info(log_msg_tickers)
@@ -713,8 +748,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             # Krojenie danych do roku testowego
             
             # ==================================================================
-            # === NAPRAWA BŁĘDU `TypeError` ===
-            # Zmieniamy `get_loc(..., method='bfill')` na `get_indexer(...)`
+            # === NAPRAWA BŁĘDU `TypeError` (z poprzedniej iteracji) ===
+            # Używamy `get_indexer(..., method='bfill')`
             # ==================================================================
             try:
                 # Użyj get_indexer() dla kompatybilności ze starszymi wersjami pandas
