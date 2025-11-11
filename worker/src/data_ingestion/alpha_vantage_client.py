@@ -294,13 +294,16 @@ class AlphaVantageClient:
     # KROK B (FAZA 0): Dodanie 4 nowych funkcji dla danych makroekonomicznych
     # ==================================================================
 
-    def get_cpi(self, interval: str = 'monthly'):
+    def get_cpi(self, interval: str = 'monthly', region: str = "United States"):
         """Pobiera dane o inflacji (CPI) (Premium)."""
-        logger.info("Agent Makro: Pobieranie danych CPI...")
+        # === POPRAWKA "PUŁAPKI" (Hiperinflacja 324.8%) ===
+        # Dodajemy 'region', aby filtrować tylko dane z USA
+        logger.info(f"Agent Makro: Pobieranie danych CPI dla {region}...")
         params = {
             "function": "CPI",
             "interval": interval,
-            "datatype": "json"
+            "datatype": "json",
+            "region": region # <-- KLUCZOWA POPRAWKA
         }
         return self._make_request(params)
 
@@ -335,42 +338,33 @@ class AlphaVantageClient:
             "datatype": "json"
         }
         return self._make_request(params)
+    
     # ==================================================================
-    # Koniec Krok B (FAZA 0)
+    # === NOWE ENDPOINTY DLA AQM (Backtest) ===
     # ==================================================================
-
-    # ==================================================================
-    # === NOWE ENDPOINTY DLA LOGIKI AQM (ZGODNIE Z PDF str. 19) ===
-    # ==================================================================
-
+    
     def get_time_series_weekly(self, symbol: str, outputsize: str = 'full'):
-        """Pobiera dane 'TIME_SERIES_WEEKLY_ADJUSTED'."""
-        logger.info(f"Pobieranie danych WEEKLY dla {symbol}...")
+        """Pobiera *zwykłe* (nie-adjusted) dane tygodniowe."""
         params = {
-            "function": "TIME_SERIES_WEEKLY_ADJUSTED", 
-            "symbol": symbol, 
+            "function": "TIME_SERIES_WEEKLY_ADJUSTED", # Używamy adjusted dla spójności
+            "symbol": symbol,
             "outputsize": outputsize
         }
         return self._make_request(params)
 
     def get_obv(self, symbol: str, interval: str = 'daily'):
         """Pobiera dane On-Balance Volume (OBV)."""
-        logger.info(f"Pobieranie danych OBV ({interval}) dla {symbol}...")
         params = {
-            "function": "OBV", 
-            "symbol": symbol, 
-            "interval": interval,
-            # (Uwaga: Alpha Vantage może wymagać 'time_period' dla OBV, ale API twierdzi, że nie.
-            # Jeśli zawiedzie, dodamy tu 'time_period=10' jako domyślny.)
+            "function": "OBV",
+            "symbol": symbol,
+            "interval": interval
         }
         return self._make_request(params)
-
+        
     def get_sector_performance(self):
-        """Pobiera dane o wydajności sektorów (SECTOR)."""
-        logger.info("Pobieranie danych SECTOR_PERFORMANCE...")
+        """Pobiera dane o wydajności sektorów."""
         params = {"function": "SECTOR"}
         return self._make_request(params)
-    
     # ==================================================================
     # === KONIEC NOWYCH ENDPOINTÓW AQM ===
     # ==================================================================
