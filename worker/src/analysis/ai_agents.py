@@ -432,11 +432,14 @@ def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str)
 
 # ==================================================================
 # KROK C (FAZA 0): Dodanie "Mózgu" Agenta Makroekonomicznego
+# === GŁÓWNA NAPRAWA BŁĘDU FAZY 0 ===
 # ==================================================================
-def _run_macro_analysis_agent(cpi: dict, fed_rate: dict, yield_10y: dict, unemployment: dict) -> dict:
+def _run_macro_analysis_agent(inflation: dict, fed_rate: dict, yield_10y: dict, unemployment: dict) -> dict:
     """
     Wywołuje Gemini API, aby przeanalizować kluczowe wskaźniki makro
     i zwrócić sentyment rynkowy ('RISK_ON' lub 'RISK_OFF').
+    
+    POPRAWIONA WERSJA: Akceptuje `inflation` (np. 3.0) zamiast `cpi` (np. 324.8).
     """
     if not GEMINI_API_KEY:
         logger.error("Agent Makro: Brak klucza GEMINI_API_KEY. Analiza niemożliwa. Ustawiam domyślny 'RISK_ON'.")
@@ -448,8 +451,9 @@ def _run_macro_analysis_agent(cpi: dict, fed_rate: dict, yield_10y: dict, unempl
     # Przygotowanie danych wejściowych dla promptu
     try:
         # Przetwarzamy dane, aby uzyskać najnowsze wartości
-        latest_cpi_value = cpi.get('data', [{}])[0].get('value', 'N/A')
-        latest_cpi_date = cpi.get('data', [{}])[0].get('date', 'N/A')
+        # ZMIANA: `cpi` -> `inflation`
+        latest_inflation_value = inflation.get('data', [{}])[0].get('value', 'N/A')
+        latest_inflation_date = inflation.get('data', [{}])[0].get('date', 'N/A')
         
         latest_fed_rate_value = fed_rate.get('data', [{}])[0].get('value', 'N/A')
         latest_fed_rate_date = fed_rate.get('data', [{}])[0].get('date', 'N/A')
@@ -465,13 +469,14 @@ def _run_macro_analysis_agent(cpi: dict, fed_rate: dict, yield_10y: dict, unempl
         return {"sentiment": "RISK_ON", "reason": f"Błąd parsowania danych wejściowych: {e}"}
 
     # Precyzyjny prompt trenujący
+    # ZMIANA: Używamy `latest_inflation_value` i poprawiamy etykietę w prompcie.
     prompt = f"""
     Jesteś głównym analitykiem makroekonomicznym w funduszu hedgingowym typu 'long-only' skupionym na akcjach wzrostowych (Nasdaq).
     Twoim zadaniem jest ochrona kapitału funduszu. Masz określić, czy otoczenie rynkowe sprzyja podejmowaniu ryzyka.
 
     Przeanalizuj poniższe 4 kluczowe wskaźniki makroekonomiczne dla USA:
 
-    1.  Inflacja (CPI, roczna): {latest_cpi_value}% (z dnia: {latest_cpi_date})
+    1.  Inflacja (Roczna stopa): {latest_inflation_value}% (z dnia: {latest_inflation_date})
     2.  Stopy Procentowe (FED Funds Rate): {latest_fed_rate_value}% (z dnia: {latest_fed_rate_date})
     3.  Rentowność Obligacji (10-letnie): {latest_yield_value}% (z dnia: {latest_yield_date})
     4.  Stopa Bezrobocia: {latest_unemployment_value}% (z dnia: {latest_unemployment_date})
@@ -544,5 +549,5 @@ def _run_macro_analysis_agent(cpi: dict, fed_rate: dict, yield_10y: dict, unempl
     logger.error(f"Agent Makro: Nie udało się przeanalizować danych makro po {max_retries} próbach. Ustawiam domyślny 'RISK_ON'.")
     return {"sentiment": "RISK_ON", "reason": "Błąd po stronie serwera podczas analizy makro."}
 # ==================================================================
-# Koniec Krok C (FAZA 0)
+# Koniec Krok C (FAZA 0) i Koniec GŁÓWNEJ NAPRAWY
 # ==================================================================
