@@ -325,21 +325,21 @@ def _calculate_aqm_score(
         
         # VES - Analiza OBV (40% wagi VES)
         obv_score = 0.0
-        if d['obv'] > d['obv_20_ma']: obv_score += 0.4
-        if d['obv'] > df_view.iloc[-2]['obv']: obv_score += 0.3 # OBV rośnie (trend > 0)
-        if d['obv_20_ma'] > d['obv_50_ma']: obv_score += 0.3
+        if not pd.isna(d['obv']) and not pd.isna(d['obv_20_ma']) and d['obv'] > d['obv_20_ma']: obv_score += 0.4
+        if not pd.isna(d['obv']) and not pd.isna(df_view.iloc[-2]['obv']) and d['obv'] > df_view.iloc[-2]['obv']: obv_score += 0.3 # OBV rośnie (trend > 0)
+        if not pd.isna(d['obv_20_ma']) and not pd.isna(d['obv_50_ma']) and d['obv_20_ma'] > d['obv_50_ma']: obv_score += 0.3
         
         # VES - Stosunek Wolumenu (30% wagi VES)
         volume_score = 0.1 # Domyślna (zła) wartość
-        if d['volume_20_ma'] > 0:
+        if not pd.isna(d['volume_20_ma']) and d['volume_20_ma'] > 0:
             volume_ratio = d['volume'] / d['volume_20_ma']
             if volume_ratio > 1.2: volume_score = 1.0 # PDF str 15: > 1.2 (użyjemy 1.0)
             elif volume_ratio > 0.8: volume_score = 0.7 # PDF str 15: > 0.8 (użyjemy 0.7)
         
         # VES - Analiza A/D Line (30% wagi VES)
         ad_score = 0.0
-        if d['ad_line'] > d['ad_line_20_ma']: ad_score += 0.5 # PDF str 15: Użyjemy 0.5
-        if d['ad_line'] > df_view.iloc[-2]['ad_line']: ad_score += 0.5 # A/D rośnie (trend > 0)
+        if not pd.isna(d['ad_line']) and not pd.isna(d['ad_line_20_ma']) and d['ad_line'] > d['ad_line_20_ma']: ad_score += 0.5 # PDF str 15: Użyjemy 0.5
+        if not pd.isna(d['ad_line']) and not pd.isna(df_view.iloc[-2]['ad_line']) and d['ad_line'] > df_view.iloc[-2]['ad_line']: ad_score += 0.5 # A/D rośnie (trend > 0)
         
         ves_score = (obv_score * 0.4) + (volume_score * 0.3) + (ad_score * 0.3)
         components["VES_Final"] = ves_score
@@ -373,13 +373,22 @@ def _calculate_aqm_score(
         tcs_score = 1.0 # Uproszczenie: Załóżmy, że timing jest zawsze dobry
         components["TCS_Final"] = tcs_score
         
-        # --- FINAŁ: Mnożenie (PDF str 12 i 18) ---
-        # Użyjmy mnożenia, zgodnie z PDF.
-        # Musimy upewnić się, że żaden score nie jest NaN
-        if pd.isna(qps_score) or pd.isna(ves_score) or pd.isna(mrs_score) or pd.isna(tcs_score):
-             return 0.0, components
+        # --- FINAŁ: Suma Ważona (ZGODNIE Z PDF str. 10, 13, 14, 15, 17) ---
+        # ==================================================================
+        # === KRYTYCZNA POPRAWKA: Zmiana z iloczynu (mnożenia) na SUMĘ WAŻONĄ ===
+        # Poprzednia logika (mnożenie) była błędna, ponieważ iloczyn
+        # ułamków (np. 0.8 * 0.7 * 0.5) nigdy nie osiągnąłby progu 0.85.
+        # Używamy logiki wag procentowych opisanych w PDF.
+        # ==================================================================
+        
+        # Upewnijmy się, że żaden score nie jest NaN, zastępując NaN zerami
+        qps_score = 0.0 if pd.isna(qps_score) else qps_score
+        ves_score = 0.0 if pd.isna(ves_score) else ves_score
+        mrs_score = 0.0 if pd.isna(mrs_score) else mrs_score
+        tcs_score = 0.0 if pd.isna(tcs_score) else tcs_score # Chociaż tcs jest 1.0
 
-        final_aqm_score = (qps_score * ves_score * mrs_score * tcs_score)
+        final_aqm_score = (qps_score * 0.40) + (ves_score * 0.30) + (mrs_score * 0.20) + (tcs_score * 0.10)
+        # ==================================================================
         
         return final_aqm_score, components
 
