@@ -363,21 +363,7 @@ def main_loop():
         
         # ==================================================================
         # === KROK 2 (REWOLUCJA): "TWARDY RESET" (OPCJA 2) ===
-        # Zgodnie z poleceniem, dodajemy jednorazową operację
-        # czyszczenia WSZYSTKICH (19000+) starych wyników backtestu.
-        # ==================================================================
-        try:
-            logger.warning("HARD RESET (OPCJA 2): Rozpoczynanie czyszczenia tabeli 'virtual_trades'...")
-            # Używamy TRUNCATE, co jest szybsze niż DELETE i resetuje liczniki
-            initial_session.execute(text("TRUNCATE TABLE virtual_trades RESTART IDENTITY;"))
-            initial_session.commit()
-            logger.info("HARD RESET: Pomyślnie wyczyszczono 'virtual_trades'. Baza danych jest czysta.")
-            # Zapisz log resetu do UI
-            utils.update_system_control(initial_session, 'scan_log', f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] TWARDY RESET: Baza 'virtual_trades' została wyczyszczona.\n")
-        except Exception as e:
-            logger.error(f"HARD RESET FAILED: {e}", exc_info=True)
-            initial_session.rollback()
-            utils.update_system_control(initial_session, 'scan_log', f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] BŁĄD TWARDEGO RESETU: {e}\n")
+        # Ten blok kodu został USUNIĘTY w tej "czystej" wersji.
         # ==================================================================
         
         
