@@ -436,7 +436,7 @@ def _run_pairs_trading_strategy(
             PAIRS_STRATEGY_PARAMS['sector_lookback_days']
         )
         if strength is not None:
-            sector_strengths.append((sector_name, strength))
+            sector_strengths.append((sector_name, strength, etf_ticker)) # Dodajemy etf_ticker
             
     if len(sector_strengths) < 2: # Potrzebujemy co najmniej 2 sektorów do porównania
         return []
@@ -445,8 +445,12 @@ def _run_pairs_trading_strategy(
     sector_strengths.sort(key=lambda x: x[1], reverse=True)
     strongest_sector_name = sector_strengths[0][0]
     weakest_sector_name = sector_strengths[-1][0]
+    
+    # 3. Sprawdź, czy sektory nie są takie same (co może się zdarzyć przy błędzie danych)
+    if strongest_sector_name == weakest_sector_name:
+        return []
 
-    # 3. Znajdź kandydatów w tych sektorach
+    # 4. Znajdź kandydatów w tych sektorach
     long_candidate_tuple = _find_best_long_candidate(
         _get_tickers_in_sector(strongest_sector_name), 
         current_date_str
@@ -457,13 +461,19 @@ def _run_pairs_trading_strategy(
         current_date_str
     )
     
-    # 4. Jeśli mamy parę, przygotuj transakcje
+    # 5. Jeśli mamy parę, przygotuj transakcje
     if long_candidate_tuple and short_candidate_tuple:
         long_ticker, long_score = long_candidate_tuple
         short_ticker, short_score = short_candidate_tuple
         
-        long_data = _get_ticker_data_from_cache(long_ticker)['daily']
-        short_data = _get_ticker_data_from_cache(short_ticker)['daily']
+        long_data_cache = _get_ticker_data_from_cache(long_ticker)
+        short_data_cache = _get_ticker_data_from_cache(short_ticker)
+        
+        if not long_data_cache or not short_data_cache:
+            return [] # Błąd cache, przerwano
+            
+        long_data = long_data_cache['daily']
+        short_data = short_data_cache['daily']
         
         # Pobieramy indeks (numer wiersza) dla bieżącej daty
         long_entry_index = long_data.index.get_loc(current_date)
@@ -738,8 +748,13 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                     
                     if aqm_score > threshold:
                         # ZNALEZIONO SETUP AQM
-                        entry_index = df_view.index.get_loc(current_date)
-                        entry_price = df_view.iloc[entry_index]['close']
+                        # ==================================================================
+                        # === OSTATECZNA POPRAWKA (Błąd Indeksowania) ===
+                        # Pobieramy indeks z PEŁNEGO dataframe (data['daily']),
+                        # a nie z wycinka (df_view).
+                        # ==================================================================
+                        entry_index = data['daily'].index.get_loc(current_date)
+                        entry_price = data['daily'].iloc[entry_index]['close']
                         
                         setup_aqm = {
                             "ticker": ticker,
