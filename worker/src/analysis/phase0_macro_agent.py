@@ -1,4 +1,7 @@
 import logging
+# === POPRAWKA (Błąd 'datetime' not defined z logów) ===
+from datetime import datetime
+# ===================================================
 from sqlalchemy.orm import Session
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 # Importujemy "mózg" Agenta Makro (z Kroku C)
@@ -59,6 +62,7 @@ def run_macro_analysis(session: Session, api_client: AlphaVantageClient) -> str:
             send_telegram_alert(alert_msg)
             
             # Zapisz globalny status makro (opcjonalne, ale przydatne)
+            # Ta linia teraz zadziała
             update_system_control(session, 'macro_sentiment', f"RISK_OFF ({datetime.now().isoformat()})")
             
             return "RISK_OFF"
@@ -69,6 +73,7 @@ def run_macro_analysis(session: Session, api_client: AlphaVantageClient) -> str:
             logger.info(f"AGENT FAZY 0 (MAKRO): {log_msg}")
             
             append_scan_log(session, log_msg)
+            # Ta linia teraz zadziała
             update_system_control(session, 'macro_sentiment', f"RISK_ON ({datetime.now().isoformat()})")
             
             return "RISK_ON"
