@@ -19,7 +19,8 @@ from .utils import (
     calculate_ad
 )
 from .. import models
-from ..config import Phase3Config, SECTOR_TO_ETF_MAP # Usunięto Phase3Config, nie jest już potrzebny
+# Importujemy SECTOR_TO_ETF_MAP (usunięto nieużywany Phase3Config)
+from ..config import SECTOR_TO_ETF_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +281,7 @@ def _calculate_aqm_score(
         
         # QPS - Zmienność Dzienna (20% wagi QPS_D)
         volatility_d = 0.3 # Domyślna (zła) wartość
-        if d['close'] > 0:
+        if d['close'] > 0 and not pd.isna(d['atr_14']):
             atr_percent = d['atr_14'] / d['close']
             if atr_percent < 0.05: volatility_d = 1.0 # Poniżej 5% ATR
             elif atr_percent < 0.08: volatility_d = 0.7 # Poniżej 8% ATR
@@ -343,7 +344,7 @@ def _calculate_aqm_score(
         
         if market_regime == 'bull':
             # PDF str 16: Faworyzuj Technology, Communication Services, Consumer Cyclical
-            if sector in ['Technology', 'Communication Services', 'Consumer Cyclical']:
+            if sector in ['Technology', 'Communication Services', 'Consumer Discretionary']: # Używamy nazw z naszej bazy
                 mrs_score = 0.7
             # PDF nie określa "else", ale obecny kod dawał 0.3. Zostawmy 0.
             
@@ -365,18 +366,13 @@ def _calculate_aqm_score(
         tcs_score = 1.0 # Uproszczenie: Załóżmy, że timing jest zawsze dobry
         components["TCS_Final"] = tcs_score
         
-        # --- FINAŁ: Suma ważona (PDF str 12) ---
-        # PDF str 12: "Finalny score AQM jest iloczynem tych komponentów"
-        # PDF str 18: "aqm_score = qps * ves * mrs * tcs"
+        # --- FINAŁ: Mnożenie (PDF str 12 i 18) ---
         # Użyjmy mnożenia, zgodnie z PDF.
-        # Musimy upewnić się, że żaden score nie jest 0, chyba że celowo.
-        # Jeśli MRS=0 (np. spółka Tech w bessie), cały wynik będzie 0. TO JEST DOBRE.
-        
+        # Musimy upewnić się, że żaden score nie jest NaN
+        if pd.isna(qps_score) or pd.isna(ves_score) or pd.isna(mrs_score) or pd.isna(tcs_score):
+             return 0.0, components
+
         final_aqm_score = (qps_score * ves_score * mrs_score * tcs_score)
-        
-        # Zapiszmy też sumę ważoną (z poprzedniej wersji kodu) na potrzeby logowania
-        # weighted_sum = (qps_score * 0.40) + (ves_score * 0.30) + (mrs_score * 0.20) + (tcs_score * 0.10)
-        # components["Weighted_Sum_DEBUG"] = weighted_sum
         
         return final_aqm_score, components
 
@@ -526,37 +522,35 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     # === KROK 2: Pobieranie Listy Spółek ===
     try:
-        log_msg_tickers = "[Backtest] Pobieranie listy tickerów ze skanera 'phase1_candidates'..."
+        log_msg_tickers = "[Backtest] Pobieranie listy tickerów ze skanera 'phase1_candidates' i 'phase2_results'..."
         logger.info(log_msg_tickers)
         append_scan_log(session, log_msg_tickers)
         
-        # Pobieramy najświeższą listę kandydatów z Fazy 1
-        tickers_to_test_rows = session.execute(text("""
-            SELECT DISTINCT ticker 
-            FROM phase1_candidates 
-            WHERE analysis_date = (SELECT MAX(analysis_date) FROM phase1_candidates)
-            ORDER BY ticker
-        """)).fetchall()
+        # ==================================================================
+        # === NAPRAWA BŁĘDU "1 Ticker" ===
+        # Pobieramy *WSZYSTKIE* unikalne tickery z OBU tabel (phase1 i phase2),
+        # niezależnie od daty, aby zapewnić, że mamy listę do pracy.
+        # ==================================================================
+        tickers_p1_rows = session.execute(text("SELECT DISTINCT ticker FROM phase1_candidates")).fetchall()
+        tickers_p2_rows = session.execute(text("SELECT DISTINCT ticker FROM phase2_results")).fetchall()
         
-        if not tickers_to_test_rows:
-             # Jeśli Faza 1 jest pusta, spróbuj pobrać z Fazy 2
-             logger.warning("Tabela 'phase1_candidates' jest pusta. Próbuję pobrać z 'phase2_results'...")
-             tickers_to_test_rows = session.execute(text("""
-                SELECT DISTINCT ticker 
-                FROM phase2_results 
-                WHERE analysis_date = (SELECT MAX(analysis_date) FROM phase2_results)
-                ORDER BY ticker
-             """)).fetchall()
+        tickers_p1 = {row[0] for row in tickers_p1_rows}
+        tickers_p2 = {row[0] for row in tickers_p2_rows}
+        
+        # Używamy set union (unikalne połączenie)
+        all_unique_tickers = list(tickers_p1.union(tickers_p2))
+        all_unique_tickers.sort() # Sortujemy dla spójności
+        
+        tickers_to_test = all_unique_tickers
+        # ==================================================================
 
-        tickers_to_test = [row[0] for row in tickers_to_test_rows]
-        
         if not tickers_to_test:
-            log_msg = f"[Backtest] BŁĄD: Tabele 'phase1_candidates' i 'phase2_results' są puste. Uruchom najpierw skaner Fazy 1 (przycisk 'Start')."
+            log_msg = f"[Backtest] BŁĄD: Tabele 'phase1_candidates' i 'phase2_results' są całkowicie puste. Uruchom najpierw skaner Fazy 1 (przycisk 'Start')."
             logger.error(log_msg)
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} tickerów w 'phase1/2' do przetestowania."
+        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} unikalnych tickerów w 'phase1/2' do przetestowania."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
@@ -670,6 +664,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 _backtest_cache["tickers_by_sector"][sector].append(ticker)
 
             except Exception as e:
+                # Nie przerywaj budowania cache z powodu jednego tickera
                 logger.error(f"[Backtest] Błąd budowania cache dla {ticker}: {e}", exc_info=True)
                 
         logger.info("[Backtest] Budowanie pamięci podręcznej (Cache) zakończone.")
@@ -703,22 +698,32 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             ticker_data = _get_ticker_data_from_cache(ticker)
             if not ticker_data:
                 continue
-                
-            # Krojenie danych do roku testowego
-            # Musimy pobrać dane "sprzed" roku, aby wskaźniki (np. EMA 200) były dojrzałe
-            # Używamy .loc, które może obsłużyć daty spoza zakresu bez błędu
             
-            # Potrzebujemy co najmniej 200 dni *przed* start_date
-            # Znajdź indeks start_date
+            # Krojenie danych do roku testowego
+            
+            # ==================================================================
+            # === NAPRAWA BŁĘDU `TypeError` ===
+            # Zmieniamy `get_loc(..., method='bfill')` na `get_indexer(...)`
+            # ==================================================================
             try:
-                start_index = ticker_data['daily'].index.get_loc(start_date, method='bfill')
-            except KeyError:
-                logger.warning(f"Brak danych dla {ticker} w roku {year}. Pomijanie.")
-                continue
+                # Użyj get_indexer() dla kompatybilności ze starszymi wersjami pandas
+                indexer = ticker_data['daily'].index.get_indexer([start_date], method='bfill')
                 
+                # Sprawdź, czy data została znaleziona (indexer zwróci -1, jeśli nie)
+                if indexer[0] == -1:
+                    raise KeyError(f"Data {start_date} nie znaleziona w indeksie dla {ticker}")
+                
+                start_index = indexer[0]
+                
+            except KeyError:
+                logger.warning(f"[Backtest] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
+                continue
+            # ==================================================================
+
+            
             # Upewnij się, że mamy 200 dni historii PRZED startem roku
             if start_index < 200:
-                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year}. Pomijanie.")
+                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec). Pomijanie.")
                 continue
 
             # Kroimy dane dzienne: od (start_date - 200 świec) do end_date
