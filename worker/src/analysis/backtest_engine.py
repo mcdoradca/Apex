@@ -103,7 +103,11 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
                 close_price = candle['close']
                 status = 'CLOSED_EXPIRED'
 
-            p_l_percent = ((close_price - entry_price) / entry_price) * 100
+            # Unikaj dzielenia przez zero, jeśli cena wejścia była 0
+            if entry_price == 0:
+                p_l_percent = 0.0
+            else:
+                p_l_percent = ((close_price - entry_price) / entry_price) * 100
         
         elif direction == 'SHORT':
             # === LOGIKA DLA POZYCJI KRÓTKIEJ (SHORT) ===
@@ -137,7 +141,10 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
                 status = 'CLOSED_EXPIRED'
 
             # P/L dla SHORT jest odwrotny
-            p_l_percent = ((entry_price - close_price) / entry_price) * 100
+            if entry_price == 0:
+                p_l_percent = 0.0
+            else:
+                p_l_percent = ((entry_price - close_price) / entry_price) * 100
         
         else:
             logger.error(f"Nieznany kierunek transakcji: {direction}")
@@ -522,35 +529,30 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     # === KROK 2: Pobieranie Listy Spółek ===
     try:
-        log_msg_tickers = "[Backtest] Pobieranie listy tickerów ze skanera 'phase1_candidates' i 'phase2_results'..."
+        # ==================================================================
+        # === NAPRAWA BŁĘDU "1 Ticker" (Poprawiona Logika) ===
+        # Pobieramy *TYLKO* tickery, które kiedykolwiek przeszły Fazę 2
+        # i są oznaczone jako "is_qualified = TRUE".
+        # To jest nasza ostateczna lista "APEX Elita" do testowania.
+        # ==================================================================
+        log_msg_tickers = "[Backtest] Pobieranie listy tickerów 'APEX Elita' (z Fazy 2)..."
         logger.info(log_msg_tickers)
         append_scan_log(session, log_msg_tickers)
         
-        # ==================================================================
-        # === NAPRAWA BŁĘDU "1 Ticker" ===
-        # Pobieramy *WSZYSTKIE* unikalne tickery z OBU tabel (phase1 i phase2),
-        # niezależnie od daty, aby zapewnić, że mamy listę do pracy.
-        # ==================================================================
-        tickers_p1_rows = session.execute(text("SELECT DISTINCT ticker FROM phase1_candidates")).fetchall()
-        tickers_p2_rows = session.execute(text("SELECT DISTINCT ticker FROM phase2_results")).fetchall()
+        tickers_p2_rows = session.execute(text(
+            "SELECT DISTINCT ticker FROM phase2_results WHERE is_qualified = TRUE"
+        )).fetchall()
         
-        tickers_p1 = {row[0] for row in tickers_p1_rows}
-        tickers_p2 = {row[0] for row in tickers_p2_rows}
-        
-        # Używamy set union (unikalne połączenie)
-        all_unique_tickers = list(tickers_p1.union(tickers_p2))
-        all_unique_tickers.sort() # Sortujemy dla spójności
-        
-        tickers_to_test = all_unique_tickers
+        tickers_to_test = sorted([row[0] for row in tickers_p2_rows])
         # ==================================================================
 
         if not tickers_to_test:
-            log_msg = f"[Backtest] BŁĄD: Tabele 'phase1_candidates' i 'phase2_results' są całkowicie puste. Uruchom najpierw skaner Fazy 1 (przycisk 'Start')."
+            log_msg = f"[Backtest] BŁĄD: Tabela 'phase2_results' (is_qualified=TRUE) jest pusta. Uruchom najpierw pełny skaner (przycisk 'Start'), aby wygenerować listę 'APEX Elita'."
             logger.error(log_msg)
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} unikalnych tickerów w 'phase1/2' do przetestowania."
+        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} unikalnych tickerów 'APEX Elita' do przetestowania."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
@@ -561,7 +563,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # === KROK 3: Budowanie Pamięci Podręcznej (Cache) ===
-    # (Pobiera VXX, SPY, 11 Sektorów ETF i wszystkie spółki z Fazy 1)
+    # (Pobiera VXX, SPY, 11 Sektorów ETF i wszystkie spółki z Fazy 2)
     
     try:
         logger.info("[Backtest] Rozpoczynanie budowania pamięci podręcznej (Cache)...")
@@ -601,7 +603,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             except Exception as e:
                 logger.error(f"  > BŁĄD ładowania danych dla sektora {etf_ticker}: {e}")
         
-        # 4. Pobierz dane dla wszystkich spółek z listy Fazy 1
+        # 4. Pobierz dane dla wszystkich spółek z listy Fazy 2
         logger.info(f"[Backtest] Cache: Ładowanie danych dla {len(tickers_to_test)} spółek...")
         total_cache_build = len(tickers_to_test)
         for i, ticker in enumerate(tickers_to_test):
@@ -707,6 +709,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             # ==================================================================
             try:
                 # Użyj get_indexer() dla kompatybilności ze starszymi wersjami pandas
+                # Znajdź indeks pierwszej daty, która jest >= start_date
                 indexer = ticker_data['daily'].index.get_indexer([start_date], method='bfill')
                 
                 # Sprawdź, czy data została znaleziona (indexer zwróci -1, jeśli nie)
