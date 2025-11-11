@@ -46,7 +46,6 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 
 
 def handle_ai_analysis_request(session):
-# ... (bez zmian) ...
     """Sprawdza i wykonuje nową analizę AI na żądanie."""
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
@@ -78,7 +77,6 @@ def handle_ai_analysis_request(session):
 # === NOWA FUNKCJA (Krok 2 - Backtest) ===
 # ==================================================================
 def handle_backtest_request(session, api_client) -> str:
-# ... (bez zmian) ...
     """
     Sprawdza i wykonuje nowe zlecenie backtestu historycznego.
     Zwraca 'BUSY', jeśli backtest jest w toku, lub 'IDLE', jeśli nie.
@@ -160,7 +158,6 @@ def handle_ai_optimizer_request(session) -> str:
 
 
 def run_full_analysis_cycle():
-# ... (bez zmian) ...
     global current_state
 
     # ==================================================================
@@ -321,7 +318,6 @@ def run_full_analysis_cycle():
 
 
 def main_loop():
-# ... (bez zmian) ...
     global current_state, api_client
     logger.info("Worker started. Initializing...")
     
@@ -364,6 +360,27 @@ def main_loop():
 
 
     with get_db_session() as initial_session:
+        
+        # ==================================================================
+        # === KROK 2 (REWOLUCJA): "TWARDY RESET" (OPCJA 2) ===
+        # Zgodnie z poleceniem, dodajemy jednorazową operację
+        # czyszczenia WSZYSTKICH (19000+) starych wyników backtestu.
+        # ==================================================================
+        try:
+            logger.warning("HARD RESET (OPCJA 2): Rozpoczynanie czyszczenia tabeli 'virtual_trades'...")
+            # Używamy TRUNCATE, co jest szybsze niż DELETE i resetuje liczniki
+            initial_session.execute(text("TRUNCATE TABLE virtual_trades RESTART IDENTITY;"))
+            initial_session.commit()
+            logger.info("HARD RESET: Pomyślnie wyczyszczono 'virtual_trades'. Baza danych jest czysta.")
+            # Zapisz log resetu do UI
+            utils.update_system_control(initial_session, 'scan_log', f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] TWARDY RESET: Baza 'virtual_trades' została wyczyszczona.\n")
+        except Exception as e:
+            logger.error(f"HARD RESET FAILED: {e}", exc_info=True)
+            initial_session.rollback()
+            utils.update_system_control(initial_session, 'scan_log', f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] BŁĄD TWARDEGO RESETU: {e}\n")
+        # ==================================================================
+        
+        
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         utils.update_system_control(initial_session, 'ai_analysis_request', 'NONE')
@@ -374,6 +391,7 @@ def main_loop():
         # === NOWA WARTOŚĆ (Krok 5 - Mega Agent) ===
         # ==================================================================
         utils.update_system_control(initial_session, 'ai_optimizer_request', 'NONE')
+        utils.update_system_control(initial_session, 'ai_optimizer_report', 'NONE') # Upewnij się, że raport też jest czysty
         # ==================================================================
         utils.report_heartbeat(initial_session)
 
