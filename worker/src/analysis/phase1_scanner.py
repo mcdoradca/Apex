@@ -23,18 +23,19 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     append_scan_log(session, "Faza 1: Rozpoczynanie skanowania EOD (Logika Fazy 2)...")
 
     # ==================================================================
-    # === POPRAWKA (Twoja sugestia): Czyszczenie tabeli na początku ===
+    # === OSTATECZNA POPRAWKA: Bezwarunkowe czyszczenie tabeli ===
+    # Usuwamy błędną klauzulę "WHERE analysis_date >= CURRENT_DATE",
+    # aby zapobiec błędom PRIMARY KEY VIOLATION z wczorajszych danych.
     # ==================================================================
     try:
-        # Czyścimy tylko kandydatów z bieżącego dnia (jeśli uruchamiamy ponownie)
-        # Stare dane są czyszczone przez main.py
-        session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date >= CURRENT_DATE"))
+        session.execute(text("DELETE FROM phase1_candidates"))
         session.commit()
-        logger.info("Cleared today's Phase 1 candidates to prevent duplicates.")
+        logger.info("Cleared ALL old Phase 1 candidates to prevent PK conflicts.")
     except Exception as e:
         logger.error(f"Failed to clear Phase 1 table: {e}", exc_info=True)
         session.rollback()
-        # Kontynuujemy, ale możemy mieć duplikaty
+        append_scan_log(session, f"BŁĄD KRYTYCZNY: Nie można wyczyścić tabeli Fazy 1: {e}")
+        return [] # Zatrzymujemy skanowanie, jeśli nie możemy wyczyścić tabeli
     # ==================================================================
 
     try:
@@ -131,14 +132,15 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             append_scan_log(session, log_msg)
             
             # ==================================================================
-            # === POPRAWKA (Twoja sugestia): Logika zapisu skopiowana z Fazy 2 ===
-            # Zapisujemy kandydata NATYCHMIAST, aby uniknąć błędów wsadowych
+            # === POPRAWKA BŁĘDU (schema "np" does not exist) ===
+            # Konwertujemy typy Numpy (np.float64, np.int64) na natywne
+            # typy Pythona (float, int), zanim przekażemy je do bazy danych.
             # ==================================================================
             candidate_data = {
                 'ticker': ticker, 
-                'price': current_price,
-                'volume': int(current_volume), # Bezpieczne, bo sprawdziliśmy NaN
-                'change_percent': change_percent,
+                'price': float(current_price),           # <-- NAPRAWIONE
+                'volume': int(current_volume),           # <-- NAPRAWIONE
+                'change_percent': float(change_percent), # <-- NAPRAWIONE
                 'score': 1 
             }
             
