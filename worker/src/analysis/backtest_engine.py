@@ -22,8 +22,7 @@ from .utils import (
     calculate_obv,
     calculate_ad
 )
-# Importujemy *tylko* setup Breakout, EMA zrobimy lokalnie
-from .phase3_sniper import _find_breakout_setup, _find_impulse_and_fib_zone
+# KROK 1 (REWOLUCJA): Usunięto importy starych strategii
 from .. import models
 from ..config import Phase3Config
 
@@ -121,48 +120,9 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         return None
 
 # ==================================================================
-# === NOWA FUNKCJA (Strategy Battle Royale) ===
-# Kopiujemy logikę EMA Bounce z phase3_sniper, ale usuwamy z niej
-# filtr ATR, aby mieć czystą bazę do testów.
+# === KROK 1 (REWOLUCJA): Usunięto funkcję _find_base_ema_bounce ===
 # ==================================================================
-def _find_base_ema_bounce(daily_df: pd.DataFrame) -> dict | None:
-    """
-    Znajduje *podstawowy* setup EMA Bounce (bez filtra ATR),
-    aby służył jako grupa kontrolna do testowania filtrów.
-    """
-    try:
-        ema_period = Phase3Config.EmaBounce.EMA_PERIOD
-        if len(daily_df) < ema_period + 3: return None
-        
-        # Ta linia modyfikuje kopię (df_view), co jest bezpieczne
-        daily_df['ema'] = calculate_ema(daily_df['close'], ema_period) 
-        
-        is_ema_rising = daily_df['ema'].iloc[-1] > daily_df['ema'].iloc[-2] > daily_df['ema'].iloc[-3]
-        latest_candle = daily_df.iloc[-1]
-        prev_candle = daily_df.iloc[-2]
-        latest_ema = daily_df['ema'].iloc[-1]
-        touched_ema = (prev_candle['low'] <= daily_df['ema'].iloc[-2] * 1.01) or \
-                      (latest_candle['open'] <= latest_ema * 1.01)
-        closed_above_ema = latest_candle['close'] > latest_ema
-        is_bullish_candle = latest_candle['close'] > latest_candle['open']
-        
-        if is_ema_rising and touched_ema and closed_above_ema and is_bullish_candle:
-             atr = calculate_atr(daily_df, 14).iloc[-1]
-             if atr == 0: return None
-             
-             stop_loss = latest_candle['low'] - (Phase3Config.EmaBounce.ATR_MULTIPLIER_FOR_SL * atr)
-             
-             return {
-                 "setup_type": "EMA_BOUNCE", # Nazwa bazowa
-                 "entry_price": latest_candle['high'] + 0.01,
-                 "stop_loss": stop_loss,
-                 "atr_percent": (atr / latest_candle['close']) # Zwracamy ATR% do filtrowania
-             }
-        return None
-    except Exception as e:
-        logger.error(f"Error in _find_base_ema_bounce: {e}")
-        return None
-# ==================================================================
+
 
 # ==================================================================
 # === NOWE FUNKCJE POMOCNICZE DLA BACKTESTU AQM ===
@@ -385,39 +345,13 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
         setups_to_test = []
         
         # ==================================================================
-        # === TEST 1 i 2: Stare strategie (dla porównania) ===
+        # === KROK 1 (REWOLUCJA): Usunięcie starych strategii ===
+        # Bloki testujące 'EMA_BOUNCE' i 'BREAKOUT' zostały usunięte.
         # ==================================================================
         
-        # Test 1: EMA Bounce (Warianty)
-        ema_setup = _find_base_ema_bounce(df_view) 
-        if ema_setup:
-            risk = ema_setup['entry_price'] - ema_setup['stop_loss']
-            if risk > 0:
-                base_setup = {
-                    "ticker": ticker,
-                    "entry_price": ema_setup['entry_price'],
-                    "stop_loss": ema_setup['stop_loss'],
-                    "take_profit": ema_setup['entry_price'] + (Phase3Config.EmaBounce.TARGET_RR_RATIO * risk),
-                    "max_hold_days": Phase3Config.EmaBounce.MAX_HOLD_DAYS
-                }
-                setups_to_test.append({ **base_setup, "setup_type": "EMA_BOUNCE" })
-
-        # Test 2: Breakout
-        breakout_setup = _find_breakout_setup(df_view)
-        if breakout_setup:
-            risk = breakout_setup['entry_price'] - breakout_setup['stop_loss']
-            if risk > 0:
-                setups_to_test.append({
-                    "ticker": ticker,
-                    "setup_type": "BREAKOUT",
-                    "entry_price": breakout_setup['entry_price'],
-                    "stop_loss": breakout_setup['stop_loss'],
-                    "take_profit": breakout_setup['entry_price'] + (Phase3Config.Breakout.TARGET_RR_RATIO * risk),
-                    "max_hold_days": Phase3Config.Breakout.MAX_HOLD_DAYS
-                })
         
         # ==================================================================
-        # === TEST 3: Nowa strategia AQM (Prototyp walidacyjny) ===
+        # === TEST TYLKO NOWEJ STRATEGII AQM ===
         # ==================================================================
         
         # 1. Wykryj reżim rynkowy (raz na dzień symulacji)
@@ -448,11 +382,11 @@ def _simulate_trades(session: Session, ticker: str, historical_data: pd.DataFram
             })
 
         # ==================================================================
-        # === Koniec Testu 3 ===
+        # === Koniec Testu AQM ===
         # ==================================================================
 
 
-        # Przetwórz wszystkie znalezione setupy (stare i nowe)
+        # Przetwórz wszystkie znalezione setupy (teraz tylko AQM)
         for setup_full in setups_to_test:
             
             log_date = historical_data.index[i].date()
@@ -506,10 +440,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     append_scan_log(session, log_msg)
 
     # ==================================================================
-    # === POPRAWKA LOGIKI CZYSZCZENIA (Twoja obserwacja) ===
-    # Zastępujemy skomplikowaną, ręczną listę 'prefixes_to_delete'
-    # jedną, globalną komendą DELETE...LIKE, aby poprawnie
-    # "zastępować" wyniki, a nie "dopisywać".
+    # === KROK 1 (REWOLUCJA): Rozszerzone Czyszczenie Bazy Danych ===
+    # Usuwamy WSZYSTKIE stare strategie, aby baza była czysta
+    # dla nowych wyników AQM.
     # ==================================================================
     try:
         # Definiujemy wzorzec LIKE (np. 'BACKTEST_2022_%')
