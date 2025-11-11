@@ -340,6 +340,79 @@ def _calculate_aqm_score(
         return 0.0, {}
 
 # ==================================================================
+# === OSTATECZNA POPRAWKA: Przywrócenie `_simulate_trades` ===
+# Ta funkcja uruchamia strategię AQM (bottom-up)
+# ==================================================================
+def _simulate_trades_aqm(session: Session, ticker: str, year: str):
+    """
+    Iteruje dzień po dniu przez historyczny DataFrame DLA JEDNEJ SPÓŁKI
+    i szuka setupów AQM.
+    """
+    trades_found = 0
+    data = _get_ticker_data_from_cache(ticker)
+    if not data:
+        return 0
+        
+    historical_data = data['daily']
+    weekly_data = data['weekly']
+    ticker_sector = data['sector']
+
+    # Zaczynamy od 200, aby mieć wystarczająco danych dla EMA 200
+    for i in range(200, len(historical_data)):
+        
+        current_date = historical_data.index[i]
+        current_date_str = current_date.strftime('%Y-%m-%d')
+
+        # Tworzymy "widok" danych, który widziałby analityk danego dnia
+        df_view = historical_data.iloc[i-200 : i+1].copy()
+        
+        # Pobierz widok danych tygodniowych (do bieżącej daty)
+        weekly_df_view = weekly_data[weekly_data.index <= current_date_str].iloc[-50:]
+        if len(weekly_df_view) < 50:
+            continue
+
+        # --- TESTOWANIE STRATEGII AQM ---
+        
+        # 1. Wykryj reżim rynkowy (raz na dzień symulacji)
+        market_regime = _detect_market_regime(current_date_str)
+        
+        # 2. Uruchamiaj tylko w hossie, zgodnie z logiką hamulca
+        if market_regime != 'bull':
+            continue
+            
+        # 3. Oblicz AQM Score
+        aqm_score, components = _calculate_aqm_score(df_view, weekly_df_view, ticker_sector, market_regime)
+        
+        # 4. Sprawdź, czy przekracza próg dla danego reżimu
+        threshold = AQM_THRESHOLDS.get(market_regime, 0.85)
+        
+        if aqm_score > threshold:
+            latest_candle = df_view.iloc[-1]
+            entry_price = latest_candle['close']
+            
+            setup_aqm = {
+                "ticker": ticker,
+                "setup_type": f"AQM_SCORE_{market_regime.upper()}", 
+                "entry_price": entry_price,
+                "stop_loss": entry_price * (1 - AQM_STRATEGY_PARAMS['stop_loss_percent']),
+                "take_profit": entry_price * (1 + AQM_STRATEGY_PARAMS['target_1_percent']),
+            }
+            
+            # entry_index to 'i' w pętli historical_data
+            trade = _resolve_trade(
+                historical_data, i, setup_aqm, 
+                AQM_STRATEGY_PARAMS['max_hold_days'], year, direction='LONG'
+            )
+            if trade:
+                session.add(trade)
+                trades_found += 1
+
+    if trades_found > 0:
+        session.commit()
+        
+    return trades_found
+
+# ==================================================================
 # === KROK 2b (REWOLUCJA): Logika Strategii 2: Handel Parami ===
 # ==================================================================
 
@@ -372,7 +445,8 @@ def _find_best_long_candidate(tickers_in_sector: List[str], current_date_str: st
             best_score = aqm_score
             best_ticker = ticker
             
-    if best_ticker and best_score > AQM_THRESHOLDS.get(market_regime, 0.85):
+    # ZMIANA: Używamy niższego progu dla Pairs Trading - szukamy "najlepszego z grupy", a nie "diamentu"
+    if best_ticker and best_score > 0.5: # Wcześniej było AQM_THRESHOLDS (zbyt wysokie)
         return best_ticker, best_score
     return None
 
@@ -416,103 +490,128 @@ def _find_best_short_candidate(tickers_in_sector: List[str], current_date_str: s
         return best_ticker, best_score
     return None
 
-def _run_pairs_trading_strategy(
+def _run_pairs_trading_simulation(
     session: Session, 
     year: str, 
-    current_date: pd.Timestamp, 
-    current_date_str: str
-) -> List[models.VirtualTrade]:
+    all_trading_days: pd.DatetimeIndex
+) -> int:
     """
-    Uruchamia pełną logikę Handlu Parami dla JEDNEGO DNIA.
+    Uruchamia pełną logikę Handlu Parami (TOP-DOWN) dla całego roku.
+    Iteruje DZIEŃ PO DNIU.
     """
-    trades_to_open = []
-    
-    # 1. Oblicz siłę wszystkich 11 sektorów
-    sector_strengths = []
-    for sector_name, etf_ticker in SECTOR_TO_ETF_MAP.items():
-        strength = _calculate_sector_strength(
-            etf_ticker, 
-            current_date_str, 
-            PAIRS_STRATEGY_PARAMS['sector_lookback_days']
-        )
-        if strength is not None:
-            sector_strengths.append((sector_name, strength, etf_ticker)) # Dodajemy etf_ticker
-            
-    if len(sector_strengths) < 2: # Potrzebujemy co najmniej 2 sektorów do porównania
-        return []
-        
-    # 2. Posortuj, aby znaleźć najsilniejszy i najsłabszy
-    sector_strengths.sort(key=lambda x: x[1], reverse=True)
-    strongest_sector_name = sector_strengths[0][0]
-    weakest_sector_name = sector_strengths[-1][0]
-    
-    # 3. Sprawdź, czy sektory nie są takie same (co może się zdarzyć przy błędzie danych)
-    if strongest_sector_name == weakest_sector_name:
-        return []
+    trades_found_total = 0
+    total_days = len(all_trading_days)
 
-    # 4. Znajdź kandydatów w tych sektorach
-    long_candidate_tuple = _find_best_long_candidate(
-        _get_tickers_in_sector(strongest_sector_name), 
-        current_date_str
-    )
-    
-    short_candidate_tuple = _find_best_short_candidate(
-        _get_tickers_in_sector(weakest_sector_name),
-        current_date_str
-    )
-    
-    # 5. Jeśli mamy parę, przygotuj transakcje
-    if long_candidate_tuple and short_candidate_tuple:
-        long_ticker, long_score = long_candidate_tuple
-        short_ticker, short_score = short_candidate_tuple
+    for i, current_date in enumerate(all_trading_days):
         
-        long_data_cache = _get_ticker_data_from_cache(long_ticker)
-        short_data_cache = _get_ticker_data_from_cache(short_ticker)
+        current_date_str = current_date.strftime('%Y-%m-%d')
         
-        if not long_data_cache or not short_data_cache:
-            return [] # Błąd cache, przerwano
+        # Pomiń pierwsze 200 dni roku, aby mieć pewność, że wskaźniki są "dojrzałe"
+        if i < 200:
+            continue
             
-        long_data = long_data_cache['daily']
-        short_data = short_data_cache['daily']
-        
-        # Pobieramy indeks (numer wiersza) dla bieżącej daty
-        long_entry_index = long_data.index.get_loc(current_date)
-        short_entry_index = short_data.index.get_loc(current_date)
-        
-        long_entry_price = long_data.iloc[long_entry_index]['close']
-        short_entry_price = short_data.iloc[short_entry_index]['close']
+        if i % 10 == 0: # Aktualizuj UI co 10 dni
+            log_msg = f"[Backtest][Pairs] Symulowanie dnia {i}/{total_days} ({current_date_str})..."
+            append_scan_log(session, log_msg)
+            update_scan_progress(session, i, total_days) # Dzieli postęp z AQM
 
-        # Przygotuj transakcję LONG
-        setup_long = {
-            "ticker": long_ticker,
-            "setup_type": f"PAIRS_LONG (vs {short_ticker})",
-            "entry_price": long_entry_price,
-            "stop_loss": long_entry_price * (1 - PAIRS_STRATEGY_PARAMS['stop_loss_percent']),
-            "take_profit": long_entry_price * (1 + PAIRS_STRATEGY_PARAMS['target_percent']),
-        }
-        trade_long = _resolve_trade(
-            long_data, long_entry_index, setup_long, 
-            PAIRS_STRATEGY_PARAMS['max_hold_days'], year, direction='LONG'
-        )
-        if trade_long:
-            trades_to_open.append(trade_long)
-
-        # Przygotuj transakcję SHORT
-        setup_short = {
-            "ticker": short_ticker,
-            "setup_type": f"PAIRS_SHORT (vs {long_ticker})",
-            "entry_price": short_entry_price,
-            "stop_loss": short_entry_price * (1 + PAIRS_STRATEGY_PARAMS['stop_loss_percent']), # SL w górę
-            "take_profit": short_entry_price * (1 - PAIRS_STRATEGY_PARAMS['target_percent']), # TP w dół
-        }
-        trade_short = _resolve_trade(
-            short_data, short_entry_index, setup_short, 
-            PAIRS_STRATEGY_PARAMS['max_hold_days'], year, direction='SHORT'
-        )
-        if trade_short:
-            trades_to_open.append(trade_short)
+        try:
+            new_trades = []
             
-    return trades_to_open
+            # 1. Oblicz siłę wszystkich 11 sektorów
+            sector_strengths = []
+            for sector_name, etf_ticker in SECTOR_TO_ETF_MAP.items():
+                strength = _calculate_sector_strength(
+                    etf_ticker, 
+                    current_date_str, 
+                    PAIRS_STRATEGY_PARAMS['sector_lookback_days']
+                )
+                if strength is not None:
+                    sector_strengths.append((sector_name, strength, etf_ticker))
+                    
+            if len(sector_strengths) < 2:
+                continue
+                
+            # 2. Posortuj
+            sector_strengths.sort(key=lambda x: x[1], reverse=True)
+            strongest_sector_name = sector_strengths[0][0]
+            weakest_sector_name = sector_strengths[-1][0]
+            
+            if strongest_sector_name == weakest_sector_name:
+                continue
+
+            # 3. Znajdź kandydatów
+            long_candidate_tuple = _find_best_long_candidate(
+                _get_tickers_in_sector(strongest_sector_name), 
+                current_date_str
+            )
+            
+            short_candidate_tuple = _find_best_short_candidate(
+                _get_tickers_in_sector(weakest_sector_name),
+                current_date_str
+            )
+            
+            # 4. Jeśli mamy parę, przygotuj transakcje
+            if long_candidate_tuple and short_candidate_tuple:
+                long_ticker, long_score = long_candidate_tuple
+                short_ticker, short_score = short_candidate_tuple
+                
+                long_data_cache = _get_ticker_data_from_cache(long_ticker)
+                short_data_cache = _get_ticker_data_from_cache(short_ticker)
+                
+                if not long_data_cache or not short_data_cache:
+                    continue
+                    
+                long_data = long_data_cache['daily']
+                short_data = short_data_cache['daily']
+                
+                long_entry_index = long_data.index.get_loc(current_date)
+                short_entry_index = short_data.index.get_loc(current_date)
+                
+                long_entry_price = long_data.iloc[long_entry_index]['close']
+                short_entry_price = short_data.iloc[short_entry_index]['close']
+
+                # Transakcja LONG
+                setup_long = {
+                    "ticker": long_ticker,
+                    "setup_type": f"PAIRS_LONG (vs {short_ticker})",
+                    "entry_price": long_entry_price,
+                    "stop_loss": long_entry_price * (1 - PAIRS_STRATEGY_PARAMS['stop_loss_percent']),
+                    "take_profit": long_entry_price * (1 + PAIRS_STRATEGY_PARAMS['target_percent']),
+                }
+                trade_long = _resolve_trade(
+                    long_data, long_entry_index, setup_long, 
+                    PAIRS_STRATEGY_PARAMS['max_hold_days'], year, direction='LONG'
+                )
+                if trade_long:
+                    new_trades.append(trade_long)
+
+                # Transakcja SHORT
+                setup_short = {
+                    "ticker": short_ticker,
+                    "setup_type": f"PAIRS_SHORT (vs {long_ticker})",
+                    "entry_price": short_entry_price,
+                    "stop_loss": short_entry_price * (1 + PAIRS_STRATEGY_PARAMS['stop_loss_percent']),
+                    "take_profit": short_entry_price * (1 - PAIRS_STRATEGY_PARAMS['target_percent']),
+                }
+                trade_short = _resolve_trade(
+                    short_data, short_entry_index, setup_short, 
+                    PAIRS_STRATEGY_PARAMS['max_hold_days'], year, direction='SHORT'
+                )
+                if trade_short:
+                    new_trades.append(trade_short)
+
+            # 5. Zapisz transakcje z TEGO DNIA
+            if new_trades:
+                session.add_all(new_trades)
+                session.commit()
+                trades_found_total += len(new_trades)
+
+        except Exception as e:
+            logger.error(f"[Backtest][Pairs] Błąd symulacji dnia {current_date_str}: {e}", exc_info=True)
+            session.rollback()
+            
+    return trades_found_total
 
 # ==================================================================
 # === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (PRZEBUDOWANA) ===
@@ -523,7 +622,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     Główna funkcja uruchamiająca backtest historyczny dla
     zdefiniowanego okresu i listy tickerów.
     
-    PRZEBUDOWANA: Działa teraz w trybie "TOP-DOWN" (dzień po dniu).
+    PRZEBUDOWANA: Uruchamia dwie oddzielne symulacje:
+    1. BOTTOM-UP (per-ticker) dla strategii AQM_SCORE
+    2. TOP-DOWN (per-day) dla strategii PAIRS_TRADING
     """
     
     try:
@@ -542,11 +643,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         append_scan_log(session, f"[Backtest] BŁĄD: Nieprawidłowy format roku: {year}")
         return
         
-    log_msg = f"BACKTEST HISTORYCZNY (TOP-DOWN): Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
+    log_msg = f"BACKTEST HISTORYCZNY (Dwie Strategie): Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
-    # === KROK 1: Czyszczenie Bazy Danych (Logika z Rewolucji) ===
+    # === KROK 1: Czyszczenie Bazy Danych ===
     try:
         like_pattern = f"BACKTEST_{year}_%"
         logger.info(f"Czyszczenie WSZYSTKICH starych wyników dla wzorca: {like_pattern}...")
@@ -561,7 +662,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         logger.error(f"Nie udało się wyczyścić starych wyników backtestu: {e}", exc_info=True)
         session.rollback()
 
-    # === KROK 2: Pobieranie Listy Spółek (Logika z Rewolucji) ===
+    # === KROK 2: Pobieranie Listy Spółek ===
     try:
         log_msg_tickers = "[Backtest] Pobieranie listy tickerów ze skanera 'phase1_candidates'..."
         logger.info(log_msg_tickers)
@@ -587,11 +688,10 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # === KROK 3: Budowanie Pamięci Podręcznej (Cache) ===
-    # To jest intensywna operacja, która wykonuje się raz na początku.
+    # (Pobiera VXX, SPY, 11 Sektorów ETF i wszystkie spółki z Fazy 1)
     
     try:
         logger.info("[Backtest] Rozpoczynanie budowania pamięci podręcznej (Cache)...")
-        # 1. Wyczyść stary cache
         _backtest_cache["vix_data"] = None
         _backtest_cache["spy_data"] = None
         _backtest_cache["sector_etf_data"] = {}
@@ -628,11 +728,12 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         
         # 4. Pobierz dane dla wszystkich spółek z listy Fazy 1
         logger.info(f"[Backtest] Cache: Ładowanie danych dla {len(tickers_to_test)} spółek...")
+        total_cache_build = len(tickers_to_test)
         for i, ticker in enumerate(tickers_to_test):
             if i % 10 == 0:
-                log_msg = f"[Backtest] Budowanie cache... ({i}/{len(tickers_to_test)})"
+                log_msg = f"[Backtest] Budowanie cache... ({i}/{total_cache_build})"
                 append_scan_log(session, log_msg)
-                update_scan_progress(session, i, len(tickers_to_test))
+                update_scan_progress(session, i, total_cache_build)
             
             try:
                 price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
@@ -689,6 +790,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 
         logger.info("[Backtest] Budowanie pamięci podręcznej (Cache) zakończone.")
         append_scan_log(session, "[Backtest] Budowanie pamięci podręcznej (Cache) zakończone.")
+        update_scan_progress(session, total_cache_build, total_cache_build)
 
     except Exception as e:
         log_msg = f"[Backtest] BŁĄD KRYTYCZNY podczas budowania cache: {e}. Zatrzymywanie."
@@ -697,100 +799,71 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # ==================================================================
-    # === KROK 4: Główna pętla symulacji (TOP-DOWN) ===
+    # === KROK 4: Uruchomienie Symulacji ===
     # ==================================================================
     
-    # Znajdź wszystkie unikalne dni handlowe w danym roku na podstawie SPY
+    trades_found_aqm = 0
+    trades_found_pairs = 0
+    total_tickers = len(tickers_to_test)
+    
+    # === URUCHOM STRATEGIĘ 1: AQM (Bottom-Up) ===
+    logger.info("[Backtest] Uruchamianie Strategii 1: AQM (Long-Only, Bottom-Up)...")
+    append_scan_log(session, "[Backtest] Uruchamianie Strategii 1: AQM...")
+    
+    for i, ticker in enumerate(tickers_to_test):
+        if i % 10 == 0:
+            log_msg = f"[Backtest][AQM] Przetwarzanie {ticker} ({i}/{total_tickers})..."
+            append_scan_log(session, log_msg)
+            update_scan_progress(session, i, total_tickers)
+        
+        try:
+            # Używamy danych z cache
+            ticker_data = _get_ticker_data_from_cache(ticker)
+            if not ticker_data:
+                continue
+                
+            # Krojenie danych do roku testowego
+            historical_data_slice = ticker_data['daily'].loc[start_date:end_date]
+            weekly_data_slice = ticker_data['weekly'].loc[:end_date] # Do końca roku
+            
+            if historical_data_slice.empty or len(historical_data_slice) < 200 or \
+               weekly_data_slice.empty or len(weekly_data_slice) < 50:
+                continue
+
+            # Uruchom symulator AQM (który iteruje po dniach wewnątrz)
+            trades_found_aqm += _simulate_trades_aqm(
+                session, ticker, 
+                historical_data_slice, 
+                weekly_data_slice, 
+                year
+            )
+        except Exception as e:
+            logger.error(f"[Backtest][AQM] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
+            session.rollback()
+            
+    log_msg_aqm = f"[Backtest] Strategia AQM zakończona. Znaleziono {trades_found_aqm} transakcji."
+    logger.info(log_msg_aqm)
+    append_scan_log(session, log_msg_aqm)
+
+    # === URUCHOM STRATEGIĘ 2: Handel Parami (Top-Down) ===
+    logger.info("[Backtest] Uruchamianie Strategii 2: Handel Parami (Market-Neutral, Top-Down)...")
+    append_scan_log(session, "[Backtest] Uruchamianie Strategii 2: Handel Parami...")
+
     all_trading_days = _backtest_cache["spy_data"].loc[start_date:end_date].index
     
-    total_days = len(all_trading_days)
-    trades_found_total = 0
+    try:
+        trades_found_pairs = _run_pairs_trading_simulation(session, year, all_trading_days)
+    except Exception as e:
+        logger.error(f"[Backtest][Pairs] Błąd krytyczny w pętli Top-Down: {e}", exc_info=True)
+        session.rollback()
 
-    for i, current_date in enumerate(all_trading_days):
-        
-        current_date_str = current_date.strftime('%Y-%m-%d')
-        
-        # Pomiń pierwsze 200 dni roku, aby mieć pewność, że wskaźniki są "dojrzałe"
-        if i < 200:
-            continue
-            
-        if i % 10 == 0: # Aktualizuj UI co 10 dni
-            log_msg = f"[Backtest] Symulowanie dnia {i}/{total_days} ({current_date_str})..."
-            append_scan_log(session, log_msg)
-            update_scan_progress(session, i, total_days)
+    log_msg_pairs = f"[Backtest] Strategia Handlu Parami zakończona. Znaleziono {trades_found_pairs} transakcji."
+    logger.info(log_msg_pairs)
+    append_scan_log(session, log_msg_pairs)
 
-        try:
-            # 1. Wykryj reżim rynkowy (raz na dzień)
-            market_regime = _detect_market_regime(current_date_str)
-            
-            new_trades = []
-
-            # ==================================================
-            # === URUCHOM STRATEGIĘ 1: AQM (Long-Only) ===
-            # Uruchamiaj tylko w hossie, zgodnie z logiką hamulca
-            # ==================================================
-            if market_regime == 'bull':
-                threshold = AQM_THRESHOLDS[market_regime]
-                
-                for ticker in tickers_to_test: # Iteruj po spółkach z Fazy 1
-                    data = _get_ticker_data_from_cache(ticker)
-                    if not data:
-                        continue
-                        
-                    # Pobierz widoki danych
-                    df_view = data['daily'][data['daily'].index <= current_date_str].iloc[-200:]
-                    weekly_df_view = data['weekly'][data['weekly'].index <= current_date_str].iloc[-50:]
-                    
-                    if len(df_view) < 200 or len(weekly_df_view) < 50:
-                        continue
-
-                    aqm_score, _ = _calculate_aqm_score(df_view, weekly_df_view, data['sector'], market_regime)
-                    
-                    if aqm_score > threshold:
-                        # ZNALEZIONO SETUP AQM
-                        # ==================================================================
-                        # === OSTATECZNA POPRAWKA (Błąd Indeksowania) ===
-                        # Pobieramy indeks z PEŁNEGO dataframe (data['daily']),
-                        # a nie z wycinka (df_view).
-                        # ==================================================================
-                        entry_index = data['daily'].index.get_loc(current_date)
-                        entry_price = data['daily'].iloc[entry_index]['close']
-                        
-                        setup_aqm = {
-                            "ticker": ticker,
-                            "setup_type": f"AQM_SCORE_{market_regime.upper()}", 
-                            "entry_price": entry_price,
-                            "stop_loss": entry_price * (1 - AQM_STRATEGY_PARAMS['stop_loss_percent']),
-                            "take_profit": entry_price * (1 + AQM_STRATEGY_PARAMS['target_1_percent']),
-                        }
-                        
-                        trade = _resolve_trade(
-                            data['daily'], entry_index, setup_aqm, 
-                            AQM_STRATEGY_PARAMS['max_hold_days'], year, direction='LONG'
-                        )
-                        if trade:
-                            new_trades.append(trade)
-
-            # ==================================================
-            # === URUCHOM STRATEGIĘ 2: Handel Parami ===
-            # Uruchamiaj ZAWSZE (jest rynkowo-neutralna)
-            # ==================================================
-            pair_trades = _run_pairs_trading_strategy(session, year, current_date, current_date_str)
-            if pair_trades:
-                new_trades.extend(pair_trades)
-
-            # Zapisz wszystkie transakcje znalezione TEGO DNIA
-            if new_trades:
-                session.add_all(new_trades)
-                session.commit()
-                trades_found_total += len(new_trades)
-
-        except Exception as e:
-            logger.error(f"[Backtest] Błąd krytyczny podczas symulacji dnia {current_date_str}: {e}", exc_info=True)
-            session.rollback()
-
-    # === KONIEC PĘTLI ROCZNEJ ===
-    update_scan_progress(session, total_days, total_days)
-    log_msg = f"BACKTEST HISTORYCZNY: Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji."
-    logger.info(log_msg)
-    append_scan_log(session, log_msg)
+    # === KONIEC SYMULACJI ===
+    total_trades_found = trades_found_aqm + trades_found_pairs
+    update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
+    log_msg_final = f"BACKTEST HISTORYCZNY: Zakończono test dla roku '{year}'. Znaleziono łącznie {total_trades_found} transakcji."
+    logger.info(log_msg_final)
+    append_scan_log(session, log_msg_final)
