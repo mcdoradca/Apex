@@ -290,33 +290,32 @@ def _calculate_aqm_score(
         ves_score = (obv_score * 0.4) + (volume_score * 0.3) + (ad_score * 0.3)
 
         # --- 3. Market Regime Score (MRS) - Waga 20% ---
-        # (Logika z PDF str. 16)
-        mrs_score = 0.3 # Domyślna niska ocena
+        # ==================================================================
+        # === POPRAWKA LOGIKI "PUŁAPKI 2" (Bessa) ===
+        # Zastępujemy błędną logikę PDF (kupowanie Utilities)
+        # prawdziwym "hamulcem", który blokuje handel w bessie.
+        # ==================================================================
+        mrs_score = 0.0 # Domyślna niska ocena (kara)
         if market_regime == 'bull':
             if sector in ['Technology', 'Communication Services', 'Consumer Cyclical']:
-                mrs_score = 0.7
+                mrs_score = 0.7 # Nagroda za zgodność z hossą
+            else:
+                mrs_score = 0.3 # Mniejsza kara, jeśli spółka nie jest z tych sektorów
+        elif market_regime == 'volatile':
+            mrs_score = 0.5 # Neutralna ocena
         elif market_regime == 'bear':
-            if sector in ['Utilities', 'Consumer Defensive', 'Healthcare']:
-                mrs_score = 0.7
-        else: # volatile
-            mrs_score = 0.5 # Neutralna
+            mrs_score = 0.0 # HAMULEC. Nie handlujemy long w bessie.
+        # ==================================================================
         
         # --- 4. Temporal Coherence Score (TCS) - Waga 10% ---
         # Ignorujemy w backteście (zbyt skomplikowane do symulacji)
         tcs_score = 1.0 
         
         # ==================================================================
-        # === KRYTYCZNA POPRAWKA (Suma ważona vs Iloczyn) ===
-        # Naprawiono błąd logiczny, który powodował brak wyników AQM.
+        # === POPRAWKA LOGIKI "PUŁAPKI 1" (Matematyka) ===
         # Używamy SUMY WAŻONEJ (40/30/20/10) zamiast iloczynu.
         # ==================================================================
-        
-        # final_aqm_score = qps_score * ves_score * mrs_score * tcs_score 
-        # ^^^ POPRZEDNI BŁĄD LOGICZNY ^^^
-        
-        # POPRAWKA: Używamy sumy ważonej zgodnie z wagami z PDF (str. 13-17)
         final_aqm_score = (qps_score * 0.40) + (ves_score * 0.30) + (mrs_score * 0.20) + (tcs_score * 0.10)
-        
         # ==================================================================
         
         components = {
@@ -612,7 +611,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             # === POPRAWKA UI ===
             # Aktualizuj logi i postęp UI co 10 tickerów (lub co 1, jeśli lista jest krótka)
-            if processed_count % 10 == 0 or total_count < 50:
+            if processed_count % 10 == 0 or total_count < 50 or processed_count == total_count:
                 logger.info(log_msg)
                 append_scan_log(session, log_msg)
                 # Wywołanie funkcji aktualizującej UI
