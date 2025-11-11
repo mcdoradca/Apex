@@ -25,14 +25,20 @@ def run_macro_analysis(session: Session, api_client: AlphaVantageClient) -> str:
         # === KROK 1: Pobieranie danych makro (Krok B) ===
         # Używamy funkcji dodanych do alpha_vantage_client.py
         
-        # Pobieramy najnowsze dane (limit 1, Alpha Vantage zwróci najnowsze)
-        cpi_data = api_client.get_cpi(interval='monthly')
+        # ==================================================================
+        # === GŁÓWNA NAPRAWA BŁĘDU FAZY 0 ===
+        # Zmieniamy wywołanie z `get_cpi` (które zwracało 324.8)
+        # na `get_inflation_rate` (które zwraca np. 3.0).
+        # ==================================================================
+        inflation_data = api_client.get_inflation_rate(interval='monthly')
+        # ==================================================================
+        
         fed_rate_data = api_client.get_fed_funds_rate(interval='monthly')
         yield_data = api_client.get_treasury_yield(interval='monthly', maturity='10year')
         unemployment_data = api_client.get_unemployment()
 
         # Sprawdzenie, czy wszystkie dane dotarły
-        if not all([cpi_data, fed_rate_data, yield_data, unemployment_data]):
+        if not all([inflation_data, fed_rate_data, yield_data, unemployment_data]):
             logger.error("AGENT FAZY 0 (MAKRO): Błąd krytyczny. Nie udało się pobrać jednego lub więcej wskaźników makro. Skanowanie domyślnie dozwolone (RISK_ON).")
             # Bezpiecznik: Jeśli Alpha Vantage zawiedzie, domyślnie przepuszczamy skanowanie.
             return "RISK_ON"
@@ -41,12 +47,18 @@ def run_macro_analysis(session: Session, api_client: AlphaVantageClient) -> str:
         # Wysyłamy surowe dane do "mózgu" AI, który wytrenowaliśmy w ai_agents.py
         
         logger.info("AGENT FAZY 0 (MAKRO): Dane pobrane. Wysyłanie do analizy AI (Gemini)...")
+        
+        # ==================================================================
+        # Zmieniamy przekazywany parametr z `cpi=` na `inflation=`,
+        # aby dopasować się do zmiany w kroku 1.
+        # ==================================================================
         analysis = _run_macro_analysis_agent(
-            cpi=cpi_data,
+            inflation=inflation_data,
             fed_rate=fed_rate_data,
             yield_10y=yield_data,
             unemployment=unemployment_data
         )
+        # ==================================================================
 
         # === KROK 3: Reakcja na decyzję AI ===
         sentiment = analysis.get('sentiment', 'RISK_ON') # Domyślnie RISK_ON w razie błędu Gemini
