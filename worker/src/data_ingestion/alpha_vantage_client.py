@@ -166,6 +166,21 @@ class AlphaVantageClient:
         
     def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True):
         # Specyfikacja AQM V3 (4.1) wymaga interval=5min, outputsize=full
+        
+        # ==================================================================
+        # === KOMENTARZ DIAGNOSTYCZNY (DOT. LOGÓW BŁĘDÓW) ===
+        # Support AV zasugerował "literówkę" lub "brak parametru".
+        # Jak widać poniżej, wysyłamy WSZYSTKIE wymagane parametry:
+        # 1. 'function': "TIME_SERIES_INTRADAY" (Poprawnie)
+        # 2. 'symbol': symbol (Poprawnie)
+        # 3. 'interval': interval (Wysyłany jako '5min' przez backtest_engine, co jest poprawne)
+        # 4. 'outputsize': outputsize (Wysyłany jako 'full' przez backtest_engine, co jest poprawne)
+        # 5. 'apikey': Dodawany automatycznie przez _make_request (Poprawnie)
+        #
+        # Błąd `{'Error Message': 'Invalid API call. ... for TIME_SERIES_INTRADAY.'}`
+        # zwracany przez API (widoczny w logach) jest zatem błędem PO STRONIE ALPHA VANTAGE,
+        # wskazującym, że KLUCZ API nie ma uprawnień (entitlement) do tego endpointu Premium.
+        # ==================================================================
         params = {
             "function": "TIME_SERIES_INTRADAY", 
             "symbol": symbol, 
@@ -405,6 +420,20 @@ class AlphaVantageClient:
     def get_vwap(self, symbol: str, interval: str = 'daily'):
         """(AQM V3 - Wymiar 1.2) Pobiera dane VWAP."""
         logger.info(f"AQM V3: Pobieranie VWAP dla {symbol} (interval: {interval})...")
+
+        # ==================================================================
+        # === KOMENTARZ DIAGNOSTYCZNY (DOT. LOGÓW BŁĘDÓW) ===
+        # Support AV zasugerował "literówkę" lub "brak parametru".
+        # Jak widać poniżej, wysyłamy WSZYSTKIE wymagane parametry:
+        # 1. 'function': "VWAP" (Poprawnie)
+        # 2. 'symbol': symbol (Poprawnie)
+        # 3. 'interval': interval (Wysyłany jako 'daily' przez backtest_engine, co jest poprawne)
+        # 4. 'apikey': Dodawany automatycznie przez _make_request (Poprawnie)
+        #
+        # Błąd `API returned an error or empty data for [TICKER]: {}`
+        # zwracany przez API (widoczny w logach) jest zatem błędem PO STRONIE ALPHA VANTAGE,
+        # wskazującym, że KLUCZ API nie ma uprawnień (entitlement) do tego endpointu Premium.
+        # ==================================================================
         params = {
             "function": "VWAP",
             "symbol": symbol,
