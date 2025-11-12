@@ -14,7 +14,7 @@ from .database import get_db_session, engine
 # KROK 1: Importujemy nasz nowy monitor
 from .analysis import (
     phase1_scanner, 
-    phase2_engine, 
+    phase2_engine, # Import POZOSTAJE (na razie) na potrzeby `ai_agents`
     phase3_sniper, 
     ai_agents, 
     utils,
@@ -267,7 +267,12 @@ def run_full_analysis_cycle():
         utils.update_system_control(session, 'worker_status', 'RUNNING')
         utils.update_system_control(session, 'scan_log', '')
         
-        logger.info("Trwałe sygnały Fazy 3 są aktywne (nie wygasają co noc).")
+        # ==================================================================
+        # === DEKONSTRUKCJA (KROK 2B) ===
+        # Logika Fazy 3 (Sygnały) jest teraz całkowicie wygaszona.
+        # ==================================================================
+        # logger.info("Trwałe sygnały Fazy 3 są aktywne (nie wygasają co noc).")
+        # ==================================================================
         
         utils.append_scan_log(session, "Rozpoczynanie nowego cyklu analizy...")
         
@@ -276,14 +281,25 @@ def run_full_analysis_cycle():
         if not candidate_tickers:
             raise Exception("Phase 1 found no candidates. Halting cycle.")
 
-        utils.update_system_control(session, 'current_phase', 'PHASE_2')
-        qualified_data = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
-        if not qualified_data:
-            raise Exception("Phase 2 qualified no stocks. Halting cycle.")
+        # ==================================================================
+        # === DEKONSTRUKCJA (KROK 11) ===
+        # Fizycznie usunęliśmy wywołania Fazy 2 i Fazy 3, ponieważ
+        # nowa logika Fazy 1 jest jedyną wymaganą.
+        # ==================================================================
+        
+        logger.info("DEKONSTRUKCJA: Cykl EOD zatrzymany po Fazie 1 (zgodnie z planem).")
+        utils.append_scan_log(session, "Faza 1 zakończona. Faza 2 i 3 są wyłączone.")
 
-        utils.update_system_control(session, 'current_phase', 'PHASE_3')
-        phase3_sniper.run_tactical_planning(session, qualified_data, lambda: current_state, api_client)
+        # utils.update_system_control(session, 'current_phase', 'PHASE_2')
+        # qualified_data = phase2_engine.run_analysis(session, candidate_tickers, lambda: current_state, api_client)
+        # if not qualified_data:
+        #     raise Exception("Phase 2 qualified no stocks. Halting cycle.")
 
+        # utils.update_system_control(session, 'current_phase', 'PHASE_3')
+        # phase3_sniper.run_tactical_planning(session, qualified_data, lambda: current_state, api_client)
+
+        # ==================================================================
+        
         utils.append_scan_log(session, "Cykl analizy zakończony pomyślnie.")
     except Exception as e:
         logger.error(f"An error occurred during the analysis: {e}", exc_info=True)
@@ -317,12 +333,13 @@ def main_loop():
         
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     
-    # POPRAWKA 2 (Problem 5: Latencja): Monitor cen (Strażnik SL/TP) - co 10 sekund (było 15)
+    # ==================================================================
+    # === DEKONSTRUKCJA (KROK 2B) ===
+    # Monitory Fazy 3 są teraz wygaszone, ale zostawiamy je w harmonogramie
+    # (schedule), aby nie powodować dalszych błędów. Ich funkcje
+    # po prostu natychmiast zwrócą `return`.
+    # ==================================================================
     schedule.every(10).seconds.do(lambda: phase3_sniper.monitor_entry_triggers(get_db_session(), api_client))
-    
-    # ==================================================================
-    # NOWA POPRAWKA (KROK 1 - Fib): Dodanie wolnego monitora H1
-    # ==================================================================
     schedule.every(15).minutes.do(lambda: phase3_sniper.monitor_fib_confirmations(get_db_session(), api_client))
     # ==================================================================
 
@@ -340,8 +357,8 @@ def main_loop():
     # ==================================================================
     
     logger.info(f"Scheduled job set for {ANALYSIS_SCHEDULE_TIME_CET} CET daily.")
-    logger.info("Real-Time Entry Trigger Monitor scheduled every 10 seconds.")
-    logger.info("H1 Fib Confirmation Monitor scheduled every 15 minutes.")
+    logger.info("Real-Time Entry Trigger Monitor scheduled every 10 seconds (NOW DEACTIVATED).")
+    logger.info("H1 Fib Confirmation Monitor scheduled every 15 minutes (NOW DEACTIVATED).")
     logger.info("Ultra News Agent (Kategoria 2) scheduled every 2 minutes.")
     logger.info("🤖 Virtual Agent Monitor scheduled every day at 23:00 CET.") # <-- NOWY LOG
 
