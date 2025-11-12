@@ -3,40 +3,36 @@ import time
 import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from ..config import Phase1Config
+# Usunięto import Phase1Config, ponieważ filtry są teraz wbudowane
+# from ..config import Phase1Config 
 from .utils import (
     append_scan_log, update_scan_progress, safe_float, 
-    standardize_df_columns, calculate_atr
+    standardize_df_columns, 
+    calculate_atr # calculate_atr nie jest już potrzebny
 )
 
 logger = logging.getLogger(__name__)
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
-    PRZEBUDOWANA FAZA 1: Skanowanie oparte na danych historycznych (EOD).
-    Iteruje po każdym tickerze i używa get_daily_adjusted (zamiast get_bulk_quotes),
-    ponieważ filtry RVol i ATR wymagają danych historycznych.
+    DEKONSTRUKCJA (KROK 4): Faza 1 z nową, uproszczoną logiką "Pierwszego Sita".
     
-    ZAPISUJE WYNIKI POJEDYNCZO (jak Faza 2), aby zapewnić odporność na błędy.
+    Iteruje po każdym tickerze, pobiera dane EOD i stosuje tylko dwa
+    bezwzględne warunki: Ceny i Średniego Wolumenu.
     """
-    logger.info("Running Phase 1: EOD Historical Data Scan (Robust Save Logic)...")
-    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania EOD (Logika Fazy 2)...")
+    logger.info("Running Phase 1: EOD Scan (New 'First Sieve' Logic)...")
+    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania (Nowa Logika 'Pierwszego Sita')...")
 
-    # ==================================================================
-    # === OSTATECZNA POPRAWKA: Bezwarunkowe czyszczenie tabeli ===
-    # Usuwamy błędną klauzulę "WHERE analysis_date >= CURRENT_DATE",
-    # aby zapobiec błędom PRIMARY KEY VIOLATION z wczorajszych danych.
-    # ==================================================================
+    # Czyszczenie starych kandydatów Fazy 1, aby uniknąć konfliktów
     try:
         session.execute(text("DELETE FROM phase1_candidates"))
         session.commit()
-        logger.info("Cleared ALL old Phase 1 candidates to prevent PK conflicts.")
+        logger.info("Cleared ALL old Phase 1 candidates.")
     except Exception as e:
         logger.error(f"Failed to clear Phase 1 table: {e}", exc_info=True)
         session.rollback()
         append_scan_log(session, f"BŁĄD KRYTYCZNY: Nie można wyczyścić tabeli Fazy 1: {e}")
-        return [] # Zatrzymujemy skanowanie, jeśli nie możemy wyczyścić tabeli
-    # ==================================================================
+        return [] 
 
     try:
         all_tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
@@ -67,6 +63,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
         try:
             # 1. Pobierz dane EOD (compact wystarczy na 100 dni)
+            # Potrzebujemy ich do obliczenia 20-dniowego średniego wolumenu
             price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='compact')
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 continue
@@ -75,73 +72,48 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             daily_df_raw = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
             daily_df = standardize_df_columns(daily_df_raw)
 
-            # 3. Sprawdź, czy mamy wystarczająco danych
-            if len(daily_df) < 22:
+            # 3. Sprawdź, czy mamy wystarczająco danych (20 dni na średnią + 1 bieżący)
+            if len(daily_df) < 21:
                 continue
 
             # 4. Wyodrębnij dane
             latest_candle = daily_df.iloc[-1]
-            prev_candle = daily_df.iloc[-2]
-
             current_price = latest_candle['close']
-            current_volume = latest_candle['volume']
-            prev_close = prev_candle['close']
             
-            if current_price is None or current_volume is None or prev_close is None or prev_close == 0:
+            if pd.isna(current_price):
                 continue
                 
-            # === POPRAWKA BŁĘDU NaN ===
-            # Sprawdź, czy pandas nie zwrócił 'NaN'
-            if pd.isna(current_price) or pd.isna(current_volume) or pd.isna(prev_close):
-                logger.warning(f"Skipping {ticker} due to NaN data in latest candle.")
-                continue
+            # ==================================================================
+            # === NOWA LOGIKA FILTROWANIA (PIERWSZE SITO) ===
+            # ==================================================================
 
-            change_percent = ((current_price - prev_close) / prev_close) * 100
-
-            # 5. Zastosuj FILTRY PODSTAWOWE (z config.py)
-            if not (Phase1Config.MIN_PRICE <= current_price <= Phase1Config.MAX_PRICE):
+            # 5. Zastosuj FILTRY BEZWZGLĘDNE (Nowa Logika)
+            
+            # WARUNEK 1: Cena (zgodnie z poleceniem)
+            if not (0.5 <= current_price <= 40.0):
                 continue
             
-            if current_volume < Phase1Config.MIN_VOLUME:
-                continue
-            if change_percent < Phase1Config.MIN_DAY_CHANGE_PERCENT:
-                continue
-                
-            # 6. Zastosuj FILTRY ZAAWANSOWANE (RVol i ATR)
+            # WARUNEK 2: Średni Wolumen (zgodnie z poleceniem)
+            # Obliczamy z 20 ostatnich *zamkniętych* świec (przed 'latest')
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if avg_volume == 0 or pd.isna(avg_volume): continue
-            
-            volume_ratio = current_volume / avg_volume
-            if volume_ratio < Phase1Config.MIN_VOLUME_RATIO:
-                continue
-
-            atr_series = calculate_atr(daily_df, period=14)
-            if atr_series.empty or pd.isna(atr_series.iloc[-1]):
+            if pd.isna(avg_volume) or avg_volume < 500000:
                 continue
             
-            latest_atr = atr_series.iloc[-1]
-            if latest_atr == 0 or current_price == 0:
-                continue
-                
-            atr_percent = (latest_atr / current_price)
-            if atr_percent > Phase1Config.MAX_VOLATILITY_ATR_PERCENT:
-                continue
+            # ==================================================================
+            # === USUNIĘTO WSZYSTKIE STARE FILTRY (RVol, ATR, % Zmiany) ===
+            # ==================================================================
             
-            # 7. KWALIFIKACJA
-            log_msg = f"Kwalifikacja (F1): {ticker} (Cena: {current_price:.2f}, VolRatio: {volume_ratio:.2f}, ATR%: {atr_percent:.2%})"
+            # 6. KWALIFIKACJA
+            log_msg = f"Kwalifikacja (F1): {ticker} (Cena: {current_price:.2f}, Śr. Wol: {avg_volume:.0f})"
             append_scan_log(session, log_msg)
             
-            # ==================================================================
-            # === POPRAWKA BŁĘDU (schema "np" does not exist) ===
-            # Konwertujemy typy Numpy (np.float64, np.int64) na natywne
-            # typy Pythona (float, int), zanim przekażemy je do bazy danych.
-            # ==================================================================
+            # 7. Zapisz kandydata w bazie
             candidate_data = {
                 'ticker': ticker, 
-                'price': float(current_price),           # <-- NAPRAWIONE
-                'volume': int(current_volume),           # <-- NAPRAWIONE
-                'change_percent': float(change_percent), # <-- NAPRAWIONE
-                'score': 1 
+                'price': float(current_price),
+                'volume': int(latest_candle['volume']), # Zapisujemy bieżący wolumen
+                'change_percent': 0.0, # Pole nieużywane, zapisujemy 0.0
+                'score': 1 # Wartość zastępcza
             }
             
             insert_stmt = text("""
@@ -150,7 +122,6 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             """)
             session.execute(insert_stmt, [candidate_data])
             session.commit() # Zapisujemy tego JEDNEGO kandydata
-            # ==================================================================
             
             # Dodajemy ticker do listy, którą przekażemy do Fazy 2
             final_candidate_tickers.append(ticker)
@@ -162,8 +133,8 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     # Zakończ postęp
     update_scan_progress(session, total_tickers, total_tickers)
 
-    logger.info(f"Phase 1 (EOD Scan) completed. Found {len(final_candidate_tickers)} final candidates.")
-    append_scan_log(session, f"Faza 1 (Skan EOD) zakończona. Znaleziono {len(final_candidate_tickers)} ostatecznych kandydatów.")
+    logger.info(f"Phase 1 (New Sieve) completed. Found {len(final_candidate_tickers)} final candidates.")
+    append_scan_log(session, f"Faza 1 (Nowe Sito) zakończona. Znaleziono {len(final_candidate_tickers)} kandydatów.")
     
     # Zwracamy listę tickerów do Fazy 2
     return final_candidate_tickers
