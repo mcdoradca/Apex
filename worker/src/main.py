@@ -16,7 +16,7 @@ from .analysis import (
     phase1_scanner, 
     phase2_engine, 
     phase3_sniper, 
-    ai_agents, # Ten import zostaje (używany przez F0 i News)
+    ai_agents, 
     utils,
     news_agent, # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
     phase0_macro_agent, # <-- POPRAWKA: Import Fazy 0
@@ -46,23 +46,17 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 
 
 # ==================================================================
-# === DEKONSTRUKCJA (KROK 6) ===
-# Funkcja `handle_ai_analysis_request` została usunięta.
-# Była ona połączona ze starymi agentami (Momentum, Volatility, Tactical),
-# które zostały wygaszone w `ai_agents.py`.
+# === DEKONSTRUKCJA (KROK 7) ===
+# Cała funkcja `handle_ai_analysis_request` została usunięta,
+# ponieważ była powiązana z wygaszoną funkcją analizy na żądanie.
 # ==================================================================
 # def handle_ai_analysis_request(session):
-#     """
-#     Sprawdza i wykonuje nową analizę AI na żądanie.
-#     NOWA LOGIKA: Sprawdza globalną blokadę.
-#     """
-#     ... (CAŁA FUNKCJA USUNIĘTA) ...
+# ... (kod usunięty) ...
 # ==================================================================
 
 
 # ==================================================================
 # === NOWA FUNKCJA (Krok 2 - Backtest) ===
-# (Ta funkcja POZOSTAJE)
 # ==================================================================
 def handle_backtest_request(session, api_client) -> str:
     """
@@ -111,7 +105,6 @@ def handle_backtest_request(session, api_client) -> str:
 
 # ==================================================================
 # === NOWA FUNKCJA (Krok 5 - Mega Agent) ===
-# (Ta funkcja POZOSTAJE)
 # ==================================================================
 def handle_ai_optimizer_request(session) -> str:
     """
@@ -256,38 +249,18 @@ def run_full_analysis_cycle():
         # Koniec Poprawki 1
         # ==================================================================
 
-        logger.info("Checking market status before starting Phase 1 scan...")
-        market_info = utils.get_market_status_and_time(api_client)
-        market_status = market_info.get("status")
+        # ==================================================================
+        # === NAPRAWA (Krok 10) ===
+        # Usunięto cały blok logiczny "Strażnika Rynku", który sprawdzał
+        # `market_status` i `is_eod_window`. Skanowanie EOD (Faza 1)
+        # będzie teraz uruchamiane zawsze, niezależnie od statusu rynku,
+        # ponieważ opiera się na danych `get_daily_adjusted`.
+        # ==================================================================
+        # logger.info("Checking market status before starting Phase 1 scan...")
+        # market_info = utils.get_market_status_and_time(api_client)
+        # ... (cały blok `if market_status not in ...` został usunięty) ...
+        # ==================================================================
 
-        # Logika "Strażnika Rynku" dla nocnego skanowania EOD
-        # Logika Fazy 1 została przebudowana, aby używać danych EOD (get_daily_adjusted)
-        # Oznacza to, że może działać *po* zamknięciu rynku.
-        # Musimy jednak zapewnić, że dane EOD z danego dnia są już dostępne.
-        # Uruchamianie o 02:30 CET (po 20:30 ET) powinno być bezpieczne.
-        # Dodajemy kontrolę, aby nie uruchamiać ręcznie w środku dnia.
-        
-        # Pobieramy aktualny czas w NY
-        now_ny = utils.get_current_NY_datetime()
-        ny_hour = now_ny.hour
-        
-        # Sprawdzamy, czy polecenie startu przyszło ręcznie (przez przycisk)
-        is_manual_start = utils.get_system_control_value(session, 'worker_command') == 'START_REQUESTED'
-
-        # Zezwalaj na start tylko w nocy (gdy dane EOD są gotowe) lub gdy rynek jest otwarty
-        # (na potrzeby testów lub ręcznego uruchomienia w ciągu dnia)
-        # Godziny 2:00 - 4:00 CET (20:00 - 22:00 ET) to idealne okno nocne
-        is_eod_window = (now_ny.hour >= 20 or now_ny.hour < 4) 
-        
-        if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"] and not is_eod_window:
-            logger.warning(f"Market status is {market_status} and it's outside EOD window. Full analysis cycle (Phase 1) will not run.")
-            utils.append_scan_log(session, f"Skanowanie Fazy 1 wstrzymane. Rynek jest {market_status} (poza oknem EOD).")
-            current_state = "IDLE"
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            session.close()
-            return 
-        
-        logger.info(f"Market status is {market_status} (lub okno EOD). Proceeding with analysis cycle.")
 
         logger.info("Starting full analysis cycle...")
         current_state = "RUNNING"
@@ -384,9 +357,8 @@ def main_loop():
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         # ==================================================================
-        # === DEKONSTRUKCJA (KROK 6) ===
-        # Usunięto inicjalizację flagi 'ai_analysis_request',
-        # ponieważ cała funkcja została usunięta.
+        # === DEKONSTRUKCJA (KROK 7) ===
+        # Usunięto flagę `ai_analysis_request`
         # ==================================================================
         # utils.update_system_control(initial_session, 'ai_analysis_request', 'NONE')
         # ==================================================================
@@ -435,14 +407,11 @@ def main_loop():
                     run_full_analysis_cycle()
                 
                 # ==================================================================
-                # === DEKONSTRUKCJA (KROK 6) ===
-                # Usunięto wywołanie `handle_ai_analysis_request(session)`,
-                # ponieważ cała funkcja została usunięta.
+                # === DEKONSTRUKCJA (KROK 7) ===
+                # Usunięto wywołanie `handle_ai_analysis_request`
                 # ==================================================================
                 # handle_ai_analysis_request(session)
                 # ==================================================================
-                
-                # Uruchom normalne, zaplanowane zadania (monitory)
                 schedule.run_pending()
                 
                 utils.report_heartbeat(session) 
