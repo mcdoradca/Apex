@@ -236,31 +236,47 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             try:
                 # ==================================================================
-                # === KROK 18, 20b, 22b: Ładowanie danych H1, H2 i H3 ===
+                # === POPRAWKA VWAP (Problem 1) ===
+                #
+                # 1. USUWAMY: `vwap_data_raw = api_client.get_vwap(ticker, interval='daily')`
+                #    (To było błędne wywołanie, które zwracało `{}`)
+                #
+                # 2. ZASTĘPUJEMY: `price_data_raw = api_client.get_daily_adjusted(...)`
+                #    na `price_data_raw = api_client.get_time_series_daily(...)`
+                #    (Zgodnie z PDF Wymiar 7.1, ten endpoint zawiera kolumnę "5. vwap")
                 # ==================================================================
                 
-                # --- ŁADOWANIE H1 ---
-                price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
+                # --- ŁADOWANIE H1 (i H3) ---
+                price_data_raw = api_client.get_time_series_daily(ticker, outputsize='full')
                 weekly_data_raw = api_client.get_time_series_weekly(ticker)
-                vwap_data_raw = api_client.get_vwap(ticker, interval='daily')
+                # vwap_data_raw = api_client.get_vwap(ticker, interval='daily') # <-- USUNIĘTE BŁĘDNE WYWOŁANIE
                 
                 # --- ŁADOWANIE H3 (CZĘŚĆ 1) ---
                 bbands_raw = api_client.get_bollinger_bands(ticker, interval='daily', time_period=20, nbdevup=2, nbdevdn=2)
                 
                 # --- ŁADOWANIE H3 (CZĘŚĆ 2) ---
+                # UWAGA: Ten endpoint nadal będzie zwracał błąd dla niektórych tickerów (Problem 2),
+                # ale teraz obsłużymy to poprawnie.
                 intraday_raw = api_client.get_intraday(ticker, interval='5min', outputsize='full')
                 
                 # Walidacja danych H1 i H3
+                # USUNIĘTO `vwap_data_raw` z walidacji
                 if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
                    not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw or \
-                   not vwap_data_raw or 'Technical Analysis: VWAP' not in vwap_data_raw or \
                    not bbands_raw or 'Technical Analysis: BBANDS' not in bbands_raw or \
                    not intraday_raw or 'Time Series (5min)' not in intraday_raw:
-                    logger.warning(f"Brak pełnych danych (H1/H3) dla {ticker}, pomijanie.")
+                    
+                    # Logujemy, *który* endpoint zawiódł
+                    if not intraday_raw or 'Time Series (5min)' not in intraday_raw:
+                        logger.warning(f"Brak danych TIME_SERIES_INTRADAY (5min) dla {ticker}. Spółka prawdopodobnie nie jest wspierana. Pomijanie.")
+                    else:
+                        logger.warning(f"Brak pełnych danych (Daily, Weekly, BBands) dla {ticker}, pomijanie.")
                     continue
 
                 # Przetwórz Daily (H1)
                 daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
+                # `standardize_df_columns` (z zaktualizowanego `utils.py`) teraz poprawnie
+                # zmapuje "5. vwap" na kolumnę "vwap" i skonwertuje ją na typ numeryczny.
                 daily_df = standardize_df_columns(daily_df)
                 daily_df.index = pd.to_datetime(daily_df.index)
                 
@@ -269,11 +285,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 weekly_df = standardize_df_columns(weekly_df)
                 weekly_df.index = pd.to_datetime(weekly_df.index)
 
-                # Przetwórz VWAP (H1)
-                vwap_df = pd.DataFrame.from_dict(vwap_data_raw['Technical Analysis: VWAP'], orient='index')
-                vwap_df.index = pd.to_datetime(vwap_df.index)
-                vwap_df['VWAP'] = pd.to_numeric(vwap_df['VWAP'], errors='coerce')
-                vwap_df.sort_index(inplace=True)
+                # Przetwórz VWAP (H1) - NIEPOTRZEBNE, jest już w `daily_df`
+                # vwap_df = ...
+                # vwap_df.sort_index(inplace=True)
                 
                 # Przetwórz BBANDS (H3)
                 bbands_df = aqm_v3_h3_loader._parse_bbands(bbands_raw)
@@ -285,9 +299,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 
                 # --- Wzbogacanie DataFrame (Krok 18 - H1) ---
                 spy_aligned = _backtest_cache["spy_data"]['close'].reindex(daily_df.index, method='ffill').rename('spy_close')
-                vwap_aligned = vwap_df['VWAP'].reindex(daily_df.index, method='ffill').rename('vwap')
+                # vwap_aligned = vwap_df['VWAP'].reindex(daily_df.index, method='ffill').rename('vwap') # <-- USUNIĘTE
                 
-                enriched_df = daily_df.join(spy_aligned).join(vwap_aligned)
+                enriched_df = daily_df.join(spy_aligned) # <-- USUNIĘTO `.join(vwap_aligned)`
                 enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
                 
                 ticker_returns_rolling = enriched_df['close'].pct_change().rolling(window=20)
@@ -295,6 +309,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 std_ticker = ticker_returns_rolling.std()
                 std_spy = spy_returns_rolling.std()
                 enriched_df['time_dilation'] = std_ticker / std_spy
+                
+                # Ta linia teraz zadziała, ponieważ 'vwap' pochodzi bezpośrednio z `daily_df` (po standaryzacji)
                 enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
                 
                 enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -309,9 +325,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 
                 # Zapisz wszystko w cache
                 _backtest_cache["company_data"][ticker] = {
-                    "daily": enriched_df, # Wzbogacony o H1
+                    "daily": enriched_df, # Wzbogacony o H1 (i teraz poprawny VWAP)
                     "weekly": weekly_df,
-                    "vwap": vwap_df, 
+                    "vwap": None, # Ta oddzielna kategoria nie jest już potrzebna
                     "insider_df": h2_data["insider_df"], # Dane H2
                     "news_df": h2_data["news_df"],       # Dane H2
                     "bbands_df": bbands_df,             # <-- NOWE DANE H3
@@ -455,10 +471,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             logger.error(f"[Backtest V3][H1/H2/H3/H4] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
             
-    # === POPRAWKA BŁĘDU (SyntaxError) ===
-    # Usunięto błędny, nadmiarowy nawias klamrowy '}' z tego miejsca (była linia 427)
-    # === KONIEC POPRAWKI ===
-            
     # === KONIEC SYMULACJI ===
     # INTEGRACJA H4 (KROK 7): Aktualizacja sumy końcowej
     trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4
@@ -468,3 +480,4 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2/H3/H4): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3}, H4: {trades_found_h4})."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
+
