@@ -13,7 +13,8 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
     try:
         transactions = raw_data.get('transactions', [])
         if not transactions:
-            return pd.DataFrame(columns=['transaction_date', 'transaction_type', 'transaction_shares'])
+            # Zwracamy pusty DF z oczekiwanymi kolumnami
+            return pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
 
         processed_data = []
         for tx in transactions:
@@ -34,7 +35,7 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
                 continue # Pomiń błędne rekordy
 
         if not processed_data:
-             return pd.DataFrame(columns=['transaction_date', 'transaction_type', 'transaction_shares'])
+             return pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
 
         df = pd.DataFrame(processed_data)
         # Ustawiamy datę jako indeks, aby umożliwić filtrowanie wg dat w backteście
@@ -50,11 +51,14 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """
     Przetwarza surową odpowiedź JSON z NEWS_SENTIMENT na DataFrame
     gotowy do backtestu.
+    
+    AKTUALIZACJA (Krok 22b): Teraz przetwarza również 'topics' dla Wymiaru 4.2 (Entropia).
     """
     try:
         feed = raw_data.get('feed', [])
         if not feed:
-            return pd.DataFrame(columns=['published_at', 'overall_sentiment_score'])
+            # Zwracamy pusty DF z oczekiwanymi kolumnami
+            return pd.DataFrame(columns=['overall_sentiment_score', 'topics']).set_index(pd.to_datetime([]))
 
         processed_data = []
         for article in feed:
@@ -64,15 +68,21 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
                 pub_time = pd.to_datetime(pub_time_str, format='%Y%m%dT%H%M%S')
                 score = float(article.get('overall_sentiment_score'))
                 
+                # Krok 22b: Przetwarzanie 'topics'
+                # Zgodnie ze specyfikacją 4.2, pobieramy listę tematów
+                article_topics = article.get('topics', [])
+                topic_list = [t['topic'] for t in article_topics if 'topic' in t]
+                
                 processed_data.append({
                     'published_at': pub_time,
-                    'overall_sentiment_score': score
+                    'overall_sentiment_score': score,
+                    'topics': topic_list # Zapisujemy listę tematów
                 })
             except (ValueError, TypeError, AttributeError):
                 continue # Pomiń błędne rekordy
 
         if not processed_data:
-            return pd.DataFrame(columns=['published_at', 'overall_sentiment_score'])
+            return pd.DataFrame(columns=['overall_sentiment_score', 'topics']).set_index(pd.to_datetime([]))
 
         df = pd.DataFrame(processed_data)
         # Ustawiamy datę jako indeks
@@ -97,21 +107,20 @@ def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient) -> Dict
     
     if insider_df is None:
         logger.warning(f"[Backtest V3][H2 Loader] Nie udało się przetworzyć danych Insider dla {ticker}. Tworzenie pustego DataFrame.")
-        insider_df = pd.DataFrame(columns=['transaction_date', 'transaction_type', 'transaction_shares'])
+        insider_df = pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
     
-    # 2. Pobierz dane News (Wymiar 2.2)
-    # Specyfikacja wymaga 7 dni, ale my ładujemy pełną historię (limit 1000)
-    # i będziemy ją filtrować "dzień po dniu" w pętli symulacji.
+    # 2. Pobierz dane News (Wymiar 2.2 i 4.2)
+    # Specyfikacja wymaga 7 dni (H2) lub 100 art. (H3), ładujemy pełną historię (limit 1000)
     news_raw = api_client.get_news_sentiment(ticker, limit=1000)
     news_df = _parse_news_sentiment(news_raw)
     
     if news_df is None:
         logger.warning(f"[Backtest V3][H2 Loader] Nie udało się przetworzyć danych News dla {ticker}. Tworzenie pustego DataFrame.")
-        news_df = pd.DataFrame(columns=['published_at', 'overall_sentiment_score'])
+        news_df = pd.DataFrame(columns=['overall_sentiment_score', 'topics']).set_index(pd.to_datetime([]))
 
     logger.info(f"[Backtest V3][H2 Loader] Załadowano {len(insider_df)} transakcji i {len(news_df)} newsów dla {ticker}.")
 
     return {
         "insider_df": insider_df,
-        "news_df": news_df
+        "news_df": news_df # Teraz zawiera 'topics'
     }
