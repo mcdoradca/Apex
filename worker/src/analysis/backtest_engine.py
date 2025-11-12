@@ -12,7 +12,6 @@ from .utils import (
     get_current_NY_datetime,
     append_scan_log,
     update_scan_progress,
-    # Importy wskaźników są zachowane na potrzeby _detect_market_regime i przyszłych obliczeń
     calculate_rsi, 
     calculate_macd,
     calculate_atr,
@@ -20,17 +19,9 @@ from .utils import (
     calculate_ad
 )
 from .. import models
-# Importujemy SECTOR_TO_ETF_MAP (nadal potrzebne do cache)
 from ..config import SECTOR_TO_ETF_MAP
 
 logger = logging.getLogger(__name__)
-
-# ==================================================================
-# === DEKONSTRUKCJA (KROK 13) ===
-# Usunięto stare, proste definicje AQM_THRESHOLDS_MINIMAL i AQM_STRATEGY_PARAMS.
-# Zostaną one zastąpione przez logikę AQM V3 (Hipotezy H1-H4).
-# ==================================================================
-
 
 # ==================================================================
 # === Silnik Symulacji (Logika LONG) ===
@@ -41,9 +32,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
     """
     "Spogląda w przyszłość" (w danych historycznych), aby zobaczyć, jak
     dana transakcja by się zakończyła.
-    
-    UWAGA: Na razie obsługuje tylko transakcje 'LONG', ponieważ strategia AQM
-    zgodnie z PDF jest strategią typu long-only.
     """
     try:
         entry_price = setup['entry_price']
@@ -58,7 +46,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             # === LOGIKA DLA POZYCJI DŁUGIEJ (LONG) ===
             for i in range(1, max_hold_days + 1):
                 if entry_index + i >= len(historical_data):
-                    # Transakcja doszła do końca danych historycznych
                     candle = historical_data.iloc[-1]
                     close_price = candle['close']
                     status = 'CLOSED_EXPIRED'
@@ -68,27 +55,21 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
                 day_low = candle['low']
                 day_high = candle['high']
 
-                # Sprawdź SL: Jeśli minimum dnia jest niższe niż SL, zamykamy po cenie SL
                 if day_low <= stop_loss:
                     close_price = stop_loss
                     status = 'CLOSED_SL'
                     break
                     
-                # Sprawdź TP: Jeśli maksimum dnia jest wyższe niż TP, zamykamy po cenie TP
                 if day_high >= take_profit:
                     close_price = take_profit
                     status = 'CLOSED_TP'
                     break
             else:
-                # Jeśli pętla zakończyła się normalnie (nie przez break),
-                # oznacza to, że ani SL, ani TP nie zostały trafione w 'max_hold_days'.
-                # Zamykamy pozycję po cenie zamknięcia ostatniego dnia.
                 final_index = min(entry_index + max_hold_days, len(historical_data) - 1)
                 candle = historical_data.iloc[final_index]
                 close_price = candle['close']
                 status = 'CLOSED_EXPIRED'
 
-            # Unikaj dzielenia przez zero, jeśli cena wejścia była 0
             if entry_price == 0:
                 p_l_percent = 0.0
             else:
@@ -96,7 +77,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         
         elif direction == 'SHORT':
             # === LOGIKA DLA POZYCJI KRÓTKIEJ (SHORT) ===
-            # Ta logika jest zachowana, ale obecnie nieużywana przez strategię AQM.
             for i in range(1, max_hold_days + 1):
                 if entry_index + i >= len(historical_data):
                     candle = historical_data.iloc[-1]
@@ -108,13 +88,11 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
                 day_low = candle['low']
                 day_high = candle['high']
 
-                # Dla SHORT, SL jest powyżej ceny wejścia
                 if day_high >= stop_loss:
                     close_price = stop_loss
                     status = 'CLOSED_SL'
                     break
                 
-                # Dla SHORT, TP jest poniżej ceny wejścia
                 if day_low <= take_profit:
                     close_price = take_profit
                     status = 'CLOSED_TP'
@@ -125,7 +103,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
                 close_price = candle['close']
                 status = 'CLOSED_EXPIRED'
 
-            # P/L dla SHORT jest odwrotny
             if entry_price == 0:
                 p_l_percent = 0.0
             else:
@@ -157,20 +134,20 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
 
 # ==================================================================
 # === SŁOWNIK CACHE (BEZ ZMIAN) ===
-# TA SEKCJA ZOSTAJE. Jest kluczowa dla wydajności AQM V3.
 # ==================================================================
 
 _backtest_cache = {
     "vix_data": None, # DF dla VXX
     "spy_data": None, # DF dla SPY
     "sector_etf_data": {}, # Klucz: 'XLK', Wartość: DF
-    "company_data": {}, # Klucz: 'AAPL', Wartość: {'daily': DF, 'weekly': DF, 'sector': 'Technology'}
-    "tickers_by_sector": {}, # Klucz: 'Technology', Wartość: ['AAPL', 'MSFT', ...]
-    "sector_map": {} # Mapa Ticker -> Sektor
+    # ZMIANA: Struktura company_data zostanie rozszerzona o 'vwap'
+    "company_data": {}, 
+    "tickers_by_sector": {}, 
+    "sector_map": {} 
 }
 
 def _get_ticker_data_from_cache(ticker: str) -> Optional[Dict[str, Any]]:
-    """Pobiera dane spółki (dzienne, tygodniowe, sektor) z cache."""
+    """Pobiera dane spółki (dzienne, tygodniowe, vwap, sektor) z cache."""
     return _backtest_cache["company_data"].get(ticker)
 
 def _get_tickers_in_sector(sector: str) -> List[str]:
@@ -196,66 +173,47 @@ def _get_sector_for_ticker(session: Session, ticker: str) -> str:
 
 # ==================================================================
 # === DETEKTOR REŻIMU RYNKOWEGO (BEZ ZMIAN) ===
-# TA SEKCJA ZOSTAJE. Dokumentacja V3 (Mapa 3, Faza 3)
-# jawnie wymaga testowania w różnych reżimach rynkowych.
 # ==================================================================
 def _detect_market_regime(current_date_str: str) -> str:
     """
     Wykrywa reżim rynkowy na podstawie danych VXX i SPY z cache.
-    Logika zgodna z PDF (str. 10 i 16).
     """
     try:
         vix_df = _backtest_cache["vix_data"]
         spy_df = _backtest_cache["spy_data"]
         
-        # Pobierz ostatni wiersz do danej daty włącznie
         vix_row = vix_df[vix_df.index <= current_date_str].iloc[-1]
         spy_row = spy_df[spy_df.index <= current_date_str].iloc[-1]
         
         vix_price = vix_row['close']
         spy_price = spy_row['close']
-        spy_sma_50 = spy_row['ema_50']   # Używamy EMA zamiast SMA
-        spy_sma_200 = spy_row['ema_200'] # Używamy EMA zamiast SMA
+        spy_sma_50 = spy_row['ema_50']
+        spy_sma_200 = spy_row['ema_200']
 
         if pd.isna(vix_price) or pd.isna(spy_price) or pd.isna(spy_sma_50) or pd.isna(spy_sma_200):
-            return 'volatile' # Błąd danych, przyjmij neutralny
+            return 'volatile' 
 
-        # Logika z PDF (str. 10 i 16)
         if vix_price < 18 and spy_price > spy_sma_200:
             return 'bull'
-        elif vix_price > 25 or spy_price < spy_sma_50: # PDF str 16: spy < sma_50 (str 10: spy < sma_200) - użyjmy tej z str 16
+        elif vix_price > 25 or spy_price < spy_sma_50: 
             return 'bear'
         else:
-            return 'volatile' # Wszystko pomiędzy (PDF str. 6: VIX 18-25)
+            return 'volatile'
             
     except IndexError:
-        # Za mało danych na początku historii
         return 'volatile'
     except Exception as e:
         logger.error(f"Błąd podczas wykrywania reżimu dla {current_date_str}: {e}")
         return 'volatile'
 
 # ==================================================================
-# === DEKONSTRUKCJA (KROK 13) ===
-# Całkowicie usunięto stare funkcje analityczne AQM:
-# - _calculate_aqm_score (stary model)
-# - _simulate_trades_aqm (stary symulator)
-#
-# Zostaną one zastąpione przez moduły obliczeniowe 7 Wymiarów
-# i symulatory Hipotez H1-H4 z AQM V3.
-# ==================================================================
-
-
-# ==================================================================
-# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (PRZEBUDOWANA) ===
+# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (ZAKTUALIZOWANA) ===
 # ==================================================================
 
 def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str):
     """
     Główna funkcja uruchamiająca backtest historyczny dla
     zdefiniowanego okresu i listy tickerów.
-    
-    PRZEBUDOWANA: Platforma gotowa na implementację hipotez AQM V3.
     """
     
     try:
@@ -280,11 +238,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     # === KROK 1: Czyszczenie Bazy Danych ===
     try:
-        # ==================================================================
-        # === DEKONSTRUKCJA (KROK 13) ===
-        # Zmieniamy wzorzec, aby czyścił *nowe* wyniki AQM_V3, a nie stary
-        # wzorzec "AQM_%". Nowy wzorzec będzie np. "AQM_V3_H1_...".
-        # ==================================================================
         like_pattern = f"BACKTEST_{year}_AQM_V3_%"
         logger.info(f"Czyszczenie starych wyników AQM V3 dla wzorca: {like_pattern}...")
         
@@ -300,22 +253,15 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     # === KROK 2: Pobieranie Listy Spółek ===
     try:
-        # ==================================================================
-        # === NAPRAWA (KROK 13 - REWIZJA) ===
-        # Zmieniamy źródło z `companies` na `phase1_candidates`.
-        # Backtest będzie teraz działał tylko na spółkach, które przeszły
-        # Twoje "Pierwsze Sito" (cena i wolumen).
-        # ==================================================================
         log_msg_tickers = "[Backtest V3] Pobieranie listy spółek z Fazy 1 ('Pierwsze Sito')..."
         logger.info(log_msg_tickers)
         append_scan_log(session, log_msg_tickers)
         
         tickers_p2_rows = session.execute(text(
-            "SELECT DISTINCT ticker FROM phase1_candidates" # <-- NAPRAWIONE ZAPYTANIE
+            "SELECT DISTINCT ticker FROM phase1_candidates"
         )).fetchall()
         
         tickers_to_test = sorted([row[0] for row in tickers_p2_rows])
-        # ==================================================================
 
         if not tickers_to_test:
             log_msg = f"[Backtest] BŁĄD: Tabela 'phase1_candidates' jest pusta. Uruchom najpierw główny skan (przycisk 'Start'), aby zapełnić tę listę."
@@ -334,19 +280,17 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # === KROK 3: Budowanie Pamięci Podręcznej (Cache) ===
-    # (Szkielet zostaje, wnętrze jest czyszczone i przygotowywane pod V3)
     
     try:
         logger.info("[Backtest V3] Rozpoczynanie budowania pamięci podręcznej (Cache)...")
-        # Resetowanie cache (zostaje)
         _backtest_cache["vix_data"] = None
         _backtest_cache["spy_data"] = None
         _backtest_cache["sector_etf_data"] = {}
         _backtest_cache["company_data"] = {}
         _backtest_cache["tickers_by_sector"] = {}
-        _backtest_cache["sector_map"] = {} # Zresetuj mapę sektorów
+        _backtest_cache["sector_map"] = {}
 
-        # 2. Pobierz dane Makro (VXX i SPY) (zostaje - potrzebne dla _detect_market_regime)
+        # 2. Pobierz dane Makro (VXX i SPY)
         logger.info("[Backtest V3] Cache: Ładowanie VXX i SPY...")
         vix_raw = api_client.get_daily_adjusted('VXX', outputsize='full')
         vix_df = pd.DataFrame.from_dict(vix_raw['Time Series (Daily)'], orient='index')
@@ -362,7 +306,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         spy_df['ema_200'] = calculate_ema(spy_df['close'], period=200)
         _backtest_cache["spy_data"] = spy_df
         
-        # 3. Pobierz dane Sektorowe (ETF-y) (zostaje - na razie)
+        # 3. Pobierz dane Sektorowe (ETF-y)
         logger.info("[Backtest V3] Cache: Ładowanie 11 sektorów ETF...")
         for sector_name, etf_ticker in SECTOR_TO_ETF_MAP.items():
             try:
@@ -385,51 +329,56 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             try:
                 # ==================================================================
-                # === DEKONSTRUKCJA (KROK 13) ===
-                # Zostawiamy pobieranie DANYCH SUROWYCH (daily i weekly),
-                # ale usuwamy CAŁĄ starą logikę obliczania wskaźników
-                # (RSI, MACD, OBV, AD_LINE itp.).
-                #
-                # W kolejnych krokach będziemy tu dodawać pobieranie
-                # i obliczanie metryk AQM V3 (VWAP, Insider, 5min Intraday itp.).
+                # === KROK 16: Dodanie ładowania VWAP do cache ===
                 # ==================================================================
                 
-                # Pobierz dane dzienne i tygodniowe (2 wywołania API na ticker)
+                # Pobierz dane dzienne (Wywołanie 1)
                 price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
-                weekly_data_raw = api_client.get_time_series_weekly(ticker) # outputsize='full' jest domyślny
+                # Pobierz dane tygodniowe (Wywołanie 2)
+                weekly_data_raw = api_client.get_time_series_weekly(ticker)
+                # Pobierz dane VWAP (Wywołanie 3)
+                vwap_data_raw = api_client.get_vwap(ticker, interval='daily')
                 
                 if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
-                   not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw:
-                    logger.warning(f"Brak pełnych danych dla {ticker}, pomijanie.")
+                   not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw or \
+                   not vwap_data_raw or 'Technical Analysis: VWAP' not in vwap_data_raw:
+                    logger.warning(f"Brak pełnych danych (Daily, Weekly lub VWAP) dla {ticker}, pomijanie.")
                     continue
 
+                # Przetwórz Daily
                 daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
                 daily_df = standardize_df_columns(daily_df)
                 daily_df.index = pd.to_datetime(daily_df.index)
                 
+                # Przetwórz Weekly
                 weekly_df = pd.DataFrame.from_dict(weekly_data_raw['Weekly Adjusted Time Series'], orient='index')
                 weekly_df = standardize_df_columns(weekly_df)
                 weekly_df.index = pd.to_datetime(weekly_df.index)
+
+                # Przetwórz VWAP
+                vwap_df = pd.DataFrame.from_dict(vwap_data_raw['Technical Analysis: VWAP'], orient='index')
+                vwap_df.index = pd.to_datetime(vwap_df.index)
+                vwap_df['VWAP'] = pd.to_numeric(vwap_df['VWAP'], errors='coerce')
+                vwap_df.sort_index(inplace=True)
                 
-                # --- (STARA LOGIKA OBLICZEŃ USUNIĘTA) ---
+                # ==================================================================
                 
-                # Zdobądź i zapisz sektor (zostaje)
+                # Zdobądź i zapisz sektor
                 sector = _get_sector_for_ticker(session, ticker)
                 
-                # Zapisz wszystko w cache (zostaje)
+                # Zapisz wszystko w cache
                 _backtest_cache["company_data"][ticker] = {
                     "daily": daily_df,
                     "weekly": weekly_df,
+                    "vwap": vwap_df, # <-- ZAPISANE W CACHE
                     "sector": sector
                 }
                 
-                # Zbuduj mapę Sektor -> Ticker (zostaje)
                 if sector not in _backtest_cache["tickers_by_sector"]:
                     _backtest_cache["tickers_by_sector"][sector] = []
                 _backtest_cache["tickers_by_sector"][sector].append(ticker)
 
             except Exception as e:
-                # Nie przerywaj budowania cache z powodu jednego tickera
                 logger.error(f"[Backtest V3] Błąd budowania cache dla {ticker}: {e}", exc_info=True)
                 
         logger.info("[Backtest V3] Budowanie pamięci podręcznej (Cache) zakończone.")
@@ -446,20 +395,13 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     # === KROK 4: Uruchomienie Symulacji (TERAZ PUSTE) ===
     # ==================================================================
     
-    # ==================================================================
-    # === DEKONSTRUKCJA (KROK 13) ===
-    # Cała pętla symulacji `_simulate_trades_aqm` została usunięta.
-    # W kolejnych krokach zastąpimy ją pętlą uruchamiającą
-    # Hipotezy H1, H2, H3, H4 z dokumentacji V3.
-    # ==================================================================
-    
     log_msg_aqm = "[Backtest V3] Szkielet silnika gotowy. Oczekiwanie na implementację Hipotez (H1-H4)."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
             
     # === KONIEC SYMULACJI ===
-    total_trades_found = 0 # Na razie 0
-    total_tickers = len(tickers_to_test) # Przeniesiono definicję na dół
+    total_trades_found = 0 
+    total_tickers = len(tickers_to_test)
     update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
     log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3): Przebudowa platformy zakończona dla roku '{year}'. Gotowy do testowania hipotez."
     logger.info(log_msg_final)
