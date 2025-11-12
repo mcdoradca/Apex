@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 from pandas import Series as pd_Series
 # ZMIANA: Dodajemy import 'Optional'
-from typing import Optional
+from typing import Optional, Tuple
 
 # ==================================================================
 # KROK 1 (KAT. 1): Dodanie importów dla Telegrama
@@ -279,18 +279,38 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     
-    # Sprawdź, czy kolumny już są w poprawnym formacie
+    # Sprawdź, czy kolumny już są w poprawnym formacie (np. 'open', 'close', 'vwap')
+    # Ten warunek jest teraz kluczowy
     if 'open' in df.columns and 'close' in df.columns:
+        # Jeśli już mamy 'open', ale nie mamy 'vwap' (bo pochodzi z TIME_SERIES_DAILY)
+        # musimy się upewnić, że 'vwap' również jest konwertowany.
+        if 'vwap' in df.columns and not pd.api.types.is_numeric_dtype(df['vwap']):
+             df['vwap'] = pd.to_numeric(df['vwap'], errors='coerce')
         return df # Już przetworzone
 
-    try:
-        df.columns = [col.split('. ')[-1] for col in df.columns]
-    except Exception as e:
-        logger.error(f"Error standardizing columns (might already be standard): {e}. Columns: {df.columns}")
-        # Kontynuujmy, próbując konwertować
-    
+    # ==================================================================
+    # === POPRAWKA VWAP (Problem 1) ===
+    # Musimy poprawnie zmapować "5. vwap" (z TIME_SERIES_DAILY) na naszą kolumnę "vwap"
+    # ==================================================================
+    column_mapping = {
+        '1. open': 'open',
+        '2. high': 'high',
+        '3. low': 'low',
+        '4. close': 'close',
+        '5. volume': 'volume', # Dla TIME_SERIES_DAILY
+        '5. vwap': 'vwap',     # Dla TIME_SERIES_DAILY
+        '6. volume': 'volume', # Dla TIME_SERIES_DAILY_ADJUSTED
+        '7. adjusted close': 'adjusted close',
+        '8. split coefficient': 'split coefficient'
+    }
+
+    # Zmieniamy nazwy kolumn na podstawie mapowania
+    df.rename(columns=lambda c: column_mapping.get(c, c.split('. ')[-1]), inplace=True)
+    # ==================================================================
+
     # Konwertuj kluczowe kolumny na numeryczne
-    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close']:
+    # Dodano 'vwap' do listy
+    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close', 'vwap']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
