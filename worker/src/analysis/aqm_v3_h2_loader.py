@@ -1,0 +1,117 @@
+import logging
+import pandas as pd
+from typing import Dict, Any, Optional
+from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
+
+logger = logging.getLogger(__name__)
+
+def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    """
+    Przetwarza surową odpowiedź JSON z INSIDER_TRANSACTIONS na DataFrame
+    gotowy do backtestu.
+    """
+    try:
+        transactions = raw_data.get('transactions', [])
+        if not transactions:
+            return pd.DataFrame(columns=['transaction_date', 'transaction_type', 'transaction_shares'])
+
+        processed_data = []
+        for tx in transactions:
+            try:
+                # Konwertujemy datę na obiekt datetime, aby ustawić ją jako indeks
+                tx_date = pd.to_datetime(tx.get('transactionDate'))
+                tx_type = tx.get('transactionType')
+                tx_shares = float(tx.get('transactionShares'))
+                
+                # Zgodnie ze specyfikacją H2 (Wymiar 2.1), interesują nas tylko 'P-Purchase' i 'S-Sale'
+                if tx_type in ['P-Purchase', 'S-Sale'] and tx_shares > 0:
+                    processed_data.append({
+                        'transaction_date': tx_date,
+                        'transaction_type': tx_type,
+                        'transaction_shares': tx_shares
+                    })
+            except (ValueError, TypeError, AttributeError):
+                continue # Pomiń błędne rekordy
+
+        if not processed_data:
+             return pd.DataFrame(columns=['transaction_date', 'transaction_type', 'transaction_shares'])
+
+        df = pd.DataFrame(processed_data)
+        # Ustawiamy datę jako indeks, aby umożliwić filtrowanie wg dat w backteście
+        df.set_index('transaction_date', inplace=True)
+        df.sort_index(inplace=True)
+        return df
+        
+    except Exception as e:
+        logger.error(f"Błąd podczas parsowania danych Insider Transactions: {e}", exc_info=True)
+        return None
+
+def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    """
+    Przetwarza surową odpowiedź JSON z NEWS_SENTIMENT na DataFrame
+    gotowy do backtestu.
+    """
+    try:
+        feed = raw_data.get('feed', [])
+        if not feed:
+            return pd.DataFrame(columns=['published_at', 'overall_sentiment_score'])
+
+        processed_data = []
+        for article in feed:
+            try:
+                # Format czasu AV to 'YYYYMMDDTHHMMSS'
+                pub_time_str = article.get('time_published')
+                pub_time = pd.to_datetime(pub_time_str, format='%Y%m%dT%H%M%S')
+                score = float(article.get('overall_sentiment_score'))
+                
+                processed_data.append({
+                    'published_at': pub_time,
+                    'overall_sentiment_score': score
+                })
+            except (ValueError, TypeError, AttributeError):
+                continue # Pomiń błędne rekordy
+
+        if not processed_data:
+            return pd.DataFrame(columns=['published_at', 'overall_sentiment_score'])
+
+        df = pd.DataFrame(processed_data)
+        # Ustawiamy datę jako indeks
+        df.set_index('published_at', inplace=True)
+        df.sort_index(inplace=True)
+        return df
+        
+    except Exception as e:
+        logger.error(f"Błąd podczas parsowania danych News Sentiment: {e}", exc_info=True)
+        return None
+
+def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient) -> Dict[str, pd.DataFrame]:
+    """
+    Główna funkcja tego modułu. Pobiera i przetwarza dane Wymiaru 2
+    dla pojedynczego tickera.
+    """
+    logger.info(f"[Backtest V3][H2 Loader] Ładowanie danych Wymiaru 2 dla {ticker}...")
+    
+    # 1. Pobierz dane Insider (Wymiar 2.1)
+    insider_raw = api_client.get_insider_transactions(ticker)
+    insider_df = _parse_insider_transactions(insider_raw)
+    
+    if insider_df is None:
+        logger.warning(f"[Backtest V3][H2 Loader] Nie udało się przetworzyć danych Insider dla {ticker}. Tworzenie pustego DataFrame.")
+        insider_df = pd.DataFrame(columns=['transaction_date', 'transaction_type', 'transaction_shares'])
+    
+    # 2. Pobierz dane News (Wymiar 2.2)
+    # Specyfikacja wymaga 7 dni, ale my ładujemy pełną historię (limit 1000)
+    # i będziemy ją filtrować "dzień po dniu" w pętli symulacji.
+    news_raw = api_client.get_news_sentiment(ticker, limit=1000)
+    news_df = _parse_news_sentiment(news_raw)
+    
+    if news_df is None:
+        logger.warning(f"[Backtest V3][H2 Loader] Nie udało się przetworzyć danych News dla {ticker}. Tworzenie pustego DataFrame.")
+        news_df = pd.DataFrame(columns=['published_at', 'overall_sentiment_score'])
+
+    logger.info(f"[Backtest V3][H2 Loader] Załadowano {len(insider_df)} transakcji i {len(news_df)} newsów dla {ticker}.")
+
+    return {
+        "insider_df": insider_df,
+        "news_df": news_df
+    }
