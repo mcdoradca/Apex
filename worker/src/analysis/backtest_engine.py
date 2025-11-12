@@ -455,6 +455,10 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             logger.error(f"[Backtest V3][H1/H2/H3/H4] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
             
+    # === POPRAWKA BŁĘDU (SyntaxError) ===
+    # Usunięto błędny, nadmiarowy nawias klamrowy '}' z tego miejsca (była linia 427)
+    # === KONIEC POPRAWKI ===
+            
     # === KONIEC SYMULACJI ===
     # INTEGRACJA H4 (KROK 7): Aktualizacja sumy końcowej
     trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4
