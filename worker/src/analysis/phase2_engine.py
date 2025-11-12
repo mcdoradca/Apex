@@ -18,7 +18,11 @@ from ..config import Phase2Config, SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
 logger = logging.getLogger(__name__)
 
 def _calculate_catalyst_score(ticker: str, api_client: AlphaVantageClient) -> int:
-    """Oblicza wynik sentymentu (bez zmian)."""
+    """
+    DEKONSTRUKCJA: Ta funkcja jest już nieużywana.
+    Logika Fazy 2 została wyłączona, aby zrobić miejsce dla nowego modelu AQM.
+    """
+    # ... (oryginalny kod zostaje, ale nie jest wywoływany) ...
     try:
         news_data = api_client.get_news_sentiment(ticker)
         if not news_data or not news_data.get('feed'): return 0
@@ -37,8 +41,10 @@ def _calculate_catalyst_score(ticker: str, api_client: AlphaVantageClient) -> in
 
 def _calculate_relative_strength_score(ticker: str, daily_df: pd.DataFrame, qqq_perf: float, api_client: AlphaVantageClient) -> int:
     """
-    KROK 3 ZMIANA: Oblicza siłę względną lokalnie, używając DataFrame.
+    DEKONSTRUKCJA: Ta funkcja jest już nieużywana.
+    Logika Fazy 2 została wyłączona, aby zrobić miejsce dla nowego modelu AQM.
     """
+    # ... (oryginalny kod zostaje, ale nie jest wywoływany) ...
     score = 0
     try:
         # 1. Oblicz RSI lokalnie (zamiast wywołania API)
@@ -66,8 +72,10 @@ def _calculate_relative_strength_score(ticker: str, daily_df: pd.DataFrame, qqq_
 
 def _calculate_energy_compression_score(ticker: str, daily_df: pd.DataFrame, api_client: AlphaVantageClient) -> int:
     """
-    KROK 3 ZMIANA: Oblicza kompresję energii lokalnie, używając DataFrame.
+    DEKONSTRUKCJA: Ta funkcja jest już nieużywana.
+    Logika Fazy 2 została wyłączona, aby zrobić miejsce dla nowego modelu AQM.
     """
+    # ... (oryginalny kod zostaje, ale nie jest wywoływany) ...
     try:
         # 1. Sprawdź, czy mamy wystarczająco danych
         if len(daily_df) < 100: 
@@ -97,12 +105,16 @@ def _calculate_energy_compression_score(ticker: str, daily_df: pd.DataFrame, api
 
 def run_analysis(session: Session, candidate_tickers: list[str], get_current_state, api_client: AlphaVantageClient) -> List[Tuple[str, pd.DataFrame]]:
     """
-    KROK 3 ZMIANA: Główna funkcja Fazy 2.
-    - Oblicza RSI i BBands lokalnie.
-    - Zwraca listę krotek: [(ticker, daily_df), ...]
+    DEKONSTRUKCJA (KROK 3): Faza 2 została zmodyfikowana.
+    
+    Ta faza nie wykonuje już starej logiki scoringowej (Catalyst, RS, Energy).
+    Jej jedynym zadaniem jest teraz pobranie pełnych danych historycznych (daily_df)
+    dla *każdego* kandydata z Fazy 1 i przekazanie ich dalej.
+    
+    Filtrowanie i scoring zostaną wykonane w Fazie 3 przez nowy model AQM.
     """
-    logger.info("Running Phase 2: APEX Predator Quality Analysis...")
-    append_scan_log(session, "Faza 2: Rozpoczynanie analizy jakościowej...")
+    logger.info("Running Phase 2: Data Pre-load Stage (Old Scoring Bypassed)...")
+    append_scan_log(session, "Faza 2: Ładowanie danych EOD (Stary scoring wyłączony)...")
 
     total_candidates = len(candidate_tickers)
     update_scan_progress(session, 0, total_candidates)
@@ -111,27 +123,17 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
     qualified_data: List[Tuple[str, pd.DataFrame]] = []
     processed_count = 0
 
-    try:
-        # Pobieramy dane QQQ raz, na początku
-        qqq_data_raw = api_client.get_daily_adjusted('QQQ', outputsize='compact')
-        if not qqq_data_raw or 'Time Series (Daily)' not in qqq_data_raw:
-            raise Exception("Could not fetch QQQ data for Phase 2 analysis.")
-        
-        # POPRAWKA BŁĘDU: Musimy przetworzyć (standaryzować) dane QQQ
-        qqq_df = pd.DataFrame.from_dict(qqq_data_raw['Time Series (Daily)'], orient='index')
-        qqq_df = standardize_df_columns(qqq_df) # Konwersja na liczby
-        
-        if len(qqq_df) < 6:
-            raise Exception("Not enough QQQ data to calculate 5-day performance.")
-            
-        # Obliczamy wydajność QQQ (już jako liczba, a nie string)
-        qqq_perf = (qqq_df['close'].iloc[-1] - qqq_df['close'].iloc[-6]) / qqq_df['close'].iloc[-6] * 100
-        logger.info(f"QQQ 5-day performance calculated: {qqq_perf:.2f}%")
-
-    except Exception as e:
-        logger.error(f"Critical error fetching or processing QQQ data in Phase 2: {e}", exc_info=True)
-        append_scan_log(session, "BŁĄD KRYTYCZNY: Nie można pobrać lub przetworzyć danych dla QQQ w Fazie 2.")
-        return []
+    # ==================================================================
+    # === DEKONSTRUKCJA (KROK 3) ===
+    # Usuwamy pobieranie danych QQQ, ponieważ stara logika scoringu
+    # (która go używała) jest wyłączona.
+    # ==================================================================
+    # try:
+    #     qqq_data_raw = api_client.get_daily_adjusted('QQQ', outputsize='compact')
+    #     ... (cały blok try/except dla QQQ usunięty) ...
+    # except Exception as e:
+    #     ...
+    # ==================================================================
 
     for ticker in candidate_tickers:
         if get_current_state() == 'PAUSED':
@@ -152,15 +154,25 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
                 append_scan_log(session, f"{ticker} - Pominięty. Puste dane po standaryzacji.")
                 continue
 
-            # 3. Pobieramy sentyment (drugie i ostatnie wywołanie API)
-            catalyst_score = _calculate_catalyst_score(ticker, api_client)
+            # ==================================================================
+            # === DEKONSTRUKCJA (KROK 3) ===
+            # Wyłączamy całą starą logikę scoringu.
+            # ==================================================================
             
-            # 4. Obliczenia lokalne (przekazujemy przetworzony DataFrame)
-            strength_score = _calculate_relative_strength_score(ticker, daily_df, qqq_perf, api_client)
-            compression_score = _calculate_energy_compression_score(ticker, daily_df, api_client)
+            # 3. (WYŁĄCZONE) Pobieranie sentymentu
+            # catalyst_score = _calculate_catalyst_score(ticker, api_client)
             
-            total_score = catalyst_score + strength_score + compression_score
-            is_qualified = total_score >= Phase2Config.MIN_APEX_SCORE_TO_QUALIFY
+            # 4. (WYŁĄCZONE) Obliczenia lokalne
+            # strength_score = _calculate_relative_strength_score(ticker, daily_df, qqq_perf, api_client)
+            # compression_score = _calculate_energy_compression_score(ticker, daily_df, api_client)
+            
+            # total_score = catalyst_score + strength_score + compression_score
+            # is_qualified = total_score >= Phase2Config.MIN_APEX_SCORE_TO_QUALIFY
+            
+            # Zastępujemy starą logikę: Kwalifikujemy *każdy* ticker, dla którego mamy dane.
+            is_qualified = True
+            total_score = 0 # Wartość zastępcza, nieużywana
+            # ==================================================================
             
             stmt = text("""
                 INSERT INTO phase2_results (ticker, analysis_date, catalyst_score, relative_strength_score, energy_compression_score, total_score, is_qualified)
@@ -171,19 +183,22 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
                 is_qualified = EXCLUDED.is_qualified;
             """)
             session.execute(stmt, {
-                'ticker': ticker, 'date': date.today(), 'c_score': catalyst_score, 
-                'rs_score': strength_score, 'ec_score': compression_score, 
-                'total': total_score, 'qual': is_qualified
+                'ticker': ticker, 'date': date.today(), 
+                'c_score': 0, # Zapisujemy 0
+                'rs_score': 0, # Zapisujemy 0
+                'ec_score': 0, # Zapisujemy 0
+                'total': total_score, 
+                'qual': is_qualified
             })
             session.commit()
 
-            log_msg = f"{ticker} - Wynik APEX: {total_score}/10 (K:{catalyst_score}, S:{strength_score}, E:{compression_score})."
+            log_msg = f"{ticker} - Faza 2: Dane EOD załadowane."
             if is_qualified:
                 # KROK 3 ZMIANA: Dodajemy krotkę (ticker, dane) do listy
                 qualified_data.append((ticker, daily_df))
-                log_msg += " Kwalifikacja do APEX Elita."
-            else:
-                log_msg += " Odrzucony."
+                log_msg += " Przekazano do Fazy 3."
+            # (Blok 'else' (odrzucony) nie jest już potrzebny)
+            
             append_scan_log(session, log_msg)
 
         except Exception as e:
@@ -193,10 +208,9 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
             processed_count += 1
             update_scan_progress(session, processed_count, total_candidates)
     
-    final_log = f"Faza 2 zakończona. Zakwalifikowano {len(qualified_data)} spółek do APEX Elita."
+    final_log = f"Faza 2 (Ładowanie Danych) zakończona. Przekazano {len(qualified_data)} spółek do Fazy 3."
     logger.info(final_log)
     append_scan_log(session, final_log)
     
     # KROK 3 ZMIANA: Zwracamy listę krotek
     return qualified_data
-
