@@ -380,23 +380,19 @@ def set_system_control_value(db: Session, key: str, value: str):
         logger.error(f"Error setting system control value for key {key}: {e}", exc_info=True)
         raise
 
-def get_ai_analysis_result(db: Session, ticker: str) -> Optional[Dict[str, Any]]:
-# ... (bez zmian) ...
-    result = db.query(models.AIAnalysisResult).filter(models.AIAnalysisResult.ticker == ticker).first()
-    return result.analysis_data if result else None
+# ==================================================================
+# === DEKONSTRUKCJA (KROK 10) ===
+# Usunięto funkcje `get_ai_analysis_result` i `delete_ai_analysis_result`,
+# ponieważ były powiązane z usuniętymi endpointami API
+# i starą logiką analizy na żądanie.
+# ==================================================================
+# def get_ai_analysis_result(...):
+#     ... (USUNIĘTE) ...
+#
+# def delete_ai_analysis_result(...):
+#     ... (USUNIĘTE) ...
+# ==================================================================
 
-def delete_ai_analysis_result(db: Session, ticker: str):
-# ... (bez zmian) ...
-    """Usuwa istniejący wynik analizy AI dla danego tickera."""
-    try:
-        deleted_count = db.query(models.AIAnalysisResult).filter(models.AIAnalysisResult.ticker == ticker).delete(synchronize_session=False)
-        db.commit()
-        if deleted_count > 0:
-             logger.info(f"Deleted previous AI analysis result for {ticker} to force refresh.")
-    except Exception as e:
-        logger.error(f"Error deleting AI analysis result for {ticker}: {e}", exc_info=True)
-        db.rollback()
-        # Nie rzucamy błędu, bo to nie jest krytyczne dla zlecenia analizy
 
 # ==================================================================
 # === NOWE FUNKCJE (KROK 5): Pobieranie Raportu Wirtualnego Agenta ===
