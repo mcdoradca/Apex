@@ -17,6 +17,11 @@ from . import aqm_v3_h2_loader
 from . import aqm_v3_h2_simulator
 # Krok 22b (Część 2): Importujemy nowy silnik ładowania H3
 from . import aqm_v3_h3_loader
+# ==================================================================
+# === INTEGRACJA H3 (KROK 1): Import nowego symulatora H3 ===
+# ==================================================================
+from . import aqm_v3_h3_simulator
+# ==================================================================
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
@@ -328,20 +333,24 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # ==================================================================
-    # === KROK 4: Uruchomienie Symulacji (Hipoteza H1 i H2) ===
+    # === KROK 4: Uruchomienie Symulacji (Hipoteza H1, H2 i H3) ===
     # ==================================================================
     
-    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnych H1 i H2..."
+    # ZMIANA: Aktualizacja logów
+    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnych H1, H2 i H3..."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
     
     trades_found_h1 = 0
     trades_found_h2 = 0
+    # INTEGRACJA H3 (KROK 2): Dodanie licznika dla H3
+    trades_found_h3 = 0
     total_tickers = len(tickers_to_test)
 
     for i, ticker in enumerate(tickers_to_test):
         if i % 10 == 0:
-            log_msg = f"[Backtest V3][H1/H2] Przetwarzanie {ticker} ({i}/{total_tickers})..."
+            # ZMIANA: Aktualizacja logów
+            log_msg = f"[Backtest V3][H1/H2/H3] Przetwarzanie {ticker} ({i}/{total_tickers})..."
             append_scan_log(session, log_msg)
             update_scan_progress(session, i, total_tickers)
         
@@ -408,21 +417,42 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             )
             # ==================================================================
             
+            # ==================================================================
+            # === INTEGRACJA H3 (KROK 3): Aktywacja Pętli Symulacyjnej H3 ===
+            # ==================================================================
+            # H3 wymaga 'daily' (slice) oraz 'insider', 'news' i 'intraday_5min' (full)
+            h3_data_slice = {
+                "daily": historical_data_slice,
+                "insider_df": ticker_data.get("insider_df"),
+                "news_df": ticker_data.get("news_df"),
+                "intraday_5min_df": ticker_data.get("intraday_5min_df")
+            }
+            
+            trades_found_h3 += aqm_v3_h3_simulator._simulate_trades_h3(
+                session,
+                ticker,
+                h3_data_slice, # Przekazujemy słownik z danymi H3
+                year
+            )
+            # ==================================================================
+            
         except Exception as e:
-            logger.error(f"[Backtest V3][H1/H2] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
+            # ZMIANA: Aktualizacja logu błędu
+            logger.error(f"[Backtest V3][H1/H2/H3] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
 
     # ==================================================================
-    # === KROK 5: Uruchomienie Symulacji (Hipoteza H3) ===
-    # (TUTAJ W PRZYSZŁOŚCI DODAMY WYWOŁANIE `_simulate_trades_h3`)
+    # INTEGRACJA H3 (KROK 4): Usunięcie starego bloku "placeholder"
     # ==================================================================
-    log_msg_aqm_h3 = "[Backtest V3] Oczekiwanie na implementację Hipotezy H3."
-    logger.info(log_msg_aqm_h3)
-    append_scan_log(session, log_msg_aqm_h3)
             
     # === KONIEC SYMULACJI ===
-    trades_found_total = trades_found_h1 + trades_found_h2
+    # INTEGRACJA H3 (KROK 5): Aktualizacja sumy końcowej
+    trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3
     update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
-    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2})."
+    
+    # INTEGRACJA H3 (KROK 6): Aktualizacja logu końcowego
+    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2/H3): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3})."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
+
+}
