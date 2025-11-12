@@ -176,23 +176,26 @@
 
         <!-- ZMIANA: Na mobile 'main' automatycznie zajmie 100% szerokości, bo 'aside' jest 'fixed' -->
         <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
+            
             <!-- 
-              ZMIANA: Zmieniono strukturę nagłówka
-              - Dodano 'flex items-center gap-2'
-              - Dodano przycisk hamburgera 'mobile-menu-btn' (widoczny tylko na mobile 'md:hidden')
-              - Input wyszukiwania ma teraz 'flex-1'
+            ==========================================================
+            === DEKONSTRUKCJA (KROK 11) ===
+            Usunięto pasek wyszukiwania (`#ticker-input`) z nagłówka,
+            ponieważ cała powiązana z nim logika backendu (stara
+            analiza AI na żądanie) została usunięta.
+            ==========================================================
             -->
             <header class="p-4 border-b border-gray-800 shrink-0">
                 <div class="max-w-xl mx-auto flex items-center gap-2">
                     <button id="mobile-menu-btn" class="md:hidden p-1 -ml-1 text-gray-400 hover:text-white rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500">
                         <i data-lucide="menu" class="w-6 h-6"></i>
                     </button>
-                    <div class="relative flex-1">
-                        <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-5 h-5"></i>
-                        <input id="ticker-input" type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 rounded-md pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500">
-                    </div>
+                    <!-- ZMIANA: Usunięto pasek wyszukiwania i wstawiono tytuł -->
+                    <h2 class="text-lg font-semibold text-gray-300">APEX Predator</h2>
                 </div>
             </header>
+            <!-- ========================================================== -->
+
 
             <div id="main-content" class="p-6 flex-grow">
                 <!-- Zawartość będzie renderowana przez JavaScript -->
@@ -231,6 +234,7 @@
 
     <!-- ========================================================== -->
     <!-- === NOWY MODAL (Krok 6 - Mega Agent) === -->
+    <!-- (Ten modal POZOSTAJE, jest używany przez nową funkcję) -->
     <!-- ========================================================== -->
     <div id="ai-report-modal" class="modal-backdrop hidden">
         <div class="modal-content modal-content-lg">
