@@ -9,6 +9,8 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 
 # Krok 18: Importujemy kalkulatory metryk z Krok 17 i 15
 from . import aqm_v3_metrics
+# Krok 19b: Importujemy nowy silnik symulacji H1
+from . import aqm_v3_h1_simulator 
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
@@ -24,103 +26,14 @@ from ..config import SECTOR_TO_ETF_MAP
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# === Silnik Symulacji (Logika LONG) ===
-# TA FUNKCJA ZOSTAJE. Jest generyczna i będzie potrzebna do testowania hipotez V3.
+# === DEKONSTRUKCJA (KROK 19b) ===
+# Funkcja `_resolve_trade` została całkowicie usunięta z tego pliku.
+# Jej nowym domem jest `aqm_v3_h1_simulator.py`.
+# ==================================================================
+# def _resolve_trade(...):
+#     ... (USUNIĘTE) ...
 # ==================================================================
 
-def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
-    """
-    "Spogląda w przyszłość" (w danych historycznych), aby zobaczyć, jak
-    dana transakcja by się zakończyła.
-    
-    ZMIANA (Specyfikacja H1): Ta funkcja jest teraz zgodna z wymogami H1.
-    Wejście (D+1 OPEN) i Wyjście (D+5 CLOSE) jest obsługiwane przez _simulate_trades_h1.
-    _resolve_trade obsługuje tylko egzekucję SL i TP w dniach D+1 do D+5.
-    """
-    try:
-        # Pobieramy parametry ze specyfikacji H1
-        entry_price = setup['entry_price'] # OPEN(D+1)
-        stop_loss = setup['stop_loss']     # OPEN(D+1) - (2 * ATR(D))
-        take_profit = setup['take_profit'] # VWAP(D)
-        
-        close_price = entry_price # Domyślna cena zamknięcia
-        status = 'CLOSED_EXPIRED' # Domyślny status
-        
-        # Znajdź indeks świecy D+1 (czyli 'entry_index' w pełnym DataFrame)
-        # Pętla musi zacząć sprawdzać SL/TP od dnia D+1 (włącznie)
-        
-        # +1, ponieważ specyfikacja mówi o 5 dniach *po* wejściu (D+1 do D+5)
-        # Dzień 1 = entry_index (D+1)
-        # Dzień 5 = entry_index + 4 (D+5)
-        for i in range(0, max_hold_days): 
-            current_day_index = entry_index + i
-            
-            if current_day_index >= len(historical_data):
-                # Transakcja doszła do końca danych historycznych
-                candle = historical_data.iloc[-1]
-                close_price = candle['close']
-                status = 'CLOSED_EXPIRED'
-                break
-            
-            candle = historical_data.iloc[current_day_index]
-            day_low = candle['low']
-            day_high = candle['high']
-
-            if direction == 'LONG':
-                # === Logika H1 (Mean Reversion) ===
-                
-                # Warunek 1: Czy SL został trafiony?
-                # Sprawdzamy LOW dnia (nawet w dniu wejścia D+1)
-                if day_low <= stop_loss:
-                    close_price = stop_loss
-                    status = 'CLOSED_SL'
-                    break
-                    
-                # Warunek 2: Czy TP został trafiony?
-                # Sprawdzamy HIGH dnia
-                if day_high >= take_profit:
-                    close_price = take_profit
-                    status = 'CLOSED_TP'
-                    break
-            
-            # (Pomijamy logikę SHORT, H1 jest tylko LONG)
-
-        else:
-            # === Warunek 3: Wyjście Czasowe (Max Hold) ===
-            # Jeśli pętla zakończyła się normalnie (bez break),
-            # zamykamy po cenie CLOSE dnia D+5.
-            
-            # Indeks D+5 to entry_index + max_hold_days - 1
-            final_index = min(entry_index + max_hold_days - 1, len(historical_data) - 1)
-            candle = historical_data.iloc[final_index]
-            close_price = candle['close']
-            status = 'CLOSED_EXPIRED'
-
-        # Obliczanie P/L
-        if entry_price == 0:
-            p_l_percent = 0.0
-        else:
-            p_l_percent = ((close_price - entry_price) / entry_price) * 100
-        
-        
-        trade = models.VirtualTrade(
-            ticker=setup['ticker'],
-            status=status,
-            setup_type=f"BACKTEST_{year}_{setup['setup_type']}",
-            entry_price=float(entry_price),
-            stop_loss=float(stop_loss),
-            take_profit=float(take_profit),
-            open_date=historical_data.index[entry_index].to_pydatetime(), # Data znalezienia setupu
-            close_date=candle.name.to_pydatetime(), # Data zamknięcia
-            close_price=float(close_price),
-            final_profit_loss_percent=float(p_l_percent)
-        )
-        
-        return trade
-
-    except Exception as e:
-        logger.error(f"[Backtest] Błąd podczas rozwiązywania transakcji dla {setup.get('ticker')}: {e}", exc_info=True)
-        return None
 
 # ==================================================================
 # === SŁOWNIK CACHE (BEZ ZMIAN) ===
@@ -420,17 +333,70 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # ==================================================================
-    # === KROK 4: Uruchomienie Symulacji (TERAZ PUSTE) ===
+    # === KROK 4: Uruchomienie Symulacji (Hipoteza H1) ===
     # ==================================================================
     
-    log_msg_aqm = "[Backtest V3] Szkielet silnika gotowy. Wstępne obliczenia H1 zakończone. Oczekiwanie na implementację pętli symulacji H1."
+    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnej H1..."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
+    
+    trades_found_total = 0
+    total_tickers = len(tickers_to_test)
+
+    for i, ticker in enumerate(tickers_to_test):
+        if i % 10 == 0:
+            log_msg = f"[Backtest V3][H1] Przetwarzanie {ticker} ({i}/{total_tickers})..."
+            append_scan_log(session, log_msg)
+            update_scan_progress(session, i, total_tickers)
+        
+        try:
+            # 1. Pobierz wstępnie obliczone dane z cache
+            ticker_data = _get_ticker_data_from_cache(ticker)
+            if not ticker_data or 'daily' not in ticker_data:
+                logger.warning(f"[Backtest V3] Brak danych w cache dla {ticker} (H1). Pomijanie.")
+                continue
+            
+            # 2. Wytnij plaster danych na dany rok (z buforem 100+1 dni)
+            full_historical_data = ticker_data['daily']
+            
+            try:
+                # Znajdź indeks pierwszej daty, która jest >= start_date
+                indexer = full_historical_data.index.get_indexer([start_date], method='bfill')
+                if indexer[0] == -1: raise KeyError("Data startu nie znaleziona")
+                start_index = indexer[0]
+            except KeyError:
+                logger.warning(f"[Backtest V3] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
+                continue
+
+            # Wymagamy 100 dni historii (dla percentyla) PRZED startem roku
+            if start_index < 100:
+                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec). Pomijanie.")
+                continue
+
+            # Kroimy dane: od (start_date - 100 świec) do end_date
+            # Bufor 100 dni jest potrzebny *przed* start_index dla `df_view.quantile()`
+            historical_data_slice = full_historical_data.iloc[start_index - 100:].loc[:end_date]
+            
+            if historical_data_slice.empty or len(historical_data_slice) < 101:
+                logger.warning(f"Pusty wycinek danych dla {ticker} w roku {year}. Pomijanie.")
+                continue
+
+            # 3. Wywołaj symulator H1 z nowego pliku
+            # Przekazujemy pocięty DataFrame, który zawiera bufor
+            trades_found_ticker = aqm_v3_h1_simulator._simulate_trades_h1(
+                session, 
+                ticker, 
+                historical_data_slice, 
+                year
+            )
+            trades_found_total += trades_found_ticker
+            
+        except Exception as e:
+            logger.error(f"[Backtest V3][H1] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
+            session.rollback()
             
     # === KONIEC SYMULACJI ===
-    total_trades_found = 0 
-    total_tickers = len(tickers_to_test)
     update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
-    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3): Przebudowa platformy zakończona dla roku '{year}'. Gotowy do testowania hipotez."
+    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
