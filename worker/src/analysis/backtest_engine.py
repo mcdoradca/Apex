@@ -6,17 +6,17 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
+
+# Krok 18: Importujemy kalkulatory metryk z Krok 17 i 15
+from . import aqm_v3_metrics
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
     get_current_NY_datetime,
     append_scan_log,
     update_scan_progress,
-    calculate_rsi, 
-    calculate_macd,
-    calculate_atr,
-    calculate_obv,
-    calculate_ad
+    # Importujemy calculate_atr, aby móc go użyć w pętli cache
+    calculate_atr
 )
 from .. import models
 from ..config import SECTOR_TO_ETF_MAP
@@ -32,86 +32,76 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
     """
     "Spogląda w przyszłość" (w danych historycznych), aby zobaczyć, jak
     dana transakcja by się zakończyła.
+    
+    ZMIANA (Specyfikacja H1): Ta funkcja jest teraz zgodna z wymogami H1.
+    Wejście (D+1 OPEN) i Wyjście (D+5 CLOSE) jest obsługiwane przez _simulate_trades_h1.
+    _resolve_trade obsługuje tylko egzekucję SL i TP w dniach D+1 do D+5.
     """
     try:
-        entry_price = setup['entry_price']
-        stop_loss = setup['stop_loss']
-        take_profit = setup['take_profit']
+        # Pobieramy parametry ze specyfikacji H1
+        entry_price = setup['entry_price'] # OPEN(D+1)
+        stop_loss = setup['stop_loss']     # OPEN(D+1) - (2 * ATR(D))
+        take_profit = setup['take_profit'] # VWAP(D)
         
-        close_price = entry_price # Domyślna cena zamknięcia, jeśli nic się nie stanie
+        close_price = entry_price # Domyślna cena zamknięcia
         status = 'CLOSED_EXPIRED' # Domyślny status
-        candle = historical_data.iloc[entry_index] # Domyślna świeca (na wypadek błędu)
+        
+        # Znajdź indeks świecy D+1 (czyli 'entry_index' w pełnym DataFrame)
+        # Pętla musi zacząć sprawdzać SL/TP od dnia D+1 (włącznie)
+        
+        # +1, ponieważ specyfikacja mówi o 5 dniach *po* wejściu (D+1 do D+5)
+        # Dzień 1 = entry_index (D+1)
+        # Dzień 5 = entry_index + 4 (D+5)
+        for i in range(0, max_hold_days): 
+            current_day_index = entry_index + i
+            
+            if current_day_index >= len(historical_data):
+                # Transakcja doszła do końca danych historycznych
+                candle = historical_data.iloc[-1]
+                close_price = candle['close']
+                status = 'CLOSED_EXPIRED'
+                break
+            
+            candle = historical_data.iloc[current_day_index]
+            day_low = candle['low']
+            day_high = candle['high']
 
-        if direction == 'LONG':
-            # === LOGIKA DLA POZYCJI DŁUGIEJ (LONG) ===
-            for i in range(1, max_hold_days + 1):
-                if entry_index + i >= len(historical_data):
-                    candle = historical_data.iloc[-1]
-                    close_price = candle['close']
-                    status = 'CLOSED_EXPIRED'
-                    break
+            if direction == 'LONG':
+                # === Logika H1 (Mean Reversion) ===
                 
-                candle = historical_data.iloc[entry_index + i]
-                day_low = candle['low']
-                day_high = candle['high']
-
+                # Warunek 1: Czy SL został trafiony?
+                # Sprawdzamy LOW dnia (nawet w dniu wejścia D+1)
                 if day_low <= stop_loss:
                     close_price = stop_loss
                     status = 'CLOSED_SL'
                     break
                     
+                # Warunek 2: Czy TP został trafiony?
+                # Sprawdzamy HIGH dnia
                 if day_high >= take_profit:
                     close_price = take_profit
                     status = 'CLOSED_TP'
                     break
-            else:
-                final_index = min(entry_index + max_hold_days, len(historical_data) - 1)
-                candle = historical_data.iloc[final_index]
-                close_price = candle['close']
-                status = 'CLOSED_EXPIRED'
+            
+            # (Pomijamy logikę SHORT, H1 jest tylko LONG)
 
-            if entry_price == 0:
-                p_l_percent = 0.0
-            else:
-                p_l_percent = ((close_price - entry_price) / entry_price) * 100
-        
-        elif direction == 'SHORT':
-            # === LOGIKA DLA POZYCJI KRÓTKIEJ (SHORT) ===
-            for i in range(1, max_hold_days + 1):
-                if entry_index + i >= len(historical_data):
-                    candle = historical_data.iloc[-1]
-                    close_price = candle['close']
-                    status = 'CLOSED_EXPIRED'
-                    break
-                
-                candle = historical_data.iloc[entry_index + i]
-                day_low = candle['low']
-                day_high = candle['high']
-
-                if day_high >= stop_loss:
-                    close_price = stop_loss
-                    status = 'CLOSED_SL'
-                    break
-                
-                if day_low <= take_profit:
-                    close_price = take_profit
-                    status = 'CLOSED_TP'
-                    break
-            else:
-                final_index = min(entry_index + max_hold_days, len(historical_data) - 1)
-                candle = historical_data.iloc[final_index]
-                close_price = candle['close']
-                status = 'CLOSED_EXPIRED'
-
-            if entry_price == 0:
-                p_l_percent = 0.0
-            else:
-                p_l_percent = ((entry_price - close_price) / entry_price) * 100
-        
         else:
-            logger.error(f"Nieznany kierunek transakcji: {direction}")
-            return None
+            # === Warunek 3: Wyjście Czasowe (Max Hold) ===
+            # Jeśli pętla zakończyła się normalnie (bez break),
+            # zamykamy po cenie CLOSE dnia D+5.
+            
+            # Indeks D+5 to entry_index + max_hold_days - 1
+            final_index = min(entry_index + max_hold_days - 1, len(historical_data) - 1)
+            candle = historical_data.iloc[final_index]
+            close_price = candle['close']
+            status = 'CLOSED_EXPIRED'
 
+        # Obliczanie P/L
+        if entry_price == 0:
+            p_l_percent = 0.0
+        else:
+            p_l_percent = ((close_price - entry_price) / entry_price) * 100
+        
         
         trade = models.VirtualTrade(
             ticker=setup['ticker'],
@@ -137,10 +127,9 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
 # ==================================================================
 
 _backtest_cache = {
-    "vix_data": None, # DF dla VXX
-    "spy_data": None, # DF dla SPY
-    "sector_etf_data": {}, # Klucz: 'XLK', Wartość: DF
-    # ZMIANA: Struktura company_data zostanie rozszerzona o 'vwap'
+    "vix_data": None, 
+    "spy_data": None, 
+    "sector_etf_data": {}, 
     "company_data": {}, 
     "tickers_by_sector": {}, 
     "sector_map": {} 
@@ -319,7 +308,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.error(f"  > BŁĄD ładowania danych dla sektora {etf_ticker}: {e}")
         
         # 4. Pobierz dane dla wszystkich spółek
-        logger.info(f"[Backtest V3] Cache: Ładowanie danych dla {len(tickers_to_test)} spółek...")
+        logger.info(f"[Backtest V3] Cache: Ładowanie danych i wstępne obliczanie metryk V3...")
         total_cache_build = len(tickers_to_test)
         for i, ticker in enumerate(tickers_to_test):
             if i % 10 == 0:
@@ -329,7 +318,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             try:
                 # ==================================================================
-                # === KROK 16: Dodanie ładowania VWAP do cache ===
+                # === KROK 18: Wstępne obliczanie metryk H1 ===
                 # ==================================================================
                 
                 # Pobierz dane dzienne (Wywołanie 1)
@@ -361,16 +350,55 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 vwap_df['VWAP'] = pd.to_numeric(vwap_df['VWAP'], errors='coerce')
                 vwap_df.sort_index(inplace=True)
                 
-                # ==================================================================
+                # --- Wzbogacanie DataFrame (Krok 18) ---
+                
+                # 1. Dołącz dane SPY i VWAP do `daily_df`
+                # Używamy `reindex` i `ffill`, aby dopasować daty i wypełnić weekendy/święta
+                spy_aligned = _backtest_cache["spy_data"]['close'].reindex(daily_df.index, method='ffill').rename('spy_close')
+                vwap_aligned = vwap_df['VWAP'].reindex(daily_df.index, method='ffill').rename('vwap')
+                
+                enriched_df = daily_df.join(spy_aligned).join(vwap_aligned)
+                
+                # 2. Oblicz ATR (potrzebne do SL)
+                enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
+                
+                # 3. Oblicz Metryki H1 (Time Dilation & Price Gravity)
+                # Używamy .rolling().apply() do stworzenia historycznej serii metryk
+                
+                # Przygotowanie danych do .apply()
+                temp_spy_view = enriched_df[['spy_close']].rename(columns={'spy_close': 'close'})
+                
+                # Obliczanie Time Dilation (Wymiar 1.1)
+                # Tworzymy 20-dniowe okno kroczące dla obu serii
+                ticker_returns_rolling = enriched_df['close'].pct_change().rolling(window=20)
+                spy_returns_rolling = enriched_df['spy_close'].pct_change().rolling(window=20)
+                
+                # Oblicz odchylenia standardowe
+                std_ticker = ticker_returns_rolling.std()
+                std_spy = spy_returns_rolling.std()
+                
+                # time_dilation = std(ticker) / std(spy)
+                enriched_df['time_dilation'] = std_ticker / std_spy
+                
+                # Obliczanie Price Gravity (Wymiar 1.2)
+                # price_gravity = (vwap - close) / close
+                enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
+                
+                # Zastąp nieskończone wartości (wynikające z dzielenia przez 0) NaN, a następnie 0
+                enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+                enriched_df['time_dilation'].fillna(0, inplace=True)
+                enriched_df['price_gravity'].fillna(0, inplace=True)
+                
+                # --- Koniec Wzbogacania ---
                 
                 # Zdobądź i zapisz sektor
                 sector = _get_sector_for_ticker(session, ticker)
                 
-                # Zapisz wszystko w cache
+                # Zapisz wzbogacone dane w cache
                 _backtest_cache["company_data"][ticker] = {
-                    "daily": daily_df,
+                    "daily": enriched_df, # <-- ZAPISUJEMY WZBOGACONY DF
                     "weekly": weekly_df,
-                    "vwap": vwap_df, # <-- ZAPISANE W CACHE
+                    "vwap": vwap_df, 
                     "sector": sector
                 }
                 
@@ -395,7 +423,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     # === KROK 4: Uruchomienie Symulacji (TERAZ PUSTE) ===
     # ==================================================================
     
-    log_msg_aqm = "[Backtest V3] Szkielet silnika gotowy. Oczekiwanie na implementację Hipotez (H1-H4)."
+    log_msg_aqm = "[Backtest V3] Szkielet silnika gotowy. Wstępne obliczenia H1 zakończone. Oczekiwanie na implementację pętli symulacji H1."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
             
