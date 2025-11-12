@@ -22,6 +22,10 @@ from . import aqm_v3_h3_loader
 # ==================================================================
 from . import aqm_v3_h3_simulator
 # ==================================================================
+# === INTEGRACJA H4 (KROK 1): Import nowego symulatora H4 ===
+# ==================================================================
+from . import aqm_v3_h4_simulator
+# ==================================================================
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
@@ -333,24 +337,25 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # ==================================================================
-    # === KROK 4: Uruchomienie Symulacji (Hipoteza H1, H2 i H3) ===
+    # === KROK 4: Uruchomienie Symulacji (Hipoteza H1, H2, H3 i H4) ===
     # ==================================================================
     
-    # ZMIANA: Aktualizacja logów
-    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnych H1, H2 i H3..."
+    # INTEGRACJA H4 (KROK 2): Aktualizacja logów
+    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnych H1, H2, H3 i H4..."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
     
     trades_found_h1 = 0
     trades_found_h2 = 0
-    # INTEGRACJA H3 (KROK 2): Dodanie licznika dla H3
     trades_found_h3 = 0
+    # INTEGRACJA H4 (KROK 3): Dodanie licznika dla H4
+    trades_found_h4 = 0
     total_tickers = len(tickers_to_test)
 
     for i, ticker in enumerate(tickers_to_test):
         if i % 10 == 0:
-            # ZMIANA: Aktualizacja logów
-            log_msg = f"[Backtest V3][H1/H2/H3] Przetwarzanie {ticker} ({i}/{total_tickers})..."
+            # INTEGRACJA H4 (KROK 4): Aktualizacja logów
+            log_msg = f"[Backtest V3][H1/H2/H3/H4] Przetwarzanie {ticker} ({i}/{total_tickers})..."
             append_scan_log(session, log_msg)
             update_scan_progress(session, i, total_tickers)
         
@@ -374,15 +379,18 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 continue
 
             # Wymagamy 100 dni historii (dla percentyla H1) PRZED startem roku
-            if start_index < 100:
-                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec). Pomijanie.")
+            # ZMIANA: Wymagamy 200 dni (dla H3) + 100 dni (dla H4) = 300 dni
+            # (Bazując na logice H3 i H4, które wymagają `history_window + percentile_window`)
+            # Użyjemy 301 (200+100+1) jako bezpiecznego minimum
+            if start_index < 301:
+                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec, wymagane 301). Pomijanie.")
                 continue
 
-            # Kroimy dane: od (start_date - 100 świec) do end_date
-            # Bufor 100 dni jest potrzebny *przed* start_index dla `df_view.quantile()`
-            historical_data_slice = full_historical_data.iloc[start_index - 100:].loc[:end_date]
+            # Kroimy dane: od (start_date - 301 świec) do end_date
+            # Bufor jest potrzebny dla okien kroczących H3 i H4
+            historical_data_slice = full_historical_data.iloc[start_index - 301:].loc[:end_date]
             
-            if historical_data_slice.empty or len(historical_data_slice) < 101:
+            if historical_data_slice.empty or len(historical_data_slice) < 302:
                 logger.warning(f"Pusty wycinek danych dla {ticker} w roku {year}. Pomijanie.")
                 continue
 
@@ -398,11 +406,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             # === KROK 21c: Aktywacja Pętli Symulacyjnej H2 ===
             # ==================================================================
             
-            # H2 również potrzebuje plastra danych, ale używa *całego* słownika cache
-            # (daily, insider_df, news_df)
-            
-            # Przygotowujemy słownik z pociętymi danymi dla H2
-            # H2 potrzebuje danych Insider/News *przed* start_date, więc przekazujemy całe DFy
             h2_data_slice = {
                 "daily": historical_data_slice,
                 "insider_df": ticker_data.get("insider_df"),
@@ -420,7 +423,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             # ==================================================================
             # === INTEGRACJA H3 (KROK 3): Aktywacja Pętli Symulacyjnej H3 ===
             # ==================================================================
-            # H3 wymaga 'daily' (slice) oraz 'insider', 'news' i 'intraday_5min' (full)
             h3_data_slice = {
                 "daily": historical_data_slice,
                 "insider_df": ticker_data.get("insider_df"),
@@ -435,23 +437,31 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 year
             )
             # ==================================================================
+
+            # ==================================================================
+            # === INTEGRACJA H4 (KROK 5): Aktywacja Pętli Symulacyjnej H4 ===
+            # ==================================================================
+            # H4 używa tego samego zestawu danych co H3 (daily, insider, news, intraday)
+            trades_found_h4 += aqm_v3_h4_simulator._simulate_trades_h4(
+                session,
+                ticker,
+                h3_data_slice, # Ponownie używamy h3_data_slice
+                year
+            )
+            # ==================================================================
             
         except Exception as e:
-            # ZMIANA: Aktualizacja logu błędu
-            logger.error(f"[Backtest V3][H1/H2/H3] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
+            # INTEGRACJA H4 (KROK 6): Aktualizacja logu błędu
+            logger.error(f"[Backtest V3][H1/H2/H3/H4] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
-
-    # ==================================================================
-    # INTEGRACJA H3 (KROK 4): Usunięcie starego bloku "placeholder"
-    # ==================================================================
             
     # === KONIEC SYMULACJI ===
-    # INTEGRACJA H3 (KROK 5): Aktualizacja sumy końcowej
-    trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3
+    # INTEGRACJA H4 (KROK 7): Aktualizacja sumy końcowej
+    trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4
     update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
     
-    # INTEGRACJA H3 (KROK 6): Aktualizacja logu końcowego
-    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2/H3): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3})."
+    # INTEGRACJA H4 (KROK 8): Aktualizacja logu końcowego
+    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2/H3/H4): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3}, H4: {trades_found_h4})."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
 
