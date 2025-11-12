@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 # Importujemy klienta AV tylko dla funkcji "na żywo",
 # funkcje "_from_data" nie będą go używać.
-from ..data_ingestion.alpha_v3_client import AlphaVantageClient
+from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +23,17 @@ logger = logging.getLogger(__name__)
 def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: pd.DataFrame) -> Optional[float]:
     """
     (Wymiar 1.1) Oblicza 'time_dilation' na podstawie historycznych widoków DataFrame.
+    
+    Wersja "czysta": Przyjmuje 20-dniowe widoki DF i oblicza metrykę.
     """
     try:
         # 1. Oblicz zwroty
         ticker_returns = daily_df_view['close'].pct_change()
         spy_returns = spy_df_view['close'].pct_change()
         
-        # 2. Oblicz 20-dniowe odchylenie standardowe
-        stddev_ticker_20 = ticker_returns.rolling(window=20).std().iloc[-1]
-        stddev_spy_20 = spy_returns.rolling(window=20).std().iloc[-1]
+        # 2. Oblicz 20-dniowe odchylenie standardowe (dla całego okna)
+        stddev_ticker_20 = ticker_returns.std()
+        stddev_spy_20 = spy_returns.std()
         
         # 3. Oblicz metrykę
         if stddev_spy_20 == 0 or pd.isna(stddev_spy_20) or pd.isna(stddev_ticker_20):
@@ -46,11 +48,15 @@ def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: 
 def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view: pd.DataFrame) -> Optional[float]:
     """
     (Wymiar 1.2) Oblicza 'price_gravity' na podstawie historycznych widoków DataFrame.
+    
+    Wersja "czysta": Przyjmuje widoki DF i oblicza metrykę dla *ostatniego dnia* widoku.
     """
     try:
         # 1. Pobierz najnowsze wartości
         price = daily_df_view['close'].iloc[-1]
-        center_of_mass = vwap_df_view['VWAP'].iloc[-1]
+        
+        # Znajdź najbliższy VWAP (w przypadku brakujących dat)
+        center_of_mass = vwap_df_view['VWAP'].asof(daily_df_view.index[-1])
         
         # 2. Oblicz metrykę
         if price == 0 or pd.isna(price) or pd.isna(center_of_mass):
@@ -64,7 +70,7 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
         return None
 
 # ==================================================================
-# === KROK 20: "Czyste" Funkcje dla Hipotezy H2 (Backtest) ===
+# === KROK 21b: "Czyste" Funkcje dla Hipotezy H2 (Backtest) ===
 # ==================================================================
 
 def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
@@ -75,7 +81,8 @@ def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, curren
     try:
         # 1. Filtruj transakcje z ostatnich 90 dni (wg specyfikacji)
         ninety_days_ago = current_date - timedelta(days=90)
-        recent_transactions = insider_df_view[insider_df_view.index >= ninety_days_ago]
+        # Używamy .loc do filtrowania po indeksie (który jest datą)
+        recent_transactions = insider_df_view.loc[insider_df_view.index >= ninety_days_ago]
         
         if recent_transactions.empty:
             return 0.0 # Neutralny, jeśli brak transakcji
@@ -105,7 +112,8 @@ def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date:
     try:
         # 1. Filtruj artykuły z ostatnich 7 dni (wg specyfikacji)
         seven_days_ago = current_date - timedelta(days=7)
-        recent_news = news_df_view[news_df_view.index >= seven_days_ago]
+        # Używamy .loc do filtrowania po indeksie (który jest datą)
+        recent_news = news_df_view.loc[news_df_view.index >= seven_days_ago]
         
         if recent_news.empty:
             return 0.0 # Neutralny, jeśli brak newsów
