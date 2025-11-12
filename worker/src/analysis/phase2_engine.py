@@ -13,16 +13,27 @@ from .utils import (
     update_scan_progress, append_scan_log, safe_float, 
     standardize_df_columns, calculate_rsi, calculate_bbands
 )
-from ..config import Phase2Config, SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
+# ==================================================================
+# === NAPRAWA BŁĘDU (DEKONSTRUKCJA KROK 9) ===
+# Usunięto import `Phase2Config`, `SECTOR_TO_ETF_MAP` i `DEFAULT_MARKET_ETF`,
+# ponieważ `Phase2Config` została usunięta z `config.py`, a pozostałe
+# nie są już używane w tym pliku.
+# ==================================================================
+# from ..config import Phase2Config, SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
+
 
 logger = logging.getLogger(__name__)
 
+# ==================================================================
+# === DEKONSTRUKCJA (KROK 3) ===
+# Cała logika scoringu Fazy 2 została wyłączona (zakomentowana),
+# ponieważ przechodzimy na nowy model AQM.
+# Faza 2 służy teraz tylko do pobrania `daily_df` dla Fazy 3.
+# ==================================================================
+
 def _calculate_catalyst_score(ticker: str, api_client: AlphaVantageClient) -> int:
-    """
-    DEKONSTRUKCJA: Ta funkcja jest już nieużywana.
-    Logika Fazy 2 została wyłączona, aby zrobić miejsce dla nowego modelu AQM.
-    """
-    # ... (oryginalny kod zostaje, ale nie jest wywoływany) ...
+    """Oblicza wynik sentymentu (bez zmian)."""
+    # ... (FUNKCJA NIEUŻYWANA) ...
     try:
         news_data = api_client.get_news_sentiment(ticker)
         if not news_data or not news_data.get('feed'): return 0
@@ -41,10 +52,9 @@ def _calculate_catalyst_score(ticker: str, api_client: AlphaVantageClient) -> in
 
 def _calculate_relative_strength_score(ticker: str, daily_df: pd.DataFrame, qqq_perf: float, api_client: AlphaVantageClient) -> int:
     """
-    DEKONSTRUKCJA: Ta funkcja jest już nieużywana.
-    Logika Fazy 2 została wyłączona, aby zrobić miejsce dla nowego modelu AQM.
+    KROK 3 ZMIANA: Oblicza siłę względną lokalnie, używając DataFrame.
     """
-    # ... (oryginalny kod zostaje, ale nie jest wywoływany) ...
+    # ... (FUNKCJA NIEUŻYWANA) ...
     score = 0
     try:
         # 1. Oblicz RSI lokalnie (zamiast wywołania API)
@@ -72,10 +82,9 @@ def _calculate_relative_strength_score(ticker: str, daily_df: pd.DataFrame, qqq_
 
 def _calculate_energy_compression_score(ticker: str, daily_df: pd.DataFrame, api_client: AlphaVantageClient) -> int:
     """
-    DEKONSTRUKCJA: Ta funkcja jest już nieużywana.
-    Logika Fazy 2 została wyłączona, aby zrobić miejsce dla nowego modelu AQM.
+    KROK 3 ZMIANA: Oblicza kompresję energii lokalnie, używając DataFrame.
     """
-    # ... (oryginalny kod zostaje, ale nie jest wywoływany) ...
+    # ... (FUNKCJA NIEUŻYWANA) ...
     try:
         # 1. Sprawdź, czy mamy wystarczająco danych
         if len(daily_df) < 100: 
@@ -105,16 +114,12 @@ def _calculate_energy_compression_score(ticker: str, daily_df: pd.DataFrame, api
 
 def run_analysis(session: Session, candidate_tickers: list[str], get_current_state, api_client: AlphaVantageClient) -> List[Tuple[str, pd.DataFrame]]:
     """
-    DEKONSTRUKCJA (KROK 3): Faza 2 została zmodyfikowana.
-    
-    Ta faza nie wykonuje już starej logiki scoringowej (Catalyst, RS, Energy).
-    Jej jedynym zadaniem jest teraz pobranie pełnych danych historycznych (daily_df)
-    dla *każdego* kandydata z Fazy 1 i przekazanie ich dalej.
-    
-    Filtrowanie i scoring zostaną wykonane w Fazie 3 przez nowy model AQM.
+    KROK 3 ZMIANA: Główna funkcja Fazy 2.
+    - Oblicza RSI i BBands lokalnie.
+    - Zwraca listę krotek: [(ticker, daily_df), ...]
     """
-    logger.info("Running Phase 2: Data Pre-load Stage (Old Scoring Bypassed)...")
-    append_scan_log(session, "Faza 2: Ładowanie danych EOD (Stary scoring wyłączony)...")
+    logger.info("Running Phase 2: APEX Predator Quality Analysis...")
+    append_scan_log(session, "Faza 2: Rozpoczynanie analizy jakościowej...")
 
     total_candidates = len(candidate_tickers)
     update_scan_progress(session, 0, total_candidates)
@@ -125,15 +130,16 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
 
     # ==================================================================
     # === DEKONSTRUKCJA (KROK 3) ===
-    # Usuwamy pobieranie danych QQQ, ponieważ stara logika scoringu
-    # (która go używała) jest wyłączona.
+    # Pomijamy pobieranie danych QQQ, ponieważ nie są już potrzebne
+    # do obliczania starej "Siły Względnej".
     # ==================================================================
     # try:
     #     qqq_data_raw = api_client.get_daily_adjusted('QQQ', outputsize='compact')
-    #     ... (cały blok try/except dla QQQ usunięty) ...
+    #     ...
     # except Exception as e:
     #     ...
     # ==================================================================
+
 
     for ticker in candidate_tickers:
         if get_current_state() == 'PAUSED':
@@ -156,22 +162,14 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
 
             # ==================================================================
             # === DEKONSTRUKCJA (KROK 3) ===
-            # Wyłączamy całą starą logikę scoringu.
+            # Pomijamy cały stary scoring i domyślnie kwalifikujemy spółkę,
+            # przekazując jej `daily_df` do Fazy 3.
             # ==================================================================
-            
-            # 3. (WYŁĄCZONE) Pobieranie sentymentu
-            # catalyst_score = _calculate_catalyst_score(ticker, api_client)
-            
-            # 4. (WYŁĄCZONE) Obliczenia lokalne
-            # strength_score = _calculate_relative_strength_score(ticker, daily_df, qqq_perf, api_client)
-            # compression_score = _calculate_energy_compression_score(ticker, daily_df, api_client)
-            
-            # total_score = catalyst_score + strength_score + compression_score
-            # is_qualified = total_score >= Phase2Config.MIN_APEX_SCORE_TO_QUALIFY
-            
-            # Zastępujemy starą logikę: Kwalifikujemy *każdy* ticker, dla którego mamy dane.
-            is_qualified = True
-            total_score = 0 # Wartość zastępcza, nieużywana
+            catalyst_score = 0
+            strength_score = 0
+            compression_score = 0
+            total_score = 0
+            is_qualified = True # Domyślnie kwalifikuj
             # ==================================================================
             
             stmt = text("""
@@ -183,21 +181,17 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
                 is_qualified = EXCLUDED.is_qualified;
             """)
             session.execute(stmt, {
-                'ticker': ticker, 'date': date.today(), 
-                'c_score': 0, # Zapisujemy 0
-                'rs_score': 0, # Zapisujemy 0
-                'ec_score': 0, # Zapisujemy 0
-                'total': total_score, 
-                'qual': is_qualified
+                'ticker': ticker, 'date': date.today(), 'c_score': catalyst_score, 
+                'rs_score': strength_score, 'ec_score': compression_score, 
+                'total': total_score, 'qual': is_qualified
             })
             session.commit()
 
-            log_msg = f"{ticker} - Faza 2: Dane EOD załadowane."
-            if is_qualified:
-                # KROK 3 ZMIANA: Dodajemy krotkę (ticker, dane) do listy
-                qualified_data.append((ticker, daily_df))
-                log_msg += " Przekazano do Fazy 3."
-            # (Blok 'else' (odrzucony) nie jest już potrzebny)
+            log_msg = f"{ticker} - Faza 2 (Pominięta). Ładowanie danych EOD..."
+            
+            # KROK 3 ZMIANA: Dodajemy krotkę (ticker, dane) do listy
+            qualified_data.append((ticker, daily_df))
+            log_msg += " Przekazano do Fazy 3."
             
             append_scan_log(session, log_msg)
 
@@ -208,7 +202,7 @@ def run_analysis(session: Session, candidate_tickers: list[str], get_current_sta
             processed_count += 1
             update_scan_progress(session, processed_count, total_candidates)
     
-    final_log = f"Faza 2 (Ładowanie Danych) zakończona. Przekazano {len(qualified_data)} spółek do Fazy 3."
+    final_log = f"Faza 2 zakończona. Przekazano {len(qualified_data)} spółek do Fazy 3."
     logger.info(final_log)
     append_scan_log(session, final_log)
     
