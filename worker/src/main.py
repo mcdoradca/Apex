@@ -16,7 +16,7 @@ from .analysis import (
     phase1_scanner, 
     phase2_engine, 
     phase3_sniper, 
-    ai_agents, 
+    ai_agents, # Ten import zostaje (używany przez F0 i News)
     utils,
     news_agent, # <-- ZMIANA: Import nowego Agenta (Kategoria 2)
     phase0_macro_agent, # <-- POPRAWKA: Import Fazy 0
@@ -45,49 +45,24 @@ current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
 
-def handle_ai_analysis_request(session):
-    """
-    Sprawdza i wykonuje nową analizę AI na żądanie.
-    NOWA LOGIKA: Sprawdza globalną blokadę.
-    """
-    # ==================================================================
-    # === POPRAWKA (TimeoutError) ===
-    # Sprawdź, czy inne zadanie (Backtest/AI Optimizer) nie blokuje workera
-    # ==================================================================
-    worker_status = utils.get_system_control_value(session, 'worker_status')
-    if worker_status not in ['IDLE', 'RUNNING', 'PAUSED', 'ERROR']: # Sprawdzamy, czy nie jest to status BUSY_*
-        logger.info(f"Worker jest zajęty ({worker_status}), pomijanie ai_analysis_request.")
-        return
-    # ==================================================================
+# ==================================================================
+# === DEKONSTRUKCJA (KROK 6) ===
+# Funkcja `handle_ai_analysis_request` została usunięta.
+# Była ona połączona ze starymi agentami (Momentum, Volatility, Tactical),
+# które zostały wygaszone w `ai_agents.py`.
+# ==================================================================
+# def handle_ai_analysis_request(session):
+#     """
+#     Sprawdza i wykonuje nową analizę AI na żądanie.
+#     NOWA LOGIKA: Sprawdza globalną blokadę.
+#     """
+#     ... (CAŁA FUNKCJA USUNIĘTA) ...
+# ==================================================================
 
-    ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
-    if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
-        logger.info(f"AI analysis request received for: {ticker_to_analyze}.")
-        utils.update_system_control(session, 'ai_analysis_request', 'PROCESSING')
-        
-        temp_result = {"status": "PROCESSING", "message": "Rozpoczynanie analizy przez agentów AI..."}
-        stmt_temp = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
-        session.execute(stmt_temp, {'ticker': ticker_to_analyze, 'data': json.dumps(temp_result)})
-        session.commit()
-
-        try:
-            results = ai_agents.run_ai_analysis(session, ticker_to_analyze, api_client)
-            
-            stmt = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
-            session.execute(stmt, {'ticker': ticker_to_analyze, 'data': json.dumps(results)})
-            session.commit()
-            logger.info(f"Successfully saved AI analysis for {ticker_to_analyze}.")
-        except Exception as e:
-            logger.error(f"Error during AI analysis for {ticker_to_analyze}: {e}", exc_info=True)
-            error_result = {"status": "ERROR", "message": str(e), "ticker": ticker_to_analyze}
-            stmt_err = text("INSERT INTO ai_analysis_results (ticker, analysis_data, last_updated) VALUES (:ticker, :data, NOW()) ON CONFLICT (ticker) DO UPDATE SET analysis_data = EXCLUDED.analysis_data, last_updated = NOW();")
-            session.execute(stmt_err, {'ticker': ticker_to_analyze, 'data': json.dumps(error_result)})
-            session.commit()
-        finally:
-             utils.update_system_control(session, 'ai_analysis_request', 'NONE')
 
 # ==================================================================
 # === NOWA FUNKCJA (Krok 2 - Backtest) ===
+# (Ta funkcja POZOSTAJE)
 # ==================================================================
 def handle_backtest_request(session, api_client) -> str:
     """
@@ -136,6 +111,7 @@ def handle_backtest_request(session, api_client) -> str:
 
 # ==================================================================
 # === NOWA FUNKCJA (Krok 5 - Mega Agent) ===
+# (Ta funkcja POZOSTAJE)
 # ==================================================================
 def handle_ai_optimizer_request(session) -> str:
     """
@@ -407,7 +383,13 @@ def main_loop():
         
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
-        utils.update_system_control(initial_session, 'ai_analysis_request', 'NONE')
+        # ==================================================================
+        # === DEKONSTRUKCJA (KROK 6) ===
+        # Usunięto inicjalizację flagi 'ai_analysis_request',
+        # ponieważ cała funkcja została usunięta.
+        # ==================================================================
+        # utils.update_system_control(initial_session, 'ai_analysis_request', 'NONE')
+        # ==================================================================
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'system_alert', 'NONE')
         utils.update_system_control(initial_session, 'backtest_request', 'NONE') # <-- NOWA WARTOŚĆ (Krok 2)
@@ -452,9 +434,15 @@ def main_loop():
                     # Uruchomiono ręcznie pełny cykl EOD
                     run_full_analysis_cycle()
                 
+                # ==================================================================
+                # === DEKONSTRUKCJA (KROK 6) ===
+                # Usunięto wywołanie `handle_ai_analysis_request(session)`,
+                # ponieważ cała funkcja została usunięta.
+                # ==================================================================
+                # handle_ai_analysis_request(session)
+                # ==================================================================
+                
                 # Uruchom normalne, zaplanowane zadania (monitory)
-                # i analizy na żądanie (AI)
-                handle_ai_analysis_request(session)
                 schedule.run_pending()
                 
                 utils.report_heartbeat(session) 
