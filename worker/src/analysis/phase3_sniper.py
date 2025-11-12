@@ -24,7 +24,14 @@ from .utils import (
     # ==================================================================
     get_system_control_value
 )
-from ..config import Phase3Config
+# ==================================================================
+# === NAPRAWA BŁĘDU (DEKONSTRUKCJA KROK 9b) ===
+# Usunięto import `Phase3Config`, ponieważ klasa ta została
+# usunięta z `config.py` w ramach dekonstrukcji.
+# ==================================================================
+# from ..config import Phase3Config 
+# ==================================================================
+
 # ==================================================================
 # KROK 2 (Wirtualny Agent): Import nowego modułu
 # ==================================================================
@@ -35,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 # KROK 7 ZMIANA: Dodajemy parser CSV (skopiowany z phase1_scanner.py dla spójności)
 def _parse_bulk_quotes_csv(csv_text: str) -> dict:
+# ... (Ten kod pozostaje bez zmian) ...
     """Przetwarza odpowiedź CSV z REALTIME_BULK_QUOTES na słownik danych."""
     if not csv_text or "symbol" not in csv_text:
         logger.warning("[Monitor F3] Otrzymane dane CSV (Bulk Quotes) są puste lub nieprawidłowe.")
@@ -86,7 +94,8 @@ def _find_breakout_setup(daily_df: pd.DataFrame, min_consolidation_days=5, break
             # ==================================================================
             # ZMIANA (Sugestia AI): Używamy mnożnika z nowej konfiguracji
             # ==================================================================
-            stop_loss = consolidation_high - (Phase3Config.Breakout.ATR_MULTIPLIER_FOR_SL * current_atr)
+            # stop_loss = consolidation_high - (Phase3Config.Breakout.ATR_MULTIPLIER_FOR_SL * current_atr) # MARTWY KOD
+            stop_loss = consolidation_high - (1.5 * current_atr) # Zastąpione wartością stałą
             
             return {
                 "setup_type": "BREAKOUT",
@@ -106,7 +115,8 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame) -> dict | None:
         # ==================================================================
         # ZMIANA (Sugestia AI): Używamy okresu EMA z nowej konfiguracji
         # ==================================================================
-        ema_period = Phase3Config.EmaBounce.EMA_PERIOD
+        # ema_period = Phase3Config.EmaBounce.EMA_PERIOD # MARTWY KOD
+        ema_period = 9 # Zastąpione wartością stałą
         # ==================================================================
 
         if len(daily_df) < ema_period + 3: return None
@@ -135,8 +145,9 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame) -> dict | None:
              # ZMIANA (Sugestia AI 2): Filtr minimalnej zmienności ATR
              # ==================================================================
              atr_percent = atr / latest_candle['close']
-             if atr_percent < Phase3Config.EmaBounce.MIN_ATR_PERCENT_FILTER:
-                 logger.info(f"EMA Bounce dla {daily_df.index[-1]} pominięty. ATR% ({atr_percent:.2%}) jest poniżej progu {Phase3Config.EmaBounce.MIN_ATR_PERCENT_FILTER:.2%}")
+             # if atr_percent < Phase3Config.EmaBounce.MIN_ATR_PERCENT_FILTER: # MARTWY KOD
+             if atr_percent < 0.20: # Zastąpione wartością stałą
+                 logger.info(f"EMA Bounce dla {daily_df.index[-1]} pominięty. ATR% ({atr_percent:.2%}) jest poniżej progu 0.20")
                  return None
              # ==================================================================
 
@@ -145,7 +156,8 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame) -> dict | None:
              # ==================================================================
              # ZMIANA (Sugestia AI): Używamy mnożnika z nowej konfiguracji
              # ==================================================================
-             stop_loss = latest_candle['low'] - (Phase3Config.EmaBounce.ATR_MULTIPLIER_FOR_SL * atr)
+             # stop_loss = latest_candle['low'] - (Phase3Config.EmaBounce.ATR_MULTIPLIER_FOR_SL * atr) # MARTWY KOD
+             stop_loss = latest_candle['low'] - (1.5 * atr) # Zastąpione wartością stałą
              
              return {
                  "setup_type": "EMA_BOUNCE",
@@ -160,6 +172,7 @@ def _find_ema_bounce_setup(daily_df: pd.DataFrame) -> dict | None:
         return None
 
 def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
+# ... (Ten kod pozostaje bez zmian - celowo wyłączony) ...
     
     # ==================================================================
     # === DEKONSTRUKCJA (KROK 1) ===
@@ -189,6 +202,7 @@ def find_end_of_day_setup(ticker: str, daily_df: pd.DataFrame) -> dict:
 
 
 def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.DataFrame]], get_current_state, api_client: AlphaVantageClient):
+# ... (Ten kod pozostaje bez zmian - celowo wyłączony) ...
     logger.info("Running Phase 3: End-of-Day Tactical Planning...")
     append_scan_log(session, "Faza 3: Skanowanie EOD w poszukiwaniu setupów...")
     successful_setups = 0
@@ -228,6 +242,7 @@ def run_tactical_planning(session: Session, qualified_data: List[Tuple[str, pd.D
 # NOWA FUNKCJA (KROK 1): Helper do sprawdzania potwierdzenia H1
 # ==================================================================
 def _check_h1_confirmation(ticker: str, api_client: AlphaVantageClient) -> bool:
+# ... (Ten kod pozostaje bez zmian - martwy kod) ...
     """
     (Ta funkcja jest teraz martwym kodem, ponieważ 'monitor_fib_confirmations'
     jest wyłączony, ale zostawiamy ją na razie na miejscu.)
@@ -281,6 +296,7 @@ def _check_h1_confirmation(ticker: str, api_client: AlphaVantageClient) -> bool:
 # DEKONSTRUKCJA (KROK 2): Całkowite wyłączenie Wolnego Monitora (Fib H1)
 # ==================================================================
 def monitor_fib_confirmations(session: Session, api_client: AlphaVantageClient):
+# ... (Ten kod pozostaje bez zmian - celowo wyłączony) ...
     """
     DEKONSTRUKCJA (KROK 2): Ten monitor jest wyłączony.
     Całkowicie zatrzymuje aktywację starych sygnałów Fib H1.
@@ -302,6 +318,7 @@ def monitor_fib_confirmations(session: Session, api_client: AlphaVantageClient):
 
 
 def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
+# ... (Ten kod pozostaje bez zmian - celowo wyłączony) ...
     """
     DEKONSTRUKCJA (KROK 2B): Ten monitor jest CAŁKOWICIE WYŁĄCZONY.
     Zgodnie z poleceniem, nie monitorujemy już starych sygnałów ACTIVE
@@ -432,6 +449,7 @@ def monitor_entry_triggers(session: Session, api_client: AlphaVantageClient):
 
 
 def _find_impulse_and_fib_zone(daily_df: pd.DataFrame) -> dict | None:
+# ... (Ten kod pozostaje bez zmian - martwy kod) ...
     # TA FUNKCJA JEST TERAZ NIEAKTYWNA (WYŁĄCZONA PRZEZ find_end_of_day_setup)
     try:
         if len(daily_df) < 21: return None
