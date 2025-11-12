@@ -52,7 +52,7 @@ def clear_alert_memory_cache():
 def send_telegram_alert(message: str):
     """
     Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
-    NOWA LOGIKA: Wysyła wiadomość tylko wtedy, jeśli nie została wysłana 
+    NOWA LOGIKA: Wysyła wiadomość only wtedy, jeśli nie została wysłana 
     wcześniej w tym cyklu (od ostatniego czyszczenia pamięci).
     """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -422,23 +422,25 @@ def calculate_ad(df: pd.DataFrame) -> pd_Series:
 
 
 # ==================================================================
-#  NOWA FUNKCJA POMOCNICZA DLA AGENTA STRAŻNIKA
+#  DEKONSTRUKCJA (KROK 9): Usunięcie martwej funkcji
+#  Funkcja `get_relevant_signal_from_db` była używana tylko przez
+#  starego Agenta Taktycznego (`_run_tactical_agent`), który
+#  został usunięty z `ai_agents.py`.
 # ==================================================================
-def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
-    """
-    Pobiera najnowszy istotny sygnał (AKTYWNY, OCZEKUJĄCY, UNIEWAŻNIONY lub ZAKOŃCZONY)
-    dla danego tickera z bazy danych.
-    """
-    try:
-        stmt = text("""
-            SELECT * FROM trading_signals
-            WHERE ticker = :ticker
-            AND status IN ('ACTIVE', 'PENDING', 'INVALIDATED', 'COMPLETED')
-            ORDER BY generation_date DESC
-            LIMIT 1;
-        """)
-        result = session.execute(stmt, {'ticker': ticker}).fetchone()
-        return result
-    except Exception as e:
-        logger.error(f"Error fetching relevant signal for {ticker}: {e}", exc_info=True)
-        return None # Dodano return None w przypadku błędu
+# def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
+#     """
+#     (USUNIĘTE)
+#     """
+#     try:
+#         stmt = text("""
+#             SELECT * FROM trading_signals
+#             WHERE ticker = :ticker
+#             AND status IN ('ACTIVE', 'PENDING', 'INVALIDATED', 'COMPLETED')
+#             ORDER BY generation_date DESC
+#             LIMIT 1;
+#         """)
+#         result = session.execute(stmt, {'ticker': ticker}).fetchone()
+#         return result
+#     except Exception as e:
+#         logger.error(f"Error fetching relevant signal for {ticker}: {e}", exc_info=True)
+#         return None
