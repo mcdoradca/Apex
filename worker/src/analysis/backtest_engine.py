@@ -11,6 +11,8 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from . import aqm_v3_metrics
 # Krok 19b: Importujemy nowy silnik symulacji H1
 from . import aqm_v3_h1_simulator 
+# Krok 20b (Część 2): Importujemy nowy silnik ładowania H2
+from . import aqm_v3_h2_loader
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
@@ -26,17 +28,7 @@ from ..config import SECTOR_TO_ETF_MAP
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# === DEKONSTRUKCJA (KROK 19b) ===
-# Funkcja `_resolve_trade` została całkowicie usunięta z tego pliku.
-# Jej nowym domem jest `aqm_v3_h1_simulator.py`.
-# ==================================================================
-# def _resolve_trade(...):
-#     ... (USUNIĘTE) ...
-# ==================================================================
-
-
-# ==================================================================
-# === SŁOWNIK CACHE (BEZ ZMIAN) ===
+# === SŁOWNIK CACHE ===
 # ==================================================================
 
 _backtest_cache = {
@@ -74,7 +66,7 @@ def _get_sector_for_ticker(session: Session, ticker: str) -> str:
 
 
 # ==================================================================
-# === DETEKTOR REŻIMU RYNKOWEGO (BEZ ZMIAN) ===
+# === DETEKTOR REŻIMU RYNKOWEGO ===
 # ==================================================================
 def _detect_market_regime(current_date_str: str) -> str:
     """
@@ -231,20 +223,18 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             try:
                 # ==================================================================
-                # === KROK 18: Wstępne obliczanie metryk H1 ===
+                # === KROK 18 & 20b: Ładowanie danych H1 i H2 ===
                 # ==================================================================
                 
-                # Pobierz dane dzienne (Wywołanie 1)
+                # --- ŁADOWANIE H1 ---
                 price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
-                # Pobierz dane tygodniowe (Wywołanie 2)
                 weekly_data_raw = api_client.get_time_series_weekly(ticker)
-                # Pobierz dane VWAP (Wywołanie 3)
                 vwap_data_raw = api_client.get_vwap(ticker, interval='daily')
                 
                 if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
                    not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw or \
                    not vwap_data_raw or 'Technical Analysis: VWAP' not in vwap_data_raw:
-                    logger.warning(f"Brak pełnych danych (Daily, Weekly lub VWAP) dla {ticker}, pomijanie.")
+                    logger.warning(f"Brak pełnych danych (H1: Daily, Weekly lub VWAP) dla {ticker}, pomijanie.")
                     continue
 
                 # Przetwórz Daily
@@ -263,55 +253,40 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 vwap_df['VWAP'] = pd.to_numeric(vwap_df['VWAP'], errors='coerce')
                 vwap_df.sort_index(inplace=True)
                 
-                # --- Wzbogacanie DataFrame (Krok 18) ---
-                
-                # 1. Dołącz dane SPY i VWAP do `daily_df`
-                # Używamy `reindex` i `ffill`, aby dopasować daty i wypełnić weekendy/święta
+                # --- Wzbogacanie DataFrame (Krok 18 - H1) ---
                 spy_aligned = _backtest_cache["spy_data"]['close'].reindex(daily_df.index, method='ffill').rename('spy_close')
                 vwap_aligned = vwap_df['VWAP'].reindex(daily_df.index, method='ffill').rename('vwap')
                 
                 enriched_df = daily_df.join(spy_aligned).join(vwap_aligned)
-                
-                # 2. Oblicz ATR (potrzebne do SL)
                 enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
                 
-                # 3. Oblicz Metryki H1 (Time Dilation & Price Gravity)
-                # Używamy .rolling().apply() do stworzenia historycznej serii metryk
-                
-                # Przygotowanie danych do .apply()
-                temp_spy_view = enriched_df[['spy_close']].rename(columns={'spy_close': 'close'})
-                
-                # Obliczanie Time Dilation (Wymiar 1.1)
-                # Tworzymy 20-dniowe okno kroczące dla obu serii
                 ticker_returns_rolling = enriched_df['close'].pct_change().rolling(window=20)
                 spy_returns_rolling = enriched_df['spy_close'].pct_change().rolling(window=20)
-                
-                # Oblicz odchylenia standardowe
                 std_ticker = ticker_returns_rolling.std()
                 std_spy = spy_returns_rolling.std()
-                
-                # time_dilation = std(ticker) / std(spy)
                 enriched_df['time_dilation'] = std_ticker / std_spy
-                
-                # Obliczanie Price Gravity (Wymiar 1.2)
-                # price_gravity = (vwap - close) / close
                 enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
                 
-                # Zastąp nieskończone wartości (wynikające z dzielenia przez 0) NaN, a następnie 0
                 enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
                 enriched_df['time_dilation'].fillna(0, inplace=True)
                 enriched_df['price_gravity'].fillna(0, inplace=True)
                 
-                # --- Koniec Wzbogacania ---
+                # ==================================================================
+                # === KROK 20b (Część 2): Ładowanie danych H2 do cache ===
+                # ==================================================================
+                h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client)
+                # ==================================================================
                 
                 # Zdobądź i zapisz sektor
                 sector = _get_sector_for_ticker(session, ticker)
                 
-                # Zapisz wzbogacone dane w cache
+                # Zapisz wszystko w cache
                 _backtest_cache["company_data"][ticker] = {
-                    "daily": enriched_df, # <-- ZAPISUJEMY WZBOGACONY DF
+                    "daily": enriched_df, # Wzbogacony o H1
                     "weekly": weekly_df,
                     "vwap": vwap_df, 
+                    "insider_df": h2_data["insider_df"], # <-- NOWE DANE H2
+                    "news_df": h2_data["news_df"],       # <-- NOWE DANE H2
                     "sector": sector
                 }
                 
@@ -394,6 +369,14 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         except Exception as e:
             logger.error(f"[Backtest V3][H1] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
+
+    # ==================================================================
+    # === KROK 5: Uruchomienie Symulacji (Hipoteza H2) ===
+    # (TUTAJ W PRZYSZŁOŚCI DODAMY WYWOŁANIE `_simulate_trades_h2`)
+    # ==================================================================
+    log_msg_aqm_h2 = "[Backtest V3] Oczekiwanie na implementację Hipotezy H2."
+    logger.info(log_msg_aqm_h2)
+    append_scan_log(session, log_msg_aqm_h2)
             
     # === KONIEC SYMULACJI ===
     update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
