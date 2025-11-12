@@ -468,5 +468,3 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2/H3/H4): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3}, H4: {trades_found_h4})."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
-
-}
