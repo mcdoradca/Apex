@@ -51,12 +51,19 @@ class TransactionHistory(TransactionHistoryBase):
 # === Pozostałe, istniejące schematy (bez zmian) ===
 # ==========================================================
 
-class AIAnalysisRequestResponse(BaseModel):
-    message: str
-    ticker: str
-
-class OnDemandRequest(BaseModel):
-    ticker: str
+# ==========================================================
+# === DEKONSTRUKCJA (KROK 8) ===
+# Usunięto schematy `AIAnalysisRequestResponse`, `OnDemandRequest`
+# oraz `AIAnalysisResult`, ponieważ były powiązane
+# z usuniętymi endpointami API.
+# ==========================================================
+# class AIAnalysisRequestResponse(BaseModel):
+#     message: str
+#     ticker: str
+#
+# class OnDemandRequest(BaseModel):
+#     ticker: str
+# ==========================================================
 
 class Progress(BaseModel):
     processed: int
@@ -111,26 +118,10 @@ class TradingSignal(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class AIAnalysisResult(BaseModel):
-    # Jedyne pole wymagane w każdym stanie (PROCESSING, ERROR, DONE)
-    status: str
-
-    # Pola dla statusu "PROCESSING" lub "ERROR"
-    message: Optional[str] = None
-
-    # Pola dla statusu "DONE"
-    ticker: Optional[str] = None
-    quote_data: Optional[Dict[str, Any]] = None # Zmieniono na Dict[str, Any]
-    market_info: Optional[Dict[str, Any]] = None # Zmieniono na Dict[str, Any]
-    overall_score: Optional[int] = None
-    max_score: Optional[int] = None
-    final_score_percent: Optional[int] = None
-    recommendation: Optional[str] = None
-    recommendation_details: Optional[str] = None
-    agents: Optional[Dict[str, Any]] = None # Zmieniono na Dict[str, Any]
-    analysis_timestamp_utc: Optional[str] = None
-
-    model_config = ConfigDict(from_attributes=True)
+# ==========================================================
+# class AIAnalysisResult(BaseModel):
+#     ... (USUNIĘTE) ...
+# ==========================================================
 
 
 # ==========================================================
