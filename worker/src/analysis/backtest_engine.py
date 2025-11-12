@@ -12,45 +12,29 @@ from .utils import (
     get_current_NY_datetime,
     append_scan_log,
     update_scan_progress,
-    calculate_rsi,
+    # Importy wskaźników są zachowane na potrzeby _detect_market_regime i przyszłych obliczeń
+    calculate_rsi, 
     calculate_macd,
     calculate_atr,
     calculate_obv,
     calculate_ad
 )
 from .. import models
-# Importujemy SECTOR_TO_ETF_MAP (usunięto nieużywany Phase3Config)
+# Importujemy SECTOR_TO_ETF_MAP (nadal potrzebne do cache)
 from ..config import SECTOR_TO_ETF_MAP
 
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# === Środowisko Backtestingu (Zaktualizowane wg PDF str. 18-19) ===
-# ==================================================================
-
-# Definicje progów AQM (z PDF str. 18)
-# UWAGA: Używamy teraz 'OPTYMALNYCH WARUNKÓW', a nie tych
-AQM_THRESHOLDS_MINIMAL = {
-    'bull': 0.65,
-    'volatile': 0.75,
-    'bear': 0.85
-}
-# Definicje strategii AQM (z PDF str. 19)
-AQM_STRATEGY_PARAMS = {
-    'stop_loss_percent': 0.04, # Używamy 4% (środek z 3-5%)
-    'target_1_percent': 0.08,  # Target 1 (8%)
-    'target_2_percent': 0.12,  # Target 2 (12%) - Na razie nieużywany
-    'max_hold_days': 7         # 7 dni (z 3-7 dni)
-}
-
-# ==================================================================
-# === USUNIĘTO: Parametry dla Handlu Parami ===
-# Strategia Handlu Parami została całkowicie usunięta na żądanie.
+# === DEKONSTRUKCJA (KROK 13) ===
+# Usunięto stare, proste definicje AQM_THRESHOLDS_MINIMAL i AQM_STRATEGY_PARAMS.
+# Zostaną one zastąpione przez logikę AQM V3 (Hipotezy H1-H4).
 # ==================================================================
 
 
 # ==================================================================
 # === Silnik Symulacji (Logika LONG) ===
+# TA FUNKCJA ZOSTAJE. Jest generyczna i będzie potrzebna do testowania hipotez V3.
 # ==================================================================
 
 def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
@@ -173,6 +157,7 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
 
 # ==================================================================
 # === SŁOWNIK CACHE (BEZ ZMIAN) ===
+# TA SEKCJA ZOSTAJE. Jest kluczowa dla wydajności AQM V3.
 # ==================================================================
 
 _backtest_cache = {
@@ -209,6 +194,11 @@ def _get_sector_for_ticker(session: Session, ticker: str) -> str:
 # ==================================================================
 
 
+# ==================================================================
+# === DETEKTOR REŻIMU RYNKOWEGO (BEZ ZMIAN) ===
+# TA SEKCJA ZOSTAJE. Dokumentacja V3 (Mapa 3, Faza 3)
+# jawnie wymaga testowania w różnych reżimach rynkowych.
+# ==================================================================
 def _detect_market_regime(current_date_str: str) -> str:
     """
     Wykrywa reżim rynkowy na podstawie danych VXX i SPY z cache.
@@ -246,277 +236,13 @@ def _detect_market_regime(current_date_str: str) -> str:
         return 'volatile'
 
 # ==================================================================
-# === USUNIĘTO: _calculate_sector_strength ===
-# Ta funkcja była używana tylko przez Handel Parami.
-# ==================================================================
-
-# ==================================================================
-# === STRATEGIA 1: AQM (Long-Only) - PRZEBUDOWANA ===
-# ==================================================================
-
-def _calculate_aqm_score(
-    df_view: pd.DataFrame, 
-    weekly_df_view: pd.DataFrame, 
-    sector: str, 
-    market_regime: str
-) -> (float, dict):
-    """
-    Oblicza AQM Score na podstawie danych EOD (zgodnie z logiką z PDF str. 13-17).
-    Zwraca: (final_score, components_dict)
-    
-    TA FUNKCJA ZOSTAŁA CAŁKOWICIE PRZEPISANA, ABY ODZWIERCIEDLAĆ LOGIKĘ Z PDF.
-    """
-    try:
-        components = {}
-        
-        # --- 1. Quantum Prime Score (QPS) - Waga 40% (PDF str. 13-14) ---
-        # Używamy tylko danych Dziennych i Tygodniowych, zgodnie z ograniczeniami backtestu.
-        
-        # --- QPS - Składnik Dzienny ---
-        d = df_view.iloc[-1] # Ostatnia świeca dzienna
-        
-        # QPS - Trend Dzienny (50% wagi QPS_D)
-        trend_d = 0.0
-        if d['close'] > d['ema_20']: trend_d += 0.25
-        if d['close'] > d['ema_50']: trend_d += 0.25
-        if d['ema_20'] > d['ema_50']: trend_d += 0.25
-        if d['ema_50'] > d['ema_200']: trend_d += 0.25
-        
-        # QPS - Momentum Dzienne (30% wagi QPS_D)
-        momentum_d = 0.0
-        if 50 < d['rsi_14'] < 70: momentum_d += 0.5 # PDF str 13: Optymalny zakres
-        if d['macd_line'] > d['signal_line']: momentum_d += 0.5
-        
-        # QPS - Zmienność Dzienna (20% wagi QPS_D)
-        volatility_d = 0.3 # Domyślna (zła) wartość
-        if d['close'] > 0 and not pd.isna(d['atr_14']):
-            atr_percent = d['atr_14'] / d['close']
-            if atr_percent < 0.05: volatility_d = 1.0 # Poniżej 5% ATR
-            elif atr_percent < 0.08: volatility_d = 0.7 # Poniżej 8% ATR
-        
-        score_daily = (trend_d * 0.5) + (momentum_d * 0.3) + (volatility_d * 0.2)
-        components["QPS_Daily"] = score_daily
-
-        # --- QPS - Składnik Tygodniowy ---
-        # PDF str 13: "weekly" - używamy tylko trendu i momentum (brak ATR i EMA 200)
-        w = weekly_df_view.iloc[-1] # Ostatnia świeca tygodniowa
-        
-        # QPS - Trend Tygodniowy (PDF str 13 - Uproszczony: 70% wagi QPS_W)
-        trend_w = 0.0
-        if w['close'] > w['ema_20']: trend_w += 0.25
-        if w['close'] > w['ema_50']: trend_w += 0.25
-        if w['ema_20'] > w['ema_50']: trend_w += 0.25
-        # Ignorujemy ema_50 > ema_200, brak w danych tygodniowych
-        
-        # QPS - Momentum Tygodniowe (PDF str 13 - 30% wagi QPS_W)
-        momentum_w = 0.0
-        if 50 < w['rsi_14'] < 70: momentum_w += 0.5 # Optymalny zakres
-        if w['macd_line'] > w['signal_line']: momentum_w += 0.5
-        
-        score_weekly = (trend_w * 0.7) + (momentum_w * 0.3)
-        components["QPS_Weekly"] = score_weekly
-        
-        # PDF str 13: "return harmonic_mean(scores)" - Użyjemy średniej arytmetycznej
-        qps_score = (score_daily + score_weekly) / 2.0
-        components["QPS_Final"] = qps_score
-
-
-        # --- 2. Volume Entropy Score (VES) - Waga 30% (PDF str. 14-15) ---
-        # Używamy tylko danych dziennych (d), bo tam mamy OBV i A/D
-        
-        # VES - Analiza OBV (40% wagi VES)
-        obv_score = 0.0
-        if not pd.isna(d['obv']) and not pd.isna(d['obv_20_ma']) and d['obv'] > d['obv_20_ma']: obv_score += 0.4
-        if not pd.isna(d['obv']) and not pd.isna(df_view.iloc[-2]['obv']) and d['obv'] > df_view.iloc[-2]['obv']: obv_score += 0.3 # OBV rośnie (trend > 0)
-        if not pd.isna(d['obv_20_ma']) and not pd.isna(d['obv_50_ma']) and d['obv_20_ma'] > d['obv_50_ma']: obv_score += 0.3
-        
-        # VES - Stosunek Wolumenu (30% wagi VES)
-        volume_score = 0.1 # Domyślna (zła) wartość
-        if not pd.isna(d['volume_20_ma']) and d['volume_20_ma'] > 0:
-            volume_ratio = d['volume'] / d['volume_20_ma']
-            if volume_ratio > 1.2: volume_score = 1.0 # PDF str 15: > 1.2 (użyjemy 1.0)
-            elif volume_ratio > 0.8: volume_score = 0.7 # PDF str 15: > 0.8 (użyjemy 0.7)
-        
-        # VES - Analiza A/D Line (30% wagi VES)
-        ad_score = 0.0
-        if not pd.isna(d['ad_line']) and not pd.isna(d['ad_line_20_ma']) and d['ad_line'] > d['ad_line_20_ma']: ad_score += 0.5 # PDF str 15: Użyjemy 0.5
-        if not pd.isna(d['ad_line']) and not pd.isna(df_view.iloc[-2]['ad_line']) and d['ad_line'] > df_view.iloc[-2]['ad_line']: ad_score += 0.5 # A/D rośnie (trend > 0)
-        
-        ves_score = (obv_score * 0.4) + (volume_score * 0.3) + (ad_score * 0.3)
-        components["VES_Final"] = ves_score
-
-
-        # --- 3. Market Regime Score (MRS) - Waga 20% (PDF str. 15-16) ---
-        # Używamy `market_regime` i `sector` przekazanych do funkcji
-        mrs_score = 0.0 # Domyślnie 0
-        
-        if market_regime == 'bull':
-            # PDF str 16: Faworyzuj Technology, Communication Services, Consumer Cyclical
-            if sector in ['Technology', 'Communication Services', 'Consumer Discretionary']: # Używamy nazw z naszej bazy
-                mrs_score = 0.7
-            # PDF nie określa "else", ale obecny kod dawał 0.3. Zostawmy 0.
-            
-        elif market_regime == 'bear':
-            # PDF str 16: Faworyzuj Utilities, Consumer Defensive, Healthcare
-            if sector in ['Utilities', 'Consumer Staples', 'Health Care']: # Używamy nazw z naszej bazy
-                mrs_score = 0.7
-            # PDF nie wspomina o "strong balance sheet", pomijamy
-        
-        elif market_regime == 'volatile':
-            # PDF str 6 i 16 sugerują faworyzowanie "jakości" lub niczego
-            # Obecny kod dawał 0.5. Użyjmy 0.5 jako neutralnej wartości.
-            mrs_score = 0.5 
-
-        components["MRS_Final"] = mrs_score
-        
-        # --- 4. Temporal Coherence Score (TCS) - Waga 10% (PDF str. 17) ---
-        # Nie mamy danych o zarobkach w backteście. Używamy uproszczenia.
-        tcs_score = 1.0 # Uproszczenie: Załóżmy, że timing jest zawsze dobry
-        components["TCS_Final"] = tcs_score
-        
-        # --- FINAŁ: Suma Ważona (ZGODNIE Z PDF str. 10, 13, 14, 15, 17) ---
-        # ==================================================================
-        # === KRYTYCZNA POPRAWKA: Zmiana z iloczynu (mnożenia) na SUMĘ WAŻONĄ ===
-        # Poprzednia logika (mnożenie) była błędna, ponieważ iloczyn
-        # ułamków (np. 0.8 * 0.7 * 0.5) nigdy nie osiągnąłby progu 0.85.
-        # Używamy logiki wag procentowych opisanych w PDF.
-        # ==================================================================
-        
-        # Upewnijmy się, że żaden score nie jest NaN, zastępując NaN zerami
-        qps_score = 0.0 if pd.isna(qps_score) else qps_score
-        ves_score = 0.0 if pd.isna(ves_score) else ves_score
-        mrs_score = 0.0 if pd.isna(mrs_score) else mrs_score
-        tcs_score = 0.0 if pd.isna(tcs_score) else tcs_score # Chociaż tcs jest 1.0
-
-        final_aqm_score = (qps_score * 0.40) + (ves_score * 0.30) + (mrs_score * 0.20) + (tcs_score * 0.10)
-        # ==================================================================
-        
-        return final_aqm_score, components
-
-    except Exception as e:
-        logger.error(f"Błąd krytyczny w _calculate_aqm_score: {e}", exc_info=True)
-        return 0.0, {}
-
-# ==================================================================
-# === USUNIĘTO: Stare funkcje _find_ema_bounce_setup i _find_breakout_setup ===
-# Zostały one zastąpione przez nową, zintegrowaną logikę AQM.
-# ==================================================================
-
-
-# ==================================================================
-# === Symulator AQM (Zaktualizowany) ===
-# ==================================================================
-def _simulate_trades_aqm(
-    session: Session, 
-    ticker: str, 
-    historical_data: pd.DataFrame, 
-    weekly_data: pd.DataFrame, 
-    year: str
-):
-    """
-    Iteruje dzień po dniu przez historyczny DataFrame DLA JEDNEJ SPÓŁKI
-    i szuka setupów AQM, używając nowej logiki z PDF.
-    
-    (Funkcja ta zastępuje starą _simulate_trades_aqm)
-    """
-    trades_found = 0
-    ticker_data_cache = _get_ticker_data_from_cache(ticker)
-    if not ticker_data_cache:
-        return 0
-    ticker_sector = ticker_data_cache['sector']
-
-    # Zaczynamy od 200, aby mieć wystarczająco danych dla EMA 200
-    for i in range(200, len(historical_data)):
-        
-        current_date = historical_data.index[i]
-        current_date_str = current_date.strftime('%Y-%m-%d')
-
-        # Tworzymy "widok" danych, który widziałby analityk danego dnia
-        # Obejmuje 200 świec wstecz + bieżącą świecę (łącznie 201)
-        df_view = historical_data.iloc[i-200 : i+1].copy()
-        
-        # Pobierz widok danych tygodniowych (do bieżącej daty)
-        weekly_df_view = weekly_data[weekly_data.index <= current_date_str].iloc[-50:]
-        if len(weekly_df_view) < 50:
-            continue # Za mało danych tygodniowych
-
-        # --- TESTOWANIE STRATEGII AQM (Logika z PDF) ---
-        
-        # 1. Wykryj reżim rynkowy (raz na dzień symulacji)
-        market_regime = _detect_market_regime(current_date_str)
-        
-        # 2. Oblicz NOWY AQM Score (logika z PDF str. 13-17)
-        aqm_score, components = _calculate_aqm_score(df_view, weekly_df_view, ticker_sector, market_regime)
-        
-        # ==================================================================
-        # === KRYTYCZNA POPRAWKA: Implementacja "WARUNKÓW OPTYMALNYCH" (PDF str. 18) ===
-        # Zastępujemy luźne "Warunki Minimalne" (które dały 258 transakcji)
-        # znacznie surowszymi "Warunkami Optymalnymi", aby odzwierciedlić
-        # oryginalną, wysoce selektywną strategię (która dała 4 transakcje).
-        # ==================================================================
-        
-        # Pobierz indywidualne wyniki
-        qps_score = components.get("QPS_Final", 0.0)
-        ves_score = components.get("VES_Final", 0.0)
-        mrs_score = components.get("MRS_Final", 0.0)
-        tcs_score = components.get("TCS_Final", 0.0) # To jest 1.0, więc zawsze > 0.6
-
-        # Warunek 1: AQM Score > 0.80 (PDF str. 18)
-        is_score_high_enough = (aqm_score > 0.80)
-        
-        # Warunek 2: Wszystkie komponenty > 0.6 (PDF str. 18)
-        # (PDF mówi "Wszystkie komponenty", ale QPS i VES są najważniejsze)
-        all_components_good = (
-            qps_score > 0.5 and # PDF str 18 (QPS > 0.5)
-            ves_score > 0.6 and # PDF str 18 (Volume Entropy > 0.6)
-            mrs_score > 0.0     # Mój dodatek: nie handluj, jeśli reżim jest 0
-        )
-        
-        # (Pomijamy "Spójność na 3 z 5 timeframe'ów", ponieważ nie mamy danych 5/15min)
-
-        if is_score_high_enough and all_components_good:
-            # ZNALEZIONO SETUP (Optymalny)!
-            # ==================================================================
-            
-            latest_candle = df_view.iloc[-1]
-            entry_price = latest_candle['close'] # PDF str 19: "Cena wejścia (zamknięcie dnia)"
-            
-            # Użyj parametrów z PDF str 19
-            stop_loss_val = entry_price * (1 - AQM_STRATEGY_PARAMS['stop_loss_percent'])
-            take_profit_val = entry_price * (1 + AQM_STRATEGY_PARAMS['target_1_percent']) # Używamy Target 1
-
-            setup_aqm = {
-                "ticker": ticker,
-                "setup_type": f"AQM_SCORE_{market_regime.upper()}", 
-                "entry_price": entry_price,
-                "stop_loss": stop_loss_val,
-                "take_profit": take_profit_val,
-            }
-            
-            # entry_index to 'i' w pętli historical_data
-            trade = _resolve_trade(
-                historical_data, i, setup_aqm, 
-                AQM_STRATEGY_PARAMS['max_hold_days'], year, direction='LONG'
-            )
-            if trade:
-                session.add(trade)
-                trades_found += 1
-
-    if trades_found > 0:
-        try:
-            session.commit()
-        except Exception as e:
-            logger.error(f"Błąd podczas commitowania transakcji AQM dla {ticker}: {e}")
-            session.rollback()
-        
-    return trades_found
-
-# ==================================================================
-# === USUNIĘTO: Logika Strategii 2: Handel Parami ===
-# Całkowicie usunięto funkcje:
-# - _find_best_long_candidate
-# - _find_best_short_candidate
-# - _run_pairs_trading_simulation
+# === DEKONSTRUKCJA (KROK 13) ===
+# Całkowicie usunięto stare funkcje analityczne AQM:
+# - _calculate_aqm_score (stary model)
+# - _simulate_trades_aqm (stary symulator)
+#
+# Zostaną one zastąpione przez moduły obliczeniowe 7 Wymiarów
+# i symulatory Hipotez H1-H4 z AQM V3.
 # ==================================================================
 
 
@@ -529,7 +255,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     Główna funkcja uruchamiająca backtest historyczny dla
     zdefiniowanego okresu i listy tickerów.
     
-    PRZEBUDOWANA: Uruchamia TYLKO strategię AQM.
+    PRZEBUDOWANA: Platforma gotowa na implementację hipotez AQM V3.
     """
     
     try:
@@ -548,25 +274,25 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         append_scan_log(session, f"[Backtest] BŁĄD: Nieprawidłowy format roku: {year}")
         return
         
-    log_msg = f"BACKTEST HISTORYCZNY (Strategia AQM): Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
+    log_msg = f"BACKTEST HISTORYCZNY (Platforma AQM V3): Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
     # === KROK 1: Czyszczenie Bazy Danych ===
     try:
         # ==================================================================
-        # === NAPRAWA LOGIKI CZYSZCZENIA ===
-        # Usuwamy tylko wyniki pasujące do tego roku i strategii AQM.
-        # Wpisy "EMA_BOUNCE" itp. zostaną, chyba że uruchomimy test dla tamtych lat.
+        # === DEKONSTRUKCJA (KROK 13) ===
+        # Zmieniamy wzorzec, aby czyścił *nowe* wyniki AQM_V3, a nie stary
+        # wzorzec "AQM_%". Nowy wzorzec będzie np. "AQM_V3_H1_...".
         # ==================================================================
-        like_pattern = f"BACKTEST_{year}_AQM_%"
-        logger.info(f"Czyszczenie starych wyników AQM dla wzorca: {like_pattern}...")
+        like_pattern = f"BACKTEST_{year}_AQM_V3_%"
+        logger.info(f"Czyszczenie starych wyników AQM V3 dla wzorca: {like_pattern}...")
         
         delete_stmt = text("DELETE FROM virtual_trades WHERE setup_type LIKE :pattern")
         result = session.execute(delete_stmt, {'pattern': like_pattern})
         
         session.commit()
-        logger.info(f"Pomyślnie usunięto {result.rowcount} starych wpisów backtestu AQM dla roku {year}.")
+        logger.info(f"Pomyślnie usunięto {result.rowcount} starych wpisów backtestu AQM V3 dla roku {year}.")
         
     except Exception as e:
         logger.error(f"Nie udało się wyczyścić starych wyników backtestu: {e}", exc_info=True)
@@ -575,28 +301,29 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     # === KROK 2: Pobieranie Listy Spółek ===
     try:
         # ==================================================================
-        # === NAPRAWA LOGIKI POBIERANIA (z poprzedniej iteracji) ===
-        # Pobieramy *TYLKO* tickery, które kiedykolwiek przeszły Fazę 2
-        # i są oznaczone jako "is_qualified = TRUE".
+        # === NAPRAWA (KROK 13 - REWIZJA) ===
+        # Zmieniamy źródło z `companies` na `phase1_candidates`.
+        # Backtest będzie teraz działał tylko na spółkach, które przeszły
+        # Twoje "Pierwsze Sito" (cena i wolumen).
         # ==================================================================
-        log_msg_tickers = "[Backtest] Pobieranie listy tickerów 'APEX Elita' (z Fazy 2)..."
+        log_msg_tickers = "[Backtest V3] Pobieranie listy spółek z Fazy 1 ('Pierwsze Sito')..."
         logger.info(log_msg_tickers)
         append_scan_log(session, log_msg_tickers)
         
         tickers_p2_rows = session.execute(text(
-            "SELECT DISTINCT ticker FROM phase2_results WHERE is_qualified = TRUE"
+            "SELECT DISTINCT ticker FROM phase1_candidates" # <-- NAPRAWIONE ZAPYTANIE
         )).fetchall()
         
         tickers_to_test = sorted([row[0] for row in tickers_p2_rows])
         # ==================================================================
 
         if not tickers_to_test:
-            log_msg = f"[Backtest] BŁĄD: Tabela 'phase2_results' (is_qualified=TRUE) jest pusta. Uruchom najpierw pełny skaner (przycisk 'Start'), aby wygenerować listę 'APEX Elita'."
+            log_msg = f"[Backtest] BŁĄD: Tabela 'phase1_candidates' jest pusta. Uruchom najpierw główny skan (przycisk 'Start'), aby zapełnić tę listę."
             logger.error(log_msg)
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest] Znaleziono {len(tickers_to_test)} unikalnych tickerów 'APEX Elita' do przetestowania."
+        log_msg = f"[Backtest V3] Znaleziono {len(tickers_to_test)} spółek z Fazy 1 do przetestowania."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
@@ -607,11 +334,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # === KROK 3: Budowanie Pamięci Podręcznej (Cache) ===
-    # (Pobiera VXX, SPY, 11 Sektorów ETF i wszystkie spółki z Fazy 2)
+    # (Szkielet zostaje, wnętrze jest czyszczone i przygotowywane pod V3)
     
     try:
-        logger.info("[Backtest] Rozpoczynanie budowania pamięci podręcznej (Cache)...")
-        # Resetowanie cache
+        logger.info("[Backtest V3] Rozpoczynanie budowania pamięci podręcznej (Cache)...")
+        # Resetowanie cache (zostaje)
         _backtest_cache["vix_data"] = None
         _backtest_cache["spy_data"] = None
         _backtest_cache["sector_etf_data"] = {}
@@ -619,8 +346,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         _backtest_cache["tickers_by_sector"] = {}
         _backtest_cache["sector_map"] = {} # Zresetuj mapę sektorów
 
-        # 2. Pobierz dane Makro (VXX i SPY)
-        logger.info("[Backtest] Cache: Ładowanie VXX i SPY...")
+        # 2. Pobierz dane Makro (VXX i SPY) (zostaje - potrzebne dla _detect_market_regime)
+        logger.info("[Backtest V3] Cache: Ładowanie VXX i SPY...")
         vix_raw = api_client.get_daily_adjusted('VXX', outputsize='full')
         vix_df = pd.DataFrame.from_dict(vix_raw['Time Series (Daily)'], orient='index')
         vix_df = standardize_df_columns(vix_df)
@@ -635,8 +362,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         spy_df['ema_200'] = calculate_ema(spy_df['close'], period=200)
         _backtest_cache["spy_data"] = spy_df
         
-        # 3. Pobierz dane Sektorowe (ETF-y)
-        logger.info("[Backtest] Cache: Ładowanie 11 sektorów ETF...")
+        # 3. Pobierz dane Sektorowe (ETF-y) (zostaje - na razie)
+        logger.info("[Backtest V3] Cache: Ładowanie 11 sektorów ETF...")
         for sector_name, etf_ticker in SECTOR_TO_ETF_MAP.items():
             try:
                 sector_raw = api_client.get_daily_adjusted(etf_ticker, outputsize='full')
@@ -647,16 +374,26 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             except Exception as e:
                 logger.error(f"  > BŁĄD ładowania danych dla sektora {etf_ticker}: {e}")
         
-        # 4. Pobierz dane dla wszystkich spółek z listy Fazy 2
-        logger.info(f"[Backtest] Cache: Ładowanie danych dla {len(tickers_to_test)} spółek...")
+        # 4. Pobierz dane dla wszystkich spółek
+        logger.info(f"[Backtest V3] Cache: Ładowanie danych dla {len(tickers_to_test)} spółek...")
         total_cache_build = len(tickers_to_test)
         for i, ticker in enumerate(tickers_to_test):
             if i % 10 == 0:
-                log_msg = f"[Backtest] Budowanie cache... ({i}/{total_cache_build})"
+                log_msg = f"[Backtest V3] Budowanie cache... ({i}/{total_cache_build})"
                 append_scan_log(session, log_msg)
                 update_scan_progress(session, i, total_cache_build)
             
             try:
+                # ==================================================================
+                # === DEKONSTRUKCJA (KROK 13) ===
+                # Zostawiamy pobieranie DANYCH SUROWYCH (daily i weekly),
+                # ale usuwamy CAŁĄ starą logikę obliczania wskaźników
+                # (RSI, MACD, OBV, AD_LINE itp.).
+                #
+                # W kolejnych krokach będziemy tu dodawać pobieranie
+                # i obliczanie metryk AQM V3 (VWAP, Insider, 5min Intraday itp.).
+                # ==================================================================
+                
                 # Pobierz dane dzienne i tygodniowe (2 wywołania API na ticker)
                 price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
                 weekly_data_raw = api_client.get_time_series_weekly(ticker) # outputsize='full' jest domyślny
@@ -673,140 +410,57 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 weekly_df = pd.DataFrame.from_dict(weekly_data_raw['Weekly Adjusted Time Series'], orient='index')
                 weekly_df = standardize_df_columns(weekly_df)
                 weekly_df.index = pd.to_datetime(weekly_df.index)
-
-                # Oblicz wskaźniki dla spółki (raz) - DZIENNE (potrzebne do QPS i VES)
-                daily_df['rsi_14'] = calculate_rsi(daily_df['close'], period=14)
-                daily_df['macd_line'], daily_df['signal_line'] = calculate_macd(daily_df['close'])
-                daily_df['atr_14'] = calculate_atr(daily_df, period=14)
-                daily_df['ema_20'] = calculate_ema(daily_df['close'], period=20)
-                daily_df['ema_50'] = calculate_ema(daily_df['close'], period=50)
-                daily_df['ema_200'] = calculate_ema(daily_df['close'], period=200)
-                daily_df['obv'] = calculate_obv(daily_df)
-                daily_df['obv_20_ma'] = daily_df['obv'].rolling(window=20).mean()
-                daily_df['obv_50_ma'] = daily_df['obv'].rolling(window=50).mean()
-                daily_df['volume_20_ma'] = daily_df['volume'].rolling(window=20).mean()
-                daily_df['ad_line'] = calculate_ad(daily_df)
-                daily_df['ad_line_20_ma'] = daily_df['ad_line'].rolling(window=20).mean()
                 
-                # Oblicz wskaźniki dla spółki (raz) - TYGODNIOWE (potrzebne do QPS)
-                weekly_df['rsi_14'] = calculate_rsi(weekly_df['close'], period=14)
-                weekly_df['macd_line'], weekly_df['signal_line'] = calculate_macd(weekly_df['close'])
-                weekly_df['ema_20'] = calculate_ema(weekly_df['close'], period=20)
-                weekly_df['ema_50'] = calculate_ema(weekly_df['close'], period=50)
+                # --- (STARA LOGIKA OBLICZEŃ USUNIĘTA) ---
                 
-                # Zdobądź i zapisz sektor
+                # Zdobądź i zapisz sektor (zostaje)
                 sector = _get_sector_for_ticker(session, ticker)
                 
-                # Zapisz wszystko w cache
+                # Zapisz wszystko w cache (zostaje)
                 _backtest_cache["company_data"][ticker] = {
                     "daily": daily_df,
                     "weekly": weekly_df,
                     "sector": sector
                 }
                 
-                # Zbuduj mapę Sektor -> Ticker (na potrzeby MRS)
+                # Zbuduj mapę Sektor -> Ticker (zostaje)
                 if sector not in _backtest_cache["tickers_by_sector"]:
                     _backtest_cache["tickers_by_sector"][sector] = []
                 _backtest_cache["tickers_by_sector"][sector].append(ticker)
 
             except Exception as e:
                 # Nie przerywaj budowania cache z powodu jednego tickera
-                logger.error(f"[Backtest] Błąd budowania cache dla {ticker}: {e}", exc_info=True)
+                logger.error(f"[Backtest V3] Błąd budowania cache dla {ticker}: {e}", exc_info=True)
                 
-        logger.info("[Backtest] Budowanie pamięci podręcznej (Cache) zakończone.")
-        append_scan_log(session, "[Backtest] Budowanie pamięci podręcznej (Cache) zakończone.")
+        logger.info("[Backtest V3] Budowanie pamięci podręcznej (Cache) zakończone.")
+        append_scan_log(session, "[Backtest V3] Budowanie pamięci podręcznej (Cache) zakończone.")
         update_scan_progress(session, total_cache_build, total_cache_build)
 
     except Exception as e:
-        log_msg = f"[Backtest] BŁĄD KRYTYCZNY podczas budowania cache: {e}. Zatrzymywanie."
+        log_msg = f"[Backtest V3] BŁĄD KRYTYCZNY podczas budowania cache: {e}. Zatrzymywanie."
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
 
     # ==================================================================
-    # === KROK 4: Uruchomienie Symulacji (TYLKO AQM) ===
+    # === KROK 4: Uruchomienie Symulacji (TERAZ PUSTE) ===
     # ==================================================================
     
-    trades_found_aqm = 0
-    total_tickers = len(tickers_to_test)
+    # ==================================================================
+    # === DEKONSTRUKCJA (KROK 13) ===
+    # Cała pętla symulacji `_simulate_trades_aqm` została usunięta.
+    # W kolejnych krokach zastąpimy ją pętlą uruchamiającą
+    # Hipotezy H1, H2, H3, H4 z dokumentacji V3.
+    # ==================================================================
     
-    logger.info("[Backtest] Uruchamianie Strategii AQM (Long-Only, Bottom-Up)...")
-    append_scan_log(session, "[Backtest] Uruchamianie Strategii AQM...")
-    
-    for i, ticker in enumerate(tickers_to_test):
-        if i % 10 == 0:
-            log_msg = f"[Backtest][AQM] Przetwarzanie {ticker} ({i}/{total_tickers})..."
-            append_scan_log(session, log_msg)
-            update_scan_progress(session, i, total_tickers)
-        
-        try:
-            # Używamy danych z cache
-            ticker_data = _get_ticker_data_from_cache(ticker)
-            if not ticker_data:
-                continue
-            
-            # Krojenie danych do roku testowego
-            
-            # ==================================================================
-            # === NAPRAWA BŁĘDU `TypeError` (z poprzedniej iteracji) ===
-            # Używamy `get_indexer(..., method='bfill')`
-            # ==================================================================
-            try:
-                # Użyj get_indexer() dla kompatybilności ze starszymi wersjami pandas
-                # Znajdź indeks pierwszej daty, która jest >= start_date
-                indexer = ticker_data['daily'].index.get_indexer([start_date], method='bfill')
-                
-                # Sprawdź, czy data została znaleziona (indexer zwróci -1, jeśli nie)
-                if indexer[0] == -1:
-                    raise KeyError(f"Data {start_date} nie znaleziona w indeksie dla {ticker}")
-                
-                start_index = indexer[0]
-                
-            except KeyError:
-                logger.warning(f"[Backtest] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
-                continue
-            # ==================================================================
-
-            
-            # Upewnij się, że mamy 200 dni historii PRZED startem roku
-            if start_index < 200:
-                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec). Pomijanie.")
-                continue
-
-            # Kroimy dane dzienne: od (start_date - 200 świec) do end_date
-            # To daje nam pełny bufor na obliczenia
-            historical_data_slice = ticker_data['daily'].iloc[start_index-200:].loc[:end_date]
-            
-            # Kroimy dane tygodniowe: wszystko do end_date
-            weekly_data_slice = ticker_data['weekly'].loc[:end_date] # Do końca roku
-            
-            if historical_data_slice.empty or len(historical_data_slice) < 200 or \
-               weekly_data_slice.empty or len(weekly_data_slice) < 50:
-                logger.warning(f"Pusty wycinek danych dla {ticker} w roku {year}. Pomijanie.")
-                continue
-
-            # Uruchom symulator AQM (który iteruje po dniach wewnątrz)
-            trades_found_aqm += _simulate_trades_aqm(
-                session, ticker, 
-                historical_data_slice, 
-                weekly_data_slice, 
-                year
-            )
-        except Exception as e:
-            logger.error(f"[Backtest][AQM] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
-            session.rollback()
-            
-    log_msg_aqm = f"[Backtest] Strategia AQM zakończona. Znaleziono {trades_found_aqm} transakcji."
+    log_msg_aqm = "[Backtest V3] Szkielet silnika gotowy. Oczekiwanie na implementację Hipotez (H1-H4)."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
-
-    # ==================================================================
-    # === USUNIĘTO: Uruchomienie Strategii 2 (Handel Parami) ===
-    # ==================================================================
-
+            
     # === KONIEC SYMULACJI ===
-    total_trades_found = trades_found_aqm
+    total_trades_found = 0 # Na razie 0
+    total_tickers = len(tickers_to_test) # Przeniesiono definicję na dół
     update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
-    log_msg_final = f"BACKTEST HISTORYCZNY (AQM): Zakończono test dla roku '{year}'. Znaleziono łącznie {total_trades_found} transakcji."
+    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3): Przebudowa platformy zakończona dla roku '{year}'. Gotowy do testowania hipotez."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
