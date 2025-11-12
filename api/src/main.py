@@ -67,7 +67,13 @@ async def startup_event():
             'scan_progress_processed': '0', 'scan_progress_total': '0',
             'scan_log': 'Czekam na rozpoczęcie skanowania...',
             'last_heartbeat': datetime.now(timezone.utc).isoformat(),
-            'ai_analysis_request': 'NONE',
+            # ==========================================================
+            # === DEKONSTRUKCJA (KROK 7) ===
+            # Usunięto inicjalizację flagi 'ai_analysis_request',
+            # ponieważ powiązane endpointy zostały usunięte.
+            # ==========================================================
+            # 'ai_analysis_request': 'NONE', 
+            # ==========================================================
             'system_alert': 'NONE',
             'backtest_request': 'NONE',
             # ==========================================================
@@ -309,30 +315,21 @@ def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
 
 
-# --- ENDPOINTY ANALIZY AI NA ŻĄDANIE ---
+# ==========================================================
+# === DEKONSTRUKCJA (KROK 7) ===
+# Usunięto endpointy AI na żądanie (`/ai-analysis/request` 
+# i `/ai-analysis/result/{ticker}`), ponieważ były powiązane
+# ze starą, wygaszoną logiką Fazy 2/3.
+# ==========================================================
+# @app.post("/api/v1/ai-analysis/request", ...)
+# def request_ai_analysis(...):
+#     ... (USUNIĘTE) ...
 
-@app.post("/api/v1/ai-analysis/request", status_code=202, response_model=schemas.AIAnalysisRequestResponse)
-def request_ai_analysis(request: schemas.OnDemandRequest, db: Session = Depends(get_db)):
-    ticker = request.ticker.strip().upper()
-    try:
-        crud.delete_ai_analysis_result(db, ticker)
-        crud.set_system_control_value(db, key="ai_analysis_request", value=ticker)
-        logger.info(f"AI analysis request for {ticker} has been sent to the worker (previous result cleared).")
-        return {"message": f"Analiza AI dla {ticker} została zlecona.", "ticker": ticker}
-    except Exception as e:
-        logger.error(f"Error processing AI analysis request for {ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania analizy.")
+# @app.get("/api/v1/ai-analysis/result/{ticker}", ...)
+# def get_ai_analysis_result(...):
+#     ... (USUNIĘTE) ...
+# ==========================================================
 
-
-@app.get("/api/v1/ai-analysis/result/{ticker}", response_model=schemas.AIAnalysisResult)
-def get_ai_analysis_result(ticker: str, db: Session = Depends(get_db)):
-    analysis_result = crud.get_ai_analysis_result(db, ticker.strip().upper())
-    if not analysis_result:
-        current_request = crud.get_system_control_value(db, "ai_analysis_request")
-        if current_request == ticker.strip().upper() or current_request == 'PROCESSING':
-             return {"status": "PROCESSING", "message": "Analiza w toku..."}
-        raise HTTPException(status_code=404, detail="Nie znaleziono wyniku analizy AI dla tego tickera ani nie jest ona przetwarzana.")
-    return analysis_result
 
 # Endpoint do pobierania ceny
 @app.get("/api/v1/quote/{ticker}", response_model=Optional[Dict[str, Any]])
@@ -359,7 +356,14 @@ def control_worker(action: str, db: Session = Depends(get_db)):
     command = allowed_actions[action]
     try:
         if action == "start":
-            crud.set_system_control_value(db, "ai_analysis_request", 'NONE')
+            # ==========================================================
+            # === DEKONSTRUKCJA (KROK 7) ===
+            # Usunięto resetowanie flagi 'ai_analysis_request',
+            # ponieważ flaga nie jest już używana.
+            # ==========================================================
+            # crud.set_system_control_value(db, "ai_analysis_request", 'NONE')
+            # ==========================================================
+            pass # Pozostawiamy 'if' na wypadek przyszłych akcji "start"
         crud.set_system_control_value(db, "worker_command", command)
         logger.info(f"Command '{action}' ({command}) sent to worker.")
         return {"message": f"Command '{action}' sent to worker."}
