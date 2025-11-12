@@ -15,6 +15,8 @@ from . import aqm_v3_h1_simulator
 from . import aqm_v3_h2_loader
 # Krok 21c: Importujemy nowy silnik symulacji H2
 from . import aqm_v3_h2_simulator
+# Krok 22b (Część 2): Importujemy nowy silnik ładowania H3
+from . import aqm_v3_h3_loader
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
@@ -225,7 +227,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             try:
                 # ==================================================================
-                # === KROK 18 & 20b: Ładowanie danych H1 i H2 ===
+                # === KROK 18, 20b, 22b: Ładowanie danych H1, H2 i H3 ===
                 # ==================================================================
                 
                 # --- ŁADOWANIE H1 ---
@@ -233,27 +235,44 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 weekly_data_raw = api_client.get_time_series_weekly(ticker)
                 vwap_data_raw = api_client.get_vwap(ticker, interval='daily')
                 
+                # --- ŁADOWANIE H3 (CZĘŚĆ 1) ---
+                bbands_raw = api_client.get_bollinger_bands(ticker, interval='daily', time_period=20, nbdevup=2, nbdevdn=2)
+                
+                # --- ŁADOWANIE H3 (CZĘŚĆ 2) ---
+                intraday_raw = api_client.get_intraday(ticker, interval='5min', outputsize='full')
+                
+                # Walidacja danych H1 i H3
                 if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
                    not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw or \
-                   not vwap_data_raw or 'Technical Analysis: VWAP' not in vwap_data_raw:
-                    logger.warning(f"Brak pełnych danych (H1: Daily, Weekly lub VWAP) dla {ticker}, pomijanie.")
+                   not vwap_data_raw or 'Technical Analysis: VWAP' not in vwap_data_raw or \
+                   not bbands_raw or 'Technical Analysis: BBANDS' not in bbands_raw or \
+                   not intraday_raw or 'Time Series (5min)' not in intraday_raw:
+                    logger.warning(f"Brak pełnych danych (H1/H3) dla {ticker}, pomijanie.")
                     continue
 
-                # Przetwórz Daily
+                # Przetwórz Daily (H1)
                 daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
                 daily_df = standardize_df_columns(daily_df)
                 daily_df.index = pd.to_datetime(daily_df.index)
                 
-                # Przetwórz Weekly
+                # Przetwórz Weekly (H1)
                 weekly_df = pd.DataFrame.from_dict(weekly_data_raw['Weekly Adjusted Time Series'], orient='index')
                 weekly_df = standardize_df_columns(weekly_df)
                 weekly_df.index = pd.to_datetime(weekly_df.index)
 
-                # Przetwórz VWAP
+                # Przetwórz VWAP (H1)
                 vwap_df = pd.DataFrame.from_dict(vwap_data_raw['Technical Analysis: VWAP'], orient='index')
                 vwap_df.index = pd.to_datetime(vwap_df.index)
                 vwap_df['VWAP'] = pd.to_numeric(vwap_df['VWAP'], errors='coerce')
                 vwap_df.sort_index(inplace=True)
+                
+                # Przetwórz BBANDS (H3)
+                bbands_df = aqm_v3_h3_loader._parse_bbands(bbands_raw)
+                if bbands_df is None: bbands_df = pd.DataFrame() # Utwórz pusty, jeśli błąd parsowania
+                
+                # Przetwórz Intraday 5min (H3)
+                intraday_5min_df = aqm_v3_h3_loader._parse_intraday_5min(intraday_raw)
+                if intraday_5min_df is None: intraday_5min_df = pd.DataFrame() # Utwórz pusty, jeśli błąd parsowania
                 
                 # --- Wzbogacanie DataFrame (Krok 18 - H1) ---
                 spy_aligned = _backtest_cache["spy_data"]['close'].reindex(daily_df.index, method='ffill').rename('spy_close')
@@ -273,11 +292,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 enriched_df['time_dilation'].fillna(0, inplace=True)
                 enriched_df['price_gravity'].fillna(0, inplace=True)
                 
-                # ==================================================================
-                # === KROK 20b (Część 2): Ładowanie danych H2 do cache ===
-                # ==================================================================
+                # --- ŁADOWANIE H2 ---
                 h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client)
-                # ==================================================================
                 
                 # Zdobądź i zapisz sektor
                 sector = _get_sector_for_ticker(session, ticker)
@@ -287,8 +303,10 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                     "daily": enriched_df, # Wzbogacony o H1
                     "weekly": weekly_df,
                     "vwap": vwap_df, 
-                    "insider_df": h2_data["insider_df"], # <-- NOWE DANE H2
-                    "news_df": h2_data["news_df"],       # <-- NOWE DANE H2
+                    "insider_df": h2_data["insider_df"], # Dane H2
+                    "news_df": h2_data["news_df"],       # Dane H2
+                    "bbands_df": bbands_df,             # <-- NOWE DANE H3
+                    "intraday_5min_df": intraday_5min_df, # <-- NOWE DANE H3
                     "sector": sector
                 }
                 
