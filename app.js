@@ -9,11 +9,11 @@ document.addEventListener('DOMContentLoaded', () => {
         liveQuotes: {},
         workerStatus: { status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 } },
         discardedSignalCount: 0,
-        activeAnalysisPolling: null,
-        activeQuotePolling: null,
+        // activeAnalysisPolling: null, // USUNIĘTE (Krok 12)
+        // activeQuotePolling: null, // USUNIĘTE (Krok 12)
         activePortfolioPolling: null,
         activeCountdownPolling: null, 
-        currentViewTicker: null,
+        // currentViewTicker: null, // USUNIĘTE (Krok 12)
         profitAlertsSent: {}, 
         snoozedAlerts: {},
         // ==========================================================
@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loginButton: document.getElementById('login-button'),
         loginStatusText: document.getElementById('login-status-text'),
         mainContent: document.getElementById('main-content'),
-        tickerInput: document.getElementById('ticker-input'),
+        // tickerInput: document.getElementById('ticker-input'), // USUNIĘTE (Krok 12)
         startBtn: document.getElementById('start-btn'),
         pauseBtn: document.getElementById('pause-btn'),
         resumeBtn: document.getElementById('resume-btn'),
@@ -90,8 +90,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
     // ==========================================================
     
-    const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms
-    const QUOTE_POLL_INTERVAL = 15000;       // ms
+    // const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms // USUNIĘTE (Krok 12)
+    // const QUOTE_POLL_INTERVAL = 15000;       // ms // USUNIĘTE (Krok 12)
     const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund na odświeżenie portfela
     const ALERT_POLL_INTERVAL = 7000; // 7 sekund
     // ==========================================================
@@ -153,8 +153,8 @@ document.addEventListener('DOMContentLoaded', () => {
         getPhase2Results: () => apiRequest('api/v1/results/phase2'),
         getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
         getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
-        requestAIAnalysis: (ticker) => apiRequest('api/v1/ai-analysis/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }),
-        getAIAnalysisResult: (ticker) => apiRequest(`api/v1/ai-analysis/result/${ticker}`),
+        // requestAIAnalysis: (ticker) => ... // USUNIĘTE (Krok 12)
+        // getAIAnalysisResult: (ticker) => ... // USUNIĘTE (Krok 12)
         getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
         addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
         getSystemAlert: () => apiRequest('api/v1/system/alert'),
@@ -387,32 +387,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const renderers = {
         loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
-        phase1List: (candidates) => candidates.map(c => `<div data-ticker="${c.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
-        phase2List: (results) => results.map(r => `<div data-ticker="${r.ticker}" class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-pointer transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+        
+        // ==========================================================
+        // === DEKONSTRUKCJA (KROK 12) ===
+        // Zmieniono 'cursor-pointer' na 'cursor-default' i usunięto
+        // 'data-ticker' oraz 'hover:bg-...'
+        // ==========================================================
+        phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+        phase2List: (results) => results.map(r => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
         phase3List: (signals) => signals.map(s => {
             let statusClass, statusText, icon;
             if (s.status === 'ACTIVE') { statusClass = 'text-green-400'; statusText = 'AKTYWNY'; icon = 'zap';}
             else if (s.status === 'PENDING') { statusClass = 'text-yellow-400'; statusText = 'OCZEKUJĄCY'; icon = 'hourglass'; }
             else { statusClass = 'text-gray-500'; statusText = s.status.toUpperCase(); icon = 'help-circle'; }
-            return `<div data-ticker="${s.ticker}" class="candidate-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
+            return `<div class="candidate-item flex items-center text-xs p-2 rounded-md cursor-default transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
         }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
+        // ==========================================================
 
-        aiAnalysisDetails: (ticker, data) => {
-            if (data.status === 'PROCESSING') return renderers.loading(data.message || `Analiza ${ticker} w toku...`);
-            if (data.status === 'ERROR') return `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Analizy ${ticker}</h2><p>${data.message}</p></div>`;
-            if (data.status !== 'DONE') return `<div class="text-yellow-400">Nieoczekiwany status: ${data.status}</div>`;
-            const { overall_score = 0, max_score = 1, recommendation = "Brak", agents = {}, quote_data = null, market_info = null } = data;
-            const scorePercent = (max_score > 0) ? (overall_score / max_score) * 100 : 0;
-            let rec_color = "bg-gray-500";
-            if (recommendation === "BARDZO SILNY KANDDAT DO KUPNA") rec_color = "bg-green-500";
-            else if (recommendation === "SILNY KANDYDAT DO OBSERWACJI") rec_color = "bg-sky-500";
-            else if (recommendation === "INTERESUJĄCY KANDYDAT") rec_color = "bg-yellow-500";
-            const createAgentCard = (agentName, icon, agentData) => {
-                 if (!agentData) return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg text-gray-500">Brak danych dla Agenta: ${agentName}</div>`;
-                 return `<div class="bg-[#161B22] border border-gray-800 p-4 rounded-lg"><h4 class="font-bold text-gray-300 mb-3 flex items-center"><i data-lucide="${icon}" class="w-5 h-5 mr-2 text-sky-400"></i>Agent: ${agentName} <span class="ml-auto text-xs font-mono bg-gray-700 px-2 py-1 rounded-md">${agentData.score ?? '?'}/${agentData.max_score ?? '?'}</span></h4><p class="text-sm text-gray-400 mb-3">${agentData.summary ?? 'Brak podsumowania.'}</p><div class="text-xs space-y-1 border-t border-gray-700 pt-2">${agentData.details && Object.keys(agentData.details).length > 0 ? Object.entries(agentData.details).map(([key, value]) => `<div class="flex justify-between"><span class="text-gray-500">${key}:</span><span class="font-mono text-gray-300">${value}</span></div>`).join('') : '<p class="text-gray-500">Brak szczegółów.</p>'}</div></div>`;
-            };
-            return `<div class="max-w-4xl mx-auto" id="ai-details-${ticker}"><div class="flex flex-wrap justify-between items-start gap-4 mb-4"><div><h2 class="text-3xl font-bold text-white">${ticker}</h2><p class="text-gray-400">Raport Analityczny AI dla Week Tradingu</p></div><div class="flex gap-3"><button id="add-to-watchlist-btn" data-ticker="${ticker}" class="flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj</button><button id="buy-stock-btn" data-ticker="${ticker}" class="flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold py-2 px-4 rounded-md text-sm transition-colors"><i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i>Kup</button></div></div><div id="quote-box-placeholder" class="mb-6 bg-[#161B22] border border-gray-800 p-4 rounded-lg">${renderQuoteBox(quote_data, market_info)}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6"><div class="lg:col-span-2 bg-[#161B22] border border-gray-800 p-6 rounded-lg"><h3 class="text-lg font-semibold mb-1">Rekomendacja Systemu</h3><p class="text-2xl font-bold ${rec_color.replace('bg-', 'text-')} mb-4">${recommendation}</p><p class="text-sm text-gray-400">${data.recommendation_details ?? `Nasi agenci AI, po przeanalizowaniu kluczowych wskaźników, przyznali tej spółce łączną ocenę ${overall_score} na ${max_score} możliwych punktów.`}</p></div><div class="bg-[#161B22] border border-gray-800 p-6 rounded-lg flex flex-col items-center justify-center"><h3 class="font-semibold text-gray-400 mb-2">Wynik Ogólny APEX</h3><div class="relative w-24 h-24"><svg class="w-full h-full" viewBox="0 0 36 36"><path class="text-gray-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path><path class="text-sky-400 progress-circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="${scorePercent.toFixed(0)}, 100"></path></svg><div class="absolute inset-0 flex items-center justify-center"><span class="text-2xl font-bold text-white">${overall_score}</span></div></div></div></div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Analizy Agentów AI</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6">${createAgentCard('Momentum', 'trending-up', agents.momentum)}${createAgentCard('Zmienności', 'activity', agents.volatility)}${createAgentCard('Sentymentu', 'message-circle', agents.sentiment)}${createAgentCard('Strażnika Wejść', 'shield-check', agents.tactical_and_guard)}</div></div>`;
-        },
+        // ==========================================================
+        // === DEKONSTRUKCJA (KROK 12) ===
+        // Cała funkcja `aiAnalysisDetails` została usunięta,
+        // ponieważ była wywoływana tylko przez (usuniętą) funkcję `showAiAnalysis`.
+        // ==========================================================
+        // aiAnalysisDetails: (ticker, data) => { ... } // USUNIĘTE
+        // ==========================================================
         
         dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
@@ -731,7 +729,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateDashboardUI(statusData) {
-        if (state.currentViewTicker || !document.getElementById('dashboard-view')) return;
+        // ==========================================================
+        // === DEKONSTRUKCJA (KROK 12) ===
+        // Usunięto warunek `!state.currentViewTicker`
+        // ==========================================================
+        if (!document.getElementById('dashboard-view')) return;
+        // ==========================================================
+        
         const ui_dash = {
             status: document.getElementById('dashboard-worker-status'),
             phase: document.getElementById('dashboard-current-phase'),
@@ -917,8 +921,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function stopAllPolling() {
         logger.info("Zatrzymywanie wszystkich aktywnych timerów odpytywania.");
-        if (state.activeAnalysisPolling) { clearTimeout(state.activeAnalysisPolling); state.activeAnalysisPolling = null; }
-        if (state.activeQuotePolling) { clearTimeout(state.activeQuotePolling); state.activeQuotePolling = null; }
+        // ==========================================================
+        // === DEKONSTRUKCJA (KROK 12) ===
+        // Usunięto referencje do martwych pollingów i zmiennych stanu
+        // ==========================================================
+        // if (state.activeAnalysisPolling) { clearTimeout(state.activeAnalysisPolling); state.activeAnalysisPolling = null; }
+        // if (state.activeQuotePolling) { clearTimeout(state.activeQuotePolling); state.activeQuotePolling = null; }
         if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
         // ==========================================================
         // === NOWA LOGIKA (Krok 6 - Mega Agent) ===
@@ -926,7 +934,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.activeAIOptimizerPolling) { clearTimeout(state.activeAIOptimizerPolling); state.activeAIOptimizerPolling = null; }
         // ==========================================================
         stopMarketCountdown(); 
-        state.currentViewTicker = null;
+        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
+        // ==========================================================
     }
 
     function setActiveSidebar(linkElement) {
@@ -936,7 +945,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function showDashboard() {
          stopAllPolling();
-         state.currentViewTicker = null;
+         // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
          setActiveSidebar(ui.dashboardLink);
          ui.mainContent.innerHTML = renderers.dashboard();
          // Aktualizujemy obie części UI
@@ -947,7 +956,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function showPortfolio() {
         stopAllPolling();
-        state.currentViewTicker = null;
+        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
         setActiveSidebar(ui.portfolioLink);
         ui.mainContent.innerHTML = renderers.loading("Ładowanie portfela...");
         try {
@@ -965,7 +974,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function showTransactions() {
         stopAllPolling();
-        state.currentViewTicker = null;
+        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
         setActiveSidebar(ui.transactionsLink);
         ui.mainContent.innerHTML = renderers.loading("Ładowanie historii transakcji...");
         try {
@@ -980,7 +989,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     async function showAgentReport() {
         stopAllPolling();
-        state.currentViewTicker = null;
+        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
         setActiveSidebar(ui.agentReportLink);
         ui.mainContent.innerHTML = renderers.loading("Ładowanie raportu Wirtualnego Agenta...");
         try {
@@ -993,10 +1002,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function pollPortfolioQuotes() {
-         if (state.currentViewTicker) {
-            state.activePortfolioPolling = null; 
-            return; 
-         }
+         // ==========================================================
+         // === DEKONSTRUKCJA (KROK 12) ===
+         // Usunięto warunek `if (state.currentViewTicker)`
+         // ==========================================================
          const portfolioTickers = state.portfolio.map(h => h.ticker);
          if (portfolioTickers.length === 0) { 
             state.activePortfolioPolling = null; 
@@ -1019,7 +1028,8 @@ document.addEventListener('DOMContentLoaded', () => {
              });
              state.liveQuotes = newQuotes; 
 
-             if (quotesUpdated && !state.currentViewTicker && document.getElementById('portfolio-view')) {
+             // Usunięto warunek `!state.currentViewTicker`
+             if (quotesUpdated && document.getElementById('portfolio-view')) {
                   ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
                   lucide.createIcons();
              }
@@ -1029,12 +1039,10 @@ document.addEventListener('DOMContentLoaded', () => {
          } catch (e) {
              logger.error("Błąd podczas odświeżania cen portfela:", e);
          } finally {
-              if (!state.currentViewTicker) { 
-                   state.activePortfolioPolling = setTimeout(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
-              } else { 
-                   state.activePortfolioPolling = null; 
-              }
+              // Uproszczona logika: po prostu ustaw następny timeout
+              state.activePortfolioPolling = setTimeout(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
          }
+         // ==========================================================
     }
     
     function checkPortfolioProfitAlerts() {
@@ -1082,82 +1090,18 @@ document.addEventListener('DOMContentLoaded', () => {
          }
     }
 
-    async function pollQuote(ticker) {
-        if (state.currentViewTicker !== ticker) { state.activeQuotePolling = null; return; }
-        try {
-            const quoteData = await api.getLiveQuote(ticker);
-            const marketInfo = state.currentAnalysisData?.market_info;
-            
-            const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
-            if (quoteBoxPlaceholder) {
-                quoteBoxPlaceholder.innerHTML = renderQuoteBox(quoteData, marketInfo);
-                lucide.createIcons();
-            }
-        } catch (e) {
-            logger.error(`Błąd podczas odświeżania ceny dla ${ticker}:`, e);
-            const quoteBoxPlaceholder = document.getElementById('quote-box-placeholder');
-            if (quoteBoxPlaceholder) { quoteBoxPlaceholder.innerHTML = `<div class="text-red-500 text-sm">Błąd odświeżania ceny.</div>`; }
-        } finally {
-            if (state.currentViewTicker === ticker) {
-               state.activeQuotePolling = setTimeout(() => pollQuote(ticker), QUOTE_POLL_INTERVAL);
-            } else { state.activeQuotePolling = null; }
-        }
-    }
-    function startQuotePolling(ticker) {
-         stopQuotePolling();
-         logger.info(`Rozpoczynam odświeżanie ceny dla ${ticker}.`);
-         pollQuote(ticker);
-    }
-    function stopQuotePolling() {
-         if (state.activeQuotePolling) {
-             logger.info("Zatrzymuję odświeżanie ceny.");
-             clearTimeout(state.activeQuotePolling);
-             state.activeQuotePolling = null;
-         }
-    }
+    // ==========================================================
+    // === DEKONSTRUKCJA (KROK 12) ===
+    // Cała logika `pollQuote`, `startQuotePolling`, `stopQuotePolling`,
+    // `pollFullAnalysis` i `showAiAnalysis` została usunięta.
+    // ==========================================================
+    // async function pollQuote(ticker) { ... } // USUNIĘTE
+    // function startQuotePolling(ticker) { ... } // USUNIĘTE
+    // function stopQuotePolling() { ... } // USUNIĘTE
+    // async function pollFullAnalysis(ticker) { ... } // USUNIĘTE
+    // async function showAiAnalysis(ticker) { ... } // USUNIĘTE
+    // ==========================================================
 
-    async function pollFullAnalysis(ticker) {
-        if (state.currentViewTicker !== ticker) { state.activeAnalysisPolling = null; return; }
-        try {
-            const data = await api.getAIAnalysisResult(ticker);
-            state.currentAnalysisData = data;
-            ui.mainContent.innerHTML = renderers.aiAnalysisDetails(ticker, data);
-            lucide.createIcons();
-            if (data.status === 'PROCESSING') {
-                 logger.info(`Pełna analiza ${ticker} w toku, ponawiam za ${FULL_ANALYSIS_POLL_INTERVAL}ms...`);
-                 state.activeAnalysisPolling = setTimeout(() => pollFullAnalysis(ticker), FULL_ANALYSIS_POLL_INTERVAL);
-            } else {
-                 logger.info(`Pełna analiza ${ticker} zakończona (${data.status}).`);
-                 state.activeAnalysisPolling = null;
-                 if (data.status === 'DONE') {
-                     startQuotePolling(ticker);
-                     startMarketCountdown();
-                 }
-            }
-        } catch(e) {
-            logger.error(`Krytyczny błąd podczas odpytywania o pełną analizę dla ${ticker}:`, e);
-            ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Pobierania Analizy</h2><p>${e.message}</p></div>`;
-            state.activeAnalysisPolling = null;
-            state.currentViewTicker = null;
-        }
-    }
-
-    async function showAiAnalysis(ticker) {
-        stopAllPolling();
-        state.currentViewTicker = ticker;
-        state.currentAnalysisData = null;
-        setActiveSidebar(null);
-        ui.mainContent.innerHTML = renderers.loading(`Uruchamianie analizy AI dla ${ticker}...`);
-        try {
-            logger.info(`Zlecanie nowej analizy dla ${ticker} (POST)...`);
-            await api.requestAIAnalysis(ticker);
-            pollFullAnalysis(ticker);
-        } catch (reqError) {
-             logger.error(`Błąd zlecania analizy dla ${ticker}:`, reqError);
-             ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center"><h2 class="text-2xl font-bold mb-2">Błąd Zlecenia Analizy</h2><p>${reqError.message}</p></div>`;
-             state.currentViewTicker = null;
-        }
-    }
     
     // --- Funkcje Obsługi Modali ---
     function showBuyModal(ticker) {
@@ -1401,17 +1345,25 @@ document.addEventListener('DOMContentLoaded', () => {
     
     
     // --- Handlery Zdarzeń (Dodawane od razu) ---
-    ui.tickerInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && ui.tickerInput.value.trim()) {
-            const ticker = ui.tickerInput.value.trim().toUpperCase();
-            showAiAnalysis(ticker);
-            ui.tickerInput.value = '';
-        }
-    });
+    
+    // ==========================================================
+    // === DEKONSTRUKCJA (KROK 12) ===
+    // Usunięto listener dla `ui.tickerInput`
+    // ==========================================================
+    // ui.tickerInput.addEventListener('keydown', (e) => { ... }); // USUNIĘTE
+    // ==========================================================
+
 
     ui.mainContent.addEventListener('click', async e => {
-        const watchlistBtn = e.target.closest('#add-to-watchlist-btn');
-        const buyBtn = e.target.closest('#buy-stock-btn');
+        // ==========================================================
+        // === DEKONSTRUKCJA (KROK 12) ===
+        // Usunięto `watchlistBtn` i `buyBtn`, ponieważ były one
+        // częścią usuniętego widoku `aiAnalysisDetails`.
+        // ==========================================================
+        // const watchlistBtn = e.target.closest('#add-to-watchlist-btn'); // USUNIĘTE
+        // const buyBtn = e.target.closest('#buy-stock-btn'); // USUNIĘTE
+        // ==========================================================
+        
         const sellBtn = e.target.closest('.sell-stock-btn');
         const backtestYearBtn = e.target.closest('#run-backtest-year-btn');
         // ==========================================================
@@ -1434,46 +1386,31 @@ document.addEventListener('DOMContentLoaded', () => {
             handleViewAIOptimizerReport();
         }
         // ==========================================================
-        else if (watchlistBtn) {
-            const ticker = watchlistBtn.dataset.ticker;
-            watchlistBtn.disabled = true;
-            watchlistBtn.innerHTML = `<i data-lucide="loader-2" class="mr-2 h-5 w-5 animate-spin"></i>Dodawanie...`;
-            lucide.createIcons();
-            try {
-                await api.addToWatchlist(ticker);
-                watchlistBtn.innerHTML = `<i data-lucide="check" class="mr-2 h-5 w-5"></i>Dodano`;
-                await refreshSidebarData();
-            } catch (e) {
-                 watchlistBtn.innerHTML = `<i data-lucide="x" class="mr-2 h-5 w-5"></i>Błąd`;
-                 logger.error(`Błąd dodawania do watchlist: ${ticker}`, e);
-                 setTimeout(() => {
-                    watchlistBtn.disabled = false;
-                    watchlistBtn.innerHTML = `<i data-lucide="plus-circle" class="mr-2 h-5 w-5"></i>Obserwuj`;
-                    lucide.createIcons();
-                 }, 2000);
-            } finally { lucide.createIcons(); }
-        }
-        else if (buyBtn) {
-            const ticker = buyBtn.dataset.ticker;
-            if (ticker) showBuyModal(ticker);
-        } else if (sellBtn) {
+        // === DEKONSTRUKCJA (KROK 12) ===
+        // Usunięto logikę `watchlistBtn` i `buyBtn`
+        // ==========================================================
+        // else if (watchlistBtn) { ... } // USUNIĘTE
+        // else if (buyBtn) { ... } // USUNIĘTE
+        // ==========================================================
+        else if (sellBtn) {
              const ticker = sellBtn.dataset.ticker;
              const quantity = parseInt(sellBtn.dataset.quantity, 10);
              if (ticker && !isNaN(quantity)) showSellModal(ticker, quantity);
         }
     });
 
-    // ZMIANA: Dodano 'closeSidebar()' do kliknięć na elementy listy
+    // ==========================================================
+    // === DEKONSTRUKCJA (KROK 12) ===
+    // Zmieniono logikę listenera sidebara. Usunięto `candidateItem`,
+    // ponieważ listy są teraz tylko do odczytu.
+    // ==========================================================
     ui.sidebarPhasesContainer.addEventListener('click', (e) => {
-        const candidateItem = e.target.closest('.candidate-item');
+        // const candidateItem = e.target.closest('.candidate-item'); // USUNIĘTE
         const accordionToggle = e.target.closest('.accordion-toggle');
-        if (candidateItem) {
-            const ticker = candidateItem.dataset.ticker;
-            if (ticker) {
-                showAiAnalysis(ticker);
-                closeSidebar(); // Zamknij menu po kliknięciu
-            }
-        } else if (accordionToggle) {
+        
+        // if (candidateItem) { ... } // USUNIĘTE
+        
+        if (accordionToggle) {
             const content = accordionToggle.nextElementSibling;
             const icon = accordionToggle.querySelector('.accordion-icon');
             if (content && icon) {
@@ -1482,6 +1419,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
+    // ==========================================================
+
 
     ui.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); showDashboard(); });
     ui.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); showPortfolio(); });
