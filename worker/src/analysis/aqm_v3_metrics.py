@@ -9,6 +9,8 @@ from scipy.stats import zscore, shapiro
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
+# Importujemy Counter do obliczeń Entropii
+from collections import Counter
 
 # Importujemy klienta AV tylko dla funkcji "na żywo",
 # funkcje "_from_data" nie będą go używać.
@@ -132,6 +134,151 @@ def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date:
         logger.error(f"Błąd w 'calculate_retail_herding_from_data': {e}", exc_info=True)
         return None
 
+
+# ==================================================================
+# === KROK 22a: "Czyste" Funkcje dla Hipotezy H3 (Wymiary 3, 4, 7) ===
+# ==================================================================
+
+def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_view: pd.DataFrame) -> Optional[float]:
+    """
+    (Wymiar 3.1) Oblicza 'breakout_energy_required'.
+    """
+    try:
+        # 1. Pobierz najnowsze wartości
+        price = daily_df_view['close'].iloc[-1]
+        
+        # Znajdź najbliższe wstęgi (na wypadek brakujących dat)
+        upper_band = bbands_df_view['Real Upper Band'].asof(daily_df_view.index[-1])
+        lower_band = bbands_df_view['Real Lower Band'].asof(daily_df_view.index[-1])
+
+        if price == 0 or pd.isna(price) or pd.isna(upper_band) or pd.isna(lower_band):
+            return None
+            
+        band_width_normalized = (upper_band - lower_band) / price
+        
+        if band_width_normalized == 0:
+            return None # Unikaj dzielenia przez zero
+            
+        breakout_energy_required = 1 / band_width_normalized
+        return breakout_energy_required
+        
+    except Exception as e:
+        logger.error(f"Błąd w 'calculate_breakout_energy_from_data': {e}", exc_info=True)
+        return None
+
+def calculate_market_temperature_from_data(intraday_5min_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
+    """
+    (Wymiar 4.1) Oblicza 'market_temperature' (zmienność 5-min).
+    """
+    try:
+        # 1. Filtruj dane 5-minutowe z ostatnich 30 dni (wg specyfikacji)
+        thirty_days_ago = current_date - timedelta(days=30)
+        recent_intraday_data = intraday_5min_df_view.loc[intraday_5min_df_view.index >= thirty_days_ago]
+
+        if recent_intraday_data.empty or len(recent_intraday_data) < 2:
+            return None # Za mało danych do obliczenia zwrotów
+
+        # 2. Oblicz zwroty 5-minutowe
+        returns_5min = recent_intraday_data['close'].pct_change()
+        
+        # 3. Oblicz odchylenie standardowe
+        market_temperature = returns_5min.std()
+        
+        if pd.isna(market_temperature):
+            return None
+            
+        return market_temperature
+        
+    except Exception as e:
+        logger.error(f"Błąd w 'calculate_market_temperature_from_data': {e}", exc_info=True)
+        return None
+
+def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optional[float]:
+    """
+    (Wymiar 4.2) Oblicza 'information_entropy' (Entropia Shannona tematów).
+    """
+    try:
+        # 1. Pobierz listę tematów (Zakładamy 100 ostatnich newsów w 'news_df_view')
+        # Zakładamy, że 'news_df_view' ma kolumnę 'topics', która jest listą
+        if 'topics' not in news_df_view.columns:
+            logger.warning("Brak kolumny 'topics' w danych news. Nie można obliczyć Entropii.")
+            return None
+
+        # .dropna() usuwa puste listy tematów
+        topic_list = news_df_view['topics'].dropna().sum()
+        
+        if not topic_list:
+            return 0.0 # Zero entropii, jeśli brak tematów
+
+        # 2. Zlicz tematy
+        topic_counts = Counter(topic_list)
+        total_topics = len(topic_list)
+        
+        # 3. Oblicz prawdopodobieństwa
+        probabilities = [count / total_topics for count in topic_counts.values()]
+        
+        # 4. Oblicz Entropię Shannona
+        information_entropy = -sum([p * math.log2(p) for p in probabilities if p > 0])
+        
+        return information_entropy
+        
+    except Exception as e:
+        logger.error(f"Błąd w 'calculate_information_entropy_from_data': {e}", exc_info=True)
+        return None
+
+def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
+    """
+    (Wymiar 7.1) Oblicza 'attention_density'.
+    Wymaga 200-dniowego 'daily_df_view' i 200-dniowego 'news_df_view'.
+    """
+    try:
+        # Upewnij się, że mamy 200 dni
+        if len(daily_df_view) < 200 or len(news_df_view) < 200:
+            return None 
+
+        # 1. Oblicz metryki 10-dniowe (dla ostatniego dnia)
+        avg_volume_10d = daily_df_view['volume'].iloc[-10:].mean()
+        
+        ten_days_ago = current_date - timedelta(days=10)
+        news_count_10d = len(news_df_view.loc[news_df_view.index >= ten_days_ago])
+        
+        # 2. Oblicz metryki 10-dniowe dla całej historii 200 dni
+        historical_avg_volume_10d = daily_df_view['volume'].rolling(window=10).mean()
+        
+        # To jest trudniejsze obliczeniowo: krocząca liczba newsów
+        # Uproszczenie: grupujemy newsy per dzień i robimy kroczącą sumę
+        news_counts_daily = news_df_view.resample('D').size().rolling(window=10).sum()
+        
+        # 3. Oblicz Z-Score (dla ostatniego dnia)
+        # (ostatnia wartość - średnia z 200 dni) / odchylenie std z 200 dni
+        
+        # Z-Score dla Wolumenu
+        vol_mean = historical_avg_volume_10d.iloc[-200:].mean()
+        vol_std = historical_avg_volume_10d.iloc[-200:].std()
+        if vol_std == 0:
+            normalized_volume = 0.0
+        else:
+            normalized_volume = (avg_volume_10d - vol_mean) / vol_std
+            
+        # Z-Score dla Newsów
+        news_mean = news_counts_daily.iloc[-200:].mean()
+        news_std = news_counts_daily.iloc[-200:].std()
+        if news_std == 0:
+            normalized_news = 0.0
+        else:
+            normalized_news = (news_count_10d - news_mean) / news_std
+            
+        # 4. Oblicz metrykę
+        attention_density = normalized_volume + normalized_news
+        
+        if pd.isna(attention_density):
+            return None
+            
+        return attention_density
+
+    except Exception as e:
+        logger.error(f"Błąd w 'calculate_attention_density_from_data': {e}", exc_info=True)
+        return None
 
 # ==================================================================
 # === Funkcje "Na Żywo" (Oryginalna Logika - jeszcze nieużywane) ===
