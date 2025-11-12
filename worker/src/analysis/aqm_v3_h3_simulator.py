@@ -4,7 +4,11 @@ import numpy as np
 from scipy.stats import zscore
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Dict, Any, Optional
+# ==================================================================
+# === POPRAWKA (NameError): Dodano 'Tuple' do importu ===
+# ==================================================================
+from typing import Dict, Any, Optional, Tuple
+# ==================================================================
 
 # Importujemy modele i funkcje pomocnicze
 from .. import models
@@ -190,7 +194,7 @@ def _simulate_trades_h3(
         # Pobierz bieżącą (ostatnią) wartość z 101-dniowej serii
         current_aqm_score = aqm_score_series.iloc[-1]
         
-        # Oblicz 95. percentyl z *całej* 101-dniowej historii
+        # Oblicz 95. percentyl z *całej* 101-dniowej serii
         percentile_95 = aqm_score_series.quantile(0.95)
 
         # Sygnał KUPNA = Warunek 1 (AQM_V3_SCORE > 95. percentyl)
