@@ -13,6 +13,8 @@ from . import aqm_v3_metrics
 from . import aqm_v3_h1_simulator 
 # Krok 20b (Część 2): Importujemy nowy silnik ładowania H2
 from . import aqm_v3_h2_loader
+# Krok 21c: Importujemy nowy silnik symulacji H2
+from . import aqm_v3_h2_simulator
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
@@ -308,19 +310,20 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # ==================================================================
-    # === KROK 4: Uruchomienie Symulacji (Hipoteza H1) ===
+    # === KROK 4: Uruchomienie Symulacji (Hipoteza H1 i H2) ===
     # ==================================================================
     
-    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnej H1..."
+    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnych H1 i H2..."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
     
-    trades_found_total = 0
+    trades_found_h1 = 0
+    trades_found_h2 = 0
     total_tickers = len(tickers_to_test)
 
     for i, ticker in enumerate(tickers_to_test):
         if i % 10 == 0:
-            log_msg = f"[Backtest V3][H1] Przetwarzanie {ticker} ({i}/{total_tickers})..."
+            log_msg = f"[Backtest V3][H1/H2] Przetwarzanie {ticker} ({i}/{total_tickers})..."
             append_scan_log(session, log_msg)
             update_scan_progress(session, i, total_tickers)
         
@@ -328,10 +331,10 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             # 1. Pobierz wstępnie obliczone dane z cache
             ticker_data = _get_ticker_data_from_cache(ticker)
             if not ticker_data or 'daily' not in ticker_data:
-                logger.warning(f"[Backtest V3] Brak danych w cache dla {ticker} (H1). Pomijanie.")
+                logger.warning(f"[Backtest V3] Brak danych w cache dla {ticker}. Pomijanie.")
                 continue
             
-            # 2. Wytnij plaster danych na dany rok (z buforem 100+1 dni)
+            # 2. Wytnij plaster danych na dany rok (z buforem 100+1 dni dla H1)
             full_historical_data = ticker_data['daily']
             
             try:
@@ -343,7 +346,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.warning(f"[Backtest V3] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
                 continue
 
-            # Wymagamy 100 dni historii (dla percentyla) PRZED startem roku
+            # Wymagamy 100 dni historii (dla percentyla H1) PRZED startem roku
             if start_index < 100:
                 logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec). Pomijanie.")
                 continue
@@ -356,30 +359,52 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.warning(f"Pusty wycinek danych dla {ticker} w roku {year}. Pomijanie.")
                 continue
 
-            # 3. Wywołaj symulator H1 z nowego pliku
-            # Przekazujemy pocięty DataFrame, który zawiera bufor
-            trades_found_ticker = aqm_v3_h1_simulator._simulate_trades_h1(
+            # 3. Wywołaj symulator H1
+            trades_found_h1 += aqm_v3_h1_simulator._simulate_trades_h1(
                 session, 
                 ticker, 
-                historical_data_slice, 
+                historical_data_slice, # H1 potrzebuje tylko 'daily' (wzbogaconego)
                 year
             )
-            trades_found_total += trades_found_ticker
+            
+            # ==================================================================
+            # === KROK 21c: Aktywacja Pętli Symulacyjnej H2 ===
+            # ==================================================================
+            
+            # H2 również potrzebuje plastra danych, ale używa *całego* słownika cache
+            # (daily, insider_df, news_df)
+            
+            # Przygotowujemy słownik z pociętymi danymi dla H2
+            # H2 potrzebuje danych Insider/News *przed* start_date, więc przekazujemy całe DFy
+            h2_data_slice = {
+                "daily": historical_data_slice,
+                "insider_df": ticker_data.get("insider_df"),
+                "news_df": ticker_data.get("news_df")
+            }
+
+            trades_found_h2 += aqm_v3_h2_simulator._simulate_trades_h2(
+                session,
+                ticker,
+                h2_data_slice, # Przekazujemy słownik z pociętymi danymi
+                year
+            )
+            # ==================================================================
             
         except Exception as e:
-            logger.error(f"[Backtest V3][H1] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
+            logger.error(f"[Backtest V3][H1/H2] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
 
     # ==================================================================
-    # === KROK 5: Uruchomienie Symulacji (Hipoteza H2) ===
-    # (TUTAJ W PRZYSZŁOŚCI DODAMY WYWOŁANIE `_simulate_trades_h2`)
+    # === KROK 5: Uruchomienie Symulacji (Hipoteza H3) ===
+    # (TUTAJ W PRZYSZŁOŚCI DODAMY WYWOŁANIE `_simulate_trades_h3`)
     # ==================================================================
-    log_msg_aqm_h2 = "[Backtest V3] Oczekiwanie na implementację Hipotezy H2."
-    logger.info(log_msg_aqm_h2)
-    append_scan_log(session, log_msg_aqm_h2)
+    log_msg_aqm_h3 = "[Backtest V3] Oczekiwanie na implementację Hipotezy H3."
+    logger.info(log_msg_aqm_h3)
+    append_scan_log(session, log_msg_aqm_h3)
             
     # === KONIEC SYMULACJI ===
+    trades_found_total = trades_found_h1 + trades_found_h2
     update_scan_progress(session, total_tickers, total_tickers) # Ustaw na 100%
-    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji."
+    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2})."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
