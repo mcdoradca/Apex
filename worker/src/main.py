@@ -46,7 +46,20 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 
 
 def handle_ai_analysis_request(session):
-    """Sprawdza i wykonuje nową analizę AI na żądanie."""
+    """
+    Sprawdza i wykonuje nową analizę AI na żądanie.
+    NOWA LOGIKA: Sprawdza globalną blokadę.
+    """
+    # ==================================================================
+    # === POPRAWKA (TimeoutError) ===
+    # Sprawdź, czy inne zadanie (Backtest/AI Optimizer) nie blokuje workera
+    # ==================================================================
+    worker_status = utils.get_system_control_value(session, 'worker_status')
+    if worker_status not in ['IDLE', 'RUNNING', 'PAUSED', 'ERROR']: # Sprawdzamy, czy nie jest to status BUSY_*
+        logger.info(f"Worker jest zajęty ({worker_status}), pomijanie ai_analysis_request.")
+        return
+    # ==================================================================
+
     ticker_to_analyze = utils.get_system_control_value(session, 'ai_analysis_request')
     if ticker_to_analyze and ticker_to_analyze not in ['NONE', 'PROCESSING']:
         logger.info(f"AI analysis request received for: {ticker_to_analyze}.")
@@ -86,8 +99,14 @@ def handle_backtest_request(session, api_client) -> str:
     
     if period_to_test and period_to_test not in ['NONE', 'PROCESSING']:
         logger.warning(f"Zlecenie Backtestu Historycznego otrzymane dla: {period_to_test}.")
+        
+        # ==================================================================
+        # === POPRAWKA (TimeoutError): Ustawienie globalnej blokady ===
+        # ==================================================================
         # Zablokuj workera na czas testu
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
+        utils.update_system_control(session, 'worker_status', 'BUSY_BACKTEST') # <-- NOWY STATUS
+        # ==================================================================
+        
         utils.update_system_control(session, 'current_phase', 'BACKTESTING')
         utils.update_system_control(session, 'backtest_request', 'PROCESSING')
         utils.append_scan_log(session, f"Rozpoczynanie Backtestu Historycznego dla '{period_to_test}'...")
@@ -127,8 +146,14 @@ def handle_ai_optimizer_request(session) -> str:
     
     if request_status and request_status == 'REQUESTED':
         logger.warning("🤖 Zlecenie Mega Agenta AI otrzymane. Rozpoczynanie...")
+        
+        # ==================================================================
+        # === POPRAWKA (TimeoutError): Ustawienie globalnej blokady ===
+        # ==================================================================
         # Zablokuj workera na czas analizy
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
+        utils.update_system_control(session, 'worker_status', 'BUSY_AI_OPTIMIZER') # <-- NOWY STATUS
+        # ==================================================================
+        
         utils.update_system_control(session, 'current_phase', 'AI_OPTIMIZING')
         utils.update_system_control(session, 'ai_optimizer_request', 'PROCESSING')
         utils.append_scan_log(session, "Rozpoczynanie analizy przez Mega Agenta AI...")
@@ -171,6 +196,17 @@ def run_full_analysis_cycle():
     
     session = get_db_session()
     try:
+        # ==================================================================
+        # === POPRAWKA (TimeoutError) ===
+        # Sprawdź, czy inne zadanie (Backtest/AI Optimizer) nie blokuje workera
+        # ==================================================================
+        worker_status = utils.get_system_control_value(session, 'worker_status')
+        if worker_status not in ['IDLE', 'ERROR']: # Pozwól na uruchomienie tylko jeśli jest IDLE lub ERROR
+            logger.warning(f"Analysis cycle skipped because worker is busy: {worker_status}")
+            session.close()
+            return
+        # ==================================================================
+        
         logger.info("Cleaning tables and expiring old setups before new analysis cycle...")
 
         # ==================================================================
@@ -211,6 +247,8 @@ def run_full_analysis_cycle():
         logger.error(f"Could not clean tables before run: {e}", exc_info=True)
         session.rollback()
  
+    # Ta funkcja sprawdzała status "RUNNING", ale teraz worker_status na górze
+    # robi to lepiej, więc ta kontrola jest (prawie) zbędna, ale ją zostawiamy.
     if utils.get_system_control_value(session, 'worker_status') == 'RUNNING':
         logger.warning("Analysis cycle already in progress. Skipping scheduled run.")
         session.close()
@@ -386,6 +424,7 @@ def main_loop():
             try:
                 # ==================================================================
                 # === NOWA LOGIKA PĘTLI GŁÓWNEJ (Krok 5 - Mega Agent) ===
+                # === POPRAWKA (TimeoutError) ===
                 # ==================================================================
                 
                 # Krok 1: Sprawdź komendy ręczne (Start/Stop)
@@ -393,17 +432,22 @@ def main_loop():
                 current_state = new_state
                 
                 # Krok 2: Sprawdź zlecenia o wysokim priorytecie (blokujące)
+                # Te funkcje teraz same ustawiają status 'BUSY'
                 backtest_status = handle_backtest_request(session, api_client)
                 optimizer_status = handle_ai_optimizer_request(session)
                 
-                if backtest_status == 'BUSY' or optimizer_status == 'BUSY' or current_state == 'PAUSED':
-                    # Jeśli trwa backtest LUB analiza AI LUB system jest zapauzowany,
-                    # nie rób nic innego, tylko raportuj heartbeat i śpij.
+                # Pobierz aktualny status (mógł zostać zmieniony przez funkcje powyżej)
+                worker_status = utils.get_system_control_value(session, 'worker_status')
+
+                # Krok 3: Sprawdź globalną blokadę
+                # Jeśli trwa backtest LUB analiza AI LUB system jest zapauzowany,
+                # nie rób nic innego, tylko raportuj heartbeat i śpij.
+                if worker_status.startswith('BUSY_') or current_state == 'PAUSED':
                     utils.report_heartbeat(session) 
                     time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
                     continue # Pomiń resztę pętli
 
-                # Krok 3: Jeśli system jest wolny (IDLE), uruchom normalne operacje
+                # Krok 4: Jeśli system jest wolny (IDLE/RUNNING), uruchom normalne operacje
                 if command_triggered_run:
                     # Uruchomiono ręcznie pełny cykl EOD
                     run_full_analysis_cycle()
