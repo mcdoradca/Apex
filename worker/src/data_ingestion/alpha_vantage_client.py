@@ -165,6 +165,7 @@ class AlphaVantageClient:
         return self._make_request(params)
         
     def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True):
+        # Specyfikacja AQM V3 (4.1) wymaga interval=5min, outputsize=full
         params = {
             "function": "TIME_SERIES_INTRADAY", 
             "symbol": symbol, 
@@ -194,12 +195,34 @@ class AlphaVantageClient:
         params = {"function": "MACD", "symbol": symbol, "interval": "daily", "series_type": series_type}
         return self._make_request(params)
         
-    def get_bollinger_bands(self, symbol: str, time_period: int = 20, interval: str = 'daily', series_type: str = 'close'):
-        params = {"function": "BBANDS", "symbol": symbol, "interval": "daily", "time_period": str(time_period), "series_type": series_type}
+    # ==================================================================
+    # === AKTUALIZACJA AQM V3 (Krok 12) ===
+    # Dodano parametry `nbdevup` i `nbdevdn` zgodnie ze specyfikacją Wymiaru 3.1
+    # ==================================================================
+    def get_bollinger_bands(self, symbol: str, time_period: int = 20, interval: str = 'daily', series_type: str = 'close', nbdevup: int = 2, nbdevdn: int = 2):
+        params = {
+            "function": "BBANDS", 
+            "symbol": symbol, 
+            "interval": interval, 
+            "time_period": str(time_period), 
+            "series_type": series_type,
+            "nbdevup": str(nbdevup),
+            "nbdevdn": str(nbdevdn)
+        }
         return self._make_request(params)
-        
-    def get_news_sentiment(self, ticker: str, limit: int = 50):
-        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)}
+    
+    # ==================================================================
+    # === AKTUALIZACJA AQM V3 (Krok 12) ===
+    # Dodano parametr `time_from` zgodnie ze specyfikacją Wymiaru 2.2
+    # ==================================================================
+    def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None):
+        params = {
+            "function": "NEWS_SENTIMENT", 
+            "tickers": ticker, 
+            "limit": str(limit)
+        }
+        if time_from:
+            params["time_from"] = time_from # Np. "20220410T0130"
         return self._make_request(params)
 
     @staticmethod
@@ -372,4 +395,80 @@ class AlphaVantageClient:
         return self._make_request(params)
     # ==================================================================
     # === KONIEC NOWYCH ENDPOINTÓW AQM ===
+    # ==================================================================
+    
+    # ==================================================================
+    # === NOWE ENDPOINTY DLA AQM V3 (Krok 12) ===
+    # Zgodnie ze specyfikacją PDF `AQM V3.pdf`
+    # ==================================================================
+
+    def get_vwap(self, symbol: str, interval: str = 'daily'):
+        """(AQM V3 - Wymiar 1.2) Pobiera dane VWAP."""
+        logger.info(f"AQM V3: Pobieranie VWAP dla {symbol} (interval: {interval})...")
+        params = {
+            "function": "VWAP",
+            "symbol": symbol,
+            "interval": interval
+        }
+        return self._make_request(params)
+
+    def get_insider_transactions(self, symbol: str):
+        """(AQM V3 - Wymiar 2.1) Pobiera transakcje insiderów."""
+        logger.info(f"AQM V3: Pobieranie INSIDER_TRANSACTIONS dla {symbol}...")
+        params = {
+            "function": "INSIDER_TRANSACTIONS",
+            "symbol": symbol
+        }
+        return self._make_request(params)
+
+    def get_time_series_daily(self, symbol: str, outputsize: str = 'full'):
+        """(AQM V3 - Wymiar 1.2, 3.1, 7.1) Pobiera dane dzienne *bez* korekty."""
+        logger.info(f"AQM V3: Pobieranie TIME_SERIES_DAILY dla {symbol}...")
+        params = {
+            "function": "TIME_SERIES_DAILY",
+            "symbol": symbol,
+            "outputsize": outputsize
+        }
+        return self._make_request(params)
+
+    def get_earnings_calendar(self, horizon: str = '3month'):
+        """(AQM V3 - Wymiar 5.1) Pobiera kalendarz wyników."""
+        logger.info(f"AQM V3: Pobieranie EARNINGS_CALENDAR (horyzont: {horizon})...")
+        params = {
+            "function": "EARNINGS_CALENDAR",
+            "horizon": horizon
+        }
+        # Zakładamy, że wersja Premium zwraca JSON, a nie CSV
+        return self._make_request(params)
+
+    def get_earnings(self, symbol: str):
+        """(AQM V3 - Wymiar 5.1) Pobiera historyczne wyniki kwartalne."""
+        logger.info(f"AQM V3: Pobieranie EARNINGS dla {symbol}...")
+        params = {
+            "function": "EARNINGS",
+            "symbol": symbol
+        }
+        return self._make_request(params)
+
+    def get_earnings_call_transcript(self, symbol: str, quarter: str):
+        """(AQM V3 - Wymiar 5.1) Pobiera transkrypcje wyników."""
+        logger.info(f"AQM V3: Pobieranie EARNINGS_CALL_TRANSCRIPTS dla {symbol} (Q: {quarter})...")
+        params = {
+            "function": "EARNINGS_CALL_TRANSCRIPTS",
+            "symbol": symbol,
+            "quarter": quarter # Np. "2024Q1"
+        }
+        return self._make_request(params)
+
+    def get_wti(self, interval: str = 'daily'):
+        """(AQM V3 - Wymiar 6.1) Pobiera ceny ropy WTI."""
+        logger.info(f"AQM V3: Pobieranie WTI (interval: {interval})...")
+        params = {
+            "function": "WTI",
+            "interval": interval
+        }
+        return self._make_request(params)
+    
+    # ==================================================================
+    # === KONIEC NOWYCH ENDPOINTÓW AQM V3 ===
     # ==================================================================
