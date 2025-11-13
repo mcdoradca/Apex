@@ -1,19 +1,19 @@
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text, Row
-from datetime import datetime, timezone, timedelta # Dodano timedelta
+from datetime import datetime, timezone, timedelta 
 import pytz
 import pandas as pd
 import numpy as np
 from pandas import Series as pd_Series
-from typing import Optional, Tuple, Dict, Any # Dodano Dict, Any
+from typing import Optional, Tuple, Dict, Any 
 
 # Importy dla Telegrama
 import os
 import requests
 from urllib.parse import quote_plus
 import hashlib 
-import json # <-- NOWY IMPORT dla cache JSON
+import json 
 
 # Importujemy nowy model cache z Workera
 from .. import models
@@ -81,12 +81,16 @@ def get_raw_data_with_cache(
     if not client_method:
         logger.error(f"[Cache UTILS] Nieznana funkcja API: {api_func}")
         return {}
-        
-    # === KRYTYCZNA POPRAWKA BŁĘDU ARGUMENTU ===
-    # Zmieniamy nazwę zmiennej 'ticker' na 'symbol' podczas wywołania funkcji klienta,
-    # ponieważ funkcje AlphaVantageClient oczekują parametru 'symbol'.
-    raw_data = client_method(symbol=ticker, **kwargs)
-
+    
+    # === KRYTYCZNA POPRAWKA LOGIKI DLA NEWSÓW VS SYMBOLU ===
+    if api_func == 'get_news_sentiment':
+        # Funkcja get_news_sentiment oczekuje argumentu 'tickers', a nie 'symbol'
+        raw_data = client_method(tickers=ticker, **kwargs)
+    else:
+        # Wszystkie pozostałe funkcje oczekują argumentu 'symbol'
+        raw_data = client_method(symbol=ticker, **kwargs)
+    # =======================================================
+    
     if not raw_data or raw_data.get("Error Message") or raw_data.get("Information"):
         logger.warning(f"[Cache UTILS] API zwróciło błąd lub puste dane dla {ticker} ({data_type}).")
         # Awaryjny powrót do nieświeżego cache
