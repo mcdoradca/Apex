@@ -109,30 +109,38 @@ def _detect_market_regime(current_date_str: str) -> str:
 # ==================================================================
 # === NOWA FUNKCJA POMOCNICZA: Parser VWAP (Intraday -> Daily) ===
 # ==================================================================
-def _parse_vwap_intraday_to_daily(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
+def _parse_vwap_intraday_to_daily(raw_data_list: List[Dict[str, Any]]) -> Optional[pd.DataFrame]:
     """
-    Przetwarza surową odpowiedź JSON z VWAP (Intraday) na DataFrame
-    i oblicza średni DZIENNY VWAP.
+    Przetwarza LISTĘ surowych odpowiedzi JSON z VWAP (Intraday, 12 miesięcy) 
+    na DataFrame i oblicza średni DZIENNY VWAP.
     """
     try:
-        # Klucz to 'Technical Analysis: VWAP' lub 'Technical Analysis: VWAP (60min)'
-        data_keys = [k for k in raw_data.keys() if k.startswith('Technical Analysis: VWAP')]
-        if not data_keys:
-            return pd.DataFrame(columns=['vwap']).set_index(pd.to_datetime([]))
-            
-        data = raw_data[data_keys[0]] # Pobierz dane z dynamicznego klucza
-        if not data:
+        all_vwap_df = pd.DataFrame()
+        
+        for raw_data in raw_data_list:
+            # Klucz to 'Technical Analysis: VWAP' lub 'Technical Analysis: VWAP (60min)'
+            data_keys = [k for k in raw_data.keys() if k.startswith('Technical Analysis: VWAP')]
+            if not data_keys:
+                continue # Pomiń ten miesiąc, jeśli brak danych
+                
+            data = raw_data[data_keys[0]] # Pobierz dane z dynamicznego klucza
+            if not data:
+                continue
+
+            df = pd.DataFrame.from_dict(data, orient='index')
+            all_vwap_df = pd.concat([all_vwap_df, df])
+
+        if all_vwap_df.empty:
             return pd.DataFrame(columns=['vwap']).set_index(pd.to_datetime([]))
 
-        df = pd.DataFrame.from_dict(data, orient='index')
-        df.index = pd.to_datetime(df.index)
+        all_vwap_df.index = pd.to_datetime(all_vwap_df.index)
         
         # Konwertuj na liczby
-        df['VWAP'] = pd.to_numeric(df['VWAP'], errors='coerce')
+        all_vwap_df['VWAP'] = pd.to_numeric(all_vwap_df['VWAP'], errors='coerce')
         
         # === KLUCZOWY KROK: Agregacja danych Intraday do Dziennych ===
         # Obliczamy średni VWAP dla każdego dnia
-        daily_vwap_df = df['VWAP'].resample('D').mean()
+        daily_vwap_df = all_vwap_df['VWAP'].resample('D').mean()
         
         # Zmień nazwę kolumny na tę, której oczekuje reszta systemu
         daily_vwap_df = daily_vwap_df.to_frame(name='vwap')
@@ -149,7 +157,7 @@ def _parse_vwap_intraday_to_daily(raw_data: Dict[str, Any]) -> Optional[pd.DataF
 # ==================================================================
 # === ZMIANA KROK 3b: ŁADOWANIE DANYCH Z CACHE DLA JEDNEGO TICKERA ===
 # ==================================================================
-def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session) -> Optional[Dict[str, pd.DataFrame]]:
+def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session, year_to_test: str) -> Optional[Dict[str, pd.DataFrame]]:
     """
     Pobiera i wstępnie przetwarza wszystkie dane (H1, H2, H3, H4) dla pojedynczego tickera,
     korzystając z mechanizmu cache w bazie danych.
@@ -167,13 +175,31 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         )
         
         # ==================================================================
-        # === NOWE WYWOŁANIE (NAPRAWA VWAP): Jawne pobranie VWAP (Intraday) ===
-        # Używamy 60min, aby dostać się jak najdalej wstecz (do 2 lat)
+        # === NOWE WYWOŁANIE (NAPRAWA VWAP): Pętla 12 miesięcy dla VWAP ===
         # ==================================================================
-        vwap_raw = get_raw_data_with_cache(
-            session=session, api_client=api_client, ticker=ticker, data_type='VWAP_INTRADAY_60MIN',
-            api_func='get_vwap', interval='60min', outputsize='full'
-        )
+        
+        # Potrzebujemy danych z roku `year_to_test` ORAZ roku poprzedniego (dla historii wskaźników)
+        years_needed = [str(int(year_to_test) - 1), year_to_test]
+        months_needed = []
+        for year in years_needed:
+            for month in range(1, 13):
+                months_needed.append(f"{year}-{month:02d}") # Format YYYY-MM
+        
+        vwap_raw_list = []
+        
+        for month_str in months_needed:
+            # Używamy 60min, aby dostać się jak najdalej wstecz
+            # Używamy unikalnego data_type dla cache per miesiąc
+            vwap_raw_month = get_raw_data_with_cache(
+                session=session, api_client=api_client, ticker=ticker, 
+                data_type=f'VWAP_INTRADAY_60MIN_{month_str}',
+                api_func='get_vwap', 
+                interval='60min', 
+                month=month_str
+            )
+            if vwap_raw_month:
+                vwap_raw_list.append(vwap_raw_month)
+        
         # ==================================================================
         
         # --- KROK 2: ŁADOWANIE H3 (BBands i Intraday 5min) ---
@@ -181,10 +207,21 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
             session=session, api_client=api_client, ticker=ticker, data_type='BBANDS',
             api_func='get_bollinger_bands', interval='daily', time_period=20, nbdevup=2, nbdevdn=2
         )
-        intraday_raw = get_raw_data_with_cache(
-            session=session, api_client=api_client, ticker=ticker, data_type='INTRADAY_5MIN',
-            api_func='get_intraday', interval='5min', outputsize='full'
-        )
+        
+        # Dla H3/H4 potrzebujemy danych 5-minutowych. Musimy je pobrać dla każdego miesiąca.
+        intraday_raw_list = []
+        for month_str in months_needed:
+            intraday_raw_month = get_raw_data_with_cache(
+                session=session, api_client=api_client, ticker=ticker,
+                data_type=f'INTRADAY_5MIN_{month_str}',
+                api_func='get_intraday',
+                interval='5min',
+                month=month_str,
+                outputsize='full' # Musimy użyć 'full', aby dostać pełne dane miesięczne
+            )
+            if intraday_raw_month:
+                intraday_raw_list.append(intraday_raw_month)
+
         
         # --- KROK 3: ŁADOWANIE H2 (Insider i News) ---
         # NOTE: load_h2_data_into_cache ma już wbudowany mechanizm cache
@@ -220,7 +257,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         # ==================================================================
         
         # Parsujemy dane VWAP (60min) i agregujemy je do Dziennych
-        vwap_daily_df = _parse_vwap_intraday_to_daily(vwap_raw)
+        vwap_daily_df = _parse_vwap_intraday_to_daily(vwap_raw_list)
         
         if vwap_daily_df is not None and not vwap_daily_df.empty:
             # Dołączamy prawdziwy, obliczony Dzienny VWAP do naszego głównego DataFrame
@@ -251,7 +288,18 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         # Przetwarzanie BBANDS (H3) i Intraday 5min (H3)
         # Te funkcje muszą teraz poprawnie obsłużyć puste dane
         bbands_df = _parse_bbands(bbands_raw)
-        intraday_5min_df = _parse_intraday_5min(intraday_raw)
+        
+        # === POPRAWKA (H3/H4): Scal 12 miesięcy danych 5-min ===
+        all_intraday_df = pd.DataFrame()
+        for raw_data in intraday_raw_list:
+            df = _parse_intraday_5min(raw_data)
+            if df is not None:
+                all_intraday_df = pd.concat([all_intraday_df, df])
+        
+        intraday_5min_df = all_intraday_df.sort_index()
+        # Usuń duplikaty indeksu, jeśli wystąpiły
+        intraday_5min_df = intraday_5min_df[~intraday_5min_df.index.duplicated(keep='first')]
+        # =======================================================
         
         # Zdobądź i zapisz sektor (dla spójności)
         sector = _get_sector_for_ticker(session, ticker)
@@ -434,7 +482,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         ticker_data = None
         try:
             # KLUCZOWA ZMIANA: Dane ładowane są dla JEDNEGO tickera
-            ticker_data = _load_all_data_for_ticker(ticker, api_client, session)
+            ticker_data = _load_all_data_for_ticker(ticker, api_client, session, year) # <-- Przekazujemy ROK
             
             if not ticker_data or 'daily' not in ticker_data:
                 logger.warning(f"[Backtest V3] Brak danych po ładowaniu per-ticker dla {ticker}. Pomijanie.")
