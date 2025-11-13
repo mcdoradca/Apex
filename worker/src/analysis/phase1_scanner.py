@@ -8,7 +8,8 @@ from sqlalchemy import text
 from .utils import (
     append_scan_log, update_scan_progress, safe_float, 
     standardize_df_columns, 
-    calculate_atr # calculate_atr nie jest już potrzebny
+    # Przywracamy pełne wykorzystanie calculate_atr
+    calculate_atr 
 )
 
 logger = logging.getLogger(__name__)
@@ -21,10 +22,11 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     Dodano "próbne wywołanie" API (zgodnie z sugestią supportu AV),
     aby filtrować spółki, które nie wspierają danych intraday.
     
-    AKTUALIZACJA: Usunięto filtr średniego wolumenu (zgodnie z prośbą).
+    AKTUALIZACJA: Przywrócono filtr Płynności (Wolumen) i dodano
+    nowy filtr Zmienności (ATR), aby stworzyć "Złotą Listę".
     """
-    logger.info("Running Phase 1: EOD Scan (New 'First Sieve' Logic with Pre-flight Check)...")
-    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania (z Filtrem Wstępnym Danych H3/H4)...")
+    logger.info("Running Phase 1: EOD Scan (New 'Golden List' Logic - Price, Volume, ATR, Data)...")
+    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania (Filtry: Cena, Płynność, Zmienność, Dane)...")
 
     # Czyszczenie starych kandydatów Fazy 1, aby uniknąć konfliktów
     try:
@@ -87,31 +89,40 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 continue
                 
             # ==================================================================
-            # === NOWA LOGIKA FILTROWANIA (PIERWSZE SITO) ===
+            # === NOWA LOGIKA FILTROWANIA (ZŁOTA LISTA) ===
             # ==================================================================
 
-            # 5. Zastosuj FILTRY BEZWZGLĘDNE (Nowa Logika)
+            # 5. Zastosuj FILTRY BEZWZGLĘDNE
             
             # WARUNEK 1: Cena (zgodnie z Pana prośbą)
             if not (0.5 <= current_price <= 40.0):
                 continue
             
-            # ==================================================================
-            # === FILTR WOLUMENU USUNIĘTY (ZGODNIE Z PROŚBĄ) ===
-            # ==================================================================
-            # WARUNEK 2: Średni Wolumen (zgodnie z poleceniem)
+            # WARUNEK 2: Płynność (PRZYWRÓCONY)
             # Obliczamy z 20 ostatnich *zamkniętych* świec (przed 'latest')
-            # avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            # if pd.isna(avg_volume) or avg_volume < 500000:
-            #     continue
-            # ==================================================================
+            avg_volume = daily_df['volume'].iloc[-21:-1].mean()
+            if pd.isna(avg_volume) or avg_volume < 500000:
+                continue
+            
+            # WARUNEK 3: Zmienność (NOWY)
+            atr_series = calculate_atr(daily_df, period=14)
+            if atr_series.empty or pd.isna(atr_series.iloc[-1]):
+                continue # Nie można obliczyć ATR
+                
+            current_atr = atr_series.iloc[-1]
+            if current_price == 0:
+                continue # Unikaj dzielenia przez zero
+                
+            atr_percent = (current_atr / current_price)
+            if atr_percent < 0.03: # Wymagamy minimum 3% zmienności
+                continue 
             
             # ==================================================================
             # === NOWY FILTR WSTĘPNY (PRE-FLIGHT CHECK) ===
             # (Zgodnie z Pana pomysłem i sugestią Supportu AV)
             # ==================================================================
             
-            # WARUNEK 3: Sprawdzenie wsparcia dla danych H3/H4 (Intraday)
+            # WARUNEK 4: Sprawdzenie wsparcia dla danych H3/H4 (Intraday)
             try:
                 # Wykonujemy lekkie, próbne wywołanie, aby sprawdzić, czy spółka wspiera dane intraday.
                 intraday_test_data = api_client.get_intraday(
@@ -135,8 +146,8 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             # ==================================================================
             
             # 6. KWALIFIKACJA
-            # ZMIANA: Usunięto 'Śr. Wol' z logu
-            log_msg = f"Kwalifikacja (F1): {ticker} (Cena: {current_price:.2f}, Dane Intraday: OK)"
+            # ZMIANA: Dodano Śr. Wol i ATR do logu
+            log_msg = f"Kwalifikacja (F1): {ticker} (Cena: {current_price:.2f}, Śr. Wol: {avg_volume:.0f}, ATR: {atr_percent:.1%}, Dane Intraday: OK)"
             append_scan_log(session, log_msg)
             
             # 7. Zapisz kandydata w bazie
