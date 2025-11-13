@@ -279,18 +279,16 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     
-    # Sprawdź, czy kolumny już są w poprawnym formacie (np. 'open', 'close', 'vwap')
-    # Ten warunek jest teraz kluczowy
+    # Sprawdź, czy kolumny już są w poprawnym formacie
     if 'open' in df.columns and 'close' in df.columns:
-        # Jeśli już mamy 'open', ale nie mamy 'vwap' (bo pochodzi z TIME_SERIES_DAILY)
-        # musimy się upewnić, że 'vwap' również jest konwertowany.
-        if 'vwap' in df.columns and not pd.api.types.is_numeric_dtype(df['vwap']):
-             df['vwap'] = pd.to_numeric(df['vwap'], errors='coerce')
+        # Ten warunek jest teraz wystarczający. Kolumna 'vwap' zostanie
+        # dodana RĘCZNIE w `backtest_engine.py`, więc nie musimy jej tutaj sprawdzać.
         return df # Już przetworzone
 
     # ==================================================================
-    # === POPRAWKA VWAP (Problem 1) ===
-    # Musimy poprawnie zmapować "5. vwap" (z TIME_SERIES_DAILY) na naszą kolumnę "vwap"
+    # === POPRAWKA VWAP (Krok 1) ===
+    # Usuwamy błędne mapowanie '5. vwap': 'vwap', ponieważ ta kolumna
+    # nie istnieje w odpowiedzi API dla TIME_SERIES_DAILY.
     # ==================================================================
     column_mapping = {
         '1. open': 'open',
@@ -298,7 +296,7 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
         '3. low': 'low',
         '4. close': 'close',
         '5. volume': 'volume', # Dla TIME_SERIES_DAILY
-        '5. vwap': 'vwap',     # Dla TIME_SERIES_DAILY
+        # '5. vwap': 'vwap',     <-- USUNIĘTE BŁĘDNE MAPOWANIE
         '6. volume': 'volume', # Dla TIME_SERIES_DAILY_ADJUSTED
         '7. adjusted close': 'adjusted close',
         '8. split coefficient': 'split coefficient'
@@ -309,8 +307,8 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     # ==================================================================
 
     # Konwertuj kluczowe kolumny na numeryczne
-    # Dodano 'vwap' do listy
-    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close', 'vwap']:
+    # Usunięto 'vwap' z tej listy, ponieważ zostanie dodany ręcznie później
+    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
