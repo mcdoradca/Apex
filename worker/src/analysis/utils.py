@@ -157,11 +157,15 @@ def get_market_status_and_time(api_client) -> dict:
 def update_system_control(session: Session, key: str, value: str):
     """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
     try:
+        # ==================================================================
+        # === KLUCZOWA POPRAWKA BŁĘDU SQL (SyntaxError: 'NOW()') ===
+        # Zmieniamy `NOW()` na jawną nazwę kolumny `updated_at`
+        # ==================================================================
         stmt = text("""
-            INSERT INTO system_control (key, value, NOW())
+            INSERT INTO system_control (key, value, updated_at)
             VALUES (:key, :value, NOW())
             ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value, NOW() = NOW();
+            SET value = EXCLUDED.value, updated_at = NOW();
         """)
         session.execute(stmt, [{'key': key, 'value': str(value)}])
         session.commit()
