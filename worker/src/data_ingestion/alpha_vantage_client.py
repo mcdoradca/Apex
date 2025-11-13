@@ -164,7 +164,10 @@ class AlphaVantageClient:
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
         
-    def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True):
+    # ==================================================================
+    # === POPRAWKA (NAPRAWA VWAP/H3): Dodanie parametru 'month' ===
+    # ==================================================================
+    def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True, month: str = None):
         # Specyfikacja AQM V3 (4.1) wymaga interval=5min, outputsize=full
         params = {
             "function": "TIME_SERIES_INTRADAY", 
@@ -173,6 +176,9 @@ class AlphaVantageClient:
             "outputsize": outputsize,
             "extended_hours": "true" if extended_hours else "false"
         }
+        if month:
+            params['month'] = month # np. '2022-01'
+        # ==================================================================
         return self._make_request(params)
 
     def get_atr(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
@@ -395,18 +401,24 @@ class AlphaVantageClient:
         # WERYFIKACJA: Funkcja `SECTOR` jest poprawna
         return self._make_request(params)
     
-    def get_vwap(self, symbol: str, interval: str = 'daily'):
+    # ==================================================================
+    # === POPRAWKA (NAPRAWA VWAP): Endpoint `get_vwap` ===
+    # Zgodnie z info od supportu, ta funkcja przyjmuje `month` i `interval`.
+    # `outputsize` nie jest obsługiwany przez ten endpoint.
+    # ==================================================================
+    def get_vwap(self, symbol: str, interval: str, month: str = None):
         """(AQM V3 - Wymiar 1.2) Pobiera dane VWAP."""
-        logger.info(f"AQM V3: Pobieranie VWAP dla {symbol} (interval: {interval})...")
+        logger.info(f"AQM V3: Pobieranie VWAP dla {symbol} (interval: {interval}, month: {month or 'latest'})...")
         params = {
             "function": "VWAP",
             "symbol": symbol,
             "interval": interval
         }
-        # WERYFIKACJA: Funkcja `VWAP` jest poprawna. Błędy API (404/pusty JSON)
-        # dla tego endpointu są prawdopodobnie problemem z uprawnieniami Premium,
-        # a nie kodem. W kodzie to zapytanie jest poprawne.
+        if month:
+            params['month'] = month # np. '2022-01'
+            
         return self._make_request(params)
+    # ==================================================================
 
     def get_insider_transactions(self, symbol: str):
         """(AQM V3 - Wymiar 2.1) Pobiera transakcje insiderów."""
