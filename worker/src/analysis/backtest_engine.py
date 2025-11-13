@@ -347,45 +347,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
 
     # ==================================================================
-    # === NOWY KROK (PRE-FLIGHT CHECK): Filtrowanie spółek bez danych H3/H4 ===
+    # === USUNIĘTY KROK (PRE-FLIGHT CHECK) ===
+    # Zgodnie z Pana sugestią, usunęliśmy ten zbędny blok,
+    # aby oszczędzić czas iteracji. Ufamy teraz liście z Fazy 1.
     # ==================================================================
-    log_msg_preflight = f"[Backtest V3] Rozpoczynanie filtru wstępnego (Pre-flight Check) dla {len(initial_tickers_to_test)} spółek..."
-    logger.info(log_msg_preflight)
-    append_scan_log(session, log_msg_preflight)
     
-    validated_tickers = []
-    
-    for i, ticker in enumerate(initial_tickers_to_test):
-        if i % 20 == 0: # Loguj postęp co 20 tickerów
-            update_scan_progress(session, i, len(initial_tickers_to_test))
-            
-        try:
-            # Używamy lekkiego zapytania 'compact', aby sprawdzić, czy endpoint działa
-            # Nie używamy cache, ponieważ to jest jednorazowy test
-            intraday_test_data = api_client.get_intraday(
-                ticker, 
-                interval='60min', 
-                outputsize='compact',
-                extended_hours=False
-            )
-            
-            # Sprawdzamy, czy odpowiedź jest poprawna i zawiera dane
-            if intraday_test_data and 'Time Series (60min)' in intraday_test_data and len(intraday_test_data['Time Series (60min)']) > 0:
-                validated_tickers.append(ticker)
-            else:
-                logger.warning(f"[Backtest V3][Pre-flight] Odrzucono {ticker} (brak danych Intraday dla H3/H4).")
-                
-        except Exception as e:
-            logger.error(f"[Backtest V3][Pre-flight] Błąd podczas sprawdzania {ticker}: {e}. Odrzucanie.")
-
-    log_msg_preflight_done = f"[Backtest V3] Filtr wstępny zakończony. Zakwalifikowano {len(validated_tickers)} / {len(initial_tickers_to_test)} spółek do pełnej analizy."
-    logger.info(log_msg_preflight_done)
-    append_scan_log(session, log_msg_preflight_done)
-    update_scan_progress(session, 0, len(validated_tickers)) # Resetuj postęp dla głównej pętli
-    # ==================================================================
-    # === KONIEC NOWEGO KROKU ===
-    # ==================================================================
-
     # === KROK 3: Budowanie Cache (TYLKO DANE GLOBALNE) ===
     
     try:
@@ -426,8 +392,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.error(f"  > BŁĄD ładowania danych dla sektora {etf_ticker}: {e}")
         
         # 3. Wstępne ładowanie mapy sektorów (dla spójności)
-        # Używamy teraz nowej, przefiltrowanej listy
-        for ticker in validated_tickers:
+        # Używamy teraz listy z Fazy 1
+        for ticker in initial_tickers_to_test:
             sector = _get_sector_for_ticker(session, ticker)
             if sector not in _backtest_cache["tickers_by_sector"]:
                 _backtest_cache["tickers_by_sector"][sector] = []
@@ -436,8 +402,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
         logger.info("[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
         append_scan_log(session, "[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
-        # Resetujemy postęp (bo ten krok się zakończył)
-        update_scan_progress(session, 0, len(validated_tickers)) 
+        # Resetujemy postęp dla głównej pętli
+        update_scan_progress(session, 0, len(initial_tickers_to_test)) 
 
     except Exception as e:
         log_msg = f"[Backtest V3] BŁĄD KRYTYCZNY podczas budowania cache LITE: {e}. Zatrzymywanie."
@@ -456,10 +422,10 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     trades_found_h3 = 0
     trades_found_h4 = 0
     
-    # UŻYWAMY NOWEJ, PRZEFILTROWANEJ LISTY
-    total_tickers = len(validated_tickers)
+    # UŻYWAMY LISTY Z FAZY 1
+    total_tickers = len(initial_tickers_to_test)
 
-    for i, ticker in enumerate(validated_tickers):
+    for i, ticker in enumerate(initial_tickers_to_test):
         if i % 10 == 0:
             log_msg = f"[Backtest V3][H1/H2/H3/H4] Ładowanie i przetwarzanie {ticker} ({i}/{total_tickers})..."
             append_scan_log(session, log_msg)
