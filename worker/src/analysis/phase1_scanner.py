@@ -17,11 +17,14 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
     DEKONSTRUKCJA (KROK 4): Faza 1 z nową, uproszczoną logiką "Pierwszego Sita".
     
-    Iteruje po każdym tickerze, pobiera dane EOD i stosuje tylko dwa
-    bezwzględne warunki: Ceny i Średniego Wolumenu.
+    NOWA LOGIKA (KROK 5 - Filtr Wstępny):
+    Dodano "próbne wywołanie" API (zgodnie z sugestią supportu AV),
+    aby filtrować spółki, które nie wspierają danych intraday.
+    
+    AKTUALIZACJA: Usunięto filtr średniego wolumenu (zgodnie z prośbą).
     """
-    logger.info("Running Phase 1: EOD Scan (New 'First Sieve' Logic)...")
-    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania (Nowa Logika 'Pierwszego Sita')...")
+    logger.info("Running Phase 1: EOD Scan (New 'First Sieve' Logic with Pre-flight Check)...")
+    append_scan_log(session, "Faza 1: Rozpoczynanie skanowania (z Filtrem Wstępnym Danych H3/H4)...")
 
     # Czyszczenie starych kandydatów Fazy 1, aby uniknąć konfliktów
     try:
@@ -89,22 +92,51 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
             # 5. Zastosuj FILTRY BEZWZGLĘDNE (Nowa Logika)
             
-            # WARUNEK 1: Cena (zgodnie z poleceniem)
+            # WARUNEK 1: Cena (zgodnie z Pana prośbą)
             if not (0.5 <= current_price <= 40.0):
                 continue
             
+            # ==================================================================
+            # === FILTR WOLUMENU USUNIĘTY (ZGODNIE Z PROŚBĄ) ===
+            # ==================================================================
             # WARUNEK 2: Średni Wolumen (zgodnie z poleceniem)
             # Obliczamy z 20 ostatnich *zamkniętych* świec (przed 'latest')
-            avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if pd.isna(avg_volume) or avg_volume < 500000:
-                continue
+            # avg_volume = daily_df['volume'].iloc[-21:-1].mean()
+            # if pd.isna(avg_volume) or avg_volume < 500000:
+            #     continue
+            # ==================================================================
             
             # ==================================================================
-            # === USUNIĘTO WSZYSTKIE STARE FILTRY (RVol, ATR, % Zmiany) ===
+            # === NOWY FILTR WSTĘPNY (PRE-FLIGHT CHECK) ===
+            # (Zgodnie z Pana pomysłem i sugestią Supportu AV)
+            # ==================================================================
+            
+            # WARUNEK 3: Sprawdzenie wsparcia dla danych H3/H4 (Intraday)
+            try:
+                # Wykonujemy lekkie, próbne wywołanie, aby sprawdzić, czy spółka wspiera dane intraday.
+                intraday_test_data = api_client.get_intraday(
+                    ticker, 
+                    interval='60min', 
+                    outputsize='compact',
+                    extended_hours=False
+                )
+                
+                # Jeśli API zwróci błąd lub puste dane, odrzucamy spółkę
+                if not intraday_test_data or 'Time Series (60min)' not in intraday_test_data or not intraday_test_data['Time Series (60min)']:
+                    append_scan_log(session, f"INFO (F1): {ticker} - Odrzucony (brak danych Intraday dla H3/H4).")
+                    continue # Pomiń tę spółkę
+                    
+            except Exception as e:
+                logger.warning(f"Błąd filtru Intraday dla {ticker}: {e}. Odrzucanie.")
+                continue
+            
+            # (Na razie pomijamy test INSIDER_TRANSACTIONS, aby nie potroić czasu skanowania)
+            
             # ==================================================================
             
             # 6. KWALIFIKACJA
-            log_msg = f"Kwalifikacja (F1): {ticker} (Cena: {current_price:.2f}, Śr. Wol: {avg_volume:.0f})"
+            # ZMIANA: Usunięto 'Śr. Wol' z logu
+            log_msg = f"Kwalifikacja (F1): {ticker} (Cena: {current_price:.2f}, Dane Intraday: OK)"
             append_scan_log(session, log_msg)
             
             # 7. Zapisz kandydata w bazie
@@ -134,7 +166,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     update_scan_progress(session, total_tickers, total_tickers)
 
     logger.info(f"Phase 1 (New Sieve) completed. Found {len(final_candidate_tickers)} final candidates.")
-    append_scan_log(session, f"Faza 1 (Nowe Sito) zakończona. Znaleziono {len(final_candidate_tickers)} kandydatów.")
+    append_scan_log(session, f"Faza 1 (Nowe Sito z Filtrem Wstępnym) zakończona. Znaleziono {len(final_candidate_tickers)} kandydatów.")
     
     # Zwracamy listę tickerów do Fazy 2
     return final_candidate_tickers
