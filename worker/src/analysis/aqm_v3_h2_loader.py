@@ -1,14 +1,19 @@
 import logging
 import pandas as pd
 from typing import Dict, Any, Optional
+from sqlalchemy.orm import Session # <-- ZMIANA: Dodano import Session
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
+# <-- ZMIANA: Importujemy funkcję cache z utils
+from .utils import get_raw_data_with_cache 
 
 logger = logging.getLogger(__name__)
+
+# Usunięto funkcję _get_raw_data_with_cache, ponieważ jest teraz w utils.py
 
 def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """
     Przetwarza surową odpowiedź JSON z INSIDER_TRANSACTIONS na DataFrame
-    gotowy do backtestu.
+    gotowy do backtestu. (LOGIKA OBLICZENIOWA BEZ ZMIAN)
     """
     try:
         transactions = raw_data.get('transactions', [])
@@ -50,9 +55,7 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
 def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """
     Przetwarza surową odpowiedź JSON z NEWS_SENTIMENT na DataFrame
-    gotowy do backtestu.
-    
-    AKTUALIZACJA (Krok 22b): Teraz przetwarza również 'topics' dla Wymiaru 4.2 (Entropia).
+    gotowy do backtestu. (LOGIKA OBLICZENIOWA BEZ ZMIAN)
     """
     try:
         feed = raw_data.get('feed', [])
@@ -69,7 +72,6 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
                 score = float(article.get('overall_sentiment_score'))
                 
                 # Krok 22b: Przetwarzanie 'topics'
-                # Zgodnie ze specyfikacją 4.2, pobieramy listę tematów
                 article_topics = article.get('topics', [])
                 topic_list = [t['topic'] for t in article_topics if 'topic' in t]
                 
@@ -94,24 +96,38 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
         logger.error(f"Błąd podczas parsowania danych News Sentiment: {e}", exc_info=True)
         return None
 
-def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient) -> Dict[str, pd.DataFrame]:
+def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session: Session) -> Dict[str, pd.DataFrame]:
     """
     Główna funkcja tego modułu. Pobiera i przetwarza dane Wymiaru 2
-    dla pojedynczego tickera.
-    """
-    logger.info(f"[Backtest V3][H2 Loader] Ładowanie danych Wymiaru 2 dla {ticker}...")
+    dla pojedynczego tickera, używając MECHANIZMU CACHE.
     
-    # 1. Pobierz dane Insider (Wymiar 2.1)
-    insider_raw = api_client.get_insider_transactions(ticker)
+    ZMIANA: Dodano argument 'session' i użyto cache.
+    """
+    logger.info(f"[Backtest V3][H2 Loader] Ładowanie danych Wymiaru 2 dla {ticker} (z cache)...")
+    
+    # 1. Pobierz dane Insider (Wymiar 2.1) - UŻYJ CACHE
+    insider_raw = get_raw_data_with_cache(
+        session=session, # Przekazujemy sesję do zapisu/odczytu cache
+        api_client=api_client, 
+        ticker=ticker,
+        data_type='INSIDER', # Stała definiująca typ danych
+        api_func='get_insider_transactions'
+    )
     insider_df = _parse_insider_transactions(insider_raw)
     
     if insider_df is None:
         logger.warning(f"[Backtest V3][H2 Loader] Nie udało się przetworzyć danych Insider dla {ticker}. Tworzenie pustego DataFrame.")
         insider_df = pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
     
-    # 2. Pobierz dane News (Wymiar 2.2 i 4.2)
-    # Specyfikacja wymaga 7 dni (H2) lub 100 art. (H3), ładujemy pełną historię (limit 1000)
-    news_raw = api_client.get_news_sentiment(ticker, limit=1000)
+    # 2. Pobierz dane News (Wymiar 2.2 i 4.2) - UŻYJ CACHE
+    news_raw = get_raw_data_with_cache(
+        session=session, # Przekazujemy sesję do zapisu/odczytu cache
+        api_client=api_client, 
+        ticker=ticker,
+        data_type='NEWS_SENTIMENT',
+        api_func='get_news_sentiment',
+        limit=1000 # Użyjemy limitu 1000, aby mieć pełną historię do backtestu
+    )
     news_df = _parse_news_sentiment(news_raw)
     
     if news_df is None:
@@ -122,5 +138,5 @@ def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient) -> Dict
 
     return {
         "insider_df": insider_df,
-        "news_df": news_df # Teraz zawiera 'topics'
+        "news_df": news_df 
     }
