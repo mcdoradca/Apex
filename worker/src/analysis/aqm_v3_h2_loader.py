@@ -14,9 +14,15 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
     """
     Przetwarza surową odpowiedź JSON z INSIDER_TRANSACTIONS na DataFrame
     gotowy do backtestu. (LOGIKA OBLICZENIOWA BEZ ZMIAN)
+    
+    AKTUALIZACJA: Naprawiono błędy parsowania na podstawie rzeczywistych danych JSON.
     """
     try:
-        transactions = raw_data.get('transactions', [])
+        # ==================================================================
+        # === POPRAWKA 1: Błędny klucz główny ===
+        transactions = raw_data.get('data', []) # <-- Klucz to 'data', a nie 'transactions'
+        # ==================================================================
+        
         if not transactions:
             # Zwracamy pusty DF z oczekiwanymi kolumnami
             return pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
@@ -24,16 +30,28 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
         processed_data = []
         for tx in transactions:
             try:
+                # ==================================================================
+                # === POPRAWKA 2: Błędne nazwy pól ===
                 # Konwertujemy datę na obiekt datetime, aby ustawić ją jako indeks
-                tx_date = pd.to_datetime(tx.get('transactionDate'))
-                tx_type = tx.get('transactionType')
-                tx_shares = float(tx.get('transactionShares'))
+                tx_date = pd.to_datetime(tx.get('transaction_date')) # <-- Poprawna nazwa pola
+                tx_type = tx.get('acquisition_or_disposal') # <-- Poprawna nazwa pola
+                tx_shares_str = tx.get('shares') # <-- Poprawna nazwa pola
                 
-                # Zgodnie ze specyfikacją H2 (Wymiar 2.1), interesują nas tylko 'P-Purchase' i 'S-Sale'
-                if tx_type in ['P-Purchase', 'S-Sale'] and tx_shares > 0:
+                # Walidacja: upewnij się, że 'shares' nie jest puste (jak w 'Convertible Note')
+                if not tx_shares_str:
+                    continue
+                    
+                tx_shares = float(tx_shares_str)
+                # ==================================================================
+                
+                # ==================================================================
+                # === POPRAWKA 3: Błędne wartości filtra ===
+                # Zgodnie ze specyfikacją H2 (Wymiar 2.1), interesują nas 'A' i 'D'
+                if tx_type in ['A', 'D'] and tx_shares > 0:
+                # ==================================================================
                     processed_data.append({
                         'transaction_date': tx_date,
-                        'transaction_type': tx_type,
+                        'transaction_type': tx_type, # Zapisze 'A' lub 'D'
                         'transaction_shares': tx_shares
                     })
             except (ValueError, TypeError, AttributeError):
@@ -53,6 +71,7 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
         return None
 
 def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
+# ... (ta funkcja pozostaje bez zmian) ...
     """
     Przetwarza surową odpowiedź JSON z NEWS_SENTIMENT na DataFrame
     gotowy do backtestu. (LOGIKA OBLICZENIOWA BEZ ZMIAN)
@@ -97,6 +116,7 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
         return None
 
 def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session: Session) -> Dict[str, pd.DataFrame]:
+# ... (ta funkcja pozostaje bez zmian) ...
     """
     Główna funkcja tego modułu. Pobiera i przetwarza dane Wymiaru 2
     dla pojedynczego tickera, używając MECHANIZMU CACHE.
