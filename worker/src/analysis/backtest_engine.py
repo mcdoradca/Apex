@@ -107,6 +107,46 @@ def _detect_market_regime(current_date_str: str) -> str:
         return 'volatile'
 
 # ==================================================================
+# === NOWA FUNKCJA POMOCNICZA: Parser VWAP (Intraday -> Daily) ===
+# ==================================================================
+def _parse_vwap_intraday_to_daily(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    """
+    Przetwarza surową odpowiedź JSON z VWAP (Intraday) na DataFrame
+    i oblicza średni DZIENNY VWAP.
+    """
+    try:
+        # Klucz to 'Technical Analysis: VWAP' lub 'Technical Analysis: VWAP (60min)'
+        data_keys = [k for k in raw_data.keys() if k.startswith('Technical Analysis: VWAP')]
+        if not data_keys:
+            return pd.DataFrame(columns=['vwap']).set_index(pd.to_datetime([]))
+            
+        data = raw_data[data_keys[0]] # Pobierz dane z dynamicznego klucza
+        if not data:
+            return pd.DataFrame(columns=['vwap']).set_index(pd.to_datetime([]))
+
+        df = pd.DataFrame.from_dict(data, orient='index')
+        df.index = pd.to_datetime(df.index)
+        
+        # Konwertuj na liczby
+        df['VWAP'] = pd.to_numeric(df['VWAP'], errors='coerce')
+        
+        # === KLUCZOWY KROK: Agregacja danych Intraday do Dziennych ===
+        # Obliczamy średni VWAP dla każdego dnia
+        daily_vwap_df = df['VWAP'].resample('D').mean()
+        
+        # Zmień nazwę kolumny na tę, której oczekuje reszta systemu
+        daily_vwap_df = daily_vwap_df.to_frame(name='vwap')
+            
+        daily_vwap_df.sort_index(inplace=True)
+        return daily_vwap_df
+        
+    except Exception as e:
+        logger.error(f"Błąd podczas parsowania i agregowania danych VWAP: {e}", exc_info=True)
+        return None
+# ==================================================================
+
+
+# ==================================================================
 # === ZMIANA KROK 3b: ŁADOWANIE DANYCH Z CACHE DLA JEDNEGO TICKERA ===
 # ==================================================================
 def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session) -> Optional[Dict[str, pd.DataFrame]]:
@@ -115,7 +155,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
     korzystając z mechanizmu cache w bazie danych.
     """
     try:
-        # --- KROK 1: ŁADOWANIE H1 (Daily Time Series z VWAP) ---
+        # --- KROK 1: ŁADOWANIE H1 (Daily Time Series) ---
         price_data_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='DAILY_WITH_VWAP',
             api_func='get_time_series_daily', outputsize='full'
@@ -125,6 +165,16 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
             session=session, api_client=api_client, ticker=ticker, data_type='WEEKLY',
             api_func='get_time_series_weekly', outputsize='full'
         )
+        
+        # ==================================================================
+        # === NOWE WYWOŁANIE (NAPRAWA VWAP): Jawne pobranie VWAP (Intraday) ===
+        # Używamy 60min, aby dostać się jak najdalej wstecz (do 2 lat)
+        # ==================================================================
+        vwap_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='VWAP_INTRADAY_60MIN',
+            api_func='get_vwap', interval='60min', outputsize='full'
+        )
+        # ==================================================================
         
         # --- KROK 2: ŁADOWANIE H3 (BBands i Intraday 5min) ---
         bbands_raw = get_raw_data_with_cache(
@@ -147,15 +197,12 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
             logger.warning(f"[Backtest V3] Brak podstawowych danych (Daily/Weekly) z cache/API dla {ticker}, pomijanie.")
             return None
             
-        # UWAGA: Brak walidacji bbands_raw i intraday_raw tutaj.
-        # Jeśli ich brakuje (co wiemy, że się zdarza), kod H3/H4
-        # powinien to obsłużyć, ale H1/H2 powinny nadal działać.
-
-        # --- KROK 5: Przetwarzanie i Wzbogacanie Daily DF (Logika bez zmian) ---
+        # --- KROK 5: Przetwarzanie i Wzbogacanie Daily DF ---
         
         # Przetwórz Daily (H1)
         daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
         daily_df.index = pd.to_datetime(daily_df.index) # <-- POPRAWKA 1 (Z POPRZEDNIEJ RUNDY): Rozwiązuje błąd 'to_pydatetime'
+        # UWAGA: `standardize_df_columns` (w `utils.py`) teraz poprawnie mapuje '5. vwap' -> 'vwap'
         daily_df = standardize_df_columns(daily_df)
         
         # Przetwórz Weekly (H1)
@@ -168,6 +215,24 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         enriched_df = daily_df.join(spy_aligned) 
         enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
         
+        # ==================================================================
+        # === POPRAWKA (NAPRAWA VWAP): Dołączenie prawdziwych, zagregowanych danych VWAP ===
+        # ==================================================================
+        
+        # Parsujemy dane VWAP (60min) i agregujemy je do Dziennych
+        vwap_daily_df = _parse_vwap_intraday_to_daily(vwap_raw)
+        
+        if vwap_daily_df is not None and not vwap_daily_df.empty:
+            # Dołączamy prawdziwy, obliczony Dzienny VWAP do naszego głównego DataFrame
+            # `vwap` będzie teraz kolumną w `enriched_df`
+            enriched_df = enriched_df.join(vwap_daily_df)
+            logger.info(f"Pomyślnie obliczono i dołączono PRAWDZIWE dane VWAP (Daily) dla {ticker}.")
+        else:
+            logger.warning(f"Brak danych VWAP (Intraday) dla {ticker}. Proxy SMA(20) jest wyłączone. H1 nie wygeneruje sygnałów dla tej spółki.")
+            # Tworzymy pustą kolumnę, aby uniknąć błędów, ale będzie pełna NaN
+            enriched_df['vwap'] = np.nan
+        # ==================================================================
+        
         # Obliczenia H1 (time_dilation, price_gravity)
         ticker_returns_rolling = enriched_df['close'].pct_change().rolling(window=20)
         spy_returns_rolling = enriched_df['spy_close'].pct_change().rolling(window=20)
@@ -175,20 +240,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         std_spy = spy_returns_rolling.std()
         enriched_df['time_dilation'] = std_ticker / std_spy
         
-        # ==================================================================
-        # === POPRAWKA 2 (KeyError: 'vwap'): ===
-        # Zapewniamy, że kolumna 'vwap' *zawsze* istnieje.
-        # ==================================================================
-        if 'vwap' not in enriched_df.columns or enriched_df['vwap'].isnull().all():
-            logger.warning(f"Brak 'vwap' dla {ticker}. Używam proxy SMA(20) zgodnie z Mapą Danych.")
-            # Obliczamy SMA(20) dla 'close' i zapisujemy W KOLUMNIE 'vwap'
-            enriched_df['vwap'] = enriched_df['close'].rolling(window=20).mean()
-        else:
-            # Kolumna 'vwap' już istnieje z API, więc nic nie robimy.
-            # logger.info(f"Używam kolumny 'vwap' z API dla {ticker}.")
-            pass
-        
-        # Obliczamy price_gravity używając teraz kolumny 'vwap' (oryginalnej lub proxy)
+        # Obliczamy price_gravity. Jeśli 'vwap' to NaN, 'price_gravity' też będzie NaN.
         enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
         
         enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -208,7 +260,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         return {
             "daily": enriched_df, 
             "weekly": weekly_df,
-            "vwap": None, # Już wbudowane w 'daily' jako 'vwap'
+            "vwap": vwap_daily_df, # Przekazujemy również osobno, choć jest już w 'daily'
             "insider_df": h2_data["insider_df"], 
             "news_df": h2_data["news_df"],       
             "bbands_df": bbands_df,             
