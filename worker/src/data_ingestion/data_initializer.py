@@ -72,8 +72,9 @@ def initialize_database_if_empty(session: Session, api_client):
     Sprawdza, czy tabela 'companies' jest pusta i w razie potrzeby ją uzupełnia.
     Migracja schematu jest teraz wywoływana osobno.
     
-    NOWA LOGIKA: Ta funkcja będzie teraz *zawsze* czyścić i przeładowywać
-    tabelę 'companies' przy starcie workera, aby zapewnić czystość danych.
+    NOWA LOGIKA: Powrót do bezpiecznego trybu "run-once".
+    Agresywne czyszczenie zostało USUNIĘTE, aby chronić 
+    wyniki backtestów (virtual_trades).
     """
     # 1. ZAWSZE URUCHAMIAJ MIGRACJĘ PRZY STARCIE W OSOBNEJ TRANSAKCJI
     _run_schema_and_index_migration(session)
@@ -81,23 +82,18 @@ def initialize_database_if_empty(session: Session, api_client):
     # 2. Teraz, w nowej transakcji, sprawdź i uzupełnij dane
     try:
         # ==================================================================
-        # === NOWA LOGIKA: WYMUSZONE CZYSZCZENIE (ZGODNIE Z PANA PROŚBĄ) ===
+        # === POWRÓT DO BEZPIECZNEJ LOGIKI (OCHRONA DANYCH) ===
+        # Sprawdzamy, czy baza danych już zawiera spółki.
         # ==================================================================
-        # Usuwamy starą "brudną" listę 4133 spółek przy każdym starcie.
-        # CASCADE zapewnia, że stare wyniki Fazy 1/Fazy 2 również zostaną usunięte.
-        logger.warning("Forcing TRUNCATE on 'companies' table to ensure clean data...")
-        session.execute(text("TRUNCATE TABLE companies RESTART IDENTITY CASCADE;"))
-        session.commit()
-        logger.info("Successfully truncated 'companies' table.")
-        # ==================================================================
-
-        # Sprawdzenie (głównie dla logiki) - teraz zawsze zwróci 0
         count_result = session.execute(text("SELECT COUNT(*) FROM companies")).scalar_one()
         if count_result > 0:
-            # Ten kod jest teraz technicznie nieosiągalny, ale zostawiamy go dla bezpieczeństwa
+            # Jeśli baza MA dane (nawet te 3600 "brudnych"), nic nie rób.
+            # Pozwól, aby Faza 1 je przefiltrowała.
             logger.info(f"Database already seeded with {count_result} companies. Skipping data initialization.")
             return
+        # ==================================================================
 
+        # Ten kod uruchomi się tylko raz, jeśli baza danych jest FIZYCZNIE pusta
         logger.info("Table 'companies' is empty. Initializing with official data from NASDAQ...")
         response = requests.get(NASDAQ_LISTED_URL, timeout=60)
         response.raise_for_status()
