@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # ==================================================================
 
 def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: pd.DataFrame) -> Optional[float]:
+# ... (bez zmian) ...
     """
     (Wymiar 1.1) Oblicza 'time_dilation' na podstawie historycznych widoków DataFrame.
     
@@ -49,6 +50,7 @@ def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: 
         return None
 
 def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view: pd.DataFrame) -> Optional[float]:
+# ... (bez zmian) ...
     """
     (Wymiar 1.2) Oblicza 'price_gravity' na podstawie historycznych widoków DataFrame.
     
@@ -75,7 +77,7 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
 
 # ==================================================================
 # === KROK 21b: "Czyste" Funkcje dla Hipotezy H2 (Backtest) ===
-# (Bez zmian, są poprawne)
+# (POPRAWKA: Zmiana filtrów P-Purchase/S-Sale na A/D)
 # ==================================================================
 
 def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
@@ -93,9 +95,12 @@ def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, curren
             return 0.0 # Neutralny, jeśli brak transakcji
 
         # 2. Oblicz sumy (zgodnie ze "Sztywną Formułą")
+        # ==================================================================
+        # === POPRAWKA: Używamy 'A' (Acquisition) i 'D' (Disposal) ===
         # Zakładamy, że 'transaction_shares' jest dodatnie dla obu typów
-        total_buys = recent_transactions[recent_transactions['transaction_type'] == 'P-Purchase']['transaction_shares'].sum()
-        total_sells = recent_transactions[recent_transactions['transaction_type'] == 'S-Sale']['transaction_shares'].sum()
+        total_buys = recent_transactions[recent_transactions['transaction_type'] == 'A']['transaction_shares'].sum()
+        total_sells = recent_transactions[recent_transactions['transaction_type'] == 'D']['transaction_shares'].sum()
+        # ==================================================================
         
         # 3. Oblicz metrykę
         denominator = total_buys + total_sells
@@ -110,6 +115,7 @@ def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, curren
         return None
 
 def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
+# ... (bez zmian) ...
     """
     (Wymiar 2.2) Oblicza 'retail_herding' na podstawie historycznego widoku DataFrame
     z sentymentem newsów (za ostatnie 7 dni).
@@ -143,6 +149,7 @@ def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date:
 # ==================================================================
 
 def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_view: pd.DataFrame) -> Optional[float]:
+# ... (bez zmian) ...
     """
     (Wymiar 3.1) Oblicza 'breakout_energy_required'.
     """
@@ -172,6 +179,7 @@ def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_v
         return None
 
 def calculate_market_temperature_from_data(intraday_5min_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
+# ... (bez zmian) ...
     """
     (Wymiar 4.1) Oblicza 'market_temperature' (zmienność 5-min).
     """
@@ -200,6 +208,7 @@ def calculate_market_temperature_from_data(intraday_5min_df_view: pd.DataFrame, 
         return None
 
 def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optional[float]:
+# ... (bez zmian) ...
     """
     (Wymiar 4.2) Oblicza 'information_entropy' (Entropia Informacyjna).
     
@@ -232,6 +241,7 @@ def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optio
         return None
 
 def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
+# ... (bez zmian) ...
     """
     (Wymiar 7.1) Oblicza 'attention_density'.
     Wymaga 200-dniowego 'daily_df_view' i 200-dniowego 'news_df_view'.
@@ -312,6 +322,7 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
 # byłyby obliczane w trybie "live" (np. dla skanera EOD).
 
 def calculate_time_dilation_live(ticker: str, ticker_daily_df: pd.DataFrame, spy_daily_df: pd.DataFrame) -> Optional[float]:
+# ... (bez zmian) ...
     """(Wymiar 1.1) Oblicza 'time_dilation' używając przekazanych DF."""
     try:
         ticker_returns = ticker_daily_df['close'].pct_change()
@@ -327,6 +338,7 @@ def calculate_time_dilation_live(ticker: str, ticker_daily_df: pd.DataFrame, spy
         return None
 
 def calculate_price_gravity_live(ticker: str, ticker_daily_df: pd.DataFrame, api_client: AlphaVantageClient) -> Optional[float]:
+# ... (bez zmian) ...
     """(Wymiar 1.2) Oblicza 'price_gravity' (wymaga 1 dodatkowego wywołania API)."""
     try:
         price = ticker_daily_df['close'].iloc[-1]
@@ -351,11 +363,17 @@ def calculate_institutional_sync_live(ticker: str, api_client: AlphaVantageClien
     """(Wymiar 2.1) Oblicza 'institutional_sync' (wymaga 1 wywołania API)."""
     try:
         insider_data = api_client.get_insider_transactions(ticker)
-        if not insider_data or 'transactions' not in insider_data or not insider_data['transactions']:
+        # ==================================================================
+        # === POPRAWKA: Używamy klucza 'data' ===
+        if not insider_data or 'data' not in insider_data or not insider_data['data']:
             logger.warning(f"Brak danych Insider Transactions (live) dla {ticker}")
+        # ==================================================================
             return 0.0 # Neutralny, jeśli brak transakcji
 
-        transactions = insider_data['transactions']
+        # ==================================================================
+        # === POPRAWKA: Używamy klucza 'data' ===
+        transactions = insider_data['data']
+        # ==================================================================
         total_buys = 0.0
         total_sells = 0.0
         
@@ -364,15 +382,22 @@ def calculate_institutional_sync_live(ticker: str, api_client: AlphaVantageClien
         
         for tx in transactions:
             try:
-                tx_date = datetime.strptime(tx['transactionDate'], '%Y-%m-%d')
+                # ==================================================================
+                # === POPRAWKA: Używamy poprawnych nazw pól ===
+                tx_date = datetime.strptime(tx['transaction_date'], '%Y-%m-%d')
                 if tx_date < ninety_days_ago:
                     continue # Transakcja zbyt stara
                 
-                shares = float(tx['transactionShares'])
+                shares_str = tx.get('shares')
+                if not shares_str:
+                    continue
+                shares = float(shares_str)
+                tx_type = tx.get('acquisition_or_disposal')
                 
-                if tx['transactionType'] == 'P-Purchase':
+                if tx_type == 'A':
                     total_buys += shares
-                elif tx['transactionType'] == 'S-Sale':
+                elif tx_type == 'D':
+                # ==================================================================
                     total_sells += shares
             except (ValueError, TypeError):
                 continue # Pomiń błędne rekordy
@@ -388,6 +413,7 @@ def calculate_institutional_sync_live(ticker: str, api_client: AlphaVantageClien
         return None
 
 def calculate_retail_herding_live(ticker: str, api_client: AlphaVantageClient) -> Optional[float]:
+# ... (bez zmian) ...
     """(Wymiar 2.2) Oblicza 'retail_herding' (wymaga 1 wywołania API)."""
     try:
         # Format daty dla AV: YYYYMMDDTHHMM
