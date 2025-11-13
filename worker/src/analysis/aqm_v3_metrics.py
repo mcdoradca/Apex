@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 # ==================================================================
 # === KROK 17: "Czyste" Funkcje dla Hipotezy H1 (Backtest) ===
+# (Bez zmian, są poprawne)
 # ==================================================================
 
 def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: pd.DataFrame) -> Optional[float]:
@@ -52,13 +53,14 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
     (Wymiar 1.2) Oblicza 'price_gravity' na podstawie historycznych widoków DataFrame.
     
     Wersja "czysta": Przyjmuje widoki DF i oblicza metrykę dla *ostatniego dnia* widoku.
+    
+    UWAGA: W Backtest Engine (backtest_engine.py), 'vwap' jest już wbudowany w daily_df_view, 
+    więc ten argument 'vwap_df_view' jest ignorowany w backtestach H1.
     """
     try:
-        # 1. Pobierz najnowsze wartości
+        # 1. Pobierz najnowsze wartości (price_gravity H1 jest poprawnie obliczone w backtest_engine)
         price = daily_df_view['close'].iloc[-1]
-        
-        # Znajdź najbliższy VWAP (w przypadku brakujących dat)
-        center_of_mass = vwap_df_view['VWAP'].asof(daily_df_view.index[-1])
+        center_of_mass = daily_df_view['vwap'].iloc[-1] # Używamy VWAP z wbudowanej kolumny
         
         # 2. Oblicz metrykę
         if price == 0 or pd.isna(price) or pd.isna(center_of_mass):
@@ -73,6 +75,7 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
 
 # ==================================================================
 # === KROK 21b: "Czyste" Funkcje dla Hipotezy H2 (Backtest) ===
+# (Bez zmian, są poprawne)
 # ==================================================================
 
 def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
@@ -148,6 +151,8 @@ def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_v
         price = daily_df_view['close'].iloc[-1]
         
         # Znajdź najbliższe wstęgi (na wypadek brakujących dat)
+        # UWAGA: Używamy asof, aby pobrać NAJBLIŻSZĄ wartość BBANDS
+        # BBANDS DataFrame może nie mieć dokładnych dat zamknięcia rynku
         upper_band = bbands_df_view['Real Upper Band'].asof(daily_df_view.index[-1])
         lower_band = bbands_df_view['Real Lower Band'].asof(daily_df_view.index[-1])
 
@@ -173,6 +178,7 @@ def calculate_market_temperature_from_data(intraday_5min_df_view: pd.DataFrame, 
     try:
         # 1. Filtruj dane 5-minutowe z ostatnich 30 dni (wg specyfikacji)
         thirty_days_ago = current_date - timedelta(days=30)
+        # Filtrujemy, używając 'loc', aby wziąć dane dla tego 30-dniowego okna
         recent_intraday_data = intraday_5min_df_view.loc[intraday_5min_df_view.index >= thirty_days_ago]
 
         if recent_intraday_data.empty or len(recent_intraday_data) < 2:
@@ -195,80 +201,99 @@ def calculate_market_temperature_from_data(intraday_5min_df_view: pd.DataFrame, 
 
 def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optional[float]:
     """
-    (Wymiar 4.2) Oblicza 'information_entropy' (Entropia Shannona tematów).
+    (Wymiar 4.2) Oblicza 'information_entropy' (Entropia Informacyjna).
+    
+    KOREKTA ZGODNA Z MAPĄ WARSTWY DANYCH (str. 23):
+    'Upraszczamy Entropię Shannona... do prostego proxy: liczby newsów. 
+    S = COUNT(artykułów z ostatnich 10 dni)'
     """
     try:
-        # 1. Pobierz listę tematów (Zakładamy 100 ostatnich newsów w 'news_df_view')
-        # Zakładamy, że 'news_df_view' ma kolumnę 'topics', która jest listą
-        if 'topics' not in news_df_view.columns:
-            logger.warning("Brak kolumny 'topics' w danych news. Nie można obliczyć Entropii.")
-            return None
+        # 1. Oblicz S - Liczba newsów z ostatnich 10 dni
+        # W Mapie Danych nie ma już skomplikowanej logiki Entropii Shannona!
+        
+        # Znajdź datę 10 dni temu
+        if news_df_view.empty:
+            return 0.0 # Brak newsów, Entropia = 0
+            
+        # Zgodnie z PDF, obliczamy LICZBĘ artykułów w ostatnich 10 dniach
+        latest_date = news_df_view.index[-1].to_pydatetime()
+        ten_days_ago = latest_date - timedelta(days=10)
+        
+        # Filtruj newsy z ostatnich 10 dni
+        recent_news = news_df_view.loc[news_df_view.index >= ten_days_ago]
+        
+        # Zwróć liczbę newsów
+        S = len(recent_news)
+        
+        return float(S) # Zwracamy float, aby zachować spójność z innymi metrykami
 
-        # .dropna() usuwa puste listy tematów
-        topic_list = news_df_view['topics'].dropna().sum()
-        
-        if not topic_list:
-            return 0.0 # Zero entropii, jeśli brak tematów
-
-        # 2. Zlicz tematy
-        topic_counts = Counter(topic_list)
-        total_topics = len(topic_list)
-        
-        # 3. Oblicz prawdopodobieństwa
-        probabilities = [count / total_topics for count in topic_counts.values()]
-        
-        # 4. Oblicz Entropię Shannona
-        information_entropy = -sum([p * math.log2(p) for p in probabilities if p > 0])
-        
-        return information_entropy
-        
     except Exception as e:
-        logger.error(f"Błąd w 'calculate_information_entropy_from_data': {e}", exc_info=True)
+        logger.error(f"Błąd w 'calculate_information_entropy_from_data' (Proxy Liczba Newsów): {e}", exc_info=True)
         return None
 
 def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
     """
     (Wymiar 7.1) Oblicza 'attention_density'.
     Wymaga 200-dniowego 'daily_df_view' i 200-dniowego 'news_df_view'.
+    
+    KOREKTA ZGODNA Z MAPĄ WARSTWY DANYCH (str. 23):
+    Oblicza Z-Score z ostatnich 200 dni dla 10-dniowego średniego wolumenu
+    i 10-dniowej liczby newsów.
     """
     try:
-        # Upewnij się, że mamy 200 dni
+        # Upewnij się, że mamy wystarczająco danych (dla Z-Score z 200 dni)
         if len(daily_df_view) < 200 or len(news_df_view) < 200:
             return None 
 
-        # 1. Oblicz metryki 10-dniowe (dla ostatniego dnia)
-        avg_volume_10d = daily_df_view['volume'].iloc[-10:].mean()
-        
-        ten_days_ago = current_date - timedelta(days=10)
-        news_count_10d = len(news_df_view.loc[news_df_view.index >= ten_days_ago])
-        
-        # 2. Oblicz metryki 10-dniowe dla całej historii 200 dni
+        # 1. Oblicz 10-dniową średnią kroczącą dla WOLUMENU (dla ostatnich 200 dni)
+        # historical_avg_volume_10d będzie miało NaN na początku
         historical_avg_volume_10d = daily_df_view['volume'].rolling(window=10).mean()
         
-        # To jest trudniejsze obliczeniowo: krocząca liczba newsów
-        # Uproszczenie: grupujemy newsy per dzień i robimy kroczącą sumę
-        news_counts_daily = news_df_view.resample('D').size().rolling(window=10).sum()
+        # Bierzemy tylko ostatnie 200 dni (odrzucamy początkowe NaN)
+        valid_volume_history = historical_avg_volume_10d.iloc[-200:].dropna()
+
+        # Bieżący 10-dniowy średni wolumen (dla ostatniego dnia)
+        avg_volume_10d = historical_avg_volume_10d.iloc[-1]
         
+        # 2. Oblicz 10-dniową kroczącą LICZBĘ NEWSÓW (dla ostatnich 200 dni)
+        
+        # a) Zlicz newsy dziennie
+        news_counts_daily = news_df_view.resample('D').size()
+        
+        # b) Oblicz kroczącą sumę z 10-dniowego okna
+        historical_news_count_10d = news_counts_daily.rolling(window=10).sum()
+        
+        # Bierzemy tylko ostatnie 200 dni (odrzucamy początkowe NaN)
+        valid_news_history = historical_news_count_10d.iloc[-200:].dropna()
+        
+        # Bieżąca 10-dniowa liczba newsów (dla ostatniego dnia)
+        news_count_10d = historical_news_count_10d.iloc[-1]
+        
+        if valid_volume_history.empty or valid_news_history.empty or pd.isna(avg_volume_10d) or pd.isna(news_count_10d):
+             return None
+
+
         # 3. Oblicz Z-Score (dla ostatniego dnia)
-        # (ostatnia wartość - średnia z 200 dni) / odchylenie std z 200 dni
         
         # Z-Score dla Wolumenu
-        vol_mean = historical_avg_volume_10d.iloc[-200:].mean()
-        vol_std = historical_avg_volume_10d.iloc[-200:].std()
+        vol_mean = valid_volume_history.mean()
+        vol_std = valid_volume_history.std()
         if vol_std == 0:
             normalized_volume = 0.0
         else:
+            # Używamy znormalizowanego Z-Score: (wartość - średnia) / odchylenie
             normalized_volume = (avg_volume_10d - vol_mean) / vol_std
             
         # Z-Score dla Newsów
-        news_mean = news_counts_daily.iloc[-200:].mean()
-        news_std = news_counts_daily.iloc[-200:].std()
+        news_mean = valid_news_history.mean()
+        news_std = valid_news_history.std()
         if news_std == 0:
             normalized_news = 0.0
         else:
+            # Używamy znormalizowanego Z-Score
             normalized_news = (news_count_10d - news_mean) / news_std
             
-        # 4. Oblicz metrykę
+        # 4. Oblicz metrykę m² (attention_density)
         attention_density = normalized_volume + normalized_news
         
         if pd.isna(attention_density):
