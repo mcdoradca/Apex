@@ -40,12 +40,6 @@ class TradingSignal(Base):
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
-    # ==================================================================
-    # KROK 4b (Licznik): Dodanie kolumny updated_at (synchronizacja z API)
-    # Ta kolumna jest niezbędna, aby filtrować sygnały, które 
-    # zostały unieważnione (INVALIDATED) lub zakończone (COMPLETED) 
-    # w ciągu ostatnich 24 godzin.
-    # ==================================================================
     updated_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
     status = Column(VARCHAR(50), default='PENDING') 
@@ -79,8 +73,6 @@ class AIAnalysisResult(Base):
     analysis_data = Column(JSONB)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
-# === NOWY MODEL DLA AGENCJI PRASOWEJ (CATALYST MONITOR) ===
-
 class ProcessedNews(Base):
     """
     Przechowuje "pamięć" Agencji Prasowej, aby nie wysyłać
@@ -99,13 +91,6 @@ class ProcessedNews(Base):
     __table_args__ = (
         UniqueConstraint('ticker', 'news_hash', name='uq_ticker_news_hash'),
     )
-
-# === KONIEC NOWEGO MODELU ===
-
-# ==================================================================
-# KROK 5 (KAT. 2): Synchronizacja modeli Portfela i Transakcji
-# Dodajemy brakujące modele, aby 'news_agent' mógł je zaimportować.
-# ==================================================================
 
 class PortfolioHolding(Base):
     """
@@ -137,11 +122,6 @@ class TransactionHistory(Base):
     # Pole na zysk/stratę dla transakcji sprzedaży - obliczane przy zapisie
     profit_loss_usd = Column(NUMERIC(14, 2), nullable=True, comment="Zrealizowany zysk/strata w USD dla transakcji sprzedaży")
 
-# === KONIEC DODANYCH MODELI ===
-
-# ==================================================================
-# === NOWY MODEL (KROK 1): Wirtualny Agent (Backtesting) ===
-# ==================================================================
 class VirtualTrade(Base):
     """
     Przechowuje wyniki Wirtualnego Agenta (Paper Tradingu).
@@ -176,5 +156,32 @@ class VirtualTrade(Base):
     # Wynik
     close_price = Column(NUMERIC(12, 2), nullable=True, comment="Cena, po której pozycja została zamknięta")
     final_profit_loss_percent = Column(NUMERIC(8, 2), nullable=True, comment="Ostateczny zysk/strata w %")
+
+# ==================================================================
+# === NOWY MODEL (KROK 1): Trwały Cache Alpha Vantage (DB) ===
+# Będziemy w nim przechowywać surowe odpowiedzi JSON z API
+# ==================================================================
+class AlphaVantageCache(Base):
+    """
+    Przechowuje surowe dane (JSONB) z Alpha Vantage dla backtestingu,
+    aby uniknąć ponownego wywoływania API i przekraczania limitów.
+    """
+    __tablename__ = 'alpha_vantage_cache'
+
+    # Klucz 1: Identyfikator instrumentu
+    ticker = Column(VARCHAR(50), primary_key=True, nullable=False, index=True)
+    
+    # Klucz 2: Typ danych (np. 'DAILY', 'NEWS', 'INSIDER', 'INTRADAY_5MIN')
+    data_type = Column(VARCHAR(50), primary_key=True, nullable=False)
+    
+    # Surowa odpowiedź JSON z API AV
+    raw_data_json = Column(JSONB, nullable=False)
+    
+    # Data ostatniego pobrania (ważne do określenia, czy dane są przestarzałe)
+    last_fetched = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        UniqueConstraint('ticker', 'data_type', name='uq_av_cache_entry'),
+    )
 
 # === KONIEC NOWEGO MODELU ===
