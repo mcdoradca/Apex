@@ -84,12 +84,17 @@ def get_raw_data_with_cache(
         logger.error(f"[Cache UTILS] Nieznana funkcja API: {api_func}")
         return {}
     
+    # ==================================================================
     # === KRYTYCZNA POPRAWKA BŁĘDU NR 1 (Argument API) ===
+    # ==================================================================
     
     # Ustalenie nazwy argumentu dla tickera
-    if api_func == 'get_news_sentiment' or api_func == 'get_bulk_quotes':
-        # API Alpha Vantage używa 'tickers' dla newsów i bulk quotes
-        kwargs['tickers'] = ticker
+    if api_func == 'get_news_sentiment':
+        # get_news_sentiment (w kliencie) oczekuje 'ticker'
+        kwargs['ticker'] = ticker
+    elif api_func == 'get_bulk_quotes':
+         # get_bulk_quotes (w kliencie) oczekuje 'symbols' (listy)
+         kwargs['symbols'] = [ticker] # Poprawiono błąd logiczny i opakowano w listę
     else:
         # Wszystkie pozostałe funkcje używają 'symbol'
         kwargs['symbol'] = ticker
