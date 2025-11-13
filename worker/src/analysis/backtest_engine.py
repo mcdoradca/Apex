@@ -28,30 +28,27 @@ from .utils import (
     get_current_NY_datetime,
     append_scan_log,
     update_scan_progress,
-    # Importujemy calculate_atr
-    calculate_atr
+    calculate_atr,
+    # === NOWY IMPORT: Funkcja cache z utils ===
+    get_raw_data_with_cache
 )
 from .. import models
 from ..config import SECTOR_TO_ETF_MAP
+# === NOWY IMPORT: Garbage Collector ===
+import gc
 
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# === ZMIANA KROK 1: PAMIĘĆ PODRĘCZNA (CACHE) ZREDUKOWANA NA LITE ===
-# Zachowujemy tylko dane globalne i mapowanie sektorów (Niezbędne do Regimu)
-# Usuwamy 'company_data', które powodowało przepełnienie pamięci
+# === PAMIĘĆ PODRĘCZNA (CACHE) LITE (Bez zmian) ===
 # ==================================================================
 _backtest_cache = {
     "vix_data": None, 
     "spy_data": None, 
     "sector_etf_data": {}, 
-    # "company_data": {}, # USUNIĘTE: To powoduje przepełnienie pamięci
     "tickers_by_sector": {}, 
     "sector_map": {} 
 }
-
-# Usunięto funkcję _get_ticker_data_from_cache, ponieważ dane
-# będą teraz ładowane bezpośrednio z API w pętli.
 
 def _get_tickers_in_sector(sector: str) -> List[str]:
     """Pobiera listę tickerów dla danego sektora z cache."""
@@ -59,7 +56,6 @@ def _get_tickers_in_sector(sector: str) -> List[str]:
 
 def _get_sector_for_ticker(session: Session, ticker: str) -> str:
     """Pobiera sektor dla tickera z bazy danych (z cache)."""
-    # Ta funkcja nadal działa, ponieważ _backtest_cache["sector_map"] jest nienaruszone
     if ticker not in _backtest_cache["sector_map"]:
         try:
             sector = session.execute(
@@ -86,8 +82,6 @@ def _detect_market_regime(current_date_str: str) -> str:
         vix_df = _backtest_cache["vix_data"]
         spy_df = _backtest_cache["spy_data"]
         
-        # NOTE: Użycie .iloc[-1] i .loc[current_date_str] na pełnych DF jest kosztowne,
-        # ale ponieważ to tylko 2 tickery (SPY, VIX), akceptujemy to.
         vix_row = vix_df[vix_df.index <= current_date_str].iloc[-1]
         spy_row = spy_df[spy_df.index <= current_date_str].iloc[-1]
         
@@ -113,28 +107,38 @@ def _detect_market_regime(current_date_str: str) -> str:
         return 'volatile'
 
 # ==================================================================
-# === NOWA FUNKCJA: Ładowanie wszystkich potrzebnych danych DLA JEDNEGO TICKERA ===
+# === ZMIANA KROK 3b: ŁADOWANIE DANYCH Z CACHE DLA JEDNEGO TICKERA ===
 # ==================================================================
 def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session) -> Optional[Dict[str, pd.DataFrame]]:
     """
-    Pobiera i wstępnie przetwarza wszystkie dane (H1, H2, H3, H4) dla pojedynczego tickera.
-    Ta funkcja jest wywoływana JEDNOCZEŚNIE dla 1049 tickerów.
+    Pobiera i wstępnie przetwarza wszystkie dane (H1, H2, H3, H4) dla pojedynczego tickera,
+    korzystając z mechanizmu cache w bazie danych.
     """
     try:
-        # --- KROK 1: ŁADOWANIE H1 (i H3/H4) ---
-        # TIME_SERIES_DAILY (z VWAP) jest kluczowy dla price_gravity i ATR/SL/TP
-        price_data_raw = api_client.get_time_series_daily(ticker, outputsize='full')
-        # TIME_SERIES_WEEKLY_ADJUSTED jest potrzebny, ale mniej krytyczny
-        weekly_data_raw = api_client.get_time_series_weekly(ticker)
+        # --- KROK 1: ŁADOWANIE H1 (Daily Time Series z VWAP) ---
+        price_data_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='DAILY_WITH_VWAP',
+            api_func='get_time_series_daily', outputsize='full'
+        )
+        # TIME_SERIES_WEEKLY_ADJUSTED
+        weekly_data_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='WEEKLY',
+            api_func='get_time_series_weekly', outputsize='full'
+        )
         
-        # --- KROK 2: ŁADOWANIE H3 (i H4) ---
-        bbands_raw = api_client.get_bollinger_bands(ticker, interval='daily', time_period=20, nbdevup=2, nbdevdn=2)
-        intraday_raw = api_client.get_intraday(ticker, interval='5min', outputsize='full')
+        # --- KROK 2: ŁADOWANIE H3 (BBands i Intraday 5min) ---
+        bbands_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='BBANDS',
+            api_func='get_bollinger_bands', interval='daily', time_period=20, nbdevup=2, nbdevdn=2
+        )
+        intraday_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='INTRADAY_5MIN',
+            api_func='get_intraday', interval='5min', outputsize='full'
+        )
         
-        # --- KROK 3: ŁADOWANIE H2 (i H3/H4) ---
-        # Insider i News są ładowane przez dedykowany loader H2, który użyje
-        # endpointów Alpha Vantage.
-        h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client)
+        # --- KROK 3: ŁADOWANIE H2 (Insider i News) ---
+        # NOTE: load_h2_data_into_cache ma już wbudowany mechanizm cache
+        h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, session)
         
         # 4. Walidacja danych
         if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
@@ -142,10 +146,10 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
            not bbands_raw or 'Technical Analysis: BBANDS' not in bbands_raw or \
            not intraday_raw or 'Time Series (5min)' not in intraday_raw:
             
-            logger.warning(f"[Backtest V3] Brak pełnych danych dla {ticker}, pomijanie.")
+            logger.warning(f"[Backtest V3] Brak pełnych danych z cache/API dla {ticker}, pomijanie.")
             return None
 
-        # --- KROK 5: Przetwarzanie i Wzbogacanie Daily DF (Kluczowe dla H1/H2/H3/H4) ---
+        # --- KROK 5: Przetwarzanie i Wzbogacanie Daily DF (Logika bez zmian) ---
         
         # Przetwórz Daily (H1)
         daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
@@ -156,7 +160,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         weekly_df = standardize_df_columns(weekly_df)
         weekly_df.index = pd.to_datetime(weekly_df.index)
         
-        # Wzbogacanie DataFrame
+        # Wzbogacanie DataFrame (z użyciem danych SPY z Cache LITE)
         spy_aligned = _backtest_cache["spy_data"]['close'].reindex(daily_df.index, method='ffill').rename('spy_close')
         enriched_df = daily_df.join(spy_aligned) 
         enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
@@ -169,7 +173,6 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         enriched_df['time_dilation'] = std_ticker / std_spy
         
         if 'vwap' not in enriched_df.columns:
-            # Użyjemy przybliżenia (jak w oryginalnym kodzie)
             enriched_df['vwap'] = (enriched_df['high'] + enriched_df['low'] + enriched_df['close']) / 3
         
         enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
@@ -204,7 +207,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
 
 
 # ==================================================================
-# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (Zmodyfikowana pętla cache) ===
+# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (Bez zmian w logice pętli) ===
 # ==================================================================
 def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str):
     """
@@ -321,8 +324,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 _backtest_cache["tickers_by_sector"][sector] = []
             _backtest_cache["tickers_by_sector"][sector].append(ticker)
 
-        # !!! ZMIANA: Usuwamy pętlę, która ładowała całe dane spółek do pamięci Workera
-        # Teraz dane będą ładowane w KROKU 4 dla każdego tickera oddzielnie.
 
         logger.info("[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
         append_scan_log(session, "[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
@@ -385,7 +386,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.warning(f"Pusty wycinek danych dla {ticker} w roku {year}. Pomijanie.")
                 continue
 
-            # === Uruchomienie Symulatorów H1-H4 ===
+            # === Uruchomienie Symulatorów H1-H4 (Logika bez zmian) ===
             
             trades_found_h1 += aqm_v3_h1_simulator._simulate_trades_h1(
                 session, 
@@ -432,8 +433,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             logger.error(f"[Backtest V3][H1/H2/H3/H4] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
         finally:
-            # KLUCZOWA ZMIANA: Usuń odniesienia do danych DF po zakończeniu pętli,
-            # aby umożliwić garbage collectorowi ich zwolnienie.
+            # Wymuszenie czyszczenia pamięci po każdym tickerze (optymalizacja RAM)
             if 'ticker_data' in locals():
                 del ticker_data
             if 'full_historical_data' in locals():
@@ -441,8 +441,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             if 'historical_data_slice' in locals():
                 del historical_data_slice
             
-            # Wymuszenie czyszczenia (choć Python zrobi to sam, jest to dobry nawyk)
-            import gc; gc.collect()
+            gc.collect() # Wymuszenie GC, aby agresywnie zwalniać pamięć
             
             
     trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4
