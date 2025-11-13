@@ -388,15 +388,15 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     # ==================================================================
     # === POPRAWKA (NAPRAWA "PRZECIEKU" VWAP): ===
-    # Przywracamy mapowanie '5. vwap', ponieważ TIME_SERIES_DAILY
-    # (zgodnie z Pana mapą danych) *powinno* je zawierać.
+    # Usuwamy błędne mapowanie '5. vwap', ponieważ support potwierdził,
+    # że VWAP nie jest częścią TIME_SERIES_DAILY.
     # ==================================================================
     column_mapping = {
         '1. open': 'open',
         '2. high': 'high',
         '3. low': 'low',
         '4. close': 'close',
-        '5. vwap': 'vwap', # <-- PRZYWRÓCONE (To jest nasz główny cel)
+        # '5. vwap': 'vwap', # <-- USUNIĘTE (Błędne założenie)
         # TIME_SERIES_DAILY
         '5. volume': 'volume', 
         # TIME_SERIES_DAILY_ADJUSTED
@@ -411,8 +411,8 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     # ==================================================================
 
     # Konwertuj kluczowe kolumny na numeryczne
-    # Dodajemy 'vwap', aby był konwertowany, jeśli istnieje
-    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close', 'vwap']:
+    # 'vwap' zostanie dołączony później w `backtest_engine`
+    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
