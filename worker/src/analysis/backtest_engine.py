@@ -142,12 +142,14 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         
         # 4. Walidacja danych
         if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
-           not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw or \
-           not bbands_raw or 'Technical Analysis: BBANDS' not in bbands_raw or \
-           not intraday_raw or 'Time Series (5min)' not in intraday_raw:
+           not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw:
             
-            logger.warning(f"[Backtest V3] Brak pełnych danych z cache/API dla {ticker}, pomijanie.")
+            logger.warning(f"[Backtest V3] Brak podstawowych danych (Daily/Weekly) z cache/API dla {ticker}, pomijanie.")
             return None
+            
+        # UWAGA: Brak walidacji bbands_raw i intraday_raw tutaj.
+        # Jeśli ich brakuje (co wiemy, że się zdarza), kod H3/H4
+        # powinien to obsłużyć, ale H1/H2 powinny nadal działać.
 
         # --- KROK 5: Przetwarzanie i Wzbogacanie Daily DF (Logika bez zmian) ---
         
@@ -195,6 +197,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         enriched_df['price_gravity'] = enriched_df['price_gravity'].fillna(0)
 
         # Przetwarzanie BBANDS (H3) i Intraday 5min (H3)
+        # Te funkcje muszą teraz poprawnie obsłużyć puste dane
         bbands_df = _parse_bbands(bbands_raw)
         intraday_5min_df = _parse_intraday_5min(intraday_raw)
         
@@ -273,15 +276,15 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             "SELECT DISTINCT ticker FROM phase1_candidates"
         )).fetchall()
         
-        tickers_to_test = sorted([row[0] for row in tickers_p2_rows])
+        initial_tickers_to_test = sorted([row[0] for row in tickers_p2_rows])
 
-        if not tickers_to_test:
+        if not initial_tickers_to_test:
             log_msg = f"[Backtest] BŁĄD: Tabela 'phase1_candidates' jest pusta. Uruchom najpierw główny skan (przycisk 'Start'), aby zapełnić tę listę."
             logger.error(log_msg)
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest V3] Znaleziono {len(tickers_to_test)} spółek z Fazy 1 do przetestowania."
+        log_msg = f"[Backtest V3] Znaleziono {len(initial_tickers_to_test)} spółek z Fazy 1 do przetestowania."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
@@ -290,6 +293,46 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
+
+    # ==================================================================
+    # === NOWY KROK (PRE-FLIGHT CHECK): Filtrowanie spółek bez danych H3/H4 ===
+    # ==================================================================
+    log_msg_preflight = f"[Backtest V3] Rozpoczynanie filtru wstępnego (Pre-flight Check) dla {len(initial_tickers_to_test)} spółek..."
+    logger.info(log_msg_preflight)
+    append_scan_log(session, log_msg_preflight)
+    
+    validated_tickers = []
+    
+    for i, ticker in enumerate(initial_tickers_to_test):
+        if i % 20 == 0: # Loguj postęp co 20 tickerów
+            update_scan_progress(session, i, len(initial_tickers_to_test))
+            
+        try:
+            # Używamy lekkiego zapytania 'compact', aby sprawdzić, czy endpoint działa
+            # Nie używamy cache, ponieważ to jest jednorazowy test
+            intraday_test_data = api_client.get_intraday(
+                ticker, 
+                interval='60min', 
+                outputsize='compact',
+                extended_hours=False
+            )
+            
+            # Sprawdzamy, czy odpowiedź jest poprawna i zawiera dane
+            if intraday_test_data and 'Time Series (60min)' in intraday_test_data and len(intraday_test_data['Time Series (60min)']) > 0:
+                validated_tickers.append(ticker)
+            else:
+                logger.warning(f"[Backtest V3][Pre-flight] Odrzucono {ticker} (brak danych Intraday dla H3/H4).")
+                
+        except Exception as e:
+            logger.error(f"[Backtest V3][Pre-flight] Błąd podczas sprawdzania {ticker}: {e}. Odrzucanie.")
+
+    log_msg_preflight_done = f"[Backtest V3] Filtr wstępny zakończony. Zakwalifikowano {len(validated_tickers)} / {len(initial_tickers_to_test)} spółek do pełnej analizy."
+    logger.info(log_msg_preflight_done)
+    append_scan_log(session, log_msg_preflight_done)
+    update_scan_progress(session, 0, len(validated_tickers)) # Resetuj postęp dla głównej pętli
+    # ==================================================================
+    # === KONIEC NOWEGO KROKU ===
+    # ==================================================================
 
     # === KROK 3: Budowanie Cache (TYLKO DANE GLOBALNE) ===
     
@@ -331,7 +374,8 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.error(f"  > BŁĄD ładowania danych dla sektora {etf_ticker}: {e}")
         
         # 3. Wstępne ładowanie mapy sektorów (dla spójności)
-        for ticker in tickers_to_test:
+        # Używamy teraz nowej, przefiltrowanej listy
+        for ticker in validated_tickers:
             sector = _get_sector_for_ticker(session, ticker)
             if sector not in _backtest_cache["tickers_by_sector"]:
                 _backtest_cache["tickers_by_sector"][sector] = []
@@ -341,7 +385,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         logger.info("[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
         append_scan_log(session, "[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
         # Resetujemy postęp (bo ten krok się zakończył)
-        update_scan_progress(session, 0, len(tickers_to_test)) 
+        update_scan_progress(session, 0, len(validated_tickers)) 
 
     except Exception as e:
         log_msg = f"[Backtest V3] BŁĄD KRYTYCZNY podczas budowania cache LITE: {e}. Zatrzymywanie."
@@ -359,9 +403,11 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     trades_found_h2 = 0
     trades_found_h3 = 0
     trades_found_h4 = 0
-    total_tickers = len(tickers_to_test)
+    
+    # UŻYWAMY NOWEJ, PRZEFILTROWANEJ LISTY
+    total_tickers = len(validated_tickers)
 
-    for i, ticker in enumerate(tickers_to_test):
+    for i, ticker in enumerate(validated_tickers):
         if i % 10 == 0:
             log_msg = f"[Backtest V3][H1/H2/H3/H4] Ładowanie i przetwarzanie {ticker} ({i}/{total_tickers})..."
             append_scan_log(session, log_msg)
@@ -387,17 +433,26 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.warning(f"[Backtest V3] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
                 continue
 
-            # Używamy 301, aby zapewnić wystarczającą historię dla 300 dni analizy
-            if start_index < 301:
-                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec, wymagane 301). Pomijanie.")
+            # ==================================================================
+            # === POPRAWKA: Złagodzenie "widełek" (Problem 2) ===
+            # Obniżamy próg z 301 do 101, aby pozwolić H1 i H2 działać
+            # ==================================================================
+            
+            # Używamy 101 (zamiast 301) jako kompromis dla H1/H2
+            if start_index < 101: # <-- ZMIANA: Obniżono próg z 301 na 101
+                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec, wymagane 101). Pomijanie.")
                 continue
 
-            # Wycinek danych na potrzeby backtestu (300 dni wstecz + testowany rok)
-            historical_data_slice = full_historical_data.iloc[start_index - 301:].loc[:end_date]
+            # Wycinek danych na potrzeby backtestu (100 dni wstecz + testowany rok)
+            historical_data_slice = full_historical_data.iloc[start_index - 101:].loc[:end_date] # <-- ZMIANA: z 301 na 101
             
-            if historical_data_slice.empty or len(historical_data_slice) < 302:
+            if historical_data_slice.empty or len(historical_data_slice) < 102: # <-- ZMIANA: z 302 na 102
                 logger.warning(f"Pusty wycinek danych dla {ticker} w roku {year}. Pomijanie.")
                 continue
+            
+            # ==================================================================
+            # === KONIEC POPRAWKI WIDEŁEK ===
+            # ==================================================================
 
             # === Uruchomienie Symulatorów H1-H4 (Logika bez zmian) ===
             
@@ -421,12 +476,16 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 year
             )
             
+            # Przygotuj dane dla H3/H4
             h3_data_slice = {
                 "daily": historical_data_slice,
                 "insider_df": ticker_data.get("insider_df"),
                 "news_df": ticker_data.get("news_df"),
                 "intraday_5min_df": ticker_data.get("intraday_5min_df")
             }
+            
+            # Symulatory H3/H4 mają wewnętrzne zabezpieczenia i pominą,
+            # jeśli intraday_5min_df lub insider_df są puste (co jest teraz oczekiwane)
             
             trades_found_h3 += aqm_v3_h3_simulator._simulate_trades_h3(
                 session,
