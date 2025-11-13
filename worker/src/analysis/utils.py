@@ -82,8 +82,10 @@ def get_raw_data_with_cache(
         logger.error(f"[Cache UTILS] Nieznana funkcja API: {api_func}")
         return {}
         
-    # Wywołanie funkcji klienta (np. get_time_series_daily(ticker=..., outputsize=...))
-    raw_data = client_method(ticker=ticker, **kwargs)
+    # === KRYTYCZNA POPRAWKA BŁĘDU ARGUMENTU ===
+    # Zmieniamy nazwę zmiennej 'ticker' na 'symbol' podczas wywołania funkcji klienta,
+    # ponieważ funkcje AlphaVantageClient oczekują parametru 'symbol'.
+    raw_data = client_method(symbol=ticker, **kwargs)
 
     if not raw_data or raw_data.get("Error Message") or raw_data.get("Information"):
         logger.warning(f"[Cache UTILS] API zwróciło błąd lub puste dane dla {ticker} ({data_type}).")
