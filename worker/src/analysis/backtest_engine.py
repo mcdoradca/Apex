@@ -24,6 +24,11 @@ from . import aqm_v3_h3_simulator
 # ==================================================================
 from . import aqm_v3_h4_simulator
 # ==================================================================
+
+# === KLUCZOWA POPRAWKA ===
+# Importujemy funkcje parsowania bezpośrednio, aby uniknąć NameError
+from .aqm_v3_h3_loader import _parse_bbands, _parse_intraday_5min 
+
 from .utils import (
     standardize_df_columns, 
     calculate_ema, 
@@ -39,7 +44,7 @@ from ..config import SECTOR_TO_ETF_MAP
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# === SŁOWNIK CACHE ===
+# === SŁOWNIK CACHE (Bez zmian) ===
 # ==================================================================
 
 _backtest_cache = {
@@ -77,7 +82,7 @@ def _get_sector_for_ticker(session: Session, ticker: str) -> str:
 
 
 # ==================================================================
-# === DETEKTOR REŻIMU RYNKOWEGO ===
+# === DETEKTOR REŻIMU RYNKOWEGO (Bez zmian) ===
 # ==================================================================
 def _detect_market_regime(current_date_str: str) -> str:
     """
@@ -112,7 +117,7 @@ def _detect_market_regime(current_date_str: str) -> str:
         return 'volatile'
 
 # ==================================================================
-# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (ZAKTUALIZOWANA) ===
+# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (Poprawiona linia 269) ===
 # ==================================================================
 
 def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str):
@@ -141,7 +146,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
-    # === KROK 1: Czyszczenie Bazy Danych ===
+    # === KROK 1: Czyszczenie Bazy Danych (Bez zmian) ===
     try:
         like_pattern = f"BACKTEST_{year}_AQM_V3_%"
         logger.info(f"Czyszczenie starych wyników AQM V3 dla wzorca: {like_pattern}...")
@@ -156,7 +161,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         logger.error(f"Nie udało się wyczyścić starych wyników backtestu: {e}", exc_info=True)
         session.rollback()
 
-    # === KROK 2: Pobieranie Listy Spółek ===
+    # === KROK 2: Pobieranie Listy Spółek (Bez zmian) ===
     try:
         log_msg_tickers = "[Backtest V3] Pobieranie listy spółek z Fazy 1 ('Pierwsze Sito')..."
         logger.info(log_msg_tickers)
@@ -234,7 +239,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             try:
                 # --- ŁADOWANIE H1 (i H3) ---
-                # Używamy TIME_SERIES_DAILY, który powinien zawierać VWAP
                 price_data_raw = api_client.get_time_series_daily(ticker, outputsize='full')
                 weekly_data_raw = api_client.get_time_series_weekly(ticker)
                 
@@ -266,11 +270,19 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 weekly_df.index = pd.to_datetime(weekly_df.index)
 
                 # Przetwórz BBANDS (H3)
-                bbands_df = aqm_v3_h3_loader._parse_bbands(bbands_raw)
+                # ==================================================================
+                # === POPRAWIONA LINIA (269) ===
+                # Teraz używamy bezpośrednio zaimportowanej funkcji _parse_bbands
+                # ==================================================================
+                bbands_df = _parse_bbands(bbands_raw)
                 if bbands_df is None: bbands_df = pd.DataFrame() 
                 
                 # Przetwórz Intraday 5min (H3)
-                intraday_5min_df = aqm_v3_h3_loader._parse_intraday_5min(intraday_raw)
+                # ==================================================================
+                # === POPRAWIONA LINIA (273) ===
+                # Teraz używamy bezpośrednio zaimportowanej funkcji _parse_intraday_5min
+                # ==================================================================
+                intraday_5min_df = _parse_intraday_5min(intraday_raw)
                 if intraday_5min_df is None: intraday_5min_df = pd.DataFrame() 
                 
                 # --- Wzbogacanie DataFrame (Krok 18 - H1) ---
@@ -285,20 +297,13 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 std_spy = spy_returns_rolling.std()
                 enriched_df['time_dilation'] = std_ticker / std_spy
                 
-                # ==================================================================
-                # === GŁÓWNA NAPRAWA (Awaryjne Obliczanie VWAP - Zgodnie z Prośbą) ===
-                # Jeśli kolumna 'vwap' nadal nie istnieje po parsowaniu (błąd API),
-                # oblicz ją awaryjnie jako cenę typową.
-                # ==================================================================
+                # Awaryjne obliczanie VWAP (poprawka z poprzedniego etapu)
                 if 'vwap' not in enriched_df.columns:
-                    # Oblicz VWAP z dostępnych danych jako średnią z high, low, close
-                    # Używamy logger.warning zamiast self.logger.warning
                     logger.warning(f"[Backtest V3] VWAP nieznaleziony dla {ticker}, używam przybliżenia High/Low/Close.")
                     enriched_df['vwap'] = (enriched_df['high'] + enriched_df['low'] + enriched_df['close']) / 3
                 
-                # LINIA, KTÓRA WYWOŁAŁA BŁĄD (teraz powinna działać)
+                # Oblicz price_gravity
                 enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
-                # ==================================================================
                 
                 enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
                 enriched_df['time_dilation'].fillna(0, inplace=True)
