@@ -153,12 +153,13 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         
         # Przetwórz Daily (H1)
         daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
+        daily_df.index = pd.to_datetime(daily_df.index) # <-- POPRAWKA 1: Rozwiązuje błąd 'to_pydatetime'
         daily_df = standardize_df_columns(daily_df)
         
         # Przetwórz Weekly (H1)
         weekly_df = pd.DataFrame.from_dict(weekly_data_raw['Weekly Adjusted Time Series'], orient='index')
-        weekly_df = standardize_df_columns(weekly_df)
         weekly_df.index = pd.to_datetime(weekly_df.index)
+        weekly_df = standardize_df_columns(weekly_df)
         
         # Wzbogacanie DataFrame (z użyciem danych SPY z Cache LITE)
         spy_aligned = _backtest_cache["spy_data"]['close'].reindex(daily_df.index, method='ffill').rename('spy_close')
@@ -172,14 +173,23 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         std_spy = spy_returns_rolling.std()
         enriched_df['time_dilation'] = std_ticker / std_spy
         
-        if 'vwap' not in enriched_df.columns:
-            enriched_df['vwap'] = (enriched_df['high'] + enriched_df['low'] + enriched_df['close']) / 3
+        # POPRAWKA 2 (ZGODNOŚĆ Z MAPĄ DANYCH H1.2: price_gravity):
+        # Używamy SMA(20) jako proxy dla 'center_of_mass', ponieważ VWAP(daily) nie istnieje.
+        if 'vwap' not in enriched_df.columns or enriched_df['vwap'].isnull().all():
+            logger.warning(f"Brak 'vwap' dla {ticker}. Używam proxy SMA(20) zgodnie z Mapą Danych.")
+            # Obliczamy SMA(20) dla 'close'
+            enriched_df['center_of_mass'] = enriched_df['close'].rolling(window=20).mean()
+        else:
+            #logger.info(f"Używam kolumny 'vwap' z API dla {ticker}.")
+            enriched_df['center_of_mass'] = enriched_df['vwap'] # Użyj vwap jeśli jest
         
-        enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
+        # Obliczamy price_gravity używając poprawnego center_of_mass
+        enriched_df['price_gravity'] = (enriched_df['center_of_mass'] - enriched_df['close']) / enriched_df['close']
         
         enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        enriched_df['time_dilation'].fillna(0, inplace=True)
-        enriched_df['price_gravity'].fillna(0, inplace=True)
+        # POPRAWKA 3 (FutureWarning): Użyj bezpośredniego przypisania zamiast inplace
+        enriched_df['time_dilation'] = enriched_df['time_dilation'].fillna(0)
+        enriched_df['price_gravity'] = enriched_df['price_gravity'].fillna(0)
 
         # Przetwarzanie BBANDS (H3) i Intraday 5min (H3)
         bbands_df = _parse_bbands(bbands_raw)
@@ -192,7 +202,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         return {
             "daily": enriched_df, 
             "weekly": weekly_df,
-            "vwap": None, 
+            "vwap": None, # Już wbudowane w 'daily' jako 'center_of_mass' lub 'vwap'
             "insider_df": h2_data["insider_df"], 
             "news_df": h2_data["news_df"],       
             "bbands_df": bbands_df,             
