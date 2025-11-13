@@ -158,10 +158,10 @@ def update_system_control(session: Session, key: str, value: str):
     """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
     try:
         stmt = text("""
-            INSERT INTO system_control (key, value, updated_at)
+            INSERT INTO system_control (key, value, NOW())
             VALUES (:key, :value, NOW())
             ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value, updated_at = NOW();
+            SET value = EXCLUDED.value, NOW() = NOW();
         """)
         session.execute(stmt, [{'key': key, 'value': str(value)}])
         session.commit()
@@ -282,38 +282,37 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Sprawdź, czy kolumny już są w poprawnym formacie
     if 'open' in df.columns and 'close' in df.columns:
         # Ten warunek jest teraz wystarczający. Kolumna 'vwap' zostanie
-        # dodana RĘCZNIE w `backtest_engine.py`, więc nie musimy jej tutaj sprawdzać.
+        # dodana RĘCZNIE w `backtest_engine.py`, jeśli brakuje jej w surowych danych.
         return df # Już przetworzone
 
     # ==================================================================
-    # === KLUCZOWA POPRAWKA DLA VWAP (BŁĄD Z LOGU: KeyError: 'vwap') ===
-    # Musimy dodać mapowanie dla kolumny VWAP, która występuje w TIME_SERIES_DAILY
-    # (zgodnie z Mapą Warstwy Danych), ale nie została poprawnie przetłumaczona.
-    # W zależności od API, VWAP może być 5. lub 6. kolumną.
-    # Używamy roboczego mapowania, które łapie obie opcje.
+    # === POPRAWKA VWAP (Usunięcie niestabilnego mapowania) ===
+    # Usuwamy mapowanie VWAP, ponieważ błąd 'KeyError: vwap' nadal występuje
+    # (nawet przy poprawnym mapowaniu), co sugeruje, że API nie zwraca
+    # tej kolumny konsekwentnie. Polegamy na AWARYJNYM obliczeniu w backtest_engine.py.
     # ==================================================================
     column_mapping = {
         '1. open': 'open',
         '2. high': 'high',
         '3. low': 'low',
         '4. close': 'close',
-        # TIME_SERIES_DAILY ZAWSZE zawiera '5. volume' i '6. vwap'
+        # TIME_SERIES_DAILY
         '5. volume': 'volume', 
-        '6. volume': 'volume', # Dla TIME_SERIES_DAILY_ADJUSTED
-        '5. vwap': 'vwap',     # Dodano mapowanie dla VWAP (może być 5. lub 6. w zależności od endpointu)
-        '6. vwap': 'vwap',     # Dodano mapowanie dla VWAP (może być 5. lub 6. w zależności od endpointu)
-        '7. adjusted close': 'adjusted close', # Dla TIME_SERIES_DAILY_ADJUSTED
+        # TIME_SERIES_DAILY_ADJUSTED
+        '6. volume': 'volume', 
+        # Usuwamy niestabilne mapowania '5. vwap' i '6. vwap'
+        '7. adjusted close': 'adjusted close', 
         '8. split coefficient': 'split coefficient'
     }
 
     # Zmieniamy nazwy kolumn na podstawie mapowania
     # Używamy rozdzielacza '. ' jako awaryjnego (fallback)
     df.rename(columns=lambda c: column_mapping.get(c, c.split('. ')[-1]), inplace=True)
-    # Weryfikacja: W przypadku TIME_SERIES_DAILY oczekujemy teraz 'vwap' w kolumnach
     # ==================================================================
 
     # Konwertuj kluczowe kolumny na numeryczne
-    # Włączamy 'vwap' do konwersji
+    # Włączamy 'vwap' do konwersji, ponieważ może istnieć w surowych danych (jeśli API go zwróci)
+    # Jeśli go nie zwróci, zostanie obsłużony przez 'backtest_engine'
     for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close', 'vwap']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
