@@ -65,8 +65,11 @@ def get_raw_data_with_cache(
             is_fresh = (now - cache_entry.last_fetched) < timedelta(days=CACHE_EXPIRY_DAYS)
             
             if is_fresh:
-                # Jeśli jest to JSON, zwróć słownik
-                return json.loads(cache_entry.raw_data_json)
+                # === POPRAWKA BŁĘDU NR 2 (Parsowanie JSONB) ===
+                # SQLAlchemy i PostgreSQL (JSONB) zwracają już obiekt Pythona (dict).
+                # Wystarczy go zwrócić bezpośrednio.
+                return cache_entry.raw_data_json 
+                # ===============================================
                 
             logger.warning(f"[Cache UTILS] Dane {data_type} dla {ticker} są nieaktualne. Pobieranie z API.")
 
@@ -76,19 +79,30 @@ def get_raw_data_with_cache(
 
     # 2. POBIERANIE Z API
     
-    # Wyszukaj odpowiednią metodę w kliencie AlphaVantage (musi to być funkcja w AlphaVantageClient)
     client_method = getattr(api_client, api_func, None)
     if not client_method:
         logger.error(f"[Cache UTILS] Nieznana funkcja API: {api_func}")
         return {}
     
-    # === KRYTYCZNA POPRAWKA LOGIKI DLA NEWSÓW VS SYMBOLU ===
-    if api_func == 'get_news_sentiment':
-        # Funkcja get_news_sentiment oczekuje argumentu 'tickers', a nie 'symbol'
-        raw_data = client_method(tickers=ticker, **kwargs)
+    # === KRYTYCZNA POPRAWKA BŁĘDU NR 1 (Argument API) ===
+    # Musimy przekazać argument 'tickers' lub 'symbol' w zależności od funkcji.
+    # Użyjemy domyślnego 'symbol', a 'tickers' dla get_news_sentiment.
+    
+    # Ustalenie nazwy argumentu dla tickera
+    if api_func == 'get_news_sentiment' or api_func == 'get_bulk_quotes':
+        # API Alpha Vantage używa 'tickers' dla newsów i bulk quotes
+        kwargs['tickers'] = ticker
     else:
-        # Wszystkie pozostałe funkcje oczekują argumentu 'symbol'
-        raw_data = client_method(symbol=ticker, **kwargs)
+        # Wszystkie pozostałe funkcje używają 'symbol'
+        kwargs['symbol'] = ticker
+        
+    try:
+        # Wywołanie klienta z poprawnie nazwanym argumentem
+        raw_data = client_method(**kwargs)
+    except TypeError as e:
+        # W razie błędu typu (np. gdy zapomnimy o nowym argumencie w AV Client)
+        logger.error(f"[Cache UTILS] Błąd wywołania funkcji {api_func} w kliencie AV: {e}", exc_info=True)
+        raw_data = {} # Wymuś błąd danych
     # =======================================================
     
     if not raw_data or raw_data.get("Error Message") or raw_data.get("Information"):
@@ -96,14 +110,15 @@ def get_raw_data_with_cache(
         # Awaryjny powrót do nieświeżego cache
         if 'cache_entry' in locals() and cache_entry:
             logger.warning(f"[Cache UTILS] Awaryjny powrót do nieświeżego cache dla {ticker} ({data_type}).")
-            return json.loads(cache_entry.raw_data_json)
+            return cache_entry.raw_data_json # Zwracamy bezpośrednio obiekt
         return {}
 
     # 3. ZAPIS DO CACHE (UPSERT)
     try:
-        raw_data_json_str = json.dumps(raw_data)
+        # === POPRAWKA BŁĘDU NR 2 (Parsowanie JSONB) ===
+        # Zapisujemy obiekt Pythona (raw_data). SQLAlchemy i PostgreSQL
+        # same konwertują to na wewnętrzny typ JSONB.
         
-        # Używamy UPSERT do zapisu
         upsert_stmt = text("""
             INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
             VALUES (:ticker, :data_type, :raw_data, NOW())
@@ -113,7 +128,7 @@ def get_raw_data_with_cache(
         session.execute(upsert_stmt, {
             'ticker': ticker,
             'data_type': data_type,
-            'raw_data': raw_data_json_str
+            'raw_data': raw_data # Wstawiamy dict, nie string
         })
         session.commit()
         logger.info(f"[Cache UTILS] Pomyślnie zapisano nowe dane {data_type} dla {ticker} do DB.")
@@ -382,7 +397,7 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if 'open' in df.columns and 'close' in df.columns:
         # Ten warunek jest teraz wystarczający. Kolumna 'vwap' zostanie
         # dodana RĘCZNIE w `backtest_engine.py`, jeśli brakuje jej w surowych danych.
-        return df # Już przetworzone
+        return df [Image of the human digestive system] # Już przetworzone
 
     # ==================================================================
     # === POPRAWKA VWAP (Usunięcie niestabilnego mapowania) ===
