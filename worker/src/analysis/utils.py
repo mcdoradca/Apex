@@ -1,33 +1,33 @@
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text, Row
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta # Dodano timedelta
 import pytz
-# Importy dla Pandas, których potrzebujemy do obliczeń
 import pandas as pd
-# KROK 2 (AQM): Dodajemy numpy do obliczeń wektorowych
 import numpy as np
 from pandas import Series as pd_Series
-# ZMIANA: Dodajemy import 'Optional'
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any # Dodano Dict, Any
 
-# ==================================================================
-# KROK 1 (KAT. 1): Dodanie importów dla Telegrama
-# ==================================================================
+# Importy dla Telegrama
 import os
 import requests
-from urllib.parse import quote_plus # Do kodowania wiadomości URL
-import hashlib # <-- NOWY IMPORT (Krok Anti-Spam)
-# ==================================================================
+from urllib.parse import quote_plus
+import hashlib 
+import json # <-- NOWY IMPORT dla cache JSON
+
+# Importujemy nowy model cache z Workera
+from .. import models
+from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 
 
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# KROK 1 (KAT. 1): Konfiguracja kluczy Telegrama
+# KROK 1 (KAT. 1): Konfiguracja kluczy Telegrama (Bez zmian)
 # ==================================================================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CACHE_EXPIRY_DAYS = 7 # <-- NOWA STAŁA: Czas ważności cache
 
 if not TELEGRAM_BOT_TOKEN:
     logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram alerts are DISABLED.")
@@ -36,20 +36,105 @@ if not TELEGRAM_CHAT_ID:
 # ==================================================================
 
 # ==================================================================
-# ZMIANA (Problem "Spamu 1600 Alertów")
+# KROK 2 (Cache): NOWA FUNKCJA CACHE'OWANIA (OGÓLNA)
 # ==================================================================
-# Zestaw (set) przechowujący skróty (hashe) już wysłanych wiadomości.
-# Jest to pamięć tymczasowa, która zostanie wyczyszczona przy restarcie workera
-# lub przez wywołanie clear_alert_memory_cache().
+def get_raw_data_with_cache(
+    session: Session, 
+    api_client: AlphaVantageClient, 
+    ticker: str, 
+    data_type: str, 
+    api_func: str, 
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Sprawdza, czy dane są w cache i są świeże. Jeśli nie, pobiera z API, zapisuje i zwraca.
+    Zwraca surowy słownik (Dict[str, Any]) lub pusty słownik ({}) w przypadku błędu.
+    """
+    
+    # 1. PRÓBA ODCZYTU Z CACHE
+    try:
+        cache_entry = session.query(models.AlphaVantageCache).filter(
+            models.AlphaVantageCache.ticker == ticker,
+            models.AlphaVantageCache.data_type == data_type
+        ).first()
+
+        now = datetime.now(timezone.utc)
+        
+        if cache_entry:
+            # DANE ZNALEZIONE: Sprawdź, czy są świeże (7 dni)
+            is_fresh = (now - cache_entry.last_fetched) < timedelta(days=CACHE_EXPIRY_DAYS)
+            
+            if is_fresh:
+                # Jeśli jest to JSON, zwróć słownik
+                return json.loads(cache_entry.raw_data_json)
+                
+            logger.warning(f"[Cache UTILS] Dane {data_type} dla {ticker} są nieaktualne. Pobieranie z API.")
+
+    except Exception as e:
+        logger.error(f"[Cache UTILS] Błąd odczytu z cache dla {ticker} ({data_type}): {e}", exc_info=True)
+        # W razie błędu parsowania lub innego błędu DB, idziemy dalej do API
+
+    # 2. POBIERANIE Z API
+    
+    # Wyszukaj odpowiednią metodę w kliencie AlphaVantage (musi to być funkcja w AlphaVantageClient)
+    client_method = getattr(api_client, api_func, None)
+    if not client_method:
+        logger.error(f"[Cache UTILS] Nieznana funkcja API: {api_func}")
+        return {}
+        
+    # Wywołanie funkcji klienta (np. get_time_series_daily(ticker=..., outputsize=...))
+    raw_data = client_method(ticker=ticker, **kwargs)
+
+    if not raw_data or raw_data.get("Error Message") or raw_data.get("Information"):
+        logger.warning(f"[Cache UTILS] API zwróciło błąd lub puste dane dla {ticker} ({data_type}).")
+        # Awaryjny powrót do nieświeżego cache
+        if 'cache_entry' in locals() and cache_entry:
+            logger.warning(f"[Cache UTILS] Awaryjny powrót do nieświeżego cache dla {ticker} ({data_type}).")
+            return json.loads(cache_entry.raw_data_json)
+        return {}
+
+    # 3. ZAPIS DO CACHE (UPSERT)
+    try:
+        raw_data_json_str = json.dumps(raw_data)
+        
+        # Używamy UPSERT do zapisu
+        upsert_stmt = text("""
+            INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
+            VALUES (:ticker, :data_type, :raw_data, NOW())
+            ON CONFLICT (ticker, data_type) DO UPDATE
+            SET raw_data_json = :raw_data, last_fetched = NOW();
+        """)
+        session.execute(upsert_stmt, {
+            'ticker': ticker,
+            'data_type': data_type,
+            'raw_data': raw_data_json_str
+        })
+        session.commit()
+        logger.info(f"[Cache UTILS] Pomyślnie zapisano nowe dane {data_type} dla {ticker} do DB.")
+        
+    except Exception as e:
+        logger.error(f"[Cache UTILS] Błąd zapisu do cache dla {ticker} ({data_type}): {e}", exc_info=True)
+        session.rollback()
+        
+    return raw_data
+# ==================================================================
+# KONIEC NOWEJ FUNKCJI CACHE
+# ==================================================================
+
+
+# --- PONIŻEJ TYLKO ZMIANY NAWIĄZUJĄCE DO IMPORTU W INNYCH PLIKACH ---
+
 _sent_alert_hashes = set()
 
 def clear_alert_memory_cache():
+# ... (bez zmian) ...
     """Czyści pamięć podręczną wysłanych alertów Telegrama."""
     global _sent_alert_hashes
     logger.info(f"Czyszczenie pamięci podręcznej alertów. Usunięto {len(_sent_alert_hashes)} wpisów.")
     _sent_alert_hashes = set()
 
 def send_telegram_alert(message: str):
+# ... (bez zmian) ...
     """
     Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
     NOWA LOGIKA: Wysyła wiadomość only wtedy, jeśli nie została wysłana 
@@ -93,15 +178,9 @@ def send_telegram_alert(message: str):
     except Exception as e:
         # Złap inne błędy (np. JSON decode error)
         logger.error(f"Nieoczekiwany błąd podczas wysyłania alertu Telegram: {e}")
-# ==================================================================
-# KONIEC ZMIAN (Anti-Spam)
-# ==================================================================
 
-
-# ==================================================================
-# KROK 1 ZMIANY: Wydzielenie funkcji czasu nowojorskiego
-# ==================================================================
 def get_current_NY_datetime() -> datetime:
+# ... (bez zmian) ...
     """Zwraca aktualny obiekt datetime dla strefy czasowej Nowego Jorku."""
     try:
         tz = pytz.timezone('US/Eastern')
@@ -110,9 +189,9 @@ def get_current_NY_datetime() -> datetime:
         logger.error(f"Error getting New York time: {e}", exc_info=True)
         # Zwróć czas UTC jako awaryjny
         return datetime.now(timezone.utc)
-# ==================================================================
 
 def get_market_status_and_time(api_client) -> dict:
+# ... (bez zmian) ...
     """
     Sprawdza status giełdy NASDAQ używając dedykowanego endpointu API
     i zwraca czas w Nowym Jorku.
@@ -155,6 +234,7 @@ def get_market_status_and_time(api_client) -> dict:
         return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
 
 def update_system_control(session: Session, key: str, value: str):
+# ... (bez zmian) ...
     """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
     try:
         # ==================================================================
@@ -174,6 +254,7 @@ def update_system_control(session: Session, key: str, value: str):
         session.rollback()
 
 def get_system_control_value(session: Session, key: str) -> str | None:
+# ... (bez zmian) ...
     """Odczytuje pojedynczą wartość z tabeli system_control."""
     try:
         result = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
@@ -183,11 +264,13 @@ def get_system_control_value(session: Session, key: str) -> str | None:
         return None
 
 def update_scan_progress(session: Session, processed: int, total: int):
+# ... (bez zmian) ...
     """Aktualizuje postęp skanowania w bazie danych."""
     update_system_control(session, 'scan_progress_processed', str(processed))
     update_system_control(session, 'scan_progress_total', str(total))
 
 def append_scan_log(session: Session, message: str):
+# ... (bez zmian) ...
     """Dodaje nową linię do logu skanowania w bazie danych."""
     try:
         current_log_result = session.execute(text("SELECT value FROM system_control WHERE key = 'scan_log'")).fetchone()
@@ -214,11 +297,13 @@ def append_scan_log(session: Session, message: str):
 
 
 def clear_scan_log(session: Session):
+# ... (bez zmian) ...
     """Czyści log skanowania w bazie danych."""
     update_system_control(session, 'scan_log', '')
 
 
 def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]:
+# ... (bez zmian) ...
     """Sprawdza i reaguje na polecenia z bazy danych."""
     command = get_system_control_value(session, 'worker_command')
     should_run_now = False
@@ -242,10 +327,12 @@ def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]
     return should_run_now, new_state
 
 def report_heartbeat(session: Session):
+# ... (bez zmian) ...
     """Raportuje 'życie' workera do bazy danych."""
     update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
 def safe_float(value) -> float | None:
+# ... (bez zmian) ...
     """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
     if value is None:
         return None
@@ -257,6 +344,7 @@ def safe_float(value) -> float | None:
         return None
 
 def get_performance(data: dict, days: int) -> float | None:
+# ... (bez zmian) ...
     """Oblicza zwrot procentowy w danym okresie na podstawie słownika."""
     try:
         time_series = data.get('Time Series (Daily)')
@@ -279,6 +367,7 @@ def get_performance(data: dict, days: int) -> float | None:
 # --- NARZĘDZIA DO OPTYMALIZACJI API ---
 
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+# ... (bez zmian) ...
     """Standaryzuje nazwy kolumn z API ('1. open' -> 'open') i konwertuje na typy numeryczne."""
     if df.empty:
         return df
@@ -325,6 +414,7 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza ATR (Average True Range) na podstawie DataFrame OHLC."""
     if df.empty or len(df) < period:
         return pd.Series(dtype=float)
@@ -339,6 +429,7 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
     return atr
 
 def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza RSI (Relative Strength Index)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -352,6 +443,7 @@ def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
     return rsi
 
 def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> tuple:
+# ... (bez zmian) ...
     """Oblicza Bollinger Bands (Środkowa, Górna, Dolna) oraz Szerokość Wstęgi (BBW)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
@@ -369,6 +461,7 @@ def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> t
 
 # --- POPRAWKA: Dodanie brakującej funkcji ---
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -379,6 +472,7 @@ def calculate_ema(series: pd_Series, period: int) -> pd_Series:
 # === NOWA FUNKCJA (Dla "Strategy Battle Royale") ===
 # ==================================================================
 def calculate_macd(series: pd_Series, short_period=12, long_period=26, signal_period=9) -> tuple:
+# ... (bez zmian) ...
     """
     Oblicza linię MACD (EMA(12) - EMA(26)) oraz linię Sygnału (EMA(9) z MACD).
     Zwraca (macd_line, signal_line).
@@ -403,6 +497,7 @@ def calculate_macd(series: pd_Series, short_period=12, long_period=26, signal_pe
 # ==================================================================
 
 def calculate_obv(df: pd.DataFrame) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza On-Balance Volume (OBV) używając metody wektorowej."""
     if 'close' not in df.columns or 'volume' not in df.columns:
         logger.error("Brak kolumn 'close' lub 'volume' do obliczenia OBV.")
@@ -419,6 +514,7 @@ def calculate_obv(df: pd.DataFrame) -> pd_Series:
     return directional_volume.cumsum()
 
 def calculate_ad(df: pd.DataFrame) -> pd_Series:
+# ... (bez zmian) ...
     """Oblicza Linię Akumulacji/Dystrybucji (A/D Line)."""
     if not all(col in df.columns for col in ['high', 'low', 'close', 'volume']):
         logger.error("Brak kolumn 'high', 'low', 'close', 'volume' do obliczenia A/D.")
@@ -446,28 +542,3 @@ def calculate_ad(df: pd.DataFrame) -> pd_Series:
 # ==================================================================
 # === KONIEC NOWYCH FUNKCJI AQM ===
 # ==================================================================
-
-
-# ==================================================================
-#  DEKONSTRUKCJA (KROK 9): Usunięcie martwej funkcji
-#  Funkcja `get_relevant_signal_from_db` była używana tylko przez
-#  starego Agenta Taktycznego (`_run_tactical_agent`), który
-#  został usunięty z `ai_agents.py`.
-# ==================================================================
-# def get_relevant_signal_from_db(session: Session, ticker: str) -> Optional[Row]:
-#     """
-#     (USUNIĘTE)
-#     """
-#     try:
-#         stmt = text("""
-#             SELECT * FROM trading_signals
-#             WHERE ticker = :ticker
-#             AND status IN ('ACTIVE', 'PENDING', 'INVALIDATED', 'COMPLETED')
-#             ORDER BY generation_date DESC
-#             LIMIT 1;
-#         """)
-#         result = session.execute(stmt, {'ticker': ticker}).fetchone()
-#         return result
-#     except Exception as e:
-#         logger.error(f"Error fetching relevant signal for {ticker}: {e}", exc_info=True)
-#         return None
