@@ -20,18 +20,19 @@ logger = logging.getLogger(__name__)
 
 # ==================================================================
 # === KROK 17: "Czyste" Funkcje dla Hipotezy H1 (Backtest) ===
-# (Bez zmian, są poprawne)
 # ==================================================================
 
 def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: pd.DataFrame) -> Optional[float]:
-# ... (bez zmian) ...
     """
     (Wymiar 1.1) Oblicza 'time_dilation' na podstawie historycznych widoków DataFrame.
     
     Wersja "czysta": Przyjmuje 20-dniowe widoki DF i oblicza metrykę.
+    
+    ZGODNIE Z MEMO SUPPORTU: Używamy 'adjusted close' do zwrotów (co 'standardize_df_columns'
+    mapuje na 'close' z endpointu 'TIME_SERIES_DAILY_ADJUSTED', więc jest OK).
     """
     try:
-        # 1. Oblicz zwroty
+        # 1. Oblicz zwroty (daily_df_view pochodzi z TIME_SERIES_DAILY_ADJUSTED, więc 'close' to 'adjusted close')
         ticker_returns = daily_df_view['close'].pct_change()
         spy_returns = spy_df_view['close'].pct_change()
         
@@ -49,26 +50,33 @@ def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: 
         logger.error(f"Błąd w 'calculate_time_dilation_from_data': {e}", exc_info=True)
         return None
 
-def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view: pd.DataFrame) -> Optional[float]:
-# ... (bez zmian) ...
+def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view: pd.DataFrame = None) -> Optional[float]:
     """
     (Wymiar 1.2) Oblicza 'price_gravity' na podstawie historycznych widoków DataFrame.
     
-    Wersja "czysta": Przyjmuje widoki DF i oblicza metrykę dla *ostatniego dnia* widoku.
+    ZGODNIE Z MEMO SUPPORTU: Zastępujemy VWAP przez proxy (H+L+C)/3.
+    Używamy danych z 'TIME_SERIES_DAILY' (które są w 'daily_df_view' w backtest_engine).
     
-    UWAGA: W Backtest Engine (backtest_engine.py), 'vwap' jest już wbudowany w daily_df_view, 
-    więc ten argument 'vwap_df_view' jest ignorowany w backtestach H1.
+    Argument 'vwap_df_view' jest ignorowany i zachowany tylko dla kompatybilności.
     """
     try:
-        # 1. Pobierz najnowsze wartości (price_gravity H1 jest poprawnie obliczone w backtest_engine)
-        price = daily_df_view['close'].iloc[-1]
-        center_of_mass = daily_df_view['vwap'].iloc[-1] # Używamy VWAP z wbudowanej kolumny
+        # 1. Pobierz najnowsze wartości OHLC
+        latest_candle = daily_df_view.iloc[-1]
+        price = latest_candle['close']
+        high = latest_candle['high']
+        low = latest_candle['low']
         
-        # 2. Oblicz metrykę
-        if price == 0 or pd.isna(price) or pd.isna(center_of_mass):
+        if pd.isna(price) or pd.isna(high) or pd.isna(low):
+            return None
+
+        # 2. Oblicz proxy "centrum masy"
+        center_of_mass_proxy = (high + low + price) / 3.0
+        
+        # 3. Oblicz metrykę
+        if price == 0:
             return None # Unikaj dzielenia przez zero
             
-        price_gravity = (center_of_mass - price) / price
+        price_gravity = (center_of_mass_proxy - price) / price
         return price_gravity
         
     except Exception as e:
@@ -178,26 +186,53 @@ def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_v
         logger.error(f"Błąd w 'calculate_breakout_energy_from_data': {e}", exc_info=True)
         return None
 
-def calculate_market_temperature_from_data(intraday_5min_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
-# ... (bez zmian) ...
+# ==================================================================
+# === KLUCZOWA ZMIANA (ZGODNIE Z MEMO SUPPORTU) ===
+# ==================================================================
+def calculate_market_temperature_from_data(
+    intraday_5min_df_view: pd.DataFrame, # TEN ARGUMENT BĘDZIE IGNOROWANY
+    current_date: datetime,
+    daily_df_view: pd.DataFrame = None # DODANO NOWY ARGUMENT
+) -> Optional[float]:
     """
-    (Wymiar 4.1) Oblicza 'market_temperature' (zmienność 5-min).
+    (Wymiar 4.1) Oblicza 'market_temperature'.
+    
+    ZGODNIE Z MEMO SUPPORTU: Zmieniamy logikę z (niestabilnego) intraday 5min
+    na (stabilną) 30-dniową zmienność dziennych zwrotów.
     """
     try:
-        # 1. Filtruj dane 5-minutowe z ostatnich 30 dni (wg specyfikacji)
-        thirty_days_ago = current_date - timedelta(days=30)
-        # Filtrujemy, używając 'loc', aby wziąć dane dla tego 30-dniowego okna
-        recent_intraday_data = intraday_5min_df_view.loc[intraday_5min_df_view.index >= thirty_days_ago]
+        # 1. Sprawdź, czy mamy nowy argument
+        if daily_df_view is None or daily_df_view.empty:
+            # Fallback na starą logikę, jeśli nowy DF nie został przekazany
+            logger.warning("Brak 'daily_df_view' w 'calculate_market_temperature', powrót do starej (błędnej) logiki intraday.")
+            
+            # STARA LOGIKA (Intraday 5min)
+            thirty_days_ago = current_date - timedelta(days=30)
+            recent_intraday_data = intraday_5min_df_view.loc[intraday_5min_df_view.index >= thirty_days_ago]
+            if recent_intraday_data.empty or len(recent_intraday_data) < 2:
+                return None
+            returns_5min = recent_intraday_data['close'].pct_change()
+            market_temperature = returns_5min.std()
 
-        if recent_intraday_data.empty or len(recent_intraday_data) < 2:
-            return None # Za mało danych do obliczenia zwrotów
+        else:
+            # =============================================
+            # === NOWA LOGIKA (ZGODNIE Z MEMO SUPPORTU) ===
+            # =============================================
+            
+            # 1. Filtruj dane dzienne z ostatnich 30 dni (wg specyfikacji)
+            thirty_days_ago = current_date - timedelta(days=30)
+            recent_daily_data = daily_df_view.loc[daily_df_view.index >= thirty_days_ago]
 
-        # 2. Oblicz zwroty 5-minutowe
-        returns_5min = recent_intraday_data['close'].pct_change()
-        
-        # 3. Oblicz odchylenie standardowe
-        market_temperature = returns_5min.std()
-        
+            if recent_daily_data.empty or len(recent_daily_data) < 2:
+                return None # Za mało danych do obliczenia zwrotów
+
+            # 2. Oblicz zwroty dzienne
+            returns_daily = recent_daily_data['close'].pct_change()
+            
+            # 3. Oblicz odchylenie standardowe (to jest nowa 'market_temperature')
+            market_temperature = returns_daily.std()
+            # =============================================
+
         if pd.isna(market_temperature):
             return None
             
@@ -206,6 +241,10 @@ def calculate_market_temperature_from_data(intraday_5min_df_view: pd.DataFrame, 
     except Exception as e:
         logger.error(f"Błąd w 'calculate_market_temperature_from_data': {e}", exc_info=True)
         return None
+# ==================================================================
+# === KONIEC KLUCZOWEJ ZMIANY ===
+# ==================================================================
+
 
 def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optional[float]:
 # ... (bez zmian) ...
@@ -338,22 +377,26 @@ def calculate_time_dilation_live(ticker: str, ticker_daily_df: pd.DataFrame, spy
         return None
 
 def calculate_price_gravity_live(ticker: str, ticker_daily_df: pd.DataFrame, api_client: AlphaVantageClient) -> Optional[float]:
-# ... (bez zmian) ...
-    """(Wymiar 1.2) Oblicza 'price_gravity' (wymaga 1 dodatkowego wywołania API)."""
+    """
+    (Wymiar 1.2) Oblicza 'price_gravity' (na żywo).
+    ZGODNIE Z MEMO SUPPORTU: Używamy proxy (H+L+C)/3. Nie wymaga to dodatkowego wywołania API.
+    """
     try:
-        price = ticker_daily_df['close'].iloc[-1]
+        # Pobierz najnowsze wartości OHLC
+        latest_candle = ticker_daily_df.iloc[-1]
+        price = latest_candle['close']
+        high = latest_candle['high']
+        low = latest_candle['low']
         
-        vwap_data = api_client.get_vwap(ticker, interval='daily')
-        if not vwap_data or 'Technical Analysis: VWAP' not in vwap_data:
-             logger.warning(f"Brak danych VWAP (live) dla {ticker}")
-             return None
+        if pd.isna(price) or pd.isna(high) or pd.isna(low):
+            return None
+
+        # Oblicz proxy "centrum masy"
+        center_of_mass_proxy = (high + low + price) / 3.0
         
-        # Znajdź najnowszą wartość VWAP
-        latest_vwap_date = sorted(vwap_data['Technical Analysis: VWAP'].keys())[-1]
-        center_of_mass = float(vwap_data['Technical Analysis: VWAP'][latest_vwap_date]['VWAP'])
-        
+        # Oblicz metrykę
         if price == 0: return None
-        price_gravity = (center_of_mass - price) / price
+        price_gravity = (center_of_mass_proxy - price) / price
         return price_gravity
     except Exception as e:
         logger.error(f"Błąd w 'calculate_price_gravity' dla {ticker}: {e}", exc_info=True)
