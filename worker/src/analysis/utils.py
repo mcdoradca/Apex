@@ -13,7 +13,7 @@ import os
 import requests
 from urllib.parse import quote_plus
 import hashlib 
-import json 
+import json # <-- POPRAWKA 1: Import biblioteki JSON
 
 # Importujemy nowy model cache z Workera
 from .. import models
@@ -124,10 +124,12 @@ def get_raw_data_with_cache(
             ON CONFLICT (ticker, data_type) DO UPDATE
             SET raw_data_json = :raw_data, last_fetched = NOW();
         """)
+        
+        # <-- POPRAWKA 1: Konwertuj 'dict' na 'str' JSON przed wysłaniem do bazy
         session.execute(upsert_stmt, {
             'ticker': ticker,
             'data_type': data_type,
-            'raw_data': raw_data # Wstawiamy dict, nie string
+            'raw_data': json.dumps(raw_data) # Serializujemy dict do stringa JSON
         })
         session.commit()
         logger.info(f"[Cache UTILS] Pomyślnie zapisano nowe dane {data_type} dla {ticker} do DB.")
@@ -460,7 +462,7 @@ def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> t
 
 # --- POPRAWKA: Dodanie brakującej funkcji ---
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
-    """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
+    """Oblicza Wykładniczą Średnią Kroczący (EMA)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
     return series.ewm(span=period, adjust=False).mean()
