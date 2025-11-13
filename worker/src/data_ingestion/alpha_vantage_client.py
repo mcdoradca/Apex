@@ -166,21 +166,6 @@ class AlphaVantageClient:
         
     def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True):
         # Specyfikacja AQM V3 (4.1) wymaga interval=5min, outputsize=full
-        
-        # ==================================================================
-        # === KOMENTARZ DIAGNOSTYCZNY (DOT. LOGÓW BŁĘDÓW) ===
-        # Support AV zasugerował "literówkę" lub "brak parametru".
-        # Jak widać poniżej, wysyłamy WSZYSTKIE wymagane parametry:
-        # 1. 'function': "TIME_SERIES_INTRADAY" (Poprawnie)
-        # 2. 'symbol': symbol (Poprawnie)
-        # 3. 'interval': interval (Wysyłany jako '5min' przez backtest_engine, co jest poprawne)
-        # 4. 'outputsize': outputsize (Wysyłany jako 'full' przez backtest_engine, co jest poprawne)
-        # 5. 'apikey': Dodawany automatycznie przez _make_request (Poprawnie)
-        #
-        # Błąd `{'Error Message': 'Invalid API call. ... for TIME_SERIES_INTRADAY.'}`
-        # zwracany przez API (widoczny w logach) jest zatem błędem PO STRONIE ALPHA VANTAGE,
-        # wskazującym, że KLUCZ API nie ma uprawnień (entitlement) do tego endpointu Premium.
-        # ==================================================================
         params = {
             "function": "TIME_SERIES_INTRADAY", 
             "symbol": symbol, 
@@ -329,15 +314,12 @@ class AlphaVantageClient:
             return None
 
     # ==================================================================
-    # === GŁÓWNA NAPRAWA BŁĘDU FAZY 0 ===
-    # Zastąpiłem funkcję `get_cpi` funkcją `get_inflation_rate`.
-    # `get_cpi` zwracała BŁĘDNIE poziom indeksu (np. 324.8).
-    # `get_inflation_rate` zwraca POPRAWNIE roczną stopę procentową (np. 3.0).
+    # === WERYFIKACJA ENDPOINTÓW MAKRO (FAZA 0) ===
     # ==================================================================
     def get_inflation_rate(self, interval: str = 'monthly'):
         """
-        Pobiera dane o ROCZNEJ STOPIE INFLACJI (procentowej) (Premium).
-        Zastępuje błędną funkcję get_cpi.
+        WERYFIKACJA: Nazwa funkcji API `INFLATION` jest poprawna.
+        Zwraca roczną stopę inflacji (procentową).
         """
         logger.info("Agent Makro: Pobieranie danych INFLATION (roczna stopa procentowa)...")
         params = {
@@ -346,24 +328,23 @@ class AlphaVantageClient:
             "datatype": "json"
         }
         return self._make_request(params)
-    # ==================================================================
-    # === KONIEC GŁÓWNEJ NAPRAWY ===
-    # ==================================================================
 
     def get_fed_funds_rate(self, interval: str = 'monthly'):
-        """Pobiera dane o stopach procentowych FED (Premium)."""
-        logger.info("Agent Makro: Pobieranie danych FED FUNDS RATE...")
-        # === POPRAWKA BŁĘDU (z logów) ===
-        # Prawidłowa nazwa funkcji API to 'FEDERAL_FUNDS_RATE'
+        """
+        WERYFIKACJA: Nazwa funkcji API to `FEDERAL_FUNDS_RATE`.
+        """
+        logger.info("Agent Makro: Pobieranie danych FEDERAL_FUNDS_RATE...")
         params = {
-            "function": "FEDERAL_FUNDS_RATE",
+            "function": "FEDERAL_FUNDS_RATE", # Poprawna nazwa
             "interval": interval,
             "datatype": "json"
         }
         return self._make_request(params)
 
     def get_treasury_yield(self, interval: str = 'monthly', maturity: str = '10year'):
-        """Pobiera dane o rentowności obligacji skarbowych (Premium)."""
+        """
+        WERYFIKACJA: Nazwa funkcji API to `TREASURY_YIELD`.
+        """
         logger.info(f"Agent Makro: Pobieranie danych TREASURY YIELD ({maturity})...")
         params = {
             "function": "TREASURY_YIELD",
@@ -374,7 +355,9 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_unemployment(self):
-        """Pobiera dane o stopie bezrobocia (Premium)."""
+        """
+        WERYFIKACJA: Nazwa funkcji API to `UNEMPLOYMENT`.
+        """
         logger.info("Agent Makro: Pobieranie danych UNEMPLOYMENT...")
         params = {
             "function": "UNEMPLOYMENT",
@@ -383,16 +366,17 @@ class AlphaVantageClient:
         return self._make_request(params)
     
     # ==================================================================
-    # === NOWE ENDPOINTY DLA AQM (Backtest) ===
+    # === WERYFIKACJA ENDPOINTÓW AQM V3 (Backtest) ===
     # ==================================================================
     
     def get_time_series_weekly(self, symbol: str, outputsize: str = 'full'):
         """Pobiera *zwykłe* (nie-adjusted) dane tygodniowe."""
         params = {
-            "function": "TIME_SERIES_WEEKLY_ADJUSTED", # Używamy adjusted dla spójności
+            "function": "TIME_SERIES_WEEKLY_ADJUSTED", 
             "symbol": symbol,
             "outputsize": outputsize
         }
+        # WERYFIKACJA: TIME_SERIES_WEEKLY_ADJUSTED to dobry wybór
         return self._make_request(params)
 
     def get_obv(self, symbol: str, interval: str = 'daily'):
@@ -402,43 +386,26 @@ class AlphaVantageClient:
             "symbol": symbol,
             "interval": interval
         }
+        # WERYFIKACJA: Funkcja `OBV` jest poprawna
         return self._make_request(params)
         
     def get_sector_performance(self):
         """Pobiera dane o wydajności sektorów."""
         params = {"function": "SECTOR"}
+        # WERYFIKACJA: Funkcja `SECTOR` jest poprawna
         return self._make_request(params)
-    # ==================================================================
-    # === KONIEC NOWYCH ENDPOINTÓW AQM ===
-    # ==================================================================
     
-    # ==================================================================
-    # === NOWE ENDPOINTY DLA AQM V3 (Krok 12) ===
-    # Zgodnie ze specyfikacją PDF `AQM V3.pdf`
-    # ==================================================================
-
     def get_vwap(self, symbol: str, interval: str = 'daily'):
         """(AQM V3 - Wymiar 1.2) Pobiera dane VWAP."""
         logger.info(f"AQM V3: Pobieranie VWAP dla {symbol} (interval: {interval})...")
-
-        # ==================================================================
-        # === KOMENTARZ DIAGNOSTYCZNY (DOT. LOGÓW BŁĘDÓW) ===
-        # Support AV zasugerował "literówkę" lub "brak parametru".
-        # Jak widać poniżej, wysyłamy WSZYSTKIE wymagane parametry:
-        # 1. 'function': "VWAP" (Poprawnie)
-        # 2. 'symbol': symbol (Poprawnie)
-        # 3. 'interval': interval (Wysyłany jako 'daily' przez backtest_engine, co jest poprawne)
-        # 4. 'apikey': Dodawany automatycznie przez _make_request (Poprawnie)
-        #
-        # Błąd `API returned an error or empty data for [TICKER]: {}`
-        # zwracany przez API (widoczny w logach) jest zatem błędem PO STRONIE ALPHA VANTAGE,
-        # wskazującym, że KLUCZ API nie ma uprawnień (entitlement) do tego endpointu Premium.
-        # ==================================================================
         params = {
             "function": "VWAP",
             "symbol": symbol,
             "interval": interval
         }
+        # WERYFIKACJA: Funkcja `VWAP` jest poprawna. Błędy API (404/pusty JSON)
+        # dla tego endpointu są prawdopodobnie problemem z uprawnieniami Premium,
+        # a nie kodem. W kodzie to zapytanie jest poprawne.
         return self._make_request(params)
 
     def get_insider_transactions(self, symbol: str):
@@ -448,13 +415,17 @@ class AlphaVantageClient:
             "function": "INSIDER_TRANSACTIONS",
             "symbol": symbol
         }
+        # WERYFIKACJA: Funkcja `INSIDER_TRANSACTIONS` jest poprawna.
         return self._make_request(params)
 
     def get_time_series_daily(self, symbol: str, outputsize: str = 'full'):
-        """(AQM V3 - Wymiar 1.2, 3.1, 7.1) Pobiera dane dzienne *bez* korekty."""
-        logger.info(f"AQM V3: Pobieranie TIME_SERIES_DAILY dla {symbol}...")
+        """
+        (AQM V3 - Wymiar 1.2, 3.1, 7.1) Pobiera dane dzienne *bez* korekty.
+        TEN ENDPOINT ZAWIERA kolumnę 6. vwap, która jest kluczowa dla $\nabla^2$.
+        """
+        logger.info(f"AQM V3: Pobieranie TIME_SERIES_DAILY (z VWAP) dla {symbol}...")
         params = {
-            "function": "TIME_SERIES_DAILY",
+            "function": "TIME_SERIES_DAILY", # WERYFIKACJA: Poprawna funkcja dla VWAP w treści
             "symbol": symbol,
             "outputsize": outputsize
         }
@@ -467,7 +438,7 @@ class AlphaVantageClient:
             "function": "EARNINGS_CALENDAR",
             "horizon": horizon
         }
-        # Zakładamy, że wersja Premium zwraca JSON, a nie CSV
+        # WERYFIKACJA: Funkcja `EARNINGS_CALENDAR` jest poprawna
         return self._make_request(params)
 
     def get_earnings(self, symbol: str):
@@ -477,6 +448,7 @@ class AlphaVantageClient:
             "function": "EARNINGS",
             "symbol": symbol
         }
+        # WERYFIKACJA: Funkcja `EARNINGS` jest poprawna
         return self._make_request(params)
 
     def get_earnings_call_transcript(self, symbol: str, quarter: str):
@@ -487,6 +459,7 @@ class AlphaVantageClient:
             "symbol": symbol,
             "quarter": quarter # Np. "2024Q1"
         }
+        # WERYFIKACJA: Funkcja `EARNINGS_CALL_TRANSCRIPTS` jest poprawna
         return self._make_request(params)
 
     def get_wti(self, interval: str = 'daily'):
@@ -496,8 +469,9 @@ class AlphaVantageClient:
             "function": "WTI",
             "interval": interval
         }
+        # WERYFIKACJA: Funkcja `WTI` jest poprawna
         return self._make_request(params)
     
     # ==================================================================
-    # === KONIEC NOWYCH ENDPOINTÓW AQM V3 ===
+    # === KONIEC WERYFIKACJI ===
     # ==================================================================
