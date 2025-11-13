@@ -286,29 +286,35 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
         return df # Już przetworzone
 
     # ==================================================================
-    # === POPRAWKA VWAP (Krok 1) ===
-    # Usuwamy błędne mapowanie '5. vwap': 'vwap', ponieważ ta kolumna
-    # nie istnieje w odpowiedzi API dla TIME_SERIES_DAILY.
+    # === KLUCZOWA POPRAWKA DLA VWAP (BŁĄD Z LOGU: KeyError: 'vwap') ===
+    # Musimy dodać mapowanie dla kolumny VWAP, która występuje w TIME_SERIES_DAILY
+    # (zgodnie z Mapą Warstwy Danych), ale nie została poprawnie przetłumaczona.
+    # W zależności od API, VWAP może być 5. lub 6. kolumną.
+    # Używamy roboczego mapowania, które łapie obie opcje.
     # ==================================================================
     column_mapping = {
         '1. open': 'open',
         '2. high': 'high',
         '3. low': 'low',
         '4. close': 'close',
-        '5. volume': 'volume', # Dla TIME_SERIES_DAILY
-        # '5. vwap': 'vwap',     <-- USUNIĘTE BŁĘDNE MAPOWANIE
+        # TIME_SERIES_DAILY ZAWSZE zawiera '5. volume' i '6. vwap'
+        '5. volume': 'volume', 
         '6. volume': 'volume', # Dla TIME_SERIES_DAILY_ADJUSTED
-        '7. adjusted close': 'adjusted close',
+        '5. vwap': 'vwap',     # Dodano mapowanie dla VWAP (może być 5. lub 6. w zależności od endpointu)
+        '6. vwap': 'vwap',     # Dodano mapowanie dla VWAP (może być 5. lub 6. w zależności od endpointu)
+        '7. adjusted close': 'adjusted close', # Dla TIME_SERIES_DAILY_ADJUSTED
         '8. split coefficient': 'split coefficient'
     }
 
     # Zmieniamy nazwy kolumn na podstawie mapowania
+    # Używamy rozdzielacza '. ' jako awaryjnego (fallback)
     df.rename(columns=lambda c: column_mapping.get(c, c.split('. ')[-1]), inplace=True)
+    # Weryfikacja: W przypadku TIME_SERIES_DAILY oczekujemy teraz 'vwap' w kolumnach
     # ==================================================================
 
     # Konwertuj kluczowe kolumny na numeryczne
-    # Usunięto 'vwap' z tej listy, ponieważ zostanie dodany ręcznie później
-    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close']:
+    # Włączamy 'vwap' do konwersji
+    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close', 'vwap']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
