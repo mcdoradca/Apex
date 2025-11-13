@@ -85,8 +85,6 @@ def get_raw_data_with_cache(
         return {}
     
     # === KRYTYCZNA POPRAWKA BŁĘDU NR 1 (Argument API) ===
-    # Musimy przekazać argument 'tickers' lub 'symbol' w zależności od funkcji.
-    # Użyjemy domyślnego 'symbol', a 'tickers' dla get_news_sentiment.
     
     # Ustalenie nazwy argumentu dla tickera
     if api_func == 'get_news_sentiment' or api_func == 'get_bulk_quotes':
@@ -115,10 +113,6 @@ def get_raw_data_with_cache(
 
     # 3. ZAPIS DO CACHE (UPSERT)
     try:
-        # === POPRAWKA BŁĘDU NR 2 (Parsowanie JSONB) ===
-        # Zapisujemy obiekt Pythona (raw_data). SQLAlchemy i PostgreSQL
-        # same konwertują to na wewnętrzny typ JSONB.
-        
         upsert_stmt = text("""
             INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
             VALUES (:ticker, :data_type, :raw_data, NOW())
@@ -148,14 +142,12 @@ def get_raw_data_with_cache(
 _sent_alert_hashes = set()
 
 def clear_alert_memory_cache():
-# ... (bez zmian) ...
     """Czyści pamięć podręczną wysłanych alertów Telegrama."""
     global _sent_alert_hashes
     logger.info(f"Czyszczenie pamięci podręcznej alertów. Usunięto {len(_sent_alert_hashes)} wpisów.")
     _sent_alert_hashes = set()
 
 def send_telegram_alert(message: str):
-# ... (bez zmian) ...
     """
     Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
     NOWA LOGIKA: Wysyła wiadomość only wtedy, jeśli nie została wysłana 
@@ -201,7 +193,6 @@ def send_telegram_alert(message: str):
         logger.error(f"Nieoczekiwany błąd podczas wysyłania alertu Telegram: {e}")
 
 def get_current_NY_datetime() -> datetime:
-# ... (bez zmian) ...
     """Zwraca aktualny obiekt datetime dla strefy czasowej Nowego Jorku."""
     try:
         tz = pytz.timezone('US/Eastern')
@@ -212,7 +203,6 @@ def get_current_NY_datetime() -> datetime:
         return datetime.now(timezone.utc)
 
 def get_market_status_and_time(api_client) -> dict:
-# ... (bez zmian) ...
     """
     Sprawdza status giełdy NASDAQ używając dedykowanego endpointu API
     i zwraca czas w Nowym Jorku.
@@ -255,13 +245,8 @@ def get_market_status_and_time(api_client) -> dict:
         return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
 
 def update_system_control(session: Session, key: str, value: str):
-# ... (bez zmian) ...
     """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
     try:
-        # ==================================================================
-        # === KLUCZOWA POPRAWKA BŁĘDU SQL (SyntaxError: 'NOW()') ===
-        # Zmieniamy `NOW()` na jawną nazwę kolumny `updated_at`
-        # ==================================================================
         stmt = text("""
             INSERT INTO system_control (key, value, updated_at)
             VALUES (:key, :value, NOW())
@@ -275,7 +260,6 @@ def update_system_control(session: Session, key: str, value: str):
         session.rollback()
 
 def get_system_control_value(session: Session, key: str) -> str | None:
-# ... (bez zmian) ...
     """Odczytuje pojedynczą wartość z tabeli system_control."""
     try:
         result = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
@@ -285,13 +269,11 @@ def get_system_control_value(session: Session, key: str) -> str | None:
         return None
 
 def update_scan_progress(session: Session, processed: int, total: int):
-# ... (bez zmian) ...
     """Aktualizuje postęp skanowania w bazie danych."""
     update_system_control(session, 'scan_progress_processed', str(processed))
     update_system_control(session, 'scan_progress_total', str(total))
 
 def append_scan_log(session: Session, message: str):
-# ... (bez zmian) ...
     """Dodaje nową linię do logu skanowania w bazie danych."""
     try:
         current_log_result = session.execute(text("SELECT value FROM system_control WHERE key = 'scan_log'")).fetchone()
@@ -318,13 +300,11 @@ def append_scan_log(session: Session, message: str):
 
 
 def clear_scan_log(session: Session):
-# ... (bez zmian) ...
     """Czyści log skanowania w bazie danych."""
     update_system_control(session, 'scan_log', '')
 
 
 def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]:
-# ... (bez zmian) ...
     """Sprawdza i reaguje na polecenia z bazy danych."""
     command = get_system_control_value(session, 'worker_command')
     should_run_now = False
@@ -348,12 +328,10 @@ def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]
     return should_run_now, new_state
 
 def report_heartbeat(session: Session):
-# ... (bez zmian) ...
     """Raportuje 'życie' workera do bazy danych."""
     update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
 def safe_float(value) -> float | None:
-# ... (bez zmian) ...
     """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
     if value is None:
         return None
@@ -365,7 +343,6 @@ def safe_float(value) -> float | None:
         return None
 
 def get_performance(data: dict, days: int) -> float | None:
-# ... (bez zmian) ...
     """Oblicza zwrot procentowy w danym okresie na podstawie słownika."""
     try:
         time_series = data.get('Time Series (Daily)')
@@ -388,7 +365,6 @@ def get_performance(data: dict, days: int) -> float | None:
 # --- NARZĘDZIA DO OPTYMALIZACJI API ---
 
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
-# ... (bez zmian) ...
     """Standaryzuje nazwy kolumn z API ('1. open' -> 'open') i konwertuje na typy numeryczne."""
     if df.empty:
         return df
@@ -397,7 +373,7 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if 'open' in df.columns and 'close' in df.columns:
         # Ten warunek jest teraz wystarczający. Kolumna 'vwap' zostanie
         # dodana RĘCZNIE w `backtest_engine.py`, jeśli brakuje jej w surowych danych.
-        return df [Image of the human digestive system] # Już przetworzone
+        return df # Już przetworzone
 
     # ==================================================================
     # === POPRAWKA VWAP (Usunięcie niestabilnego mapowania) ===
@@ -435,7 +411,6 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza ATR (Average True Range) na podstawie DataFrame OHLC."""
     if df.empty or len(df) < period:
         return pd.Series(dtype=float)
@@ -450,7 +425,6 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
     return atr
 
 def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza RSI (Relative Strength Index)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -464,7 +438,6 @@ def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
     return rsi
 
 def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> tuple:
-# ... (bez zmian) ...
     """Oblicza Bollinger Bands (Środkowa, Górna, Dolna) oraz Szerokość Wstęgi (BBW)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
@@ -482,7 +455,6 @@ def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> t
 
 # --- POPRAWKA: Dodanie brakującej funkcji ---
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
     if series.empty or len(series) < period:
         return pd.Series(dtype=float)
@@ -493,7 +465,6 @@ def calculate_ema(series: pd_Series, period: int) -> pd_Series:
 # === NOWA FUNKCJA (Dla "Strategy Battle Royale") ===
 # ==================================================================
 def calculate_macd(series: pd_Series, short_period=12, long_period=26, signal_period=9) -> tuple:
-# ... (bez zmian) ...
     """
     Oblicza linię MACD (EMA(12) - EMA(26)) oraz linię Sygnału (EMA(9) z MACD).
     Zwraca (macd_line, signal_line).
@@ -518,7 +489,6 @@ def calculate_macd(series: pd_Series, short_period=12, long_period=26, signal_pe
 # ==================================================================
 
 def calculate_obv(df: pd.DataFrame) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza On-Balance Volume (OBV) używając metody wektorowej."""
     if 'close' not in df.columns or 'volume' not in df.columns:
         logger.error("Brak kolumn 'close' lub 'volume' do obliczenia OBV.")
@@ -535,7 +505,6 @@ def calculate_obv(df: pd.DataFrame) -> pd_Series:
     return directional_volume.cumsum()
 
 def calculate_ad(df: pd.DataFrame) -> pd_Series:
-# ... (bez zmian) ...
     """Oblicza Linię Akumulacji/Dystrybucji (A/D Line)."""
     if not all(col in df.columns for col in ['high', 'low', 'close', 'volume']):
         logger.error("Brak kolumn 'high', 'low', 'close', 'volume' do obliczenia A/D.")
