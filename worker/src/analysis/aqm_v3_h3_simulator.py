@@ -4,11 +4,7 @@ import numpy as np
 from scipy.stats import zscore
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-# ==================================================================
-# === POPRAWKA (NameError): Dodano 'Tuple' do importu ===
-# ==================================================================
 from typing import Dict, Any, Optional, Tuple
-# ==================================================================
 
 # Importujemy modele i funkcje pomocnicze
 from .. import models
@@ -29,65 +25,77 @@ def _calculate_h3_components_for_day(
     intraday_5min_df: pd.DataFrame
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
-    Oblicza *nienormalizowane* wartości J, ∇² i m² dla pojedynczego dnia.
+    Oblicza *nienormalizowane* wartości J (entropy_change), ∇² (price_gravity) 
+    i m² (attention_density) dla pojedynczego dnia, zgodnie z Mapą Warstwy Danych.
     """
     try:
-        # 1. Oblicz ∇² (Grawitacja Cenowa) - jest już na daily_df
-        # Używamy .loc, aby bezpiecznie pobrać wartość dla DOKŁADNEJ daty
+        # --- 1. Oblicz ∇² (Grawitacja Cenowa) ---
+        # ∇² jest aliasem dla price_gravity (Wymiar 1.2), obliczanym w daily_df
+        # Korzystamy z ffill, aby znaleźć cenę VWAP i Close z najbliższego dnia
         nabla_sq = daily_df.loc[current_date]['price_gravity']
         
-        # 2. Oblicz m² (Gęstość Uwagi) - Wymaga 200 dni historii
-        # Musimy zapewnić, że mamy co najmniej 200 dni danych PRZED current_date
-        daily_view_m_sq = daily_df.loc[:current_date].iloc[-200:]
-        news_view_m_sq = news_df.loc[:current_date].iloc[-200:] # Uproszczenie, news_df może być rzadki
+        if pd.isna(nabla_sq):
+            return None, None, None
+
+        # --- 2. Oblicz m² (Gęstość Uwagi) ---
+        # m² jest aliasem dla attention_density (Wymiar 7.1).
+        # Wymaga 200 dni historii do obliczenia Z-Score.
+        # Używamy .loc[:current_date] i .iloc[-200:], aby pobrać właściwy widok historyczny
         
-        if len(daily_view_m_sq) < 200:
-            return None, None, None # Niewystarczająca historia dla Z-Score w m²
+        # Tworzymy widoki danych kończące się na current_date
+        daily_view_m_sq = daily_df.loc[:current_date]
+        news_view_m_sq = news_df.loc[:current_date] 
+        
+        if len(daily_view_m_sq) < 200 or len(news_view_m_sq) < 200:
+            # Nie wystarczająca historia dla Z-Score w m² ( attention_density)
+            return None, None, None 
 
         m_sq = aqm_v3_metrics.calculate_attention_density_from_data(
             daily_view_m_sq,
             news_view_m_sq,
-            current_date
+            current_date.to_pydatetime()
         )
         
-        # 3. Oblicz J (Zmiana Entropii)
+        if m_sq is None:
+            return None, None, None
+
+        # --- 3. Oblicz J (Zmiana Entropii) ---
         
-        # S (Entropia) - 100 ostatnich newsów
-        news_view_s = news_df.loc[:current_date].iloc[-100:]
-        S = aqm_v3_metrics.calculate_information_entropy_from_data(news_view_s)
+        # a) S (Entropia Informacyjna) - Proxy: COUNT(artykułów z ostatnich 10 dni) (str. 23)
+        # news_view_j jest używany do obliczenia S, Q i μ
+        news_view_j = news_df.loc[:current_date]
+        S = aqm_v3_metrics.calculate_information_entropy_from_data(news_view_j)
         
-        # Q (Retail Herding) - ostatnie 7 dni
-        Q = aqm_v3_metrics.calculate_retail_herding_from_data(news_df, current_date)
+        # b) Q (Przepływ Sentymentu) - retail_herding (ostatnie 7 dni)
+        Q = aqm_v3_metrics.calculate_retail_herding_from_data(news_view_j, current_date.to_pydatetime())
         
-        # T (Temperatura Rynku) - ostatnie 30 dni danych 5-min
-        T = aqm_v3_metrics.calculate_market_temperature_from_data(intraday_5min_df, current_date)
+        # c) T (Temperatura Rynku) - STDEV(returns_5min) (ostatnie 30 dni)
+        T = aqm_v3_metrics.calculate_market_temperature_from_data(intraday_5min_df, current_date.to_pydatetime())
         
-        # μ (Institutional Sync) - ostatnie 90 dni
-        mu = aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, current_date)
+        # d) μ (Potencjał Insiderów) - institutional_sync (ostatnie 90 dni)
+        mu = aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, current_date.to_pydatetime())
         
-        # ΔN (Odwrotność m²)
-        if m_sq is None or m_sq == 0:
-            return None, None, None # Nie można obliczyć J bez m²
-        
-        delta_N = 1.0 / m_sq
+        # e) ΔN (Przewaga Informacyjna) - Stała 1.0 (str. 23)
+        delta_N = 1.0 
         
         # Walidacja komponentów J
-        if any(v is None for v in [S, Q, T, mu, delta_N]):
+        if any(v is None for v in [S, Q, T, mu]):
             return None, None, None # Brakuje danych do obliczenia J
             
         if T == 0:
             return None, None, None # Dzielenie przez zero
 
-        # Sztywna Formuła Analityczna: J = S - (Q / T) + (μ * ΔN)
+        # Sztywna Formuła Analityczna (Prawo 2): J = S - (Q / T) + (μ * ΔN)
+        # UWAGA: W PDF (str. 6) wzór to: $S-(Q/T)+(\mu^{*}\Delta N)$. Zgodnie z PDF (str. 23) używamy: $J=S-(Q/T)+(\mu*\Delta N)$
         J = S - (Q / T) + (mu * delta_N)
         
-        if pd.isna(J) or pd.isna(nabla_sq) or pd.isna(m_sq):
+        if pd.isna(J):
             return None, None, None
             
-        return J, nabla_sq, m_sq
+        return float(J), float(nabla_sq), float(m_sq)
 
     except KeyError:
-        # logger.warning(f"[Backtest H3] Brak danych (KeyError) dla {current_date.date()}.")
+        # Błąd KeyError oznacza, że dla tej daty brakuje wpisu w daily_df (co jest normalne dla dni wolnych)
         return None, None, None
     except Exception as e:
         logger.error(f"[Backtest H3] Błąd w _calculate_h3_components_for_day: {e}", exc_info=True)
@@ -105,14 +113,11 @@ def _simulate_trades_h3(
     """
     trades_found = 0
     
-    # 1. Wyodrębnij wszystkie potrzebne DataFrame'y z cache
     daily_df = historical_data.get("daily")
     insider_df = historical_data.get("insider_df")
     news_df = historical_data.get("news_df")
-    intraday_5min_df = historical_data.get("intraday_5min_df") # Wymagany dla 'T'
-    # bbands_df = historical_data.get("bbands_df") # Niewymagany dla H3
+    intraday_5min_df = historical_data.get("intraday_5min_df") 
 
-    # Wymagamy wszystkich zestawów danych do uruchomienia testu H3
     if daily_df is None or insider_df is None or news_df is None or intraday_5min_df is None:
         logger.warning(f"[Backtest V3][H3] Pominięto {ticker}, brak kompletnych danych (Daily, Insider, News lub Intraday 5min).")
         return 0
@@ -121,27 +126,18 @@ def _simulate_trades_h3(
         logger.warning(f"[Backtest V3][H3] Pominięto {ticker}, jeden z DataFrame'ów jest pusty.")
         return 0
 
-    # 2. Definicje okien (zgodnie ze specyfikacją)
-    # m² (attention_density) wymaga 200-dniowego okna dla swojego Z-Score,
-    # a sam AQM_V3_SCORE wymaga 100-dniowego okna dla percentyla.
-    # Używamy 200 jako minimalnego wymaganego bufora historii.
     history_window = 200 
-    percentile_window = 100 # Okno dla Z-Score i Percentyla (wg specyfikacji H3)
+    percentile_window = 100 
     
-    # Zapewniamy, że mamy wystarczająco danych (200 dni historii + 100 dni okna percentyla + 1 dzień bieżący)
     if len(daily_df) < history_window + percentile_window + 1:
-        logger.warning(f"[Backtest V3][H3] Pominięto {ticker}, za mało danych ({len(daily_df)}) do testu H3.")
+        logger.warning(f"[Backtest V3][H3] Pominięto {ticker}, za mało danych ({len(daily_df)}) do testu H3 (wymagane 301+).")
         return 0
 
-    # 3. Główna pętla symulacyjna
-    # Zaczynamy od indeksu, który pozwala na 100-dniowe okno percentyla ORAZ
-    # 200-dniowe okno dla obliczenia m² (attention_density).
-    # `i` reprezentuje Dzień D (Skanowanie na CLOSE)
+    # Główna pętla symulacyjna
     for i in range(history_window + percentile_window, len(daily_df) - 1): 
         
         # --- Dzień D (Skanowanie na CLOSE) ---
         
-        # Listy do przechowywania 100-dniowej historii komponentów
         j_history = []
         nabla_history = []
         m_history = []
@@ -149,7 +145,6 @@ def _simulate_trades_h3(
         components_calculated = True
 
         # 4. Oblicz 100-dniową historię komponentów (dla Z-Score i Percentyla)
-        # Iterujemy od (i - 100) do i (włącznie), aby uzyskać 101 punktów danych
         for j in range(i - percentile_window, i + 1):
             current_date_j = daily_df.index[j]
             
@@ -164,37 +159,40 @@ def _simulate_trades_h3(
             
             if J_j is None or nabla_sq_j is None or m_sq_j is None:
                 components_calculated = False
-                break # Przerwij pętlę komponentów, jeśli brakuje danych
+                break 
                 
             j_history.append(J_j)
             nabla_history.append(nabla_sq_j)
             m_history.append(m_sq_j)
 
         if not components_calculated:
-            # logger.warning(f"[Backtest H3] Pominięto Dzień {daily_df.index[i].date()} dla {ticker}, błąd obliczania komponentów.")
-            continue # Przejdź do następnego dnia D
+            continue
 
         # 5. Normalizacja (Z-Score)
-        # Konwertujemy na serie, aby łatwo obliczyć Z-Score
         j_series = pd.Series(j_history)
         nabla_series = pd.Series(nabla_history)
         m_series = pd.Series(m_history)
 
         # Używamy `scipy.stats.zscore`. `ddof=1` dla próbki (standardowe odchylenie)
-        j_norm_series = pd.Series(zscore(j_series, ddof=1))
-        nabla_norm_series = pd.Series(zscore(nabla_series, ddof=1))
-        m_norm_series = pd.Series(zscore(m_series, ddof=1))
+        # Należy obsłużyć przypadek, gdy std=0
         
-        # 6. Oblicz AQM_V3_SCORE (zgodnie ze specyfikacją)
-        # Wagi w1=1.0, w2=1.0, w3=1.0
+        j_norm_series = (j_series - j_series.mean()) / j_series.std(ddof=1) if j_series.std(ddof=1) != 0 else pd.Series(0, index=j_series.index)
+        nabla_norm_series = (nabla_series - nabla_series.mean()) / nabla_series.std(ddof=1) if nabla_series.std(ddof=1) != 0 else pd.Series(0, index=nabla_series.index)
+        m_norm_series = (m_series - m_series.mean()) / m_series.std(ddof=1) if m_series.std(ddof=1) != 0 else pd.Series(0, index=m_series.index)
+        
+        # Zastąp NaN wartościami 0 (powstają, gdy std=0)
+        j_norm_series.fillna(0, inplace=True)
+        nabla_norm_series.fillna(0, inplace=True)
+        m_norm_series.fillna(0, inplace=True)
+        
+        # 6. Oblicz AQM_V3_SCORE (zgodnie ze specyfikacją - wagi 1.0)
         aqm_score_series = (1.0 * j_norm_series) - (1.0 * nabla_norm_series) - (1.0 * m_norm_series)
         
         # 7. Zastosuj Warunki H3 (Logika Sygnału)
         
-        # Pobierz bieżącą (ostatnią) wartość z 101-dniowej serii
         current_aqm_score = aqm_score_series.iloc[-1]
         
-        # Oblicz 95. percentyl z *całej* 101-dniowej serii
+        # Oblicz 95. percentyl z *całej* 101-dniowej serii (w tym bieżący dzień)
         percentile_95 = aqm_score_series.quantile(0.95)
 
         # Sygnał KUPNA = Warunek 1 (AQM_V3_SCORE > 95. percentyl)
@@ -212,7 +210,6 @@ def _simulate_trades_h3(
                 
                 # Walidacja danych (bardzo ważna)
                 if pd.isna(entry_price) or pd.isna(atr_value) or atr_value == 0:
-                    logger.warning(f"[Backtest H3] Pominięto sygnał dla {ticker} (Dzień {candle_D.name.date()}). Brak danych OPEN(D+1) lub ATR(D).")
                     continue
                 
                 # Używamy parametrów ze Specyfikacji H3
@@ -228,11 +225,10 @@ def _simulate_trades_h3(
                     "take_profit": take_profit,
                 }
                 
-                # 9. Przekaż do _resolve_trade (zapożyczonego z symulatora H1)
-                # Przekazujemy pełny DataFrame i indeks dnia WEJŚIA (D+1)
+                # 9. Przekaż do _resolve_trade
                 trade = _resolve_trade(
                     daily_df, 
-                    i + 1, # Indeks Dnia D+1 (start pętli w _resolve_trade)
+                    i + 1, 
                     setup_h3, 
                     max_hold_days, 
                     year, 
@@ -243,7 +239,6 @@ def _simulate_trades_h3(
                     trades_found += 1
                     
             except IndexError:
-                # Dzień D był ostatnim dniem w danych, nie ma D+1
                 continue
             except Exception as e:
                 logger.error(f"[Backtest H3] Błąd podczas tworzenia setupu dla {ticker} (Dzień {candle_D.name.date()}): {e}", exc_info=True)
