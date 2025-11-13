@@ -107,6 +107,43 @@ def _detect_market_regime(current_date_str: str) -> str:
         return 'volatile'
 
 # ==================================================================
+# === NOWA FUNKCJA POMOCNICZA: Parser VWAP (Daily) ===
+# ==================================================================
+def _parse_vwap_daily(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    """
+    Przetwarza surową odpowiedź JSON z VWAP (Daily) na DataFrame.
+    """
+    try:
+        # Klucz to 'Technical Analysis: VWAP' lub 'Technical Analysis: VWAP (Daily)'
+        data_keys = [k for k in raw_data.keys() if k.startswith('Technical Analysis: VWAP')]
+        if not data_keys:
+            logger.warning("Parser VWAP (Daily): Nie znaleziono klucza 'Technical Analysis: VWAP' w odpowiedzi.")
+            return pd.DataFrame(columns=['vwap']).set_index(pd.to_datetime([]))
+        
+        data = raw_data[data_keys[0]] # Pobierz dane z dynamicznego klucza
+        if not data:
+            logger.warning("Parser VWAP (Daily): Klucz 'Technical Analysis: VWAP' zawiera puste dane.")
+            return pd.DataFrame(columns=['vwap']).set_index(pd.to_datetime([]))
+
+        df = pd.DataFrame.from_dict(data, orient='index')
+        df.index = pd.to_datetime(df.index)
+        
+        # Konwertuj na liczby
+        df['VWAP'] = pd.to_numeric(df['VWAP'], errors='coerce')
+        
+        # Zmień nazwę kolumny na tę, której oczekuje reszta systemu
+        df.rename(columns={'VWAP': 'vwap'}, inplace=True)
+            
+        df.sort_index(inplace=True)
+        return df
+        
+    except Exception as e:
+        logger.error(f"Błąd podczas parsowania danych VWAP (Daily): {e}", exc_info=True)
+        return None
+# ==================================================================
+
+
+# ==================================================================
 # === NOWA FUNKCJA POMOCNICZA: Parser VWAP (Intraday -> Daily) ===
 # ==================================================================
 def _parse_vwap_intraday_to_daily(raw_data_list: List[Dict[str, Any]]) -> Optional[pd.DataFrame]:
@@ -175,7 +212,9 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         )
         
         # ==================================================================
-        # === NOWE WYWOŁANIE (NAPRAWA VWAP): Pętla 12 miesięcy dla VWAP ===
+        # === OPTYMALIZACJA VWAP: Usunięcie pętli 24 wywołań ===
+        # Zastąpiono pętlę pobierającą dane 60min per miesiąc
+        # pojedynczym wywołaniem pobierającym dane Daily VWAP (20+ lat).
         # ==================================================================
         
         # Potrzebujemy danych z roku `year_to_test` ORAZ roku poprzedniego (dla historii wskaźników)
@@ -185,20 +224,13 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
             for month in range(1, 13):
                 months_needed.append(f"{year}-{month:02d}") # Format YYYY-MM
         
-        vwap_raw_list = []
-        
-        for month_str in months_needed:
-            # Używamy 60min, aby dostać się jak najdalej wstecz
-            # Używamy unikalnego data_type dla cache per miesiąc
-            vwap_raw_month = get_raw_data_with_cache(
-                session=session, api_client=api_client, ticker=ticker, 
-                data_type=f'VWAP_INTRADAY_60MIN_{month_str}',
-                api_func='get_vwap', 
-                interval='60min', 
-                month=month_str
-            )
-            if vwap_raw_month:
-                vwap_raw_list.append(vwap_raw_month)
+        logger.info(f"Optymalizacja: Pobieranie Daily VWAP (1 wywołanie) dla {ticker}...")
+        vwap_daily_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker,
+            data_type='VWAP_DAILY_FULL_V2', # Nowy, pojedynczy typ cache (v2 dla pewności)
+            api_func='get_vwap',
+            interval='daily' # Kluczowa zmiana
+        )
         
         # ==================================================================
         
@@ -209,6 +241,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         )
         
         # Dla H3/H4 potrzebujemy danych 5-minutowych. Musimy je pobrać dla każdego miesiąca.
+        # TA PĘTLA MUSI POZOSTAĆ (jest niezbędna dla H3 i H4)
         intraday_raw_list = []
         for month_str in months_needed:
             intraday_raw_month = get_raw_data_with_cache(
@@ -256,8 +289,8 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         # === POPRAWKA (NAPRAWA VWAP): Dołączenie prawdziwych, zagregowanych danych VWAP ===
         # ==================================================================
         
-        # Parsujemy dane VWAP (60min) i agregujemy je do Dziennych
-        vwap_daily_df = _parse_vwap_intraday_to_daily(vwap_raw_list)
+        # Parsujemy dane VWAP (Daily) używając nowej funkcji
+        vwap_daily_df = _parse_vwap_daily(vwap_daily_raw)
         
         if vwap_daily_df is not None and not vwap_daily_df.empty:
             # Dołączamy prawdziwy, obliczony Dzienny VWAP do naszego głównego DataFrame
@@ -265,7 +298,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
             enriched_df = enriched_df.join(vwap_daily_df)
             logger.info(f"Pomyślnie obliczono i dołączono PRAWDZIWE dane VWAP (Daily) dla {ticker}.")
         else:
-            logger.warning(f"Brak danych VWAP (Intraday) dla {ticker}. Proxy SMA(20) jest wyłączone. H1 nie wygeneruje sygnałów dla tej spółki.")
+            logger.warning(f"Brak danych VWAP (Daily) dla {ticker}. H1 nie wygeneruje sygnałów dla tej spółki.")
             # Tworzymy pustą kolumnę, aby uniknąć błędów, ale będzie pełna NaN
             enriched_df['vwap'] = np.nan
         # ==================================================================
