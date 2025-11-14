@@ -102,11 +102,11 @@ def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, curren
     try:
         # 1. Filtruj transakcje z ostatnich 90 dni (wg specyfikacji)
         ninety_days_ago = current_date - timedelta(days=90)
-
-        # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
-        # Ta funkcja jest bezpieczna, ponieważ zarówno 'insider_df_view.index'
-        # jak i 'current_date' są domyślnie "naiwne" (tz-naive), więc można je porównywać.
-        # Nie ma potrzeby wprowadzania zmian, jeśli logi nie wskazują tu błędu.
+        
+        # Ta funkcja jest bezpieczna:
+        # 'current_date' (z daily_df) jest "naiwna" (naive).
+        # 'insider_df_view.index' (z _parse_insider_transactions) też jest "naiwny".
+        # Porównanie Naive vs Naive jest poprawne.
         
         # Używamy .loc do filtrowania po indeksie (który jest datą)
         recent_transactions = insider_df_view.loc[insider_df_view.index >= ninety_days_ago]
@@ -144,19 +144,22 @@ def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date:
         # === POPRAWKA BŁĘDU (TypeError: tz-naive vs tz-aware) ===
         # ==================================================================
         
-        # Krok A: Sprawdź, czy 'current_date' (z daily_df) jest naiwna.
-        # Jeśli tak, nadaj jej strefę czasową UTC, aby pasowała do indeksu news_df.
-        if current_date.tzinfo is None:
-            current_date_utc = current_date.replace(tzinfo=timezone.utc)
-        else:
-            current_date_utc = current_date # Już jest świadoma
-
-        # Krok B: Oblicz 'seven_days_ago' używając daty świadomej strefy czasowej
-        seven_days_ago_utc = current_date_utc - timedelta(days=7)
+        # Krok A: 'current_date' jest NAIVE (z daily_df)
+        seven_days_ago = current_date - timedelta(days=7)
         
-        # Używamy .loc do filtrowania po indeksie (który jest datą)
-        # Teraz porównujemy TZ-Aware (indeks) z TZ-Aware (seven_days_ago_utc)
-        recent_news = news_df_view.loc[news_df_view.index >= seven_days_ago_utc]
+        # Krok B: 'news_df_view.index' jest AWARE (UTC) gdy ma dane,
+        # lub NAIVE (datetime64[ns]) gdy jest pusty.
+        # Musimy ujednolicić wszystko do NAIVE, aby pasowało do 'current_date'.
+        
+        if news_df_view.index.tz is not None:
+            # Jeśli indeks jest świadomy (Aware), konwertujemy go na naiwny (Naive)
+            news_df_view_naive = news_df_view.tz_convert(None)
+        else:
+            # Jeśli indeks jest już naiwny (np. pusty), używamy go bez zmian
+            news_df_view_naive = news_df_view
+
+        # Krok C: Porównujemy Naive vs Naive (bezpieczne)
+        recent_news = news_df_view_naive.loc[news_df_view_naive.index >= seven_days_ago]
         
         # ==================================================================
         # === KONIEC POPRAWKI ===
@@ -255,8 +258,23 @@ def calculate_market_temperature_from_data(
             logger.warning("Brak 'daily_df_view' - używam starej logiki (Intraday).")
             
             # STARA LOGIKA (Intraday 5min)
-            thirty_days_ago = current_date - timedelta(days=30)
-            recent_intraday_data = intraday_5min_df_view.loc[intraday_5min_df_view.index >= thirty_days_ago]
+            # ==================================================================
+            # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
+            # Ta logika jest martwa, ale na wszelki wypadek ją też naprawimy
+            if current_date.tzinfo is None:
+                current_date_utc = current_date.replace(tzinfo=timezone.utc)
+            else:
+                current_date_utc = current_date
+            thirty_days_ago_utc = current_date_utc - timedelta(days=30)
+
+            if intraday_5min_df_view.index.tz is not None:
+                intraday_naive = intraday_5min_df_view.tz_convert(None)
+            else:
+                intraday_naive = intraday_5min_df_view
+            # ==================================================================
+
+            recent_intraday_data = intraday_naive.loc[intraday_naive.index >= (current_date - timedelta(days=30))]
+            
             if recent_intraday_data.empty or len(recent_intraday_data) < 2:
                 return None
             returns_5min = recent_intraday_data['close'].pct_change()
@@ -282,19 +300,25 @@ def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optio
     try:
         # 1. Oblicz S - Liczba newsów z ostatnich 10 dni
         
-        if news_df_view.empty:
-            return 0.0 
-            
-        latest_date = news_df_view.index[-1].to_pydatetime()
-        
         # ==================================================================
         # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
         # ==================================================================
-        # 'latest_date' jest TZ-Aware (UTC), więc 'ten_days_ago' też będzie.
-        ten_days_ago_utc = latest_date - timedelta(days=10)
         
-        # Filtruj newsy z ostatnich 10 dni (Aware vs Aware - jest OK)
-        recent_news = news_df_view.loc[news_df_view.index >= ten_days_ago_utc]
+        # Krok A: Ujednolić do NAIVE
+        if news_df_view.index.tz is not None:
+            news_df_view_naive = news_df_view.tz_convert(None)
+        else:
+            news_df_view_naive = news_df_view
+        
+        if news_df_view_naive.empty:
+            return 0.0 
+            
+        # Krok B: Obliczenia na danych naiwnych
+        latest_date_naive = news_df_view_naive.index[-1].to_pydatetime()
+        ten_days_ago_naive = latest_date_naive - timedelta(days=10)
+        
+        # Krok C: Porównanie Naive vs Naive
+        recent_news = news_df_view_naive.loc[news_df_view_naive.index >= ten_days_ago_naive]
         # ==================================================================
         
         # Zwróć liczbę newsów
@@ -335,8 +359,19 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
             # Poprawka: Fallback 0.0 bez spamowania logami
             normalized_news = 0.0 
         else:
-            # a) Zlicz newsy dziennie
-            news_counts_daily = news_df_view.resample('D').size()
+            
+            # ==================================================================
+            # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
+            # ==================================================================
+            # Krok A: Ujednolić do NAIVE
+            if news_df_view.index.tz is not None:
+                news_df_view_naive = news_df_view.tz_convert(None)
+            else:
+                news_df_view_naive = news_df_view
+            
+            # a) Zlicz newsy dziennie (na danych naiwnych)
+            news_counts_daily = news_df_view_naive.resample('D').size()
+            # ==================================================================
             
             # b) Oblicz kroczącą sumę z 10-dniowego okna
             historical_news_count_10d = news_counts_daily.rolling(window=10).sum()
@@ -344,19 +379,9 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
             # Bierzemy OSTATNIE 200 punktów, które nie są NaN
             valid_news_history = historical_news_count_10d.iloc[-200:].dropna()
             
-            # ==================================================================
-            # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
-            # ==================================================================
-            # 'current_date' jest naiwna, a indeks 'historical_news_count_10d'
-            # jest świadomy (bo pochodzi z news_df_view).
-            # Musimy użyć 'asof' z datą świadomą strefy.
-            if current_date.tzinfo is None:
-                current_date_utc = current_date.replace(tzinfo=timezone.utc)
-            else:
-                current_date_utc = current_date
-                
-            news_count_10d = historical_news_count_10d.asof(current_date_utc)
-            # ==================================================================
+            # Krok C: Porównanie Naive (asof) vs Naive (current_date)
+            # 'current_date' jest już naiwna
+            news_count_10d = historical_news_count_10d.asof(current_date)
             
             if valid_news_history.empty or pd.isna(news_count_10d):
                 normalized_news = 0.0
@@ -402,6 +427,69 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
     except Exception as e:
         logger.error(f"Błąd w 'calculate_attention_density_from_data': {e}", exc_info=True)
         return None
+# ==================================================================
+
+
+# ==================================================================
+# === NOWA FUNKCJA (Brakujący Atrybut z H3/H4) ===
+# Ta funkcja łączy wszystkie metryki w komponenty H3
+# ==================================================================
+def calculate_h3_components_for_day(
+    current_date: datetime,
+    daily_view: pd.DataFrame,        # Widok Dzienny do daty J
+    insider_df: pd.DataFrame,          # Pełna historia insider
+    news_df: pd.DataFrame,             # Pełna historia news
+    full_daily_df: pd.DataFrame,       # Pełny DF (dla BBANDS/History)
+    intraday_5min_df: pd.DataFrame     # (Pusty) DF
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Oblicza trzy główne komponenty modelu H3 (J, Nabla^2, m^2) dla JEDNEGO DNIA.
+    Jest to funkcja, której brakowało (AttributeError).
+    """
+    try:
+        # === 1. Oblicz J (entropy_change) ===
+        # J = S - (Q / T) + (μ * ΔN)
+        
+        # S = information_entropy (Proxy: Liczba newsów z 10 dni)
+        S = calculate_information_entropy_from_data(news_df)
+        
+        # Q = retail_herding (Średni sentyment z 7 dni)
+        Q = calculate_retail_herding_from_data(news_df, current_date)
+        
+        # T = market_temperature (Zmienność dzienna z 30 dni)
+        T = calculate_market_temperature_from_data(
+            intraday_5min_df, # Ignorowane
+            current_date,
+            daily_view # Używamy widoku dziennego
+        )
+        
+        # μ = institutional_sync (Stosunek insiderów z 90 dni)
+        mu = calculate_institutional_sync_from_data(insider_df, current_date)
+        
+        # ΔN = 1.0 (zgodnie ze specyfikacją PDF)
+        delta_N = 1.0
+        
+        J = None
+        if S is not None and Q is not None and T is not None and mu is not None:
+            if T == 0 or pd.isna(T):
+                J = S + (mu * delta_N) # Unikaj dzielenia przez zero lub błędu NaN
+            else:
+                J = S - (Q / T) + (mu * delta_N)
+
+        # === 2. Oblicz ∇² (nabla_sq) = price_gravity ===
+        nabla_sq = calculate_price_gravity_from_data(daily_view)
+
+        # === 3. Oblicz m² (m_sq) = attention_density ===
+        # Wymaga 'full_daily_df' do obliczenia 200-dniowego Z-Score wolumenu
+        m_sq = calculate_attention_density_from_data(full_daily_df, news_df, current_date)
+        
+        return J, nabla_sq, m_sq
+
+    except Exception as e:
+        logger.error(f"Błąd w 'calculate_h3_components_for_day' dla daty {current_date}: {e}", exc_info=True)
+        return None, None, None
+# ==================================================================
+# === KONIEC NOWEJ FUNKCJI ===
 # ==================================================================
 
 
