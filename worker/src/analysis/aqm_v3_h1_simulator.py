@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 # ==================================================================
 # === LOGIKA EGZEKUCJI TRANSAKCJI (Przeniesiona z backtest_engine) ===
+# === ZMODYFIKOWANA O LOGOWANIE METRYK ===
 # ==================================================================
 
 def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
@@ -20,9 +21,8 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
     "Spogląda w przyszłość" (w danych historycznych), aby zobaczyć, jak
     dana transakcja by się zakończyła.
     
-    ZMIANA (Specyfikacja H1): Ta funkcja jest teraz zgodna z wymogami H1.
-    Wejście (D+1 OPEN) i Wyjście (D+5 CLOSE) jest obsługiwane przez _simulate_trades_h1.
-    _resolve_trade obsługuje tylko egzekucję SL i TP w dniach D+1 do D+5.
+    ZMIANA (Głębokie Logowanie): Ta funkcja pobiera teraz dodatkowe
+    metryki z `setup` dict i zapisuje je w obiekcie VirtualTrade.
     """
     try:
         # Pobieramy parametry ze specyfikacji H1
@@ -90,6 +90,9 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             p_l_percent = ((close_price - entry_price) / entry_price) * 100
         
         
+        # ==================================================================
+        # === NOWA LOGIKA: Tworzenie obiektu VirtualTrade z pełnym logowaniem metryk ===
+        # ==================================================================
         trade = models.VirtualTrade(
             ticker=setup['ticker'],
             status=status,
@@ -100,8 +103,34 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             open_date=historical_data.index[entry_index].to_pydatetime(), # Data znalezienia setupu
             close_date=candle.name.to_pydatetime(), # Data zamknięcia
             close_price=float(close_price),
-            final_profit_loss_percent=float(p_l_percent)
+            final_profit_loss_percent=float(p_l_percent),
+            
+            # --- ZAPIS METRYK DO BAZY DANYCH ---
+            # Wspólne
+            metric_atr_14=setup.get('metric_atr_14'),
+            
+            # H1
+            metric_time_dilation=setup.get('metric_time_dilation'),
+            metric_price_gravity=setup.get('metric_price_gravity'),
+            metric_td_percentile_90=setup.get('metric_td_percentile_90'),
+            metric_pg_percentile_90=setup.get('metric_pg_percentile_90'),
+            
+            # H2
+            metric_inst_sync=setup.get('metric_inst_sync'),
+            metric_retail_herding=setup.get('metric_retail_herding'),
+            
+            # H3
+            metric_aqm_score_h3=setup.get('metric_aqm_score_h3'),
+            metric_aqm_percentile_95=setup.get('metric_aqm_percentile_95'),
+            metric_J_norm=setup.get('metric_J_norm'),
+            metric_nabla_sq_norm=setup.get('metric_nabla_sq_norm'),
+            metric_m_sq_norm=setup.get('metric_m_sq_norm'),
+            
+            # H4
+            metric_J=setup.get('metric_J'),
+            metric_J_threshold_2sigma=setup.get('metric_J_threshold_2sigma')
         )
+        # ==================================================================
         
         return trade
 
@@ -111,6 +140,7 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
 
 # ==================================================================
 # === KROK 19: Implementacja Pętli Symulacyjnej dla Hipotezy H1 ===
+# === ZMODYFIKOWANA O LOGOWANIE METRYK ===
 # ==================================================================
 
 def _simulate_trades_h1(
@@ -184,14 +214,25 @@ def _simulate_trades_h1(
                 stop_loss = entry_price - (2.0 * atr_value)
                 max_hold_days = 5 # Wg specyfikacji
                 
+                # ==================================================================
+                # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # ==================================================================
                 setup_h1 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H1_GRAVITY_MEAN_REVERSION", 
                     "entry_price": entry_price,
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
+                    
+                    # --- Dodatkowe metryki do logowania ---
+                    "metric_atr_14": atr_value,
+                    "metric_time_dilation": current_time_dilation,
+                    "metric_price_gravity": current_price_gravity,
+                    "metric_td_percentile_90": dilation_percentile_90,
+                    "metric_pg_percentile_90": gravity_percentile_90,
                 }
-                
+                # ==================================================================
+
                 # 6. Przekaż do _resolve_trade
                 # Przekazujemy pełny DataFrame i indeks dnia WEJŚCIA (D+1)
                 trade = _resolve_trade(
