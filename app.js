@@ -531,32 +531,43 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // ==========================================================
         // KROK 5 (Frontend): Nowy renderer dla raportu
+        // AKTUALIZACJA: GŁĘBOKIE LOGOWANIE
         // ==========================================================
         agentReport: (report) => {
             const stats = report.stats;
             const trades = report.trades;
             
             // ==========================================================
-            // === NAPRAWA BŁĘDU 'toFixed' ===
-            // Modyfikujemy funkcje formatujące, aby były "null-safe"
+            // === NOWE FUNKCJE POMOCNICZE DO FORMATOWANIA ===
             // ==========================================================
+            
+            // Funkcja do formatowania metryk (z 3 miejscami po przecinku)
+            const formatMetric = (val) => {
+                if (typeof val !== 'number' || isNaN(val)) {
+                    return `<span class="text-gray-600">---</span>`;
+                }
+                return val.toFixed(3);
+            };
+            
+            // Funkcja do formatowania P/L %
             const formatPercent = (val) => {
-                // Sprawdź, czy 'val' jest poprawną liczbą
                 if (typeof val !== 'number' || isNaN(val)) {
                     return `<span class="text-gray-500">---</span>`;
                 }
                 const color = val >= 0 ? 'text-green-500' : 'text-red-500';
                 return `<span class="${color}">${val.toFixed(2)}%</span>`;
             };
+            
+            // Funkcja do formatowania Profit Factor
             const formatProfitFactor = (val) => {
-                 // Sprawdź, czy 'val' jest poprawną liczbą
                  if (typeof val !== 'number' || isNaN(val)) {
                     return `<span class="text-gray-500">---</span>`;
                 }
                  const color = val >= 1 ? 'text-green-500' : 'text-red-500';
                  return `<span class="${color}">${val.toFixed(2)}</span>`;
             };
-            // Funkcja do bezpiecznego formatowania liczb (jak cena)
+            
+            // Funkcja do formatowania cen
             const formatNumber = (val) => {
                 if (typeof val !== 'number' || isNaN(val)) {
                     return `<span class="text-gray-500">---</span>`;
@@ -574,7 +585,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>`;
             };
             
-            // --- Tabela statystyk per strategia ---
+            // --- Tabela statystyk per strategia (bez zmian) ---
             const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => {
                 return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
                             <td class="p-3 font-semibold text-sky-400">${setupName}</td>
@@ -601,37 +612,95 @@ document.addEventListener('DOMContentLoaded', () => {
                     </table>
                  </div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
 
-            // --- Tabela historii transakcji ---
+            // ==========================================================
+            // === NOWA, SZCZEGÓŁOWA TABELA HISTORII TRANSAKCJI ===
+            // ==========================================================
+            
+            // Definiujemy wszystkie nagłówki naszej nowej, szerokiej tabeli
+            const tradeHeaders = [
+                'Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)',
+                'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile',
+                'Inst. Sync', 'Retail Herd.',
+                'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)',
+                'J (H4)', 'J Thresh.'
+            ];
+            
+            // Definiujemy klasy CSS dla nagłówków (dla pozycjonowania i przyklejania)
+            const headerClasses = [
+                'sticky left-0', // Data Otwarcia
+                'sticky left-[90px]', // Ticker
+                'sticky left-[160px]', // Strategia
+                'text-right', // Status
+                'text-right', // Cena Wejścia
+                'text-right', // Cena Zamknięcia
+                'text-right', // P/L (%)
+                'text-right', // ATR
+                'text-right', // T. Dil.
+                'text-right', // P. Grav.
+                'text-right', // TD %tile
+                'text-right', // PG %tile
+                'text-right', // Inst. Sync
+                'text-right', // Retail Herd.
+                'text-right', // AQM H3
+                'text-right', // AQM %tile
+                'text-right', // J (Norm)
+                'text-right', // ∇² (Norm)
+                'text-right', // m² (Norm)
+                'text-right', // J (H4)
+                'text-right'  // J Thresh.
+            ];
+
+            // Generujemy wiersze tabeli, teraz z nowymi danymi
             const tradeRows = trades.map(t => {
                 const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
-                // ==========================================================
-                // === NAPRAWA BŁĘDU 'toFixed' ===
-                // Używamy nowych, bezpiecznych funkcji formatujących
-                // ==========================================================
-                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs">
-                            <td class="p-2 font-mono text-gray-400">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
-                            <td class="p-2 font-bold text-sky-400">${t.ticker}</td>
-                            <td class="p-2 text-gray-300">${t.setup_type}</td>
-                            <td class="p-2 text-right ${statusClass}">${t.status}</td>
-                            <td class="p-2 text-right font-mono">${formatNumber(t.entry_price)}</td>
-                            <td class="p-2 text-right font-mono">${formatNumber(t.close_price)}</td>
-                            <td class="p-2 text-right font-mono">${formatPercent(t.final_profit_loss_percent)}</td>
+                // Skracamy nazwę strategii dla czytelności
+                const setupNameShort = t.setup_type.replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
+                
+                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono">
+                            <!-- Dane Podstawowe (Przyklejone) -->
+                            <td class_name="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
+                            <td class_name="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td>
+                            <td class_name="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td>
+                            
+                            <!-- Wynik Transakcji -->
+                            <td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td>
+                            <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td>
+                            <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td>
+                            <td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td>
+                            
+                            <!-- Metryka Wspólna -->
+                            <td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td>
+                            
+                            <!-- Metryki H1 -->
+                            <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td>
+
+                            <!-- Metryki H2 -->
+                            <td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td>
+
+                            <!-- Metryki H3 -->
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td>
+
+                            <!-- Metryki H4 -->
+                            <td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td>
                         </tr>`;
-                // ==========================================================
             }).join('');
 
+            // Tworzymy finalną tabelę z kontenerem do przewijania
             const tradeTable = trades.length > 0 ?
-                 `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-96 overflow-y-auto">
-                    <table class="w-full text-sm text-left text-gray-300">
-                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0">
+                 `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto">
+                    <table class="w-full text-sm text-left text-gray-300 min-w-[2200px]">
+                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10">
                             <tr>
-                                <th scope="col" class="p-2">Data Otwarcia</th>
-                                <th scope="col" class="p-2">Ticker</th>
-                                <th scope="col" class="p-2">Strategia</th>
-                                <th scope="col" class="p-2 text-right">Status Zamknięcia</th>
-                                <th scope="col" class="p-2 text-right">Cena Wejścia</th>
-                                <th scope="col" class="p-2 text-right">Cena Zamknięcia</th>
-                                <th scope="col" class="p-2 text-right">P/L (%)</th>
+                                ${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}
                             </tr>
                         </thead>
                         <tbody>${tradeRows}</tbody>
@@ -639,8 +708,8 @@ document.addEventListener('DOMContentLoaded', () => {
                  </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
             
             // ==========================================================
-            // ZMIANA (Dynamiczny Rok): Nowy interfejs Backtestingu
-            // ==========================================================
+            
+            // --- Sekcje Backtestu i AI (bez zmian) ---
             const backtestSection = `
                 <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                     <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
@@ -655,11 +724,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
                 </div>
             `;
-            // ==========================================================
             
-            // ==========================================================
-            // === NOWA SEKCJA (Krok 6 - Mega Agent) ===
-            // ==========================================================
             const aiOptimizerSection = `
                 <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                     <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4>
@@ -677,7 +742,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div>
                 </div>
             `;
-            // ==========================================================
 
 
             return `<div id="agent-report-view" class="max-w-6xl mx-auto">
@@ -706,7 +770,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>
                         </div>
 
-                        <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji</h3>
+                        <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji (z Metrykami)</h3>
                         ${tradeTable}
                     </div>`;
         }
