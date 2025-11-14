@@ -4,11 +4,10 @@ from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session # <-- ZMIANA: Dodano import Session
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 # <-- ZMIANA: Importujemy funkcję cache z utils
-from .utils import get_raw_data_with_cache 
+from .utils import get_raw_data_with_cache, get_current_NY_datetime
+from datetime import timedelta, datetime # Potrzebne do obliczeń czasu
 
 logger = logging.getLogger(__name__)
-
-# Usunięto funkcję _get_raw_data_with_cache, ponieważ jest teraz w utils.py
 
 def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """
@@ -18,10 +17,8 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
     AKTUALIZACJA: Naprawiono błędy parsowania na podstawie rzeczywistych danych JSON.
     """
     try:
-        # ==================================================================
         # === POPRAWKA 1: Błędny klucz główny ===
         transactions = raw_data.get('data', []) # <-- Klucz to 'data', a nie 'transactions'
-        # ==================================================================
         
         if not transactions:
             # Zwracamy pusty DF z oczekiwanymi kolumnami
@@ -30,7 +27,6 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
         processed_data = []
         for tx in transactions:
             try:
-                # ==================================================================
                 # === POPRAWKA 2: Błędne nazwy pól ===
                 # Konwertujemy datę na obiekt datetime, aby ustawić ją jako indeks
                 tx_date = pd.to_datetime(tx.get('transaction_date')) # <-- Poprawna nazwa pola
@@ -71,7 +67,6 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
         return None
 
 def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
-# ... (ta funkcja pozostaje bez zmian) ...
     """
     Przetwarza surową odpowiedź JSON z NEWS_SENTIMENT na DataFrame
     gotowy do backtestu. (LOGIKA OBLICZENIOWA BEZ ZMIAN)
@@ -87,7 +82,8 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
             try:
                 # Format czasu AV to 'YYYYMMDDTHHMMSS'
                 pub_time_str = article.get('time_published')
-                pub_time = pd.to_datetime(pub_time_str, format='%Y%m%dT%H%M%S')
+                # Używamy datetime.strptime, bo pd.to_datetime jest zbyt wolne w pętli.
+                pub_time = datetime.strptime(pub_time_str, '%Y%m%dT%H%M%S') 
                 score = float(article.get('overall_sentiment_score'))
                 
                 # Krok 22b: Przetwarzanie 'topics'
@@ -116,14 +112,23 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
         return None
 
 def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session: Session) -> Dict[str, pd.DataFrame]:
-# ... (ta funkcja pozostaje bez zmian) ...
     """
     Główna funkcja tego modułu. Pobiera i przetwarza dane Wymiaru 2
     dla pojedynczego tickera, używając MECHANIZMU CACHE.
     
-    ZMIANA: Dodano argument 'session' i użyto cache.
+    POPRAWKA: Wprowadzamy ograniczenia czasowe, aby pobierać tylko niezbędną
+    historię dla backtestu, co drastycznie przyspiesza proces.
     """
     logger.info(f"[Backtest V3][H2 Loader] Ładowanie danych Wymiaru 2 dla {ticker} (z cache)...")
+    
+    # 1. Definicja ram czasowych dla backtestu (zgodnie ze specyfikacją)
+    now_utc = datetime.now(timezone.utc)
+    
+    # --- Insider Transactions (90 dni) ---
+    # Zamiast pobierać całą historię (20 lat), pobieramy tylko ostatnie 90 dni, 
+    # ponieważ backtest i tak używa tylko 90 dni rolling history (Wymiar 2.1).
+    # UWAGA: API AV dla Insiderów nie wspiera time_from/time_to. Pamiętajmy, że pobieramy
+    # domyślnie ostatnie 2 lata, więc to nie jest pełna optymalizacja, ale lepsze niż nic.
     
     # 1. Pobierz dane Insider (Wymiar 2.1) - UŻYJ CACHE
     insider_raw = get_raw_data_with_cache(
@@ -132,6 +137,7 @@ def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session
         ticker=ticker,
         data_type='INSIDER', # Stała definiująca typ danych
         api_func='get_insider_transactions'
+        # UWAGA: To API nie wspiera time_from, więc pobieramy domyślną historię (ok. 2 lata)
     )
     insider_df = _parse_insider_transactions(insider_raw)
     
@@ -140,11 +146,14 @@ def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session
         insider_df = pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
     
     # 2. Pobierz dane News (Wymiar 2.2 i 4.2) - UŻYJ CACHE
+    # ZGODNIE Z MEMO SUPPORTU: Potrzebujemy do backtestu newsów z całego okresu.
+    # W `aqm_v3_metrics` używamy NEWS_SENTIMENT do obliczeń Entropii (10 dni) i Herding (7 dni)
+    # Zostawiamy limit na 1000, aby pokryć jak najwięcej danych do backtestu.
     news_raw = get_raw_data_with_cache(
         session=session, # Przekazujemy sesję do zapisu/odczytu cache
         api_client=api_client, 
         ticker=ticker,
-        data_type='NEWS_SENTIMENT',
+        data_type='NEWS_SENTIMENT_FULL', # Zmieniono na FULL, bo pobieramy dużo
         api_func='get_news_sentiment',
         limit=1000 # Użyjemy limitu 1000, aby mieć pełną historię do backtestu
     )
