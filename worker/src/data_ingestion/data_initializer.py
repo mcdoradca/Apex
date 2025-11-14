@@ -18,10 +18,10 @@ def _run_schema_and_index_migration(session: Session):
     try:
         logger.info("Starting database schema and index migration...")
         
-        # --- Krok 1: Sprawdzenie i dodanie brakujących kolumn (jeśli istnieją) ---
         engine = session.get_bind()
         inspector = inspect(engine)
         
+        # === MIGRACJA TABELI 1: trading_signals ===
         if 'trading_signals' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('trading_signals')]
             
@@ -31,26 +31,15 @@ def _run_schema_and_index_migration(session: Session):
             if 'entry_zone_top' not in columns:
                 logger.warning("Migration needed: Adding column 'entry_zone_top'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN entry_zone_top NUMERIC(12, 2)"))
-                
-            # ==================================================================
-            # KROK 4 (Migracja): Dodanie brakującej kolumny "updated_at"
-            # To jest polecenie, którego brak powoduje wszystkie błędy.
-            # ==================================================================
             if 'updated_at' not in columns:
                 logger.warning("Migration needed: Adding column 'updated_at' to 'trading_signals' table.")
-                # Dodajemy kolumnę z domyślną wartością NOW(), aby uniknąć problemów z istniejącymi wierszami
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
                 logger.info("Successfully added 'updated_at' column.")
-            # ==================================================================
 
-        # --- Krok 2: OSTATECZNA NAPRAWA - Zapewnienie istnienia częściowego indeksu unikalnego ---
+        # === MIGRACJA TABELI 2: Stworzenie indeksu (jeśli go brakuje) ===
         index_name = 'uq_active_pending_ticker'
         logger.info(f"Attempting to create or verify partial unique index '{index_name}'...")
-        
-        # Usunięcie starego, potencjalnie konfliktowego ograniczenia
         session.execute(text("ALTER TABLE trading_signals DROP CONSTRAINT IF EXISTS trading_signals_ticker_key;"))
-        
-        # Stworzenie poprawnego indeksu
         create_index_sql = text(f"""
             CREATE UNIQUE INDEX IF NOT EXISTS {index_name}
             ON trading_signals (ticker)
@@ -58,8 +47,54 @@ def _run_schema_and_index_migration(session: Session):
         """)
         session.execute(create_index_sql)
         
-        session.commit() # Zapisujemy zmiany w schemacie
-        logger.info(f"Successfully committed schema and index migrations.")
+        # ==================================================================
+        # === KRYTYCZNA NAPRAWA BŁĘDU: MIGRACJA TABELI virtual_trades ===
+        # Musimy dodać wszystkie nowe kolumny metryk, jeśli nie istnieją.
+        # ==================================================================
+        
+        if 'virtual_trades' in inspector.get_table_names():
+            logger.info("Checking schema for 'virtual_trades' table...")
+            vt_columns = [col['name'] for col in inspector.get_columns('virtual_trades')]
+            
+            # Lista wszystkich 14 nowych kolumn
+            metric_columns_to_add = [
+                ("metric_atr_14", "NUMERIC(10, 5)"),
+                # H1
+                ("metric_time_dilation", "NUMERIC(10, 5)"),
+                ("metric_price_gravity", "NUMERIC(10, 5)"),
+                ("metric_td_percentile_90", "NUMERIC(10, 5)"),
+                ("metric_pg_percentile_90", "NUMERIC(10, 5)"),
+                # H2
+                ("metric_inst_sync", "NUMERIC(10, 5)"),
+                ("metric_retail_herding", "NUMERIC(10, 5)"),
+                # H3
+                ("metric_aqm_score_h3", "NUMERIC(10, 5)"),
+                ("metric_aqm_percentile_95", "NUMERIC(10, 5)"),
+                ("metric_J_norm", "NUMERIC(10, 5)"),
+                ("metric_nabla_sq_norm", "NUMERIC(10, 5)"),
+                ("metric_m_sq_norm", "NUMERIC(10, 5)"),
+                # H4
+                ("metric_J", "NUMERIC(10, 5)"),
+                ("metric_J_threshold_2sigma", "NUMERIC(10, 5)")
+            ]
+            
+            # Pętla dodająca brakujące kolumny
+            for col_name, col_type in metric_columns_to_add:
+                if col_name not in vt_columns:
+                    logger.warning(f"Migration needed: Adding column '{col_name}' ({col_type}) to 'virtual_trades' table.")
+                    try:
+                        session.execute(text(f'ALTER TABLE virtual_trades ADD COLUMN {col_name} {col_type}'))
+                        logger.info(f"Successfully added column '{col_name}'.")
+                    except Exception as e:
+                        logger.error(f"Failed to add column {col_name}: {e}")
+                        session.rollback() # Wycofaj tylko tę jedną nieudaną operację
+                
+        # ==================================================================
+        # === KONIEC KRYTYCZNEJ NAPRAWY ===
+        # ==================================================================
+
+        session.commit() # Zapisujemy wszystkie zmiany w schemacie
+        logger.info(f"Successfully committed all schema and index migrations.")
 
     except Exception as e:
         logger.critical(f"FATAL: Error during database schema/index migration: {e}", exc_info=True)
