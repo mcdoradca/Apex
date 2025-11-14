@@ -110,13 +110,22 @@ def _simulate_trades_h4(
                 stop_loss = entry_price - (2.0 * atr_value)
                 max_hold_days = 5
                 
+                # ==================================================================
+                # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # ==================================================================
                 setup_h4 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H4_INFO_THERMO", 
                     "entry_price": entry_price,
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
+                    
+                    # --- Dodatkowe metryki do logowania ---
+                    "metric_atr_14": atr_value,
+                    "metric_J": j_series.iloc[i],
+                    "metric_J_threshold_2sigma": threshold_series.iloc[i]
                 }
+                # ==================================================================
                 
                 # 8. Przekaż do _resolve_trade (zapożyczonego z symulatora H1)
                 trade = _resolve_trade(
