@@ -370,8 +370,15 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         # Wypełnij NaN wartościami 0 (lub metodą ffill), aby symulatory nie napotkały NaN
         enriched_df['time_dilation'] = enriched_df['time_dilation'].fillna(0)
         enriched_df['price_gravity'] = enriched_df['price_gravity'].fillna(0) # Zapewnienie, że jest kolumna
-        enriched_df['atr_14'] = enriched_df['atr_14'].fillna(method='ffill').fillna(0)
-        enriched_df['vwap'] = enriched_df['vwap'].fillna(method='ffill').fillna(0)
+        
+        # ==================================================================
+        # === NAPRAWA (FutureWarning: .fillna(method='ffill')) ===
+        # Zastąpiono przestarzałe .fillna(method='ffill') nowym .ffill()
+        # enriched_df['atr_14'] = enriched_df['atr_14'].fillna(method='ffill').fillna(0)
+        # enriched_df['vwap'] = enriched_df['vwap'].fillna(method='ffill').fillna(0)
+        enriched_df['atr_14'] = enriched_df['atr_14'].ffill().fillna(0)
+        enriched_df['vwap'] = enriched_df['vwap'].ffill().fillna(0)
+        # ==================================================================
 
         
         # Przetwarzanie BBANDS (H3)
