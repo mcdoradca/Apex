@@ -177,4 +177,36 @@ class VirtualTrade(Base):
     close_price = Column(NUMERIC(12, 2), nullable=True, comment="Cena, po której pozycja została zamknięta")
     final_profit_loss_percent = Column(NUMERIC(8, 2), nullable=True, comment="Ostateczny zysk/strata w %")
 
+    # ==================================================================
+    # === AKTUALIZACJA (GŁĘBOKIE LOGOWANIE METRYK) ===
+    # Kopiujemy DOKŁADNIE ten sam blok, co w worker/src/models.py
+    # ==================================================================
+    
+    # Metryki Dnia D (wspólne dla wszystkich)
+    metric_atr_14 = Column(NUMERIC(10, 4), nullable=True)
+    
+    # Metryki dla H1 (Wymiar 1)
+    metric_time_dilation = Column(NUMERIC(10, 4), nullable=True)
+    metric_price_gravity = Column(NUMERIC(10, 4), nullable=True)
+    metric_td_percentile_90 = Column(NUMERIC(10, 4), nullable=True)
+    metric_pg_percentile_90 = Column(NUMERIC(10, 4), nullable=True)
+
+    # Metryki dla H2 (Wymiar 2)
+    metric_inst_sync = Column(NUMERIC(10, 4), nullable=True)
+    metric_retail_herding = Column(NUMERIC(10, 4), nullable=True)
+    
+    # Metryki dla H3 (Model Pola Kwantowego)
+    metric_aqm_score_h3 = Column(NUMERIC(10, 4), nullable=True)
+    metric_aqm_percentile_95 = Column(NUMERIC(10, 4), nullable=True)
+    metric_J_norm = Column(NUMERIC(10, 4), nullable=True)
+    metric_nabla_sq_norm = Column(NUMERIC(10, 4), nullable=True)
+    metric_m_sq_norm = Column(NUMERIC(10, 4), nullable=True)
+    
+    # Metryki dla H4 (Termodynamika)
+    metric_J = Column(NUMERIC(10, 4), nullable=True)
+    metric_J_threshold_2sigma = Column(NUMERIC(10, 4), nullable=True)
+    
+    # ==================================================================
+
+
 # === KONIEC NOWEGO MODELU ===
