@@ -370,7 +370,13 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
                 news_df_view_naive = news_df_view
             
             # a) Zlicz newsy dziennie (na danych naiwnych)
-            news_counts_daily = news_df_view_naive.resample('D').size()
+            # Poprawka: Używamy indeksu jako daty, a nie resample
+            news_counts_daily = news_df_view_naive.groupby(news_df_view_naive.index.date).size()
+            # Musimy ponownie przekonwertować indeks na datetime, aby .rolling działał
+            news_counts_daily.index = pd.to_datetime(news_counts_daily.index)
+            # Uzupełnij brakujące dni (weekendy) zerami
+            news_counts_daily = news_counts_daily.reindex(pd.date_range(start=news_counts_daily.index.min(), end=news_counts_daily.index.max(), freq='D'), fill_value=0)
+            
             # ==================================================================
             
             # b) Oblicz kroczącą sumę z 10-dniowego okna
