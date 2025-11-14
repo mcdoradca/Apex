@@ -146,14 +146,26 @@ def _simulate_trades_h3(
                 stop_loss = entry_price - (2.0 * atr_value)
                 max_hold_days = 5
                 
+                # ==================================================================
+                # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # ==================================================================
                 setup_h3 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H3_QUANTUM_FIELD", 
                     "entry_price": entry_price,
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
+                    
+                    # --- Dodatkowe metryki do logowania ---
+                    "metric_atr_14": atr_value,
+                    "metric_aqm_score_h3": current_aqm_score,
+                    "metric_aqm_percentile_95": percentile_95,
+                    "metric_J_norm": j_norm.iloc[i],
+                    "metric_nabla_sq_norm": nabla_norm.iloc[i],
+                    "metric_m_sq_norm": m_norm.iloc[i],
                 }
-                
+                # ==================================================================
+
                 # 9. Przekaż do _resolve_trade
                 trade = _resolve_trade(
                     daily_df, 
