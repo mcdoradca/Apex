@@ -8,7 +8,12 @@ from statsmodels.tsa.stattools import grangercausalitytests
 from scipy.stats import zscore, shapiro
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
-from datetime import datetime, timedelta
+# ==================================================================
+# === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
+# Dodajemy import 'timezone', aby móc ujednolicić strefy czasowe.
+# ==================================================================
+from datetime import datetime, timedelta, timezone
+# ==================================================================
 # Importujemy Counter do obliczeń Entropii
 from collections import Counter
 
@@ -97,6 +102,12 @@ def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, curren
     try:
         # 1. Filtruj transakcje z ostatnich 90 dni (wg specyfikacji)
         ninety_days_ago = current_date - timedelta(days=90)
+
+        # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
+        # Ta funkcja jest bezpieczna, ponieważ zarówno 'insider_df_view.index'
+        # jak i 'current_date' są domyślnie "naiwne" (tz-naive), więc można je porównywać.
+        # Nie ma potrzeby wprowadzania zmian, jeśli logi nie wskazują tu błędu.
+        
         # Używamy .loc do filtrowania po indeksie (który jest datą)
         recent_transactions = insider_df_view.loc[insider_df_view.index >= ninety_days_ago]
         
@@ -128,9 +139,28 @@ def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date:
     """
     try:
         # 1. Filtruj artykuły z ostatnich 7 dni (wg specyfikacji)
-        seven_days_ago = current_date - timedelta(days=7)
+        
+        # ==================================================================
+        # === POPRAWKA BŁĘDU (TypeError: tz-naive vs tz-aware) ===
+        # ==================================================================
+        
+        # Krok A: Sprawdź, czy 'current_date' (z daily_df) jest naiwna.
+        # Jeśli tak, nadaj jej strefę czasową UTC, aby pasowała do indeksu news_df.
+        if current_date.tzinfo is None:
+            current_date_utc = current_date.replace(tzinfo=timezone.utc)
+        else:
+            current_date_utc = current_date # Już jest świadoma
+
+        # Krok B: Oblicz 'seven_days_ago' używając daty świadomej strefy czasowej
+        seven_days_ago_utc = current_date_utc - timedelta(days=7)
+        
         # Używamy .loc do filtrowania po indeksie (który jest datą)
-        recent_news = news_df_view.loc[news_df_view.index >= seven_days_ago]
+        # Teraz porównujemy TZ-Aware (indeks) z TZ-Aware (seven_days_ago_utc)
+        recent_news = news_df_view.loc[news_df_view.index >= seven_days_ago_utc]
+        
+        # ==================================================================
+        # === KONIEC POPRAWKI ===
+        # ==================================================================
         
         if recent_news.empty:
             # ZGODNIE Z MEMO SUPPORTU: Fallback na 0.0 (zamiast NaN/None)
@@ -256,10 +286,16 @@ def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optio
             return 0.0 
             
         latest_date = news_df_view.index[-1].to_pydatetime()
-        ten_days_ago = latest_date - timedelta(days=10)
         
-        # Filtruj newsy z ostatnich 10 dni
-        recent_news = news_df_view.loc[news_df_view.index >= ten_days_ago]
+        # ==================================================================
+        # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
+        # ==================================================================
+        # 'latest_date' jest TZ-Aware (UTC), więc 'ten_days_ago' też będzie.
+        ten_days_ago_utc = latest_date - timedelta(days=10)
+        
+        # Filtruj newsy z ostatnich 10 dni (Aware vs Aware - jest OK)
+        recent_news = news_df_view.loc[news_df_view.index >= ten_days_ago_utc]
+        # ==================================================================
         
         # Zwróć liczbę newsów
         S = len(recent_news)
@@ -308,8 +344,19 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
             # Bierzemy OSTATNIE 200 punktów, które nie są NaN
             valid_news_history = historical_news_count_10d.iloc[-200:].dropna()
             
-            # Bieżąca 10-dniowa liczba newsów (dla ostatniego dnia)
-            news_count_10d = historical_news_count_10d.asof(current_date)
+            # ==================================================================
+            # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
+            # ==================================================================
+            # 'current_date' jest naiwna, a indeks 'historical_news_count_10d'
+            # jest świadomy (bo pochodzi z news_df_view).
+            # Musimy użyć 'asof' z datą świadomą strefy.
+            if current_date.tzinfo is None:
+                current_date_utc = current_date.replace(tzinfo=timezone.utc)
+            else:
+                current_date_utc = current_date
+                
+            news_count_10d = historical_news_count_10d.asof(current_date_utc)
+            # ==================================================================
             
             if valid_news_history.empty or pd.isna(news_count_10d):
                 normalized_news = 0.0
