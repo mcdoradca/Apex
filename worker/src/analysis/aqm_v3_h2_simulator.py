@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # ==================================================================
 # === KROK 21a: Implementacja Pętli Symulacyjnej dla Hipotezy H2 ===
 # === REFAKTORYZACJA (WYDAJNOŚĆ): Ta funkcja odczytuje teraz wstępnie obliczone metryki ===
+# === ZMODYFIKOWANA O LOGOWANIE METRYK ===
 # ==================================================================
 
 def _simulate_trades_h2(
@@ -108,13 +109,22 @@ def _simulate_trades_h2(
                 stop_loss = entry_price - (2.0 * atr_value)
                 max_hold_days = 5
                 
+                # ==================================================================
+                # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # ==================================================================
                 setup_h2 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H2_CONTRARIAN_ENTANGLEMENT", 
                     "entry_price": entry_price,
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
+                    
+                    # --- Dodatkowe metryki do logowania ---
+                    "metric_atr_14": atr_value,
+                    "metric_inst_sync": sync_score,
+                    "metric_retail_herding": herding_score,
                 }
+                # ==================================================================
                 
                 # 6. Przekaż do _resolve_trade (zapożyczonego z symulatora H1)
                 # Przekazujemy pełny DataFrame i indeks dnia WEJŚCIA (D+1)
