@@ -20,6 +20,7 @@ from . import aqm_v3_h3_simulator
 # === INTEGRACJA H4 (KROK 1): Import nowego symulatora H4 ===
 from . import aqm_v3_h4_simulator
 # Importujemy funkcje parsowania z H3 loader (potrzebne do przetwarzania surowych danych)
+# UWAGA: _parse_intraday_5min nie będzie już używane, ale zostawiamy import na razie
 from .aqm_v3_h3_loader import _parse_bbands, _parse_intraday_5min 
 
 from .utils import (
@@ -108,14 +109,11 @@ def _detect_market_regime(current_date_str: str) -> str:
 
 # ==================================================================
 # === USUNIĘTE FUNKCJE PARSOWANIA VWAP ===
-# Usunięto `_parse_vwap_daily` i `_parse_vwap_intraday_to_daily`
-# ponieważ VWAP jest teraz ładowany bezpośrednio z TIME_SERIES_DAILY
-# dzięki poprawce w `utils.py`.
 # ==================================================================
 
 
 # ==================================================================
-# === ZMIANA KROK 3b: ŁADOWANIE DANYCH Z CACHE DLA JEDNEGO TICKERA ===
+# === ZMIANA KROK 4/4: ŁADOWANIE DANYCH Z CACHE (NAPRAWA BŁĘDÓW) ===
 # ==================================================================
 def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session, year_to_test: str) -> Optional[Dict[str, pd.DataFrame]]:
     """
@@ -124,56 +122,43 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
     """
     try:
         # --- KROK 1: ŁADOWANIE H1 (Daily Time Series) ---
-        # TEN PLIK ZAWIERA TERAZ VWAP!
+        # ZGODNIE Z MEMO SUPPORTU: Używamy 'TIME_SERIES_DAILY' dla proxy (H+L+C)/3 (dla H1 i H3)
+        # Używamy 'TIME_SERIES_DAILY_ADJUSTED' dla zwrotów (dla H1 time_dilation)
+        
         price_data_raw = get_raw_data_with_cache(
-            session=session, api_client=api_client, ticker=ticker, data_type='DAILY_WITH_VWAP',
+            session=session, api_client=api_client, ticker=ticker, data_type='DAILY_OHLCV', # Zmieniono nazwę cache
             api_func='get_time_series_daily', outputsize='full'
         )
+        # Ten endpoint jest potrzebny do H1 (time_dilation)
+        adjusted_price_data_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='DAILY_ADJUSTED',
+            api_func='get_daily_adjusted', outputsize='full'
+        )
+        
         # TIME_SERIES_WEEKLY_ADJUSTED
         weekly_data_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='WEEKLY',
             api_func='get_time_series_weekly', outputsize='full'
         )
         
-        # ==================================================================
-        # === OPTYMALIZACJA VWAP: Usunięto pętlę 24 wywołań ===
-        # Poniższy blok został usunięty, ponieważ `price_data_raw`
-        # (z `get_time_series_daily`) już zawiera VWAP,
-        # który zostanie zmapowany przez `standardize_df_columns` (dzięki poprawce w utils.py)
-        # ==================================================================
-        
-        # Potrzebujemy danych z roku `year_to_test` ORAZ roku poprzedniego (dla historii wskaźników)
-        years_needed = [str(int(year_to_test) - 1), year_to_test]
-        months_needed = []
-        for year in years_needed:
-            for month in range(1, 13):
-                months_needed.append(f"{year}-{month:02d}") # Format YYYY-MM
-        
-        # logger.info(f"Optymalizacja: Pobieranie Daily VWAP (1 wywołanie) dla {ticker}...")
-        # vwap_daily_raw = get_raw_data_with_cache(...)
-        
-        # ==================================================================
-        
-        # --- KROK 2: ŁADOWANIE H3 (BBands i Intraday 5min) ---
+        # --- KROK 2: ŁADOWANIE H3 (BBands) ---
         bbands_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='BBANDS',
             api_func='get_bollinger_bands', interval='daily', time_period=20, nbdevup=2, nbdevdn=2
         )
         
-        # Dla H3/H4 potrzebujemy danych 5-minutowych. Musimy je pobrać dla każdego miesiąca.
-        # TA PĘTLA MUSI POZOSTAĆ (jest niezbędna dla H3 i H4)
-        intraday_raw_list = []
-        for month_str in months_needed:
-            intraday_raw_month = get_raw_data_with_cache(
-                session=session, api_client=api_client, ticker=ticker,
-                data_type=f'INTRADAY_5MIN_{month_str}',
-                api_func='get_intraday',
-                interval='5min',
-                month=month_str,
-                outputsize='full' # Musimy użyć 'full', aby dostać pełne dane miesięczne
-            )
-            if intraday_raw_month:
-                intraday_raw_list.append(intraday_raw_month)
+        # ==================================================================
+        # === KLUCZOWA ZMIANA (ZGODNIE Z MEMO SUPPORTU 4.1) ===
+        # CAŁKOWICIE USUWAMY PĘTLĘ POBIERAJĄCĄ DANE INTRADAY_5MIN.
+        # Ta pętla była źródłem błędów 'Invalid API call'.
+        # Metryka 'market_temperature' (H3/H4) została zmieniona na DZIENNĄ,
+        # więc te dane nie są już potrzebne.
+        # ==================================================================
+        # years_needed = [str(int(year_to_test) - 1), year_to_test] # <-- USUNIĘTE
+        # months_needed = [] # <-- USUNIĘTE
+        # ... (cała pętla 'for month_str in months_needed' usunięta) ...
+        # intraday_raw_list = [] # <-- USUNIĘTE
+        # ==================================================================
 
         
         # --- KROK 3: ŁADOWANIE H2 (Insider i News) ---
@@ -181,19 +166,25 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, session)
         
         # 4. Walidacja danych
+        # Upewniamy się, że mamy oba typy danych dziennych
         if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
+           not adjusted_price_data_raw or 'Time Series (Daily)' not in adjusted_price_data_raw or \
            not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw:
             
-            logger.warning(f"[Backtest V3] Brak podstawowych danych (Daily/Weekly) z cache/API dla {ticker}, pomijanie.")
+            logger.warning(f"[Backtest V3] Brak podstawowych danych (Daily/Adjusted/Weekly) z cache/API dla {ticker}, pomijanie.")
             return None
             
         # --- KROK 5: Przetwarzanie i Wzbogacanie Daily DF ---
         
-        # Przetwórz Daily (H1)
+        # Przetwórz Daily (dla proxy HLC/3 i ATR)
         daily_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
-        daily_df.index = pd.to_datetime(daily_df.index) # <-- POPRAWKA 1 (Z POPRZEDNIEJ RUNDY): Rozwiązuje błąd 'to_pydatetime'
-        # UWAGA: `standardize_df_columns` (w `utils.py`) teraz poprawnie mapuje '5. vwap' -> 'vwap'
+        daily_df.index = pd.to_datetime(daily_df.index) 
         daily_df = standardize_df_columns(daily_df)
+        
+        # Przetwórz Adjusted Daily (dla H1 time_dilation)
+        adjusted_daily_df = pd.DataFrame.from_dict(adjusted_price_data_raw['Time Series (Daily)'], orient='index')
+        adjusted_daily_df.index = pd.to_datetime(adjusted_daily_df.index)
+        adjusted_daily_df = standardize_df_columns(adjusted_daily_df)
         
         # Przetwórz Weekly (H1)
         weekly_df = pd.DataFrame.from_dict(weekly_data_raw['Weekly Adjusted Time Series'], orient='index')
@@ -201,34 +192,43 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         weekly_df = standardize_df_columns(weekly_df)
         
         # Wzbogacanie DataFrame (z użyciem danych SPY z Cache LITE)
-        spy_aligned = _backtest_cache["spy_data"]['close'].reindex(daily_df.index, method='ffill').rename('spy_close')
-        enriched_df = daily_df.join(spy_aligned) 
+        # UŻYWAMY DANYCH 'ADJUSTED' DO OBLICZEŃ ZWROTÓW (time_dilation)
+        spy_aligned = _backtest_cache["spy_data"]['close'].reindex(adjusted_daily_df.index, method='ffill').rename('spy_close')
+        
+        # Używamy NIE-ADJUSTOWANYCH danych 'daily_df' jako bazy
+        enriched_df = daily_df.copy()
+        
+        # Dołączamy 'adjusted close' (do time_dilation) i 'spy_close'
+        enriched_df['adj_close_for_returns'] = adjusted_daily_df['adjusted close'].reindex(enriched_df.index, method='ffill')
+        enriched_df['spy_close'] = spy_aligned.reindex(enriched_df.index, method='ffill')
+        
+        # Obliczamy ATR (na nie-adjustowanych danych HLC)
         enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
         
         # ==================================================================
-        # === POPRAWKA (NAPRAWA VWAP): Sprawdzenie, czy VWAP istnieje ===
+        # === KLUCZOWA ZMIANA (ZGODNIE Z MEMO SUPPORTU 1.2) ===
+        # Obliczamy proxy VWAP (HLC/3) z NIE-ADJUSTOWANYCH danych 'daily_df'
         # ==================================================================
-        
-        # Nie musimy już niczego dołączać (`.join(vwap_daily_df)`)
-        # Wystarczy sprawdzić, czy kolumna 'vwap' została poprawnie
-        # załadowana przez `standardize_df_columns` z `TIME_SERIES_DAILY`.
-        
-        if 'vwap' not in enriched_df.columns or enriched_df['vwap'].isnull().all():
-            logger.warning(f"Brak danych VWAP (Daily) w TIME_SERIES_DAILY dla {ticker}. H1 nie wygeneruje sygnałów dla tej spółki.")
-            # Tworzymy pustą kolumnę, aby uniknąć błędów, ale będzie pełna NaN
-            enriched_df['vwap'] = np.nan
+        if 'high' in enriched_df.columns and 'low' in enriched_df.columns and 'close' in enriched_df.columns:
+            center_of_mass_proxy = (enriched_df['high'] + enriched_df['low'] + enriched_df['close']) / 3.0
+            # Nadpisujemy lub tworzymy kolumnę 'vwap', aby reszta kodu (price_gravity) działała
+            enriched_df['vwap'] = center_of_mass_proxy
+            # logger.info(f"Pomyślnie obliczono HLC/3 proxy (VWAP) dla {ticker}.") # Zbyt głośne, wyłączono
         else:
-            logger.info(f"Pomyślnie załadowano dane VWAP (Daily) z TIME_SERIES_DAILY dla {ticker}.")
+            logger.warning(f"Brak kolumn HLC w 'TIME_SERIES_DAILY' dla {ticker}. 'vwap' będzie NaN.")
+            enriched_df['vwap'] = np.nan
         # ==================================================================
         
         # Obliczenia H1 (time_dilation, price_gravity)
-        ticker_returns_rolling = enriched_df['close'].pct_change().rolling(window=20)
+        
+        # time_dilation używa zwrotów, więc musi być obliczone na 'adj_close_for_returns'
+        ticker_returns_rolling = enriched_df['adj_close_for_returns'].pct_change().rolling(window=20)
         spy_returns_rolling = enriched_df['spy_close'].pct_change().rolling(window=20)
         std_ticker = ticker_returns_rolling.std()
         std_spy = spy_returns_rolling.std()
         enriched_df['time_dilation'] = std_ticker / std_spy
         
-        # Obliczamy price_gravity. Jeśli 'vwap' to NaN, 'price_gravity' też będzie NaN.
+        # price_gravity używa proxy 'vwap' i 'close' (z 'daily_df')
         enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
         
         enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -236,20 +236,14 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         enriched_df['time_dilation'] = enriched_df['time_dilation'].fillna(0)
         enriched_df['price_gravity'] = enriched_df['price_gravity'].fillna(0)
 
-        # Przetwarzanie BBANDS (H3) i Intraday 5min (H3)
-        # Te funkcje muszą teraz poprawnie obsłużyć puste dane
+        # Przetwarzanie BBANDS (H3)
         bbands_df = _parse_bbands(bbands_raw)
         
-        # === POPRAWKA (H3/H4): Scal 12 miesięcy danych 5-min ===
-        all_intraday_df = pd.DataFrame()
-        for raw_data in intraday_raw_list:
-            df = _parse_intraday_5min(raw_data)
-            if df is not None:
-                all_intraday_df = pd.concat([all_intraday_df, df])
-        
-        intraday_5min_df = all_intraday_df.sort_index()
-        # Usuń duplikaty indeksu, jeśli wystąpiły
-        intraday_5min_df = intraday_5min_df[~intraday_5min_df.index.duplicated(keep='first')]
+        # ==================================================================
+        # === KLUCZOWA ZMIANA (ZGODNIE Z MEMO SUPPORTU 4.1) ===
+        # Tworzymy PUSTY DataFrame dla intraday_5min_df, ponieważ nie jest już potrzebny.
+        # ==================================================================
+        intraday_5min_df = pd.DataFrame() 
         # =======================================================
         
         # Zdobądź i zapisz sektor (dla spójności)
@@ -259,11 +253,11 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         return {
             "daily": enriched_df, 
             "weekly": weekly_df,
-            "vwap": enriched_df[['vwap']] if 'vwap' in enriched_df.columns else pd.DataFrame(columns=['vwap']), # Zwróć DF VWAP dla spójności
+            "vwap": enriched_df[['vwap']], # Zwróć DF VWAP (Proxy) dla spójności
             "insider_df": h2_data["insider_df"], 
             "news_df": h2_data["news_df"],       
             "bbands_df": bbands_df,             
-            "intraday_5min_df": intraday_5min_df, 
+            "intraday_5min_df": intraday_5min_df, # Zwracamy pusty DF
             "sector": sector
         }
     
@@ -347,8 +341,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     # ==================================================================
     # === USUNIĘTY KROK (PRE-FLIGHT CHECK) ===
-    # Zgodnie z Pana sugestią, usunęliśmy ten zbędny blok,
-    # aby oszczędzić czas iteracji. Ufamy teraz liście z Fazy 1.
     # ==================================================================
     
     # === KROK 3: Budowanie Cache (TYLKO DANE GLOBALNE) ===
@@ -498,11 +490,13 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 "daily": historical_data_slice,
                 "insider_df": ticker_data.get("insider_df"),
                 "news_df": ticker_data.get("news_df"),
-                "intraday_5min_df": ticker_data.get("intraday_5min_df")
+                # ZGODNIE ZE ZMIANĄ: Przekazujemy pusty (lub nieistniejący) DF
+                "intraday_5min_df": ticker_data.get("intraday_5min_df") 
             }
             
-            # Symulatory H3/H4 mają wewnętrzne zabezpieczenia i pominą,
-            # jeśli intraday_5min_df lub insider_df są puste (co jest teraz oczekiwane)
+            # Symulatory H3/H4 (w następnych krokach) muszą zostać zaktualizowane,
+            # aby poradzić sobie z brakiem 'intraday_5min_df'
+            # i zamiast tego używać 'daily' do obliczania temperatury.
             
             trades_found_h3 += aqm_v3_h3_simulator._simulate_trades_h3(
                 session,
