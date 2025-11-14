@@ -6,8 +6,12 @@ from typing import Dict, Any
 
 # Importujemy modele i funkcje pomocnicze
 from .. import models
-# Importujemy "czyste" funkcje obliczeniowe z Kroków 17 i 20a
-from . import aqm_v3_metrics 
+# ==================================================================
+# === REFAKTORYZACJA (WYDAJNOŚĆ): Usunięto import aqm_v3_metrics ===
+# Obliczenia są teraz wykonywane w backtest_engine
+# ==================================================================
+# from . import aqm_v3_metrics 
+# ==================================================================
 # Importujemy funkcję egzekucji transakcji z Krok 19a
 from .aqm_v3_h1_simulator import _resolve_trade
 
@@ -15,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # ==================================================================
 # === KROK 21a: Implementacja Pętli Symulacyjnej dla Hipotezy H2 ===
+# === REFAKTORYZACJA (WYDAJNOŚĆ): Ta funkcja odczytuje teraz wstępnie obliczone metryki ===
 # ==================================================================
 
 def _simulate_trades_h2(
@@ -24,50 +29,54 @@ def _simulate_trades_h2(
     year: str
 ) -> int:
     """
-    Iteruje dzień po dniu przez historyczny DataFrame DLA JEDNEGÓ SPÓŁKI
+    Iteruje dzień po dniu przez historyczny DataFrame DLA JEDNEGO SPÓŁKI
     i szuka setupów zgodnych z Hipotezą H2 (Splątanie Kwantowe).
     
-    Wymaga, aby 'historical_data' (słownik) zawierał:
-    - 'daily': Wzbogacony DF z 'atr_14'
-    - 'insider_df': Pełna historia transakcji insiderów
-    - 'news_df': Pełna historia sentymentu newsów
+    Wymaga, aby 'historical_data' (słownik) zawierał 'daily' DataFrame
+    z wstępnie obliczonymi kolumnami:
+    - 'atr_14'
+    - 'institutional_sync'
+    - 'retail_herding'
     """
     trades_found = 0
     
     daily_df = historical_data.get("daily")
-    insider_df = historical_data.get("insider_df")
-    news_df = historical_data.get("news_df")
-
-    # Wymagamy wszystkich trzech zestawów danych do uruchomienia testu H2
-    if daily_df is None or insider_df is None or news_df is None:
-        logger.warning(f"[Backtest V3][H2] Pominięto {ticker}, brak kompletnych danych (Daily, Insider lub News).")
+    
+    # ==================================================================
+    # === REFAKTORYZACJA (WYDAJNOŚĆ): Nie potrzebujemy już insider_df ani news_df ===
+    # ==================================================================
+    if daily_df is None:
+        logger.warning(f"[Backtest V3][H2] Pominięto {ticker}, brak kompletnych danych (Daily).")
         return 0
+    # ==================================================================
 
-    # Zaczynamy od 1 (aby mieć dane D-1), ale musimy też zapewnić, że mamy dane D+1
-    for i in range(1, len(daily_df) - 1): 
+    # ==================================================================
+    # === REFAKTORYZACJA (WYDAJNOŚĆ): Ustawienie bufora ===
+    # Musimy poczekać, aż metryki (np. 200-dniowe) będą stabilne
+    # 201 dni to bezpieczny bufor dla wszystkich metryk H1-H4
+    # ==================================================================
+    history_buffer = 201 
+    
+    # Zaczynamy od bufora, aby mieć dane D-1, ale musimy też zapewnić, że mamy dane D+1
+    for i in range(history_buffer, len(daily_df) - 1): 
         
         # --- Dzień D (Skanowanie na CLOSE) ---
         
         # 1. Pobierz dane dla Dnia D
         candle_D = daily_df.iloc[i]
-        current_date = candle_D.name.to_pydatetime() # Pobierz datę jako obiekt datetime
         
-        # 2. Oblicz Metrykę 2.1: institutional_sync (ostatnie 90 dni)
-        # Używamy "czystej" funkcji z aqm_v3_metrics
-        sync_score = aqm_v3_metrics.calculate_institutional_sync_from_data(
-            insider_df, 
-            current_date
-        )
+        # ==================================================================
+        # === REFAKTORYZACJA (WYDAJNOŚĆ): Odczyt zamiast obliczeń ===
+        # ==================================================================
+        # 2. Oblicz Metrykę 2.1: institutional_sync (odczyt z kolumny)
+        sync_score = candle_D['institutional_sync']
         
-        # 3. Oblicz Metrykę 2.2: retail_herding (ostatnie 7 dni)
-        # Używamy "czystej" funkcji z aqm_v3_metrics
-        herding_score = aqm_v3_metrics.calculate_retail_herding_from_data(
-            news_df,
-            current_date
-        )
+        # 3. Oblicz Metrykę 2.2: retail_herding (odczyt z kolumny)
+        herding_score = candle_D['retail_herding']
+        # ==================================================================
 
-        if sync_score is None or herding_score is None:
-            continue # Błąd obliczeń, przejdź do następnego dnia
+        if pd.isna(sync_score) or pd.isna(herding_score):
+            continue # Błąd obliczeń (NaN z pre-processingu), przejdź do następnego dnia
 
         # 4. Zastosuj Warunki H2 (wg Specyfikacji Analitycznej)
         
