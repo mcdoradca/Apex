@@ -140,6 +140,36 @@ class VirtualTrade(BaseModel):
     close_date: Optional[datetime] = None
     close_price: Optional[float] = None
     final_profit_loss_percent: Optional[float] = None
+    
+    # ==========================================================
+    # === AKTUALIZACJA (GŁĘBOKIE LOGOWANIE) ===
+    # Dodajemy wszystkie nowe pola metryk, aby API mogło je odczytać
+    # ==========================================================
+    
+    # Wspólne
+    metric_atr_14: Optional[float] = None
+    
+    # H1
+    metric_time_dilation: Optional[float] = None
+    metric_price_gravity: Optional[float] = None
+    metric_td_percentile_90: Optional[float] = None
+    metric_pg_percentile_90: Optional[float] = None
+
+    # H2
+    metric_inst_sync: Optional[float] = None
+    metric_retail_herding: Optional[float] = None
+    
+    # H3
+    metric_aqm_score_h3: Optional[float] = None
+    metric_aqm_percentile_95: Optional[float] = None
+    metric_J_norm: Optional[float] = None
+    metric_nabla_sq_norm: Optional[float] = None
+    metric_m_sq_norm: Optional[float] = None
+    
+    # H4
+    metric_J: Optional[float] = None
+    metric_J_threshold_2sigma: Optional[float] = None
+    # ==========================================================
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -152,7 +182,7 @@ class VirtualAgentStats(BaseModel):
 
 class VirtualAgentReport(BaseModel):
     stats: VirtualAgentStats
-    trades: List[VirtualTrade]
+    trades: List[VirtualTrade] # Ten schemat teraz zawiera nowe metryki
 
 
 # ==========================================================
