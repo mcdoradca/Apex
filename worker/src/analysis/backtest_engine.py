@@ -107,7 +107,104 @@ def _detect_market_regime(current_date_str: str) -> str:
         return 'volatile'
 
 # ==================================================================
+# === REFAKTORYZACJA (WYDAJNOŚĆ): Nowa funkcja pomocnicza do obliczeń H3/H4 ===
+# ==================================================================
+def _pre_calculate_metrics(
+    daily_df: pd.DataFrame, 
+    insider_df: pd.DataFrame, 
+    news_df: pd.DataFrame, 
+    bbands_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Wstępnie oblicza *wszystkie* złożone metryki (H2, H3, H4)
+    i dodaje je jako kolumny do DataFrame'u.
+    """
+    logger.info(f"Rozpoczynanie wstępnego obliczania metryk (H2, H3, H4) dla {len(daily_df)} dni...")
+    
+    # Kopiujemy, aby uniknąć SettingWithCopyWarning
+    df = daily_df.copy()
+    
+    # Przygotowanie pustych kolumn na wyniki
+    df['institutional_sync'] = np.nan
+    df['retail_herding'] = np.nan
+    df['J'] = np.nan
+    df['nabla_sq'] = np.nan
+    df['m_sq'] = np.nan
+    
+    # Pusty DF dla ignorowanego argumentu (zgodnie z memo supportu)
+    intraday_empty_df = pd.DataFrame()
+
+    # Iterujemy przez DataFrame Dzień po Dniu
+    # Zaczynamy od 201, aby mieć 200 dni historii dla Z-Score (dla m_sq)
+    # i 100 dni dla H3/H4 (percentyl/stdev)
+    # 201 jest bezpiecznym buforem.
+    start_index = 201
+    if len(df) <= start_index:
+        logger.warning(f"Za mało danych ({len(df)}) do obliczenia metryk H2/H3/H4, wymagane > {start_index}.")
+        return df # Zwróć pusty
+
+    # ==================================================================
+    # === GŁÓWNA PĘTLA OBLICZENIOWA (WYKONYWANA 1 RAZ) ===
+    # ==================================================================
+    # Używamy tqdm (jeśli jest) lub prostej pętli
+    try:
+        from tqdm import tqdm
+        iterator = tqdm(range(start_index, len(df)), desc="  Obliczanie metryk H2/H3/H4", leave=False, unit="d")
+    except ImportError:
+        iterator = range(start_index, len(df))
+
+    for i in iterator:
+        try:
+            current_date = df.index[i].to_pydatetime()
+            daily_view = df.iloc[:i+1] # Widok do dnia 'i' (włącznie)
+            
+            # --- Obliczenia H2 ---
+            # (Metryki te są relatywnie szybkie, ponieważ filtrują małe okna 7/90 dni)
+            
+            # 1. Metryka 2.1: institutional_sync (ostatnie 90 dni)
+            sync_score = aqm_v3_metrics.calculate_institutional_sync_from_data(
+                insider_df, 
+                current_date
+            )
+            df.loc[df.index[i], 'institutional_sync'] = sync_score
+
+            # 2. Metryka 2.2: retail_herding (ostatnie 7 dni)
+            herding_score = aqm_v3_metrics.calculate_retail_herding_from_data(
+                news_df,
+                current_date
+            )
+            df.loc[df.index[i], 'retail_herding'] = herding_score
+
+            # --- Obliczenia H3/H4 (Komponenty Pola) ---
+            # (To są wolniejsze metryki, szczególnie m_sq)
+            
+            J_j, nabla_sq_j, m_sq_j = aqm_v3_metrics.calculate_h3_components_for_day(
+                current_date,
+                daily_view,         # Widok Dzienny do daty J
+                insider_df,         # Pełna historia insider
+                news_df,            # Pełna historia news
+                df,                 # Pełny DF (dla BBANDS/History)
+                intraday_empty_df   # (Pusty) DF
+            )
+            
+            df.loc[df.index[i], 'J'] = J_j
+            df.loc[df.index[i], 'nabla_sq'] = nabla_sq_j
+            df.loc[df.index[i], 'm_sq'] = m_sq_j
+
+        except Exception as e:
+            # Nie przerywaj pętli, po prostu zaloguj błąd dla tej daty
+            logger.error(f"Błąd w _pre_calculate_metrics dla daty {current_date}: {e}", exc_info=False) # False, aby nie spamować logów
+            
+    # ==================================================================
+    
+    logger.info("Wstępne obliczanie metryk zakończone.")
+    return df
+# ==================================================================
+
+
+# ==================================================================
 # === ZMIANA KROK 4/4: ŁADOWANIE DANYCH DLA JEDNEGO TICKERA ===
+# === REFAKTORYZACJA (WYDAJNOŚĆ): Ta funkcja teraz wstępnie oblicza metryki ===
 # ==================================================================
 def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session, year_to_test: str) -> Optional[Dict[str, pd.DataFrame]]:
     """
@@ -115,6 +212,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
     korzystając z mechanizmu cache w bazie danych.
     
     KLUCZOWA POPRAWKA: Usunięto pętlę intraday i zaimplementowano proxy VWAP (HLC/3).
+    NOWA LOGIKA: Ta funkcja wywołuje `_pre_calculate_metrics`.
     """
     try:
         # --- KROK 1: ŁADOWANIE H1 (Daily Time Series) ---
@@ -192,7 +290,10 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         # Metryka price_gravity: (Center_of_Mass - Close) / Close.
         # Center_of_Mass = enriched_df['vwap'] (czyli HLC/3)
         # Close = enriched_df['close_ohlcv'] (czyli nie-adjusted close, które jest w enriched_df)
-        enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
+        
+        # Upewnijmy się, że używamy 'close_ohlcv' jeśli istnieje, lub 'close' jeśli nie
+        close_col = 'close_ohlcv' if 'close_ohlcv' in enriched_df.columns else 'close'
+        enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df[close_col]) / enriched_df[close_col]
         # ================================================================
 
         # Wzbogacanie DataFrame (z użyciem danych SPY z Cache LITE)
@@ -211,8 +312,12 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         
         
         enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        # Wypełnij NaN wartościami 0 (lub metodą ffill), aby symulatory nie napotkały NaN
         enriched_df['time_dilation'] = enriched_df['time_dilation'].fillna(0)
         enriched_df['price_gravity'] = enriched_df['price_gravity'].fillna(0) # Zapewnienie, że jest kolumna
+        enriched_df['atr_14'] = enriched_df['atr_14'].fillna(method='ffill').fillna(0)
+        enriched_df['vwap'] = enriched_df['vwap'].fillna(method='ffill').fillna(0)
+
         
         # Przetwarzanie BBANDS (H3)
         bbands_df = _parse_bbands(bbands_raw)
@@ -223,15 +328,29 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         # Zdobądź i zapisz sektor (dla spójności)
         sector = _get_sector_for_ticker(session, ticker)
         
+        # ==================================================================
+        # === REFAKTORYZACJA (WYDAJNOŚĆ): Wstępne obliczanie H2/H3/H4 ===
+        # ==================================================================
+        # Wywołujemy nową funkcję, aby dodać kolumny:
+        # 'institutional_sync', 'retail_herding', 'J', 'nabla_sq', 'm_sq'
+        enriched_df_with_metrics = _pre_calculate_metrics(
+            daily_df=enriched_df,
+            insider_df=h2_data["insider_df"],
+            news_df=h2_data["news_df"],
+            bbands_df=bbands_df
+        )
+        # ==================================================================
+
+        
         # Zwracamy wszystkie przetworzone dane
         return {
-            "daily": enriched_df, 
+            "daily": enriched_df_with_metrics, # Zwracamy wzbogacony DF
             "weekly": weekly_df,
-            "vwap": enriched_df[['vwap']], 
-            "insider_df": h2_data["insider_df"], 
-            "news_df": h2_data["news_df"],       
-            "bbands_df": bbands_df,             
-            "intraday_5min_df": intraday_5min_df, 
+            "vwap": enriched_df[['vwap']], # (Nadal używane przez H1)
+            "insider_df": h2_data["insider_df"], # (Nadal używane przez H2)
+            "news_df": h2_data["news_df"],       # (Nadal używane przez H2/H3/H4)
+            "bbands_df": bbands_df,             # (Nadal używane przez H3)
+            "intraday_5min_df": intraday_5min_df, # (Pusty)
             "sector": sector
         }
     
@@ -401,6 +520,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.warning(f"[Backtest V3] Brak danych po ładowaniu per-ticker dla {ticker}. Pomijanie.")
                 continue
             
+            # ==================================================================
+            # === REFAKTORYZACJA (WYDAJNOŚĆ): Pobieramy wstępnie obliczony DF ===
+            # ==================================================================
             full_historical_data = ticker_data['daily']
             
             # Weryfikacja zakresu dat (bez zmian)
@@ -412,55 +534,63 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 logger.warning(f"[Backtest V3] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
                 continue
 
-            # Używamy 101 (zamiast 301) jako kompromis dla H1/H2
-            if start_index < 101: 
-                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec, wymagane 101). Pomijanie.")
+            # ==================================================================
+            # === REFAKTORYZACJA (WYDAJNOŚĆ): Zmieniamy bufor historii ===
+            # Wymagamy teraz 201 dni historii (dla Z-Score m_sq)
+            # ==================================================================
+            history_buffer = 201 
+            if start_index < history_buffer: 
+                logger.warning(f"Za mało danych historycznych dla {ticker} przed {year} (znaleziono {start_index} świec, wymagane {history_buffer}). Pomijanie.")
                 continue
 
-            # Wycinek danych na potrzeby backtestu (100 dni wstecz + testowany rok)
-            historical_data_slice = full_historical_data.iloc[start_index - 101:].loc[:end_date] 
+            # Wycinek danych na potrzeby backtestu (bufor historii + testowany rok)
+            historical_data_slice = full_historical_data.iloc[start_index - history_buffer:].loc[:end_date] 
             
-            if historical_data_slice.empty or len(historical_data_slice) < 102:
+            if historical_data_slice.empty or len(historical_data_slice) < history_buffer + 1:
                 logger.warning(f"Pusty wycinek danych dla {ticker} w roku {year}. Pomijanie.")
                 continue
             
             
-            # === Uruchomienie Symulatorów H1-H4 (Logika bez zmian) ===
+            # === Uruchomienie Symulatorów H1-H4 ===
             
             trades_found_h1 += aqm_v3_h1_simulator._simulate_trades_h1(
                 session, 
                 ticker, 
-                historical_data_slice, 
+                historical_data_slice, # Przekazujemy wstępnie obliczony DF
                 year
             )
             
-            # DANE DLA H2/H3/H4 (Wszystko jest w tym samym słowniku)
+            # ==================================================================
+            # === REFAKTORYZACJA (WYDAJNOŚĆ): Przygotowanie danych dla H2/H3/H4 ===
+            # Przekazujemy teraz ten sam, w pełni wzbogacony DataFrame do
+            # wszystkich symulatorów. One NIE BĘDĄ już nic obliczać.
+            # ==================================================================
             h_data_slice = {
                 "daily": historical_data_slice,
-                "insider_df": ticker_data.get("insider_df"),
-                "news_df": ticker_data.get("news_df"),
-                "bbands_df": ticker_data.get("bbands_df"), # Dodano BBands
-                "intraday_5min_df": ticker_data.get("intraday_5min_df") # Pusty DF
+                "insider_df": ticker_data.get("insider_df"), # Nadal potrzebne (do szybkiego wglądu)
+                "news_df": ticker_data.get("news_df"),       # Nadal potrzebne (do szybkiego wglądu)
+                "bbands_df": ticker_data.get("bbands_df")    # Nadal potrzebne (do szybkiego wglądu)
             }
+            # ==================================================================
 
             trades_found_h2 += aqm_v3_h2_simulator._simulate_trades_h2(
                 session,
                 ticker,
-                h_data_slice, 
+                h_data_slice, # Przekazujemy ten sam wzbogacony DF
                 year
             )
             
             trades_found_h3 += aqm_v3_h3_simulator._simulate_trades_h3(
                 session,
                 ticker,
-                h_data_slice, 
+                h_data_slice, # Przekazujemy ten sam wzbogacony DF
                 year
             )
 
             trades_found_h4 += aqm_v3_h4_simulator._simulate_trades_h4(
                 session,
                 ticker,
-                h_data_slice, 
+                h_data_slice, # Przekazujemy ten sam wzbogacony DF
                 year
             )
 
