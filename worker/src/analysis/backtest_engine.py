@@ -119,9 +119,9 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
     try:
         # --- KROK 1: ŁADOWANIE H1 (Daily Time Series) ---
         
-        # TIME_SERIES_DAILY (OHLCV - bez adjustacji, ale ma dane VWAP (których użyjemy jako HLC/3 proxy))
+        # TIME_SERIES_DAILY (OHLCV - do HLC/3 Proxy)
         price_data_raw = get_raw_data_with_cache(
-            session=session, api_client=api_client, ticker=ticker, data_type='DAILY_OHLCV', # Zmieniono nazwę na bezpieczniejszą
+            session=session, api_client=api_client, ticker=ticker, data_type='DAILY_OHLCV',
             api_func='get_time_series_daily', outputsize='full'
         )
         # TIME_SERIES_DAILY_ADJUSTED (Dla time_dilation)
@@ -142,10 +142,7 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         )
         
         # --- KROK 3: DANE INTRADAY (USUWANIE) ---
-        # USUNIĘTO PĘTLĘ POBIERAJĄCĄ DANE INTRADAY MIESIĄC PO MIESIĄCU.
-        # TE DANE SĄ JEDYNIE POTRZEBNE DO H4 (Market Temp),
-        # ale teraz używamy PROXY (Daily Volatility), co eliminuje błędy API.
-        
+        # USUNIĘTO PĘTLĘ POBIERAJĄCĄ DANE INTRADAY. Zastąpione pustym DF.
         intraday_5min_df = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume']).set_index(pd.to_datetime([]))
         
         # --- KROK 4: ŁADOWANIE H2 (Insider i News) ---
@@ -163,7 +160,6 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         # Przetwórz Daily OHLCV (dla HLC/3 proxy)
         daily_ohlcv_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
         daily_ohlcv_df.index = pd.to_datetime(daily_ohlcv_df.index) 
-        # UWAGA: Używamy standardowego mapowania, ale to jest OHLCV (bez Adjusted Close)
         daily_ohlcv_df = standardize_df_columns(daily_ohlcv_df)
         
         # Przetwórz Daily Adjusted (dla time_dilation i ATR)
@@ -176,12 +172,11 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         weekly_df.index = pd.to_datetime(weekly_df.index)
         weekly_df = standardize_df_columns(weekly_df)
         
-        # === KLUCZOWA ZMIANA (VWAP PROXY HLC/3) ===
-        # Obliczamy proxy (High+Low+Close)/3 bezpośrednio na daily_ohlcv_df
-        # i dodajemy je do daily_adjusted_df jako kolumnę 'vwap'.
+        # === KLUCZOWA POPRAWKA (VWAP PROXY HLC/3) ===
+        # Obliczamy proxy VWAP (HLC/3) na daily_ohlcv_df
         daily_ohlcv_df['vwap_proxy'] = (daily_ohlcv_df['high'] + daily_ohlcv_df['low'] + daily_ohlcv_df['close']) / 3.0
         
-        # Dołączamy proxy do DF Adjusted (który zawiera Adjusted Close do obliczeń)
+        # Używamy DF Adjusted jako bazy i dołączamy do niego OHLCV i VWAP Proxy
         enriched_df = daily_adjusted_df.join(daily_ohlcv_df[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
         
         # Mapujemy nową kolumnę 'vwap_proxy' na oczekiwaną nazwę 'vwap'
@@ -191,28 +186,39 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
              logger.warning(f"Brak danych HLC/3 VWAP Proxy dla {ticker}. H1 nie wygeneruje sygnałów dla tej spółki.")
         else:
             logger.info(f"Pomyślnie załadowano dane VWAP Proxy (HLC/3) dla {ticker}.")
-        # ==================================================================
         
+        # === KRYTYCZNA POPRAWKA: TWORZENIE KOLUMNY 'price_gravity' ===
+        # Ta linia musi istnieć, aby symulator H1/H3/H4 mógł znaleźć klucz 'price_gravity'
+        # Metryka price_gravity: (Center_of_Mass - Close) / Close.
+        # Center_of_Mass = enriched_df['vwap'] (czyli HLC/3)
+        # Close = enriched_df['close_ohlcv'] (czyli nie-adjusted close, które jest w enriched_df)
+        enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
+        # ================================================================
+
         # Wzbogacanie DataFrame (z użyciem danych SPY z Cache LITE)
         spy_aligned = _backtest_cache["spy_data"]['close'].reindex(enriched_df.index, method='ffill').rename('spy_close')
         enriched_df = enriched_df.join(spy_aligned) 
+        
+        # Obliczamy ATR (na nie-adjustowanych danych HLC, które są w enriched_df)
         enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
         
-        # Obliczenia H1 (time_dilation, price_gravity)
+        # Obliczenia H1 (time_dilation)
         ticker_returns_rolling = enriched_df['close'].pct_change().rolling(window=20)
         spy_returns_rolling = enriched_df['spy_close'].pct_change().rolling(window=20)
         std_ticker = ticker_returns_rolling.std()
         std_spy = spy_returns_rolling.std()
         enriched_df['time_dilation'] = std_ticker / std_spy
         
-        # price_gravity jest teraz obliczane w aqm_v3_metrics.py na podstawie HLC/3, 
-        # więc nie musimy go liczyć tutaj.
-
+        
         enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
         enriched_df['time_dilation'] = enriched_df['time_dilation'].fillna(0)
+        enriched_df['price_gravity'] = enriched_df['price_gravity'].fillna(0) # Zapewnienie, że jest kolumna
         
         # Przetwarzanie BBANDS (H3)
         bbands_df = _parse_bbands(bbands_raw)
+        
+        # DANE INTRADAY (USUWANIE)
+        intraday_5min_df = pd.DataFrame() 
         
         # Zdobądź i zapisz sektor (dla spójności)
         sector = _get_sector_for_ticker(session, ticker)
@@ -221,11 +227,11 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         return {
             "daily": enriched_df, 
             "weekly": weekly_df,
-            "vwap": enriched_df[['vwap']] if 'vwap' in enriched_df.columns else pd.DataFrame(columns=['vwap']), 
+            "vwap": enriched_df[['vwap']], 
             "insider_df": h2_data["insider_df"], 
             "news_df": h2_data["news_df"],       
             "bbands_df": bbands_df,             
-            "intraday_5min_df": intraday_5min_df, # Wciąż pusty, ale go przekazujemy
+            "intraday_5min_df": intraday_5min_df, 
             "sector": sector
         }
     
