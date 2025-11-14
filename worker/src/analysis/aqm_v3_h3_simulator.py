@@ -8,8 +8,8 @@ from typing import Dict, Any, Optional, Tuple
 
 # Importujemy modele i funkcje pomocnicze
 from .. import models
-# Importujemy "czyste" funkcje obliczeniowe z metryk AQM
-from . import aqm_v3_metrics
+# Importujemy "czyste" funkcje obliczeniowe z metryk AQM (nowy docelowy dom)
+from . import aqm_v3_metrics 
 # Importujemy funkcję egzekucji transakcji z symulatora H1
 from .aqm_v3_h1_simulator import _resolve_trade
 # Importujemy ATR z utils
@@ -17,106 +17,9 @@ from .utils import calculate_atr
 
 logger = logging.getLogger(__name__)
 
-def _calculate_h3_components_for_day(
-    current_date: pd.Timestamp,
-    daily_df: pd.DataFrame,
-    insider_df: pd.DataFrame,
-    news_df: pd.DataFrame,
-    intraday_5min_df: pd.DataFrame
-) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    """
-    Oblicza *nienormalizowane* wartości J (entropy_change), ∇² (price_gravity) 
-    i m² (attention_density) dla pojedynczego dnia, zgodnie z Mapą Warstwy Danych.
-    """
-    try:
-        # --- 1. Oblicz ∇² (Grawitacja Cenowa) ---
-        # ∇² jest aliasem dla price_gravity (Wymiar 1.2)
-        # ZGODNIE Z MEMO SUPPORTU 1.2: Używamy proxy (H+L+C)/3.
-        # Ta logika jest teraz zaimplementowana w 'calculate_price_gravity_from_data'.
-        # Musimy tylko przekazać 'daily_df' (widok do 'current_date').
-        daily_view_nabla = daily_df.loc[daily_df.index <= current_date]
-        if daily_view_nabla.empty:
-            return None, None, None
-            
-        nabla_sq = aqm_v3_metrics.calculate_price_gravity_from_data(daily_view_nabla)
-        
-        if nabla_sq is None:
-            return None, None, None
-
-        # --- 2. Oblicz m² (Gęstość Uwagi) ---
-        # m² jest aliasem dla attention_density (Wymiar 7.1).
-        # Wymaga 200 dni historii do obliczenia Z-Score.
-        # Używamy .loc[:current_date] i .iloc[-200:], aby pobrać właściwy widok historyczny
-        
-        # Tworzymy widoki danych kończące się na current_date
-        daily_view_m_sq = daily_df.loc[:current_date]
-        news_view_m_sq = news_df.loc[:current_date] 
-        
-        if len(daily_view_m_sq) < 200:
-            # Nie wystarczająca historia dla Z-Score w m² ( attention_density)
-            return None, None, None 
-
-        m_sq = aqm_v3_metrics.calculate_attention_density_from_data(
-            daily_view_m_sq,
-            news_view_m_sq,
-            current_date.to_pydatetime()
-        )
-        
-        if m_sq is None:
-            return None, None, None
-
-        # --- 3. Oblicz J (Zmiana Entropii) ---
-        
-        # a) S (Entropia Informacyjna) - Proxy: COUNT(artykułów z ostatnich 10 dni) (str. 23)
-        # news_view_j jest używany do obliczenia S, Q i μ
-        news_view_j = news_df.loc[:current_date]
-        S = aqm_v3_metrics.calculate_information_entropy_from_data(news_view_j)
-        
-        # b) Q (Przepływ Sentymentu) - retail_herding (ostatnie 7 dni)
-        Q = aqm_v3_metrics.calculate_retail_herding_from_data(news_view_j, current_date.to_pydatetime())
-        
-        # ==================================================================
-        # === KLUCZOWA ZMIANA (ZGODNIE Z MEMO SUPPORTU 4.1) ===
-        # ==================================================================
-        # c) T (Temperatura Rynku) - Zmieniamy z 5min na STDEV(returns_daily)
-        # Przekazujemy teraz 'daily_df_view', którego wymaga nowa funkcja
-        daily_view_temp = daily_df.loc[daily_df.index <= current_date]
-        T = aqm_v3_metrics.calculate_market_temperature_from_data(
-            intraday_5min_df,           # Argument 1 (ignorowany, ale zachowany dla porządku)
-            current_date.to_pydatetime(), # Argument 2
-            daily_df_view=daily_view_temp # Argument 3 (NOWY, KLUCZOWY)
-        )
-        # ==================================================================
-        
-        # d) μ (Potencjał Insiderów) - institutional_sync (ostatnie 90 dni)
-        mu = aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, current_date.to_pydatetime())
-        
-        # e) ΔN (Przewaga Informacyjna) - Stała 1.0 (str. 23)
-        delta_N = 1.0 
-        
-        # Walidacja komponentów J
-        if any(v is None for v in [S, Q, T, mu]):
-            return None, None, None # Brakuje danych do obliczenia J
-            
-        if T == 0:
-            return None, None, None # Dzielenie przez zero
-
-        # Sztywna Formuła Analityczna (Prawo 2): J = S - (Q / T) + (μ * ΔN)
-        # UWAGA: W PDF (str. 6) wzór to: $S-(Q/T)+(\mu^{*}\Delta N)$. Zgodnie z PDF (str. 23) używamy: $J=S-(Q/T)+(\mu*\Delta N)$
-        J = S - (Q / T) + (mu * delta_N)
-        
-        if pd.isna(J):
-            return None, None, None
-            
-        return float(J), float(nabla_sq), float(m_sq)
-
-    except KeyError as e:
-        # Błąd KeyError oznacza, że dla tej daty brakuje wpisu w daily_df (co jest normalne dla dni wolnych)
-        # logger.warning(f"[Backtest H3] Błąd klucza (prawdopodobnie dzień wolny) w _calculate_h3_components: {e} dla daty {current_date}")
-        return None, None, None
-    except Exception as e:
-        logger.error(f"[Backtest H3] Błąd w _calculate_h3_components_for_day: {e}", exc_info=True)
-        return None, None, None
+# ==================================================================
+# === USUNIĘTO: Funkcja _calculate_h3_components_for_day została przeniesiona do aqm_v3_metrics.py ===
+# ==================================================================
 
 def _simulate_trades_h3(
     session: Session, 
@@ -133,9 +36,9 @@ def _simulate_trades_h3(
     daily_df = historical_data.get("daily")
     insider_df = historical_data.get("insider_df")
     news_df = historical_data.get("news_df")
-    intraday_5min_df = historical_data.get("intraday_5min_df") # Teraz pusty, ale przekazywany
+    # Ten DF jest teraz pusty (po Krok 4/4), ale przekazujemy go dla spójności
+    intraday_5min_df = historical_data.get("intraday_5min_df") 
 
-    # ZGODNIE Z MEMO 4.1: Nie potrzebujemy już intraday_5min_df do H3
     if daily_df is None or insider_df is None or news_df is None:
         logger.warning(f"[Backtest V3][H3] Pominięto {ticker}, brak kompletnych danych (Daily, Insider lub News).")
         return 0
@@ -160,41 +63,57 @@ def _simulate_trades_h3(
         nabla_history = []
         m_history = []
         
-        components_calculated = True
-
         # 4. Oblicz 100-dniową historię komponentów (dla Z-Score i Percentyla)
-        # Tworzymy widok 101 dni (od i-100 do i)
         start_idx = i - percentile_window
         end_idx = i + 1
         
         # Optymalizacja: Stwórz widoki raz
-        daily_view_hist = daily_df.iloc[:end_idx] # Widok od początku do Dnia D
-        insider_view_hist = insider_df.loc[insider_df.index <= daily_df.index[i]]
-        news_view_hist = news_df.loc[news_df.index <= daily_df.index[i]]
-        # intraday_5min_df jest przekazywany w całości (i tak jest pusty)
+        # Używamy full_daily_df, aby pobrać wszystkie dane historyczne do indeksu i
+        daily_view_hist = daily_df.iloc[:end_idx] 
+        # News/Insider views są globalne, filtrowane w metrykach
+        
+        # Zmienna do śledzenia brakujących danych, ale nie przerywająca pętli od razu
+        data_valid = True
 
         for j in range(start_idx, end_idx): # Iteruj po indeksach (dniach)
             current_date_j = daily_df.index[j]
             
-            # Oblicz komponenty J, ∇², m² dla dnia 'j'
-            J_j, nabla_sq_j, m_sq_j = _calculate_h3_components_for_day(
+            # === KLUCZOWA ZMIANA LOGIKI PĘTLI ===
+            
+            # Wycinek danych dziennych kończący się na dacie j (potrzebne dla T i m_sq)
+            daily_view_j = daily_df.loc[daily_df.index <= current_date_j]
+            
+            # Przekaż datę J, ale filtruj dane wewnątrz metryki (dla większej czystości)
+            J_j, nabla_sq_j, m_sq_j = aqm_v3_metrics.calculate_h3_components_for_day(
                 current_date_j,
-                daily_view_hist,     # Przekaż pełny widok historii
-                insider_view_hist,   # Przekaż pełny widok historii
-                news_view_hist,      # Przekaż pełny widok historii
-                intraday_5min_df     # Przekaż (pusty) DF
+                daily_view_j,        # Widok Dzienny do daty J (dla price_gravity, market_temp)
+                insider_df,          # Pełna historia insider
+                news_df,             # Pełna historia news
+                daily_df,            # Pełny DF (dla BBANDS/History)
+                intraday_5min_df     # (Pusty) DF
             )
             
-            if J_j is None or nabla_sq_j is None or m_sq_j is None:
-                components_calculated = False
-                break 
+            # Jeśli brakuje danych, ustaw na 0.0 (neutralny wpływ) i kontynuuj
+            if J_j is None:
+                J_j = 0.0 
+                data_valid = False
+            if nabla_sq_j is None:
+                nabla_sq_j = 0.0
+                data_valid = False
+            if m_sq_j is None:
+                m_sq_j = 0.0
+                data_valid = False
                 
             j_history.append(J_j)
             nabla_history.append(nabla_sq_j)
             m_history.append(m_sq_j)
 
-        if not components_calculated:
+        if not data_valid and (j_history.count(0.0) / len(j_history) > 0.5):
+            # Jeśli ponad 50% historycznych punktów to 0.0, pomiń ten cykl (za mało informacji)
+            # To jest nasza nowa linia obrony przed "pustymi DataFrame'ami"
+            logger.warning(f"[Backtest H3] Pominięto {ticker} (Dzień D: {daily_df.index[i].date()}). Ponad 50% historii metryk to 0.0 (brak danych news/insider).")
             continue
+
 
         # 5. Normalizacja (Z-Score)
         j_series = pd.Series(j_history)
