@@ -184,8 +184,14 @@ def _pre_calculate_metrics(
     
     # Z-Score dla Wolumenu
     df['normalized_volume'] = (df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']
-    df['normalized_volume'].replace([np.inf, -np.inf], 0, inplace=True) # Obsługa dzielenia przez 0
-    df['normalized_volume'].fillna(0, inplace=True)
+    
+    # ==================================================================
+    # === NAPRAWA (FutureWarning: SettingWithCopyWarning) ===
+    # Zastąpiono inplace=True bezpiecznym przypisaniem zwrotnym.
+    # df['normalized_volume'].replace([np.inf, -np.inf], 0, inplace=True) # Obsługa dzielenia przez 0
+    # df['normalized_volume'].fillna(0, inplace=True)
+    df['normalized_volume'] = df['normalized_volume'].replace([np.inf, -np.inf], 0).fillna(0)
+    # ==================================================================
 
     # m_sq (attention_density - Newsy) i S (information_entropy)
     logger.info(f"[{ticker}] Obliczanie 'attention_density' (m_sq) i 'info_entropy' (S) - Newsy...")
@@ -206,8 +212,14 @@ def _pre_calculate_metrics(
         df['news_std_200d'] = df['information_entropy'].rolling(window=200).std()
 
         df['normalized_news'] = (df['information_entropy'] - df['news_mean_200d']) / df['news_std_200d']
-        df['normalized_news'].replace([np.inf, -np.inf], 0, inplace=True) # Obsługa dzielenia przez 0
-        df['normalized_news'].fillna(0, inplace=True)
+        
+        # ==================================================================
+        # === NAPRAWA (FutureWarning: SettingWithCopyWarning) ===
+        # Zastąpiono inplace=True bezpiecznym przypisaniem zwrotnym.
+        # df['normalized_news'].replace([np.inf, -np.inf], 0, inplace=True) # Obsługa dzielenia przez 0
+        # df['normalized_news'].fillna(0, inplace=True)
+        df['normalized_news'] = df['normalized_news'].replace([np.inf, -np.inf], 0).fillna(0)
+        # ==================================================================
     else:
         df['information_entropy'] = 0.0
         df['normalized_news'] = 0.0
@@ -232,7 +244,13 @@ def _pre_calculate_metrics(
     
     # Wypełnij NaN (które powstały z dzielenia przez zero)
     # Jeśli T było 0, Q/T = NaN, J = NaN. Wypełniamy S + (mu*dN)
-    J.fillna(S + (mu * delta_N), inplace=True)
+    
+    # ==================================================================
+    # === NAPRAWA (FutureWarning: SettingWithCopyWarning) ===
+    # Zastąpiono inplace=True bezpiecznym przypisaniem zwrotnym.
+    # J.fillna(S + (mu * delta_N), inplace=True)
+    J = J.fillna(S + (mu * delta_N))
+    # ==================================================================
     
     df['J'] = J
 
