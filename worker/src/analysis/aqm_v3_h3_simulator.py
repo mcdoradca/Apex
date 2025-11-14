@@ -29,7 +29,9 @@ def _simulate_trades_h3(
 ) -> int:
     """
     Iteruje dzień po dniu przez historyczny DataFrame DLA JEDNEJ SPÓŁKI
-    i szuka setupów zgodnych z Hipotezą H3 (Uproszczony Model Pola).
+    i szuka setupów zgodnych z Hipotezy H3 (Uproszczony Model Pola).
+    
+    KLUCZOWA POPRAWKA: Zabezpiecza pętlę historyczną przed przerwaniem przez brakujące dane (newsy/insider).
     """
     trades_found = 0
     
@@ -67,7 +69,6 @@ def _simulate_trades_h3(
         start_idx = i - percentile_window
         end_idx = i + 1
         
-        # Optymalizacja: Stwórz widoki raz
         # Używamy full_daily_df, aby pobrać wszystkie dane historyczne do indeksu i
         daily_view_hist = daily_df.iloc[:end_idx] 
         # News/Insider views są globalne, filtrowane w metrykach
@@ -78,20 +79,21 @@ def _simulate_trades_h3(
         for j in range(start_idx, end_idx): # Iteruj po indeksach (dniach)
             current_date_j = daily_df.index[j]
             
-            # === KLUCZOWA ZMIANA LOGIKI PĘTLI ===
-            
-            # Wycinek danych dziennych kończący się na dacie j (potrzebne dla T i m_sq)
+            # Wycinek danych dziennych kończący się na dacie j (potrzebne dla price_gravity, market_temp)
             daily_view_j = daily_df.loc[daily_df.index <= current_date_j]
             
             # Przekaż datę J, ale filtruj dane wewnątrz metryki (dla większej czystości)
+            # Używamy teraz daily_df zamiast intraday do market_temp
             J_j, nabla_sq_j, m_sq_j = aqm_v3_metrics.calculate_h3_components_for_day(
                 current_date_j,
                 daily_view_j,        # Widok Dzienny do daty J (dla price_gravity, market_temp)
                 insider_df,          # Pełna historia insider
                 news_df,             # Pełna historia news
-                daily_df,            # Pełny DF (dla BBANDS/History)
+                daily_df,            # Pełny DF (dla BBANDS/History - potrzebne do entropii)
                 intraday_5min_df     # (Pusty) DF
             )
+            
+            # === KLUCZOWA ZMIANA LOGIKI PĘTLI: Zabezpieczenie przed None ===
             
             # Jeśli brakuje danych, ustaw na 0.0 (neutralny wpływ) i kontynuuj
             if J_j is None:
@@ -125,7 +127,7 @@ def _simulate_trades_h3(
         
         j_norm_series = (j_series - j_series.mean()) / j_series.std(ddof=1) if j_series.std(ddof=1) != 0 else pd.Series(0, index=j_series.index)
         nabla_norm_series = (nabla_series - nabla_series.mean()) / nabla_series.std(ddof=1) if nabla_series.std(ddof=1) != 0 else pd.Series(0, index=nabla_series.index)
-        m_norm_series = (m_series - m_series.mean()) / m_series.std(ddof=1) if m_series.std(ddof=1) != 0 else pd.Series(0, index=m_series.index)
+        m_norm_series = (m_series - m_series.mean()) / m_series.std(ddof=1) if m_series.std(ddof=1) != 0 else pd.Series(0, index=nabla_series.index)
         
         # Zastąp NaN wartościami 0 (powstają, gdy std=0)
         j_norm_series.fillna(0, inplace=True)
