@@ -1,63 +1,52 @@
 import logging
 import pandas as pd
 from typing import Dict, Any, Optional
-from sqlalchemy.orm import Session # <-- ZMIANA: Dodano import Session
+from sqlalchemy.orm import Session 
+# ==================================================================
+# === BŁĄD KRYTYCZNY: BRAK IMPORTU 'timezone' ===
+from datetime import datetime, timezone # <--- DODANO BRAKUJĄCY IMPORT
+# ==================================================================
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
-# <-- ZMIANA: Importujemy funkcję cache z utils
-from .utils import get_raw_data_with_cache, get_current_NY_datetime
-from datetime import timedelta, datetime # Potrzebne do obliczeń czasu
+from .utils import get_raw_data_with_cache 
 
 logger = logging.getLogger(__name__)
 
 def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """
-    Przetwarza surową odpowiedź JSON z INSIDER_TRANSACTIONS na DataFrame
-    gotowy do backtestu. (LOGIKA OBLICZENIOWA BEZ ZMIAN)
-    
-    AKTUALIZACJA: Naprawiono błędy parsowania na podstawie rzeczywistych danych JSON.
+    Przetwarza surową odpowiedź JSON z INSIDER_TRANSACTIONS na DataFrame.
+    (LOGIKA OBLICZENIOWA BEZ ZMIAN)
     """
     try:
-        # === POPRAWKA 1: Błędny klucz główny ===
-        transactions = raw_data.get('data', []) # <-- Klucz to 'data', a nie 'transactions'
+        transactions = raw_data.get('data', [])
         
         if not transactions:
-            # Zwracamy pusty DF z oczekiwanymi kolumnami
             return pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
 
         processed_data = []
         for tx in transactions:
             try:
-                # === POPRAWKA 2: Błędne nazwy pól ===
-                # Konwertujemy datę na obiekt datetime, aby ustawić ją jako indeks
-                tx_date = pd.to_datetime(tx.get('transaction_date')) # <-- Poprawna nazwa pola
-                tx_type = tx.get('acquisition_or_disposal') # <-- Poprawna nazwa pola
-                tx_shares_str = tx.get('shares') # <-- Poprawna nazwa pola
+                tx_date = pd.to_datetime(tx.get('transaction_date')) 
+                tx_type = tx.get('acquisition_or_disposal')
+                tx_shares_str = tx.get('shares') 
                 
-                # Walidacja: upewnij się, że 'shares' nie jest puste (jak w 'Convertible Note')
                 if not tx_shares_str:
                     continue
                     
                 tx_shares = float(tx_shares_str)
-                # ==================================================================
                 
-                # ==================================================================
-                # === POPRAWKA 3: Błędne wartości filtra ===
-                # Zgodnie ze specyfikacją H2 (Wymiar 2.1), interesują nas 'A' i 'D'
                 if tx_type in ['A', 'D'] and tx_shares > 0:
-                # ==================================================================
                     processed_data.append({
                         'transaction_date': tx_date,
-                        'transaction_type': tx_type, # Zapisze 'A' lub 'D'
+                        'transaction_type': tx_type, 
                         'transaction_shares': tx_shares
                     })
             except (ValueError, TypeError, AttributeError):
-                continue # Pomiń błędne rekordy
+                continue 
 
         if not processed_data:
              return pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
 
         df = pd.DataFrame(processed_data)
-        # Ustawiamy datę jako indeks, aby umożliwić filtrowanie wg dat w backteście
         df.set_index('transaction_date', inplace=True)
         df.sort_index(inplace=True)
         return df
@@ -69,40 +58,36 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
 def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """
     Przetwarza surową odpowiedź JSON z NEWS_SENTIMENT na DataFrame
-    gotowy do backtestu. (LOGIKA OBLICZENIOWA BEZ ZMIAN)
+    gotowy do backtestu.
     """
     try:
         feed = raw_data.get('feed', [])
         if not feed:
-            # Zwracamy pusty DF z oczekiwanymi kolumnami
             return pd.DataFrame(columns=['overall_sentiment_score', 'topics']).set_index(pd.to_datetime([]))
 
         processed_data = []
         for article in feed:
             try:
-                # Format czasu AV to 'YYYYMMDDTHHMMSS'
                 pub_time_str = article.get('time_published')
-                # Używamy datetime.strptime, bo pd.to_datetime jest zbyt wolne w pętli.
-                pub_time = datetime.strptime(pub_time_str, '%Y%m%dT%H%M%S') 
+                # ZMIANA: Upewnij się, że parsujesz z uwzględnieniem strefy czasowej
+                pub_time = pd.to_datetime(pub_time_str, format='%Y%m%dT%H%M%S', utc=True)
                 score = float(article.get('overall_sentiment_score'))
                 
-                # Krok 22b: Przetwarzanie 'topics'
                 article_topics = article.get('topics', [])
                 topic_list = [t['topic'] for t in article_topics if 'topic' in t]
                 
                 processed_data.append({
                     'published_at': pub_time,
                     'overall_sentiment_score': score,
-                    'topics': topic_list # Zapisujemy listę tematów
+                    'topics': topic_list
                 })
             except (ValueError, TypeError, AttributeError):
-                continue # Pomiń błędne rekordy
+                continue
 
         if not processed_data:
             return pd.DataFrame(columns=['overall_sentiment_score', 'topics']).set_index(pd.to_datetime([]))
 
         df = pd.DataFrame(processed_data)
-        # Ustawiamy datę jako indeks
         df.set_index('published_at', inplace=True)
         df.sort_index(inplace=True)
         return df
@@ -113,31 +98,21 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
 
 def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session: Session) -> Dict[str, pd.DataFrame]:
     """
-    Główna funkcja tego modułu. Pobiera i przetwarza dane Wymiaru 2
-    dla pojedynczego tickera, używając MECHANIZMU CACHE.
-    
-    POPRAWKA: Wprowadzamy ograniczenia czasowe, aby pobierać tylko niezbędną
-    historię dla backtestu, co drastycznie przyspiesza proces.
+    Pobiera i przetwarza dane Wymiaru 2 dla pojedynczego tickera, używając MECHANIZMU CACHE.
     """
     logger.info(f"[Backtest V3][H2 Loader] Ładowanie danych Wymiaru 2 dla {ticker} (z cache)...")
     
-    # 1. Definicja ram czasowych dla backtestu (zgodnie ze specyfikacją)
+    # Używamy datetime i timezone poprawnie zaimportowanych na górze
     now_utc = datetime.now(timezone.utc)
     
-    # --- Insider Transactions (90 dni) ---
-    # Zamiast pobierać całą historię (20 lat), pobieramy tylko ostatnie 90 dni, 
-    # ponieważ backtest i tak używa tylko 90 dni rolling history (Wymiar 2.1).
-    # UWAGA: API AV dla Insiderów nie wspiera time_from/time_to. Pamiętajmy, że pobieramy
-    # domyślnie ostatnie 2 lata, więc to nie jest pełna optymalizacja, ale lepsze niż nic.
-    
     # 1. Pobierz dane Insider (Wymiar 2.1) - UŻYJ CACHE
+    # Używamy cache, ale data aktualizacji jest używana do walidacji w utils.py (CACHE_EXPIRY_DAYS)
     insider_raw = get_raw_data_with_cache(
-        session=session, # Przekazujemy sesję do zapisu/odczytu cache
+        session=session,
         api_client=api_client, 
         ticker=ticker,
-        data_type='INSIDER', # Stała definiująca typ danych
+        data_type='INSIDER',
         api_func='get_insider_transactions'
-        # UWAGA: To API nie wspiera time_from, więc pobieramy domyślną historię (ok. 2 lata)
     )
     insider_df = _parse_insider_transactions(insider_raw)
     
@@ -146,16 +121,14 @@ def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session
         insider_df = pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
     
     # 2. Pobierz dane News (Wymiar 2.2 i 4.2) - UŻYJ CACHE
-    # ZGODNIE Z MEMO SUPPORTU: Potrzebujemy do backtestu newsów z całego okresu.
-    # W `aqm_v3_metrics` używamy NEWS_SENTIMENT do obliczeń Entropii (10 dni) i Herding (7 dni)
-    # Zostawiamy limit na 1000, aby pokryć jak najwięcej danych do backtestu.
+    # Zmieniliśmy logikę na pobieranie pełnej historii do backtestu (limit=1000)
     news_raw = get_raw_data_with_cache(
-        session=session, # Przekazujemy sesję do zapisu/odczytu cache
+        session=session,
         api_client=api_client, 
         ticker=ticker,
-        data_type='NEWS_SENTIMENT_FULL', # Zmieniono na FULL, bo pobieramy dużo
+        data_type='NEWS_SENTIMENT_FULL_HISTORY', # Zmieniono na unikalny klucz
         api_func='get_news_sentiment',
-        limit=1000 # Użyjemy limitu 1000, aby mieć pełną historię do backtestu
+        limit=1000 # Pełna historia
     )
     news_df = _parse_news_sentiment(news_raw)
     
