@@ -70,7 +70,7 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
         low = latest_candle['low']
         
         if pd.isna(price) or pd.isna(high) or pd.isna(low):
-            logger.warning(f"Brak danych HLC dla {latest_candle.name} w 'calculate_price_gravity_from_data'.")
+            # logger.warning(f"Brak danych HLC dla {latest_candle.name} w 'calculate_price_gravity_from_data'.")
             return None
 
         # 2. Oblicz proxy "centrum masy" (Typical Price)
@@ -221,7 +221,7 @@ def calculate_market_temperature_from_data(
             recent_daily_data = daily_df_view.loc[daily_df_view.index <= current_date].iloc[-30:]
 
             if recent_daily_data.empty or len(recent_daily_data) < 2:
-                logger.warning(f"Za mało danych (Daily) do obliczenia Market Temp (potrzebne 2, jest {len(recent_daily_data)})")
+                # logger.warning(f"Za mało danych (Daily) do obliczenia Market Temp (potrzebne 2, jest {len(recent_daily_data)})")
                 return None # Za mało danych do obliczenia zwrotów
 
             # 2. Oblicz zwroty dzienne
@@ -294,6 +294,9 @@ def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optio
         logger.error(f"Błąd w 'calculate_information_entropy_from_data' (Proxy Liczba Newsów): {e}", exc_info=True)
         return None
 
+# ==================================================================
+# === NAPRAWA BŁĘDU LOGICZNEGO (Spam w logach) ===
+# ==================================================================
 def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
     """
     (Wymiar 7.1) Oblicza 'attention_density'.
@@ -302,10 +305,16 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
     KOREKTA ZGODNA Z MAPĄ WARSTWY DANYCH (str. 23) i MEMO SUPPORTU (7.1).
     """
     try:
-        # Upewnij się, że mamy wystarczająco danych (dla Z-Score z 200 dni)
-        if len(daily_df_view) < 200:
-            logger.warning(f"Za mało danych 'daily' ({len(daily_df_view)}) do obliczenia Attention Density (wymagane 200).")
-            return None 
+        # ==================================================================
+        # === POPRAWKA BŁĘDU: Przeniesiono walidację 'daily_df_view' ===
+        # Ta walidacja była błędna, ponieważ 'daily_df_view' w pętli historycznej
+        # celowo rośnie (np. 101, 102... elementów). Musimy walidować
+        # historię *wolumenu* po jej obliczeniu.
+        # ==================================================================
+        # if len(daily_df_view) < 200: # <--- BŁĘDNA LINIA USUNIĘTA
+        #     logger.warning(f"Za mało danych 'daily' ({len(daily_df_view)}) do obliczenia Attention Density (wymagane 200).")
+        #     return None 
+        # ==================================================================
 
         # 1. Oblicz 10-dniową średnią kroczącą dla WOLUMENU (dla ostatnich 200 dni)
         # historical_avg_volume_10d będzie miało NaN na początku
@@ -322,7 +331,12 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
         
         # ZGODNIE Z MEMO SUPPORTU: Obsługa braku newsów
         if news_df_view.empty:
-            logger.warning(f"Brak danych 'news' do obliczenia Attention Density. Używam tylko wolumenu.")
+            # ==================================================================
+            # === POPRAWKA BŁĘDU: Usunięcie spamu z logów ===
+            # Ten log był wywoływany 100 razy na sekundę. Zastępujemy go
+            # pojedynczym logiem w 'aqm_v3_h3_simulator.py'.
+            # ==================================================================
+            # logger.warning(f"Brak danych 'news' do obliczenia Attention Density. Używam tylko wolumenu.") # <--- SPAM USUNIĘTY
             normalized_news = 0.0 # Fallback
         else:
             # a) Zlicz newsy dziennie
@@ -350,9 +364,12 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
                     # Używamy znormalizowanego Z-Score
                     normalized_news = (news_count_10d - news_mean) / news_std
         
-
-        if valid_volume_history.empty or pd.isna(avg_volume_10d):
-             logger.warning(f"Brak wystarczającej historii wolumenu do obliczenia Z-Score w Attention Density.")
+        # ==================================================================
+        # === POPRAWKA BŁĘDU: Przywrócenie poprawnej walidacji ===
+        # Sprawdzamy, czy mamy wystarczającą *historię wolumenu* (min 200 dni)
+        # ==================================================================
+        if len(valid_volume_history) < 200 or pd.isna(avg_volume_10d):
+             logger.warning(f"Brak wystarczającej historii wolumenu ({len(valid_volume_history)}) do obliczenia Z-Score w Attention Density.")
              return None
 
 
@@ -378,6 +395,10 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
     except Exception as e:
         logger.error(f"Błąd w 'calculate_attention_density_from_data': {e}", exc_info=True)
         return None
+# ==================================================================
+# === KONIEC NAPRAWY BŁĘDU LOGICZNEGO ===
+# ==================================================================
+
 
 # ==================================================================
 # === Funkcje "Na Żywo" (Oryginalna Logika - jeszcze nieużywane) ===
@@ -386,7 +407,6 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
 # byłyby obliczane w trybie "live" (np. dla skanera EOD).
 
 def calculate_time_dilation_live(ticker: str, ticker_daily_df: pd.DataFrame, spy_daily_df: pd.DataFrame) -> Optional[float]:
-# ... (bez zmian) ...
     """(Wymiar 1.1) Oblicza 'time_dilation' używając przekazanych DF."""
     try:
         ticker_returns = ticker_daily_df['close'].pct_change()
