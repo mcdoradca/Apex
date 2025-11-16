@@ -180,9 +180,15 @@ class VirtualAgentStats(BaseModel):
     profit_factor: float
     by_setup: Dict[str, Any] # Tu będą statystyki dla każdego setup_type
 
+# ==========================================================
+# === AKTUALIZACJA (STRONICOWANIE) ===
+# Schemat raportu jest teraz podzielony
+# ==========================================================
 class VirtualAgentReport(BaseModel):
-    stats: VirtualAgentStats
-    trades: List[VirtualTrade] # Ten schemat teraz zawiera nowe metryki
+    stats: VirtualAgentStats # Statystyki są globalne
+    trades: List[VirtualTrade] # To będzie tylko bieżąca strona transakcji
+    total_trades_count: int # Całkowita liczba transakcji (dla paginacji)
+# ==========================================================
 
 
 # ==========================================================
