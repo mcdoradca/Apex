@@ -1,5 +1,5 @@
-from sqlalchemy.orm import Session, Row
-from sqlalchemy import text, desc, func, update, delete # Dodano Row
+from sqlalchemy.orm import Session
+from sqlalchemy import text, desc, func, update, delete, Row # POPRAWKA: Import 'Row' jest tutaj
 from . import models, schemas # Dodano import schemas
 from typing import Optional, Any, Dict, List
 # KROK 4d: Dodano 'timedelta' do obliczeń 24-godzinnych
