@@ -89,7 +89,7 @@ def _simulate_trades_h4(
         # ==================================================================
         
         # 6. Zastosuj Sygnał H4
-        if is_signal:
+        if is_signal and pd.notna(is_signal): # Dodano pd.notna dla bezpieczeństwa
             
             # --- ZNALEZIONO SYGNAŁ H4 ---
             
@@ -112,18 +112,19 @@ def _simulate_trades_h4(
                 
                 # ==================================================================
                 # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # === POPRAWKA: Konwertujemy wszystko na float() ===
                 # ==================================================================
                 setup_h4 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H4_INFO_THERMO", 
-                    "entry_price": entry_price,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit,
+                    "entry_price": float(entry_price),
+                    "stop_loss": float(stop_loss),
+                    "take_profit": float(take_profit),
                     
-                    # --- Dodatkowe metryki do logowania ---
-                    "metric_atr_14": atr_value,
-                    "metric_J": j_series.iloc[i],
-                    "metric_J_threshold_2sigma": threshold_series.iloc[i]
+                    # --- Dodatkowe metryki do logowania (BEZPIECZNA KONWERSJA) ---
+                    "metric_atr_14": float(atr_value),
+                    "metric_J": float(j_series.iloc[i]),
+                    "metric_J_threshold_2sigma": float(threshold_series.iloc[i])
                 }
                 # ==================================================================
                 
