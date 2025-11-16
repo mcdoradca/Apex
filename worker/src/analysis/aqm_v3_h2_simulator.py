@@ -167,7 +167,11 @@ def _simulate_trades_h2(
                 # Dzień D był ostatnim dniem w danych, nie ma D+1
                 continue
             except Exception as e:
-                logger.error(f"[Backtest H2] Błąd podczas tworzenia setupu dla {ticker} (Dzień {candle_D.name.date()}): {e}", exc_info.True)
+                # ==================================================================
+                # === POPRAWKA BŁĘDU SYNTAX ERROR ===
+                # (Zmieniono .True na =True)
+                # ==================================================================
+                logger.error(f"[Backtest H2] Błąd podczas tworzenia setupu dla {ticker} (Dzień {candle_D.name.date()}): {e}", exc_info=True)
                 session.rollback()
 
 
