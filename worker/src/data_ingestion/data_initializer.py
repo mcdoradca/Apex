@@ -48,14 +48,18 @@ def _run_schema_and_index_migration(session: Session):
         session.execute(create_index_sql)
         
         # ==================================================================
-        # === KRYTYCZNA NAPRAWA BŁĘDU: MIGRACJA TABELI virtual_trades ===
-        # Musimy dodać wszystkie nowe kolumny metryk, jeśli nie istnieją.
+        # === KRYTYCZNA NAPRAWA BŁĘDU (DuplicateColumn): MIGRACJA virtual_trades ===
         # ==================================================================
         
         if 'virtual_trades' in inspector.get_table_names():
             logger.info("Checking schema for 'virtual_trades' table...")
-            vt_columns = [col['name'] for col in inspector.get_columns('virtual_trades')]
             
+            # ==================================================================
+            # === POPRAWKA LOGIKI (CASE INSENSITIVE) ===
+            # Pobieramy nazwy kolumn i natychmiast zamieniamy je na małe litery
+            vt_columns_lower = [col['name'].lower() for col in inspector.get_columns('virtual_trades')]
+            # ==================================================================
+
             # Lista wszystkich 14 nowych kolumn (używamy NUMERIC(12, 6) dla większej precyzji)
             metric_columns_to_add = [
                 ("metric_atr_14", "NUMERIC(12, 6)"),
@@ -81,20 +85,27 @@ def _run_schema_and_index_migration(session: Session):
             # Pętla dodająca brakujące kolumny
             columns_added_count = 0
             for col_name, col_type in metric_columns_to_add:
-                if col_name not in vt_columns:
-                    logger.warning(f"Migration needed: Adding column '{col_name}' ({col_type}) to 'virtual_trades' table.")
+                # ==================================================================
+                # === POPRAWKA LOGIKI (CASE INSENSITIVE) ===
+                # Sprawdzamy teraz listę z małymi literami
+                if col_name.lower() not in vt_columns_lower:
+                # ==================================================================
+                    
+                    # Logika dodawania pozostaje taka sama (używamy cudzysłowów, aby zachować wielkość liter)
+                    logger.warning(f"Migration: Adding column '\"{col_name}\"' ({col_type}) to 'virtual_trades' table.")
                     try:
-                        session.execute(text(f'ALTER TABLE virtual_trades ADD COLUMN {col_name} {col_type}'))
-                        logger.info(f"Successfully added column '{col_name}'.")
+                        # UŻYWAMY CUDZYSŁOWÓW, aby zachować wielkość liter (np. "metric_J_norm")
+                        session.execute(text(f'ALTER TABLE virtual_trades ADD COLUMN "{col_name}" {col_type}'))
+                        logger.info(f"Successfully added column '\"{col_name}\"'.")
                         columns_added_count += 1
                     except Exception as e:
-                        logger.error(f"Failed to add column {col_name}: {e}")
-                        session.rollback() # Wycofaj tylko tę jedną nieudaną operację
+                        logger.error(f"Failed to add column \"{col_name}\": {e}")
+                        session.rollback()
                 
             if columns_added_count > 0:
                 logger.info(f"Migration added {columns_added_count} new columns to 'virtual_trades'.")
             else:
-                logger.info("Schema for 'virtual_trades' is already up-to-date.")
+                logger.info("Schema for 'virtual_trades' is already up-to-date (all columns found).")
                 
         # ==================================================================
         # === KONIEC KRYTYCZNEJ NAPRAWY ===
