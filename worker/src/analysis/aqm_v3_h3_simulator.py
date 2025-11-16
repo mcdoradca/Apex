@@ -90,12 +90,10 @@ def _simulate_trades_h3(
     m_norm = (daily_df['m_sq'] - m_mean) / m_std
 
     # 2. Zastąp nieskończoności (z dzielenia przez 0 std) i NaNy
-    j_norm.replace([np.inf, -np.inf], np.nan, inplace=True)
-    nabla_norm.replace([np.inf, -np.inf], np.nan, inplace=True)
-    m_norm.replace([np.inf, -np.inf], np.nan, inplace=True)
-    j_norm.fillna(0, inplace=True)
-    nabla_norm.fillna(0, inplace=True)
-    m_norm.fillna(0, inplace=True)
+    # Używamy .replace zamiast .fillna(0, inplace=True) aby uniknąć ostrzeżeń
+    j_norm = j_norm.replace([np.inf, -np.inf], np.nan).fillna(0)
+    nabla_norm = nabla_norm.replace([np.inf, -np.inf], np.nan).fillna(0)
+    m_norm = m_norm.replace([np.inf, -np.inf], np.nan).fillna(0)
 
     # 3. Oblicz AQM_V3_SCORE (zgodnie ze specyfikacją - wagi 1.0)
     aqm_score_series = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
@@ -148,21 +146,22 @@ def _simulate_trades_h3(
                 
                 # ==================================================================
                 # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # === POPRAWKA: Konwertujemy wszystko na float() ===
                 # ==================================================================
                 setup_h3 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H3_QUANTUM_FIELD", 
-                    "entry_price": entry_price,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit,
+                    "entry_price": float(entry_price),
+                    "stop_loss": float(stop_loss),
+                    "take_profit": float(take_profit),
                     
-                    # --- Dodatkowe metryki do logowania ---
-                    "metric_atr_14": atr_value,
-                    "metric_aqm_score_h3": current_aqm_score,
-                    "metric_aqm_percentile_95": percentile_95,
-                    "metric_J_norm": j_norm.iloc[i],
-                    "metric_nabla_sq_norm": nabla_norm.iloc[i],
-                    "metric_m_sq_norm": m_norm.iloc[i],
+                    # --- Dodatkowe metryki do logowania (BEZPIECZNA KONWERSJA) ---
+                    "metric_atr_14": float(atr_value),
+                    "metric_aqm_score_h3": float(current_aqm_score),
+                    "metric_aqm_percentile_95": float(percentile_95),
+                    "metric_J_norm": float(j_norm.iloc[i]),
+                    "metric_nabla_sq_norm": float(nabla_norm.iloc[i]),
+                    "metric_m_sq_norm": float(m_norm.iloc[i]),
                 }
                 # ==================================================================
 
