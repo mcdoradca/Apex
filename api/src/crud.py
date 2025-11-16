@@ -1,5 +1,5 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import text, desc, func, update, delete # Dodano update, delete
+from sqlalchemy.orm import Session, Row
+from sqlalchemy import text, desc, func, update, delete # Dodano Row
 from . import models, schemas # Dodano import schemas
 from typing import Optional, Any, Dict, List
 # KROK 4d: Dodano 'timedelta' do obliczeń 24-godzinnych
@@ -381,13 +381,16 @@ def set_system_control_value(db: Session, key: str, value: str):
 
 
 # ==================================================================
-# === NOWE FUNKCJE (KROK 5): Pobieranie Raportu Wirtualnego Agenta ===
+# === AKTUALIZACJA (STRONICOWANIE): Funkcje Raportu Agenta ===
 # ==================================================================
 
-def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualAgentStats:
-    """Funkcja pomocnicza do obliczania statystyk na podstawie listy transakcji."""
+def _calculate_stats_from_rows(trades_rows: List[Row]) -> schemas.VirtualAgentStats:
+    """
+    Funkcja pomocnicza do obliczania statystyk na podstawie wierszy (Rows) z SQLAlchemy.
+    Przyjmuje listę wierszy zawierających `final_profit_loss_percent` i `setup_type`.
+    """
     
-    total_trades = len(trades_list)
+    total_trades = len(trades_rows)
     if total_trades == 0:
         # Zwróć puste, domyślne statystyki
         return schemas.VirtualAgentStats(
@@ -406,12 +409,13 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
         'trades': 0, 'wins': 0, 'total_p_l': Decimal(0), 'total_loss_p_l': Decimal(0), 'total_win_p_l': Decimal(0)
     })
 
-    for trade in trades_list:
-        # Upewnijmy się, że final_profit_loss_percent nie jest None
+    valid_trades_count = 0
+    for trade in trades_rows:
+        # Używamy `trade.final_profit_loss_percent` (dostęp przez nazwę atrybutu w Row)
         if trade.final_profit_loss_percent is None:
-            total_trades -= 1 # Ta transakcja nie jest jeszcze w pełni obliczona
-            continue
+            continue # Ta transakcja nie jest jeszcze w pełni obliczona
 
+        valid_trades_count += 1
         p_l = Decimal(trade.final_profit_loss_percent)
         
         total_p_l += p_l
@@ -430,7 +434,7 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
             setup_stats[setup_type]['total_loss_p_l'] += p_l
 
     # Obliczenia końcowe
-    win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+    win_rate = (wins / valid_trades_count) * 100 if valid_trades_count > 0 else 0
     # Profit Factor = (Całkowity zysk z wygranych) / (Całkowita strata z przegranych)
     profit_factor = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0.0 # abs bo total_loss jest ujemne
 
@@ -445,7 +449,7 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
         }
 
     return schemas.VirtualAgentStats(
-        total_trades=total_trades,
+        total_trades=valid_trades_count,
         win_rate_percent=float(win_rate),
         total_p_l_percent=float(total_p_l),
         profit_factor=profit_factor,
@@ -453,43 +457,58 @@ def _calculate_stats(trades_list: List[models.VirtualTrade]) -> schemas.VirtualA
     )
 
 
-def get_virtual_agent_report(db: Session) -> schemas.VirtualAgentReport:
+def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -> schemas.VirtualAgentReport:
     """
     Pobiera wszystkie *zamknięte* wirtualne transakcje i oblicza
     szczegółowe statystyki wydajności.
     
-    AKTUALIZACJA: Ta funkcja jest teraz gotowa do pobrania
-    wszystkich nowych kolumn 'metric_...', ponieważ SQLAlchemy
-    automatycznie wypełni pełny obiekt `models.VirtualTrade`,
-    a `schemas.VirtualTrade` (z Pydantic) jest gotowy, aby je przyjąć.
+    AKTUALIZACJA (Stronicowanie): Ta funkcja jest teraz stronnicowana.
+    1. Pobiera WSZYSTKIE transakcje (tylko kolumny do statystyk) do obliczenia statystyk.
+    2. Pobiera JEDNĄ stronę pełnych transakcji do wyświetlenia.
+    3. Zwraca całkowitą liczbę transakcji.
     """
     try:
-        # Pobieramy tylko te, które są zamknięte (mają wynik)
-        # SQLAlchemy ORM automatycznie pobierze *wszystkie* kolumny,
-        # w tym nowe kolumny 'metric_...'
-        closed_trades = db.query(models.VirtualTrade).filter(
+        # === KROK 1: Oblicz statystyki (Lekkie zapytanie) ===
+        # Pobieramy *tylko* kolumny potrzebne do statystyk, ale dla *wszystkich* transakcji.
+        logger.info("Pobieranie danych do statystyk (wszystkie transakcje)...")
+        stats_query_result = db.query(
+            models.VirtualTrade.final_profit_loss_percent,
+            models.VirtualTrade.setup_type
+        ).filter(models.VirtualTrade.status != 'OPEN').all()
+        
+        # Oblicz statystyki na tych lekkich danych
+        stats = _calculate_stats_from_rows(stats_query_result)
+        total_trades_count = len(stats_query_result) # Całkowita liczba transakcji
+        logger.info(f"Obliczono statystyki dla {total_trades_count} transakcji.")
+
+        if total_trades_count == 0:
+             return schemas.VirtualAgentReport(stats=stats, trades=[], total_trades_count=0)
+
+        # === KROK 2: Pobierz tylko *stronę* transakcji (Ciężkie zapytanie, mały wynik) ===
+        logger.info(f"Pobieranie strony {page} (rozmiar: {page_size}) pełnych obiektów transakcji...")
+        offset = (page - 1) * page_size
+        paged_trades = db.query(models.VirtualTrade).filter(
             models.VirtualTrade.status != 'OPEN'
-        ).order_by(desc(models.VirtualTrade.close_date)).all()
+        ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
+        logger.info(f"Pobrano {len(paged_trades)} transakcji na bieżącą stronę.")
         
-        # Oblicz statystyki (ta funkcja operuje tylko na P/L, więc bez zmian)
-        stats = _calculate_stats(closed_trades)
-        
-        # Zwróć pełny raport
+        # === KROK 3: Zwróć połączony raport ===
         # Pydantic (schemas.VirtualTrade.model_validate) automatycznie
-        # zmapuje wszystkie nowe kolumny z `closed_trades` (modele ORM)
+        # zmapuje wszystkie nowe kolumny z `paged_trades` (modele ORM)
         # do `trades` (schematy Pydantic).
         return schemas.VirtualAgentReport(
             stats=stats,
-            trades=closed_trades 
+            trades=paged_trades, # Tylko strona transakcji
+            total_trades_count=total_trades_count # Całkowita liczba
         )
     except Exception as e:
         logger.error(f"Nie można wygenerować raportu Wirtualnego Agenta: {e}", exc_info=True)
         # Zwróć pusty raport w razie błędu
-        empty_stats = _calculate_stats([])
-        return schemas.VirtualAgentReport(stats=empty_stats, trades=[])
+        empty_stats = _calculate_stats_from_rows([]) # Użyj nowej funkcji
+        return schemas.VirtualAgentReport(stats=empty_stats, trades=[], total_trades_count=0)
 
 # ==================================================================
-# === KONIEC NOWYCH FUNKCJI (KROK 5) ===
+# === KONIEC AKTUALIZACJI (STRONICOWANIE) ===
 # ==================================================================
 
 # ==================================================================
