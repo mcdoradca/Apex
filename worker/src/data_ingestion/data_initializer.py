@@ -56,38 +56,45 @@ def _run_schema_and_index_migration(session: Session):
             logger.info("Checking schema for 'virtual_trades' table...")
             vt_columns = [col['name'] for col in inspector.get_columns('virtual_trades')]
             
-            # Lista wszystkich 14 nowych kolumn
+            # Lista wszystkich 14 nowych kolumn (używamy NUMERIC(12, 6) dla większej precyzji)
             metric_columns_to_add = [
-                ("metric_atr_14", "NUMERIC(10, 5)"),
+                ("metric_atr_14", "NUMERIC(12, 6)"),
                 # H1
-                ("metric_time_dilation", "NUMERIC(10, 5)"),
-                ("metric_price_gravity", "NUMERIC(10, 5)"),
-                ("metric_td_percentile_90", "NUMERIC(10, 5)"),
-                ("metric_pg_percentile_90", "NUMERIC(10, 5)"),
+                ("metric_time_dilation", "NUMERIC(12, 6)"),
+                ("metric_price_gravity", "NUMERIC(12, 6)"),
+                ("metric_td_percentile_90", "NUMERIC(12, 6)"),
+                ("metric_pg_percentile_90", "NUMERIC(12, 6)"),
                 # H2
-                ("metric_inst_sync", "NUMERIC(10, 5)"),
-                ("metric_retail_herding", "NUMERIC(10, 5)"),
+                ("metric_inst_sync", "NUMERIC(12, 6)"),
+                ("metric_retail_herding", "NUMERIC(12, 6)"),
                 # H3
-                ("metric_aqm_score_h3", "NUMERIC(10, 5)"),
-                ("metric_aqm_percentile_95", "NUMERIC(10, 5)"),
-                ("metric_J_norm", "NUMERIC(10, 5)"),
-                ("metric_nabla_sq_norm", "NUMERIC(10, 5)"),
-                ("metric_m_sq_norm", "NUMERIC(10, 5)"),
+                ("metric_aqm_score_h3", "NUMERIC(12, 6)"),
+                ("metric_aqm_percentile_95", "NUMERIC(12, 6)"),
+                ("metric_J_norm", "NUMERIC(12, 6)"),
+                ("metric_nabla_sq_norm", "NUMERIC(12, 6)"),
+                ("metric_m_sq_norm", "NUMERIC(12, 6)"),
                 # H4
-                ("metric_J", "NUMERIC(10, 5)"),
-                ("metric_J_threshold_2sigma", "NUMERIC(10, 5)")
+                ("metric_J", "NUMERIC(12, 6)"),
+                ("metric_J_threshold_2sigma", "NUMERIC(12, 6)")
             ]
             
             # Pętla dodająca brakujące kolumny
+            columns_added_count = 0
             for col_name, col_type in metric_columns_to_add:
                 if col_name not in vt_columns:
                     logger.warning(f"Migration needed: Adding column '{col_name}' ({col_type}) to 'virtual_trades' table.")
                     try:
                         session.execute(text(f'ALTER TABLE virtual_trades ADD COLUMN {col_name} {col_type}'))
                         logger.info(f"Successfully added column '{col_name}'.")
+                        columns_added_count += 1
                     except Exception as e:
                         logger.error(f"Failed to add column {col_name}: {e}")
                         session.rollback() # Wycofaj tylko tę jedną nieudaną operację
+                
+            if columns_added_count > 0:
+                logger.info(f"Migration added {columns_added_count} new columns to 'virtual_trades'.")
+            else:
+                logger.info("Schema for 'virtual_trades' is already up-to-date.")
                 
         # ==================================================================
         # === KONIEC KRYTYCZNEJ NAPRAWY ===
