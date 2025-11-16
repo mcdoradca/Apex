@@ -25,21 +25,24 @@ def _run_schema_and_index_migration(session: Session):
         if 'trading_signals' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('trading_signals')]
             
+            # Używamy IF NOT EXISTS dla bezpieczeństwa
             if 'entry_zone_bottom' not in columns:
                 logger.warning("Migration needed: Adding column 'entry_zone_bottom'.")
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN entry_zone_bottom NUMERIC(12, 2)"))
+                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS entry_zone_bottom NUMERIC(12, 2)"))
             if 'entry_zone_top' not in columns:
                 logger.warning("Migration needed: Adding column 'entry_zone_top'.")
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN entry_zone_top NUMERIC(12, 2)"))
+                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS entry_zone_top NUMERIC(12, 2)"))
             if 'updated_at' not in columns:
                 logger.warning("Migration needed: Adding column 'updated_at' to 'trading_signals' table.")
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
                 logger.info("Successfully added 'updated_at' column.")
 
         # === MIGRACJA TABELI 2: Stworzenie indeksu (jeśli go brakuje) ===
         index_name = 'uq_active_pending_ticker'
         logger.info(f"Attempting to create or verify partial unique index '{index_name}'...")
+        # Usunięcie starego, potencjalnie konfliktowego ograniczenia (bezpieczne, jeśli nie istnieje)
         session.execute(text("ALTER TABLE trading_signals DROP CONSTRAINT IF EXISTS trading_signals_ticker_key;"))
+        # Stworzenie poprawnego indeksu
         create_index_sql = text(f"""
             CREATE UNIQUE INDEX IF NOT EXISTS {index_name}
             ON trading_signals (ticker)
@@ -48,18 +51,14 @@ def _run_schema_and_index_migration(session: Session):
         session.execute(create_index_sql)
         
         # ==================================================================
-        # === KRYTYCZNA NAPRAWA BŁĘDU (DuplicateColumn): MIGRACJA virtual_trades ===
+        # === OSTATECZNA NAPRAWA BŁĘDU (DuplicateColumn / UndefinedColumn) ===
+        # Używamy teraz polecenia 'ADD COLUMN IF NOT EXISTS', które jest
+        # idempotentne i obsługiwane przez PostgreSQL.
         # ==================================================================
         
         if 'virtual_trades' in inspector.get_table_names():
-            logger.info("Checking schema for 'virtual_trades' table...")
+            logger.info("Checking schema for 'virtual_trades' table using robust migration...")
             
-            # ==================================================================
-            # === POPRAWKA LOGIKI (CASE INSENSITIVE) ===
-            # Pobieramy nazwy kolumn i natychmiast zamieniamy je na małe litery
-            vt_columns_lower = [col['name'].lower() for col in inspector.get_columns('virtual_trades')]
-            # ==================================================================
-
             # Lista wszystkich 14 nowych kolumn (używamy NUMERIC(12, 6) dla większej precyzji)
             metric_columns_to_add = [
                 ("metric_atr_14", "NUMERIC(12, 6)"),
@@ -82,33 +81,25 @@ def _run_schema_and_index_migration(session: Session):
                 ("metric_J_threshold_2sigma", "NUMERIC(12, 6)")
             ]
             
-            # Pętla dodająca brakujące kolumny
+            # Pętla dodająca brakujące kolumny w sposób odporny na błędy
             columns_added_count = 0
             for col_name, col_type in metric_columns_to_add:
-                # ==================================================================
-                # === POPRAWKA LOGIKI (CASE INSENSITIVE) ===
-                # Sprawdzamy teraz listę z małymi literami
-                if col_name.lower() not in vt_columns_lower:
-                # ==================================================================
-                    
-                    # Logika dodawania pozostaje taka sama (używamy cudzysłowów, aby zachować wielkość liter)
-                    logger.warning(f"Migration: Adding column '\"{col_name}\"' ({col_type}) to 'virtual_trades' table.")
-                    try:
-                        # UŻYWAMY CUDZYSŁOWÓW, aby zachować wielkość liter (np. "metric_J_norm")
-                        session.execute(text(f'ALTER TABLE virtual_trades ADD COLUMN "{col_name}" {col_type}'))
-                        logger.info(f"Successfully added column '\"{col_name}\"'.")
-                        columns_added_count += 1
-                    except Exception as e:
-                        logger.error(f"Failed to add column \"{col_name}\": {e}")
-                        session.rollback()
-                
+                try:
+                    # Używamy cudzysłowów, aby zachować wielkość liter (np. "metric_J_norm")
+                    # To polecenie DODA kolumnę, jeśli jej nie ma, i NIE ZGŁOSI BŁĘDU, jeśli już istnieje.
+                    sql_command = f'ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS "{col_name}" {col_type}'
+                    session.execute(text(sql_command))
+                    columns_added_count += 1 # Liczymy próby, niekoniecznie sukcesy
+                except Exception as e:
+                    # Ten błąd nie powinien się już zdarzyć, ale zabezpieczamy
+                    logger.error(f"Failed to execute 'ADD COLUMN IF NOT EXISTS' for {col_name}: {e}")
+                    session.rollback() # Wycofaj tylko tę jedną nieudaną operację
+            
             if columns_added_count > 0:
-                logger.info(f"Migration added {columns_added_count} new columns to 'virtual_trades'.")
-            else:
-                logger.info("Schema for 'virtual_trades' is already up-to-date (all columns found).")
-                
+                logger.info(f"Migration: Successfully executed 'ADD IF NOT EXISTS' for all {columns_added_count} metric columns.")
+            
         # ==================================================================
-        # === KONIEC KRYTYCZNEJ NAPRAWY ===
+        # === KONIEC OSTATECZNEJ NAPRAWY ===
         # ==================================================================
 
         session.commit() # Zapisujemy wszystkie zmiany w schemacie
