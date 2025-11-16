@@ -9,19 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
         liveQuotes: {},
         workerStatus: { status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 } },
         discardedSignalCount: 0,
-        // activeAnalysisPolling: null, // USUNIĘTE (Krok 12)
-        // activeQuotePolling: null, // USUNIĘTE (Krok 12)
         activePortfolioPolling: null,
         activeCountdownPolling: null, 
-        // currentViewTicker: null, // USUNIĘTE (Krok 12)
         profitAlertsSent: {}, 
         snoozedAlerts: {},
+        activeAIOptimizerPolling: null,
         // ==========================================================
-        // === NOWY STAN (Krok 6 - Mega Agent) ===
+        // === NOWY STAN (STRONICOWANIE) ===
         // ==========================================================
-        // Przechowuje stan odpytywania o raport AI
-        activeAIOptimizerPolling: null 
-        // ==========================================================
+        currentReportPage: 1
     };
 
     // --- SELEKTORY UI (Definiowane od razu) ---
@@ -31,7 +27,6 @@ document.addEventListener('DOMContentLoaded', () => {
         loginButton: document.getElementById('login-button'),
         loginStatusText: document.getElementById('login-status-text'),
         mainContent: document.getElementById('main-content'),
-        // tickerInput: document.getElementById('ticker-input'), // USUNIĘTE (Krok 12)
         startBtn: document.getElementById('start-btn'),
         pauseBtn: document.getElementById('pause-btn'),
         resumeBtn: document.getElementById('resume-btn'),
@@ -63,16 +58,11 @@ document.addEventListener('DOMContentLoaded', () => {
             cancelBtn: document.getElementById('sell-cancel-btn'),
             confirmBtn: document.getElementById('sell-confirm-btn')
         },
-        // ==========================================================
-        // === NOWE SELEKTORY (Krok 6 - Mega Agent) ===
-        // ==========================================================
         aiReportModal: {
             backdrop: document.getElementById('ai-report-modal'),
             content: document.getElementById('ai-report-content'),
             closeBtn: document.getElementById('ai-report-close-btn')
         },
-        // ==========================================================
-        // NOWE SELEKTORY DLA MOBILNEGO MENU
         sidebar: document.getElementById('app-sidebar'),
         sidebarBackdrop: document.getElementById('sidebar-backdrop'),
         mobileMenuBtn: document.getElementById('mobile-menu-btn'),
@@ -83,24 +73,16 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log("UI Selectors defined.");
 
     // --- KONFIGURACJA API ---
-    // ==========================================================
-    // === NAPRAWA BŁĘDU (Awaria Logowania) ===
-    // Przywracamy poprawny, absolutny URL do serwera API,
-    // ==========================================================
     const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
-    // ==========================================================
     
-    // const FULL_ANALYSIS_POLL_INTERVAL = 3000; // ms // USUNIĘTE (Krok 12)
-    // const QUOTE_POLL_INTERVAL = 15000;       // ms // USUNIĘTE (Krok 12)
-    const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund na odświeżenie portfela
+    const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund
     const ALERT_POLL_INTERVAL = 7000; // 7 sekund
-    // ==========================================================
-    // === NOWY INTERWAŁ (Krok 6 - Mega Agent) ===
-    // ==========================================================
-    // Jak często sprawdzać, czy raport AI jest gotowy
     const AI_OPTIMIZER_POLL_INTERVAL = 5000; // 5 sekund
+    const PROFIT_ALERT_THRESHOLD = 1.02; // +2%
     // ==========================================================
-    const PROFIT_ALERT_THRESHOLD = 1.02; // 1.02 oznacza +2%
+    // === NOWA STAŁA (STRONICOWANIE) ===
+    // ==========================================================
+    const REPORT_PAGE_SIZE = 200; // Musi być zgodne z limitem w api/src/crud.py
 
     const logger = {
         error: (message, ...args) => console.error(message, ...args),
@@ -109,23 +91,16 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const apiRequest = async (endpoint, options = {}) => {
-        // ==========================================================
-        // NAPRAWA BŁĘDU: Zapewniamy, że endpoint jest poprawnie
-        // dołączany, nawet jeśli jest pusty (dla '/')
-        // ==========================================================
         const url = endpoint ? `${API_BASE_URL}/${endpoint}` : API_BASE_URL;
-        // ==========================================================
         try {
             const response = await fetch(url, options);
             if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
             if (!response.ok) {
-                // Próba sparsowania błędu JSON od FastAPI
                 let errorText = response.statusText;
                 try {
                     const errorJson = await response.json();
                     errorText = errorJson.detail || errorText;
                 } catch (e) {
-                    // Jeśli to nie JSON, użyj tekstu
                     errorText = await response.text() || errorText;
                 }
                 
@@ -153,8 +128,6 @@ document.addEventListener('DOMContentLoaded', () => {
         getPhase2Results: () => apiRequest('api/v1/results/phase2'),
         getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
         getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
-        // requestAIAnalysis: (ticker) => ... // USUNIĘTE (Krok 12)
-        // getAIAnalysisResult: (ticker) => ... // USUNIĘTE (Krok 12)
         getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
         addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
         getSystemAlert: () => apiRequest('api/v1/system/alert'),
@@ -162,29 +135,27 @@ document.addEventListener('DOMContentLoaded', () => {
         buyStock: (data) => apiRequest('api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
         sellStock: (data) => apiRequest('api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
         getTransactionHistory: () => apiRequest('api/v1/transactions'),
-        getVirtualAgentReport: () => apiRequest('api/v1/virtual-agent/report'),
+        // ==========================================================
+        // === AKTUALIZACJA (STRONICOWANIE) ===
+        // ==========================================================
+        getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
+        // ==========================================================
         requestBacktest: (year) => apiRequest('api/v1/backtest/request', { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify({ year: year })
         }),
         getApiRootStatus: () => apiRequest(''),
-        // ==========================================================
-        // === NOWE FUNKCJE API (Krok 6 - Mega Agent) ===
-        // ==========================================================
         requestAIOptimizer: () => apiRequest('api/v1/ai-optimizer/request', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}) // Wysyłamy puste ciało, zgodnie ze schematem
+            body: JSON.stringify({})
         }),
         getAIOptimizerReport: () => apiRequest('api/v1/ai-optimizer/report'),
-        // ==========================================================
     };
     console.log("Full API object defined.");
 
-    // ==========================================================
-    // === NOWA LOGIKA: Sterowanie Mobilnym Sidebarem ===
-    // ==========================================================
+    // --- Sterowanie Mobilnym Sidebarem ---
     function openSidebar() {
         if (ui.sidebar) {
             ui.sidebar.classList.remove('-translate-x-full');
@@ -205,18 +176,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Podłączanie listenerów do przycisków
-    if (ui.mobileMenuBtn) {
-        ui.mobileMenuBtn.addEventListener('click', openSidebar);
-    }
-    if (ui.mobileSidebarCloseBtn) {
-        ui.mobileSidebarCloseBtn.addEventListener('click', closeSidebar);
-    }
-    if (ui.sidebarBackdrop) {
-        ui.sidebarBackdrop.addEventListener('click', closeSidebar);
-    }
-    
-    // Listener do zamykania menu po kliknięciu linku nawigacji
+    if (ui.mobileMenuBtn) ui.mobileMenuBtn.addEventListener('click', openSidebar);
+    if (ui.mobileSidebarCloseBtn) ui.mobileSidebarCloseBtn.addEventListener('click', closeSidebar);
+    if (ui.sidebarBackdrop) ui.sidebarBackdrop.addEventListener('click', closeSidebar);
     if (ui.sidebarNav) {
         ui.sidebarNav.addEventListener('click', (e) => {
             if (e.target.closest('a')) {
@@ -226,10 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     console.log("Mobile sidebar logic initialized.");
 
-
-    // ==========================================================
-    // === FUNKCJE: Minutnik Rynkowy ===
-    // ==========================================================
+    // --- Funkcje Minutnika Rynkowego ---
     function getNYTime() {
         try {
             const options = {
@@ -319,11 +278,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // ==========================================================
-    // === Koniec funkcji Minutnika ===
-    // ==========================================================
-
-
     // --- Renderowanie i Widoki ---
     const renderQuoteBox = (quote, market) => {
          if (!quote || Object.keys(quote).length === 0) {
@@ -388,11 +342,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const renderers = {
         loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
         
-        // ==========================================================
-        // === DEKONSTRUKCJA (KROK 12) ===
-        // Zmieniono 'cursor-pointer' na 'cursor-default' i usunięto
-        // 'data-ticker' oraz 'hover:bg-...'
-        // ==========================================================
         phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
         phase2List: (results) => results.map(r => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
         phase3List: (signals) => signals.map(s => {
@@ -402,15 +351,6 @@ document.addEventListener('DOMContentLoaded', () => {
             else { statusClass = 'text-gray-500'; statusText = s.status.toUpperCase(); icon = 'help-circle'; }
             return `<div class="candidate-item flex items-center text-xs p-2 rounded-md cursor-default transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
         }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
-        // ==========================================================
-
-        // ==========================================================
-        // === DEKONSTRUKCJA (KROK 12) ===
-        // Cała funkcja `aiAnalysisDetails` została usunięta,
-        // ponieważ była wywoływana tylko przez (usuniętą) funkcję `showAiAnalysis`.
-        // ==========================================================
-        // aiAnalysisDetails: (ticker, data) => { ... } // USUNIĘTE
-        // ==========================================================
         
         dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
@@ -530,26 +470,20 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         
         // ==========================================================
-        // KROK 5 (Frontend): Nowy renderer dla raportu
-        // AKTUALIZACJA: GŁĘBOKIE LOGOWANIE
+        // === AKTUALIZACJA (STRONICOWANIE I GŁĘBOKIE LOGOWANIE) ===
         // ==========================================================
         agentReport: (report) => {
             const stats = report.stats;
             const trades = report.trades;
+            const total_trades_count = report.total_trades_count;
             
-            // ==========================================================
-            // === NOWE FUNKCJE POMOCNICZE DO FORMATOWANIA ===
-            // ==========================================================
-            
-            // Funkcja do formatowania metryk (z 3 miejscami po przecinku)
+            // === Funkcje pomocnicze do formatowania ===
             const formatMetric = (val) => {
                 if (typeof val !== 'number' || isNaN(val)) {
                     return `<span class="text-gray-600">---</span>`;
                 }
                 return val.toFixed(3);
             };
-            
-            // Funkcja do formatowania P/L %
             const formatPercent = (val) => {
                 if (typeof val !== 'number' || isNaN(val)) {
                     return `<span class="text-gray-500">---</span>`;
@@ -557,8 +491,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const color = val >= 0 ? 'text-green-500' : 'text-red-500';
                 return `<span class="${color}">${val.toFixed(2)}%</span>`;
             };
-            
-            // Funkcja do formatowania Profit Factor
             const formatProfitFactor = (val) => {
                  if (typeof val !== 'number' || isNaN(val)) {
                     return `<span class="text-gray-500">---</span>`;
@@ -566,15 +498,13 @@ document.addEventListener('DOMContentLoaded', () => {
                  const color = val >= 1 ? 'text-green-500' : 'text-red-500';
                  return `<span class="${color}">${val.toFixed(2)}</span>`;
             };
-            
-            // Funkcja do formatowania cen
             const formatNumber = (val) => {
                 if (typeof val !== 'number' || isNaN(val)) {
                     return `<span class="text-gray-500">---</span>`;
                 }
                 return val.toFixed(2);
             };
-            // ==========================================================
+            // === Koniec funkcji pomocniczych ===
 
             const createStatCard = (label, value, icon) => {
                 return `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
@@ -612,9 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </table>
                  </div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
 
-            // ==========================================================
             // === NOWA, SZCZEGÓŁOWA TABELA HISTORII TRANSAKCJI ===
-            // ==========================================================
             
             // Definiujemy wszystkie nagłówki naszej nowej, szerokiej tabeli
             const tradeHeaders = [
@@ -629,7 +557,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const headerClasses = [
                 'sticky left-0', // Data Otwarcia
                 'sticky left-[90px]', // Ticker
-                'sticky left-[160px]', // Strategia
+                'sticky left-[240px]', // Strategia (szersza)
                 'text-right', // Status
                 'text-right', // Cena Wejścia
                 'text-right', // Cena Zamknięcia
@@ -654,13 +582,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const tradeRows = trades.map(t => {
                 const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
                 // Skracamy nazwę strategii dla czytelności
-                const setupNameShort = t.setup_type.replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
+                const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
                 
                 return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono">
                             <!-- Dane Podstawowe (Przyklejone) -->
-                            <td class_name="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
-                            <td class_name="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td>
-                            <td class_name="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td>
+                            <td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
+                            <td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td>
+                            <td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td>
                             
                             <!-- Wynik Transakcji -->
                             <td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td>
@@ -697,7 +625,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Tworzymy finalną tabelę z kontenerem do przewijania
             const tradeTable = trades.length > 0 ?
                  `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto">
-                    <table class="w-full text-sm text-left text-gray-300 min-w-[2200px]">
+                    <table class="w-full text-sm text-left text-gray-300 min-w-[2400px]">
                         <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10">
                             <tr>
                                 ${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}
@@ -706,8 +634,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         <tbody>${tradeRows}</tbody>
                     </table>
                  </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
-            
-            // ==========================================================
             
             // --- Sekcje Backtestu i AI (bez zmian) ---
             const backtestSection = `
@@ -743,11 +669,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
 
+            // === NOWA SEKCJA STRONICOWANIA ===
+            const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
+            const startTrade = (state.currentReportPage - 1) * REPORT_PAGE_SIZE + 1;
+            const endTrade = Math.min(state.currentReportPage * REPORT_PAGE_SIZE, total_trades_count);
 
+            const paginationControls = totalPages > 1 ? `
+                <div class="flex justify-between items-center mt-4">
+                    <span class="text-sm text-gray-400">
+                        Wyświetlanie ${startTrade}-${endTrade} z ${total_trades_count} transakcji
+                    </span>
+                    <div class="flex gap-2">
+                        <button id="report-prev-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === 1 ? 'disabled' : ''}>
+                            <i data-lucide="arrow-left" class="w-4 h-4"></i>
+                        </button>
+                        <span class="text-sm text-gray-400 p-2">Strona ${state.currentReportPage} / ${totalPages}</span>
+                        <button id="report-next-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === totalPages ? 'disabled' : ''}>
+                            <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+            ` : '';
+
+            // --- OSTATECZNY HTML ---
             return `<div id="agent-report-view" class="max-w-6xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
                         
-                        <h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie Strategie)</h3>
+                        <h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie ${stats.total_trades} Transakcji)</h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                             ${createStatCard('Całkowity P/L (%)', formatPercent(stats.total_p_l_percent), 'percent')}
                             ${createStatCard('Win Rate (%)', formatPercent(stats.win_rate_percent), 'target')}
@@ -758,7 +706,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         <h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>
                         ${setupTable}
                         
-                        <!-- ZMIANA: Dodano kontener siatki dla dwóch nowych sekcji -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
                             <div>
                                 <h3 class="text-xl font-bold text-gray-300 mb-4">Uruchom Backtesting</h3>
@@ -771,7 +718,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
 
                         <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji (z Metrykami)</h3>
+                        ${paginationControls}
                         ${tradeTable}
+                        ${paginationControls} <!-- Kontrolki także na dole -->
                     </div>`;
         }
         // ==========================================================
@@ -793,12 +742,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateDashboardUI(statusData) {
-        // ==========================================================
-        // === DEKONSTRUKCJA (KROK 12) ===
-        // Usunięto warunek `!state.currentViewTicker`
-        // ==========================================================
         if (!document.getElementById('dashboard-view')) return;
-        // ==========================================================
         
         const ui_dash = {
             status: document.getElementById('dashboard-worker-status'),
@@ -928,16 +872,11 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (statusData.status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
             else if (statusData.status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
             
-            // ==========================================================
-            // === NOWA LOGIKA STATUSU (Krok 6 - Mega Agent) ===
-            // ==========================================================
-            // Specjalne statusy dla zadań w tle
             if (statusData.phase === 'BACKTESTING') {
                 statusClass = 'bg-purple-600/20 text-purple-400';
             } else if (statusData.phase === 'AI_OPTIMIZING') {
                 statusClass = 'bg-pink-600/20 text-pink-400';
             }
-            // ==========================================================
 
             ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass} transition-colors`;
             ui.workerStatusText.textContent = statusData.phase === 'NONE' ? statusData.status : statusData.phase; // Pokaż fazę, jeśli jest aktywna
@@ -985,21 +924,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function stopAllPolling() {
         logger.info("Zatrzymywanie wszystkich aktywnych timerów odpytywania.");
-        // ==========================================================
-        // === DEKONSTRUKCJA (KROK 12) ===
-        // Usunięto referencje do martwych pollingów i zmiennych stanu
-        // ==========================================================
-        // if (state.activeAnalysisPolling) { clearTimeout(state.activeAnalysisPolling); state.activeAnalysisPolling = null; }
-        // if (state.activeQuotePolling) { clearTimeout(state.activeQuotePolling); state.activeQuotePolling = null; }
         if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
-        // ==========================================================
-        // === NOWA LOGIKA (Krok 6 - Mega Agent) ===
-        // ==========================================================
         if (state.activeAIOptimizerPolling) { clearTimeout(state.activeAIOptimizerPolling); state.activeAIOptimizerPolling = null; }
-        // ==========================================================
         stopMarketCountdown(); 
-        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
-        // ==========================================================
     }
 
     function setActiveSidebar(linkElement) {
@@ -1009,10 +936,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function showDashboard() {
          stopAllPolling();
-         // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
          setActiveSidebar(ui.dashboardLink);
          ui.mainContent.innerHTML = renderers.dashboard();
-         // Aktualizujemy obie części UI
          updateDashboardUI(state.workerStatus);
          updateDashboardCounters();
          lucide.createIcons();
@@ -1020,7 +945,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function showPortfolio() {
         stopAllPolling();
-        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
         setActiveSidebar(ui.portfolioLink);
         ui.mainContent.innerHTML = renderers.loading("Ładowanie portfela...");
         try {
@@ -1038,7 +962,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function showTransactions() {
         stopAllPolling();
-        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
         setActiveSidebar(ui.transactionsLink);
         ui.mainContent.innerHTML = renderers.loading("Ładowanie historii transakcji...");
         try {
@@ -1051,25 +974,31 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // ==========================================================
+    // === AKTUALIZACJA (STRONICOWANIE) ===
+    // ==========================================================
     async function showAgentReport() {
         stopAllPolling();
-        // state.currentViewTicker = null; // USUNIĘTE (Krok 12)
         setActiveSidebar(ui.agentReportLink);
-        ui.mainContent.innerHTML = renderers.loading("Ładowanie raportu Wirtualnego Agenta...");
+        // Resetuj na pierwszą stronę za każdym razem, gdy wchodzisz w ten widok
+        await loadAgentReportPage(1);
+    }
+    
+    async function loadAgentReportPage(page) {
+        state.currentReportPage = page;
+        ui.mainContent.innerHTML = renderers.loading(`Ładowanie raportu... (Strona ${page})`);
         try {
-            const report = await api.getVirtualAgentReport();
+            // Pobierz konkretną stronę raportu
+            const report = await api.getVirtualAgentReport(page);
             ui.mainContent.innerHTML = renderers.agentReport(report);
             lucide.createIcons();
         } catch (e) {
              ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania raportu agenta: ${e.message}</div>`;
         }
     }
-
+    // ==========================================================
+    
     async function pollPortfolioQuotes() {
-         // ==========================================================
-         // === DEKONSTRUKCJA (KROK 12) ===
-         // Usunięto warunek `if (state.currentViewTicker)`
-         // ==========================================================
          const portfolioTickers = state.portfolio.map(h => h.ticker);
          if (portfolioTickers.length === 0) { 
             state.activePortfolioPolling = null; 
@@ -1092,7 +1021,6 @@ document.addEventListener('DOMContentLoaded', () => {
              });
              state.liveQuotes = newQuotes; 
 
-             // Usunięto warunek `!state.currentViewTicker`
              if (quotesUpdated && document.getElementById('portfolio-view')) {
                   ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
                   lucide.createIcons();
@@ -1103,10 +1031,8 @@ document.addEventListener('DOMContentLoaded', () => {
          } catch (e) {
              logger.error("Błąd podczas odświeżania cen portfela:", e);
          } finally {
-              // Uproszczona logika: po prostu ustaw następny timeout
               state.activePortfolioPolling = setTimeout(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
          }
-         // ==========================================================
     }
     
     function checkPortfolioProfitAlerts() {
@@ -1154,19 +1080,6 @@ document.addEventListener('DOMContentLoaded', () => {
          }
     }
 
-    // ==========================================================
-    // === DEKONSTRUKCJA (KROK 12) ===
-    // Cała logika `pollQuote`, `startQuotePolling`, `stopQuotePolling`,
-    // `pollFullAnalysis` i `showAiAnalysis` została usunięta.
-    // ==========================================================
-    // async function pollQuote(ticker) { ... } // USUNIĘTE
-    // function startQuotePolling(ticker) { ... } // USUNIĘTE
-    // function stopQuotePolling() { ... } // USUNIĘTE
-    // async function pollFullAnalysis(ticker) { ... } // USUNIĘTE
-    // async function showAiAnalysis(ticker) { ... } // USUNIĘTE
-    // ==========================================================
-
-    
     // --- Funkcje Obsługi Modali ---
     function showBuyModal(ticker) {
         ui.buyModal.tickerSpan.textContent = ticker;
@@ -1230,9 +1143,6 @@ document.addEventListener('DOMContentLoaded', () => {
          } finally { ui.sellModal.confirmBtn.disabled = false; ui.sellModal.confirmBtn.textContent = "Realizuj"; }
     }
     
-    // ==========================================================
-    // === NOWE FUNKCJE (Krok 6 - Mega Agent) ===
-    // ==========================================================
     function showAIReportModal() {
         if (ui.aiReportModal.backdrop) {
             ui.aiReportModal.backdrop.classList.remove('hidden');
@@ -1264,7 +1174,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await api.requestAIOptimizer();
             statusMsg.className = 'text-sm mt-3 text-green-400';
             statusMsg.textContent = response.message || 'Zlecono analizę. Worker rozpoczął pracę.';
-            // Rozpocznij odpytywanie o raport
             pollAIOptimizerReport();
         } catch (e) {
             statusMsg.className = 'text-sm mt-3 text-red-400';
@@ -1276,7 +1185,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // Funkcja odpytująca o gotowy raport AI
     async function pollAIOptimizerReport() {
         if (state.activeAIOptimizerPolling) {
             clearTimeout(state.activeAIOptimizerPolling);
@@ -1289,14 +1197,12 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (reportData.status === 'PROCESSING') {
                 if(statusMsg) statusMsg.textContent = 'Worker przetwarza dane i konsultuje się z AI... (Sprawdzam ponownie za 5s)';
-                // Planuj kolejne sprawdzenie
                 state.activeAIOptimizerPolling = setTimeout(pollAIOptimizerReport, AI_OPTIMIZER_POLL_INTERVAL);
             } else if (reportData.status === 'DONE') {
                 if(statusMsg) {
                     statusMsg.className = 'text-sm mt-3 text-green-400';
                     statusMsg.textContent = `Analiza AI zakończona (${new Date(reportData.last_updated).toLocaleString()}).`;
                 }
-                // Odblokuj przyciski
                 const runBtn = document.getElementById('run-ai-optimizer-btn');
                 const viewBtn = document.getElementById('view-ai-report-btn');
                 if (runBtn) {
@@ -1306,9 +1212,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (viewBtn) viewBtn.disabled = false;
                 
-                // Automatycznie otwórz modal z nowym raportem
                 showAIReportModal();
-                // Wypełnij modal raportem (używamy <pre> dla zachowania formatowania Markdown)
                 if (ui.aiReportModal.content) {
                     ui.aiReportModal.content.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
                 }
@@ -1318,7 +1222,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     statusMsg.className = 'text-sm mt-3 text-gray-400';
                     statusMsg.textContent = reportData.status === 'ERROR' ? reportData.report_text : 'Gotowy do analizy.';
                 }
-                // Odblokuj przyciski
                 const runBtn = document.getElementById('run-ai-optimizer-btn');
                 const viewBtn = document.getElementById('view-ai-report-btn');
                 if (runBtn) {
@@ -1362,9 +1265,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     }
-    // ==========================================================
     
-
     async function handleYearBacktestRequest() {
         const yearInput = document.getElementById('backtest-year-input');
         const yearBtn = document.getElementById('run-backtest-year-btn');
@@ -1374,7 +1275,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const year = yearInput.value.trim();
         const currentYear = new Date().getFullYear();
 
-        // Walidacja
         if (!year || year.length !== 4 || !/^\d{4}$/.test(year) || parseInt(year) < 2000 || parseInt(year) > currentYear) {
             statusMsg.className = 'text-sm mt-3 text-red-400';
             statusMsg.textContent = `Błąd: Wprowadź poprawny rok (np. 2000 - ${currentYear}).`;
@@ -1388,10 +1288,9 @@ document.addEventListener('DOMContentLoaded', () => {
         statusMsg.textContent = `Zlecanie testu dla roku ${year}...`;
 
         try {
-            const response = await api.requestBacktest(year); // Używamy nowej funkcji API
+            const response = await api.requestBacktest(year);
             statusMsg.className = 'text-sm mt-3 text-green-400';
             statusMsg.textContent = response.message || `Zlecono test dla ${year}. Worker rozpoczął pracę.`;
-            // Opcjonalnie: odśwież logi na dashboardzie
             setTimeout(() => {
                 if (document.getElementById('dashboard-view')) {
                     pollWorkerStatus();
@@ -1410,69 +1309,46 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // --- Handlery Zdarzeń (Dodawane od razu) ---
     
-    // ==========================================================
-    // === DEKONSTRUKCJA (KROK 12) ===
-    // Usunięto listener dla `ui.tickerInput`
-    // ==========================================================
-    // ui.tickerInput.addEventListener('keydown', (e) => { ... }); // USUNIĘTE
-    // ==========================================================
-
-
     ui.mainContent.addEventListener('click', async e => {
-        // ==========================================================
-        // === DEKONSTRUKCJA (KROK 12) ===
-        // Usunięto `watchlistBtn` i `buyBtn`, ponieważ były one
-        // częścią usuniętego widoku `aiAnalysisDetails`.
-        // ==========================================================
-        // const watchlistBtn = e.target.closest('#add-to-watchlist-btn'); // USUNIĘTE
-        // const buyBtn = e.target.closest('#buy-stock-btn'); // USUNIĘTE
-        // ==========================================================
-        
         const sellBtn = e.target.closest('.sell-stock-btn');
         const backtestYearBtn = e.target.closest('#run-backtest-year-btn');
-        // ==========================================================
-        // === NOWE LISTENERY (Krok 6 - Mega Agent) ===
-        // ==========================================================
         const runAIOptimizerBtn = e.target.closest('#run-ai-optimizer-btn');
         const viewAIReportBtn = e.target.closest('#view-ai-report-btn');
+        // ==========================================================
+        // === NOWE LISTENERY (STRONICOWANIE) ===
+        // ==========================================================
+        const prevBtn = e.target.closest('#report-prev-btn');
+        const nextBtn = e.target.closest('#report-next-btn');
         // ==========================================================
 
         if (backtestYearBtn) {
             handleYearBacktestRequest();
         }
-        // ==========================================================
-        // === NOWE HANDLERY (Krok 6 - Mega Agent) ===
-        // ==========================================================
         else if (runAIOptimizerBtn) {
             handleRunAIOptimizer();
         }
         else if (viewAIReportBtn) {
             handleViewAIOptimizerReport();
         }
-        // ==========================================================
-        // === DEKONSTRUKCJA (KROK 12) ===
-        // Usunięto logikę `watchlistBtn` i `buyBtn`
-        // ==========================================================
-        // else if (watchlistBtn) { ... } // USUNIĘTE
-        // else if (buyBtn) { ... } // USUNIĘTE
-        // ==========================================================
         else if (sellBtn) {
              const ticker = sellBtn.dataset.ticker;
              const quantity = parseInt(sellBtn.dataset.quantity, 10);
              if (ticker && !isNaN(quantity)) showSellModal(ticker, quantity);
         }
+        // ==========================================================
+        // === NOWE HANDLERY (STRONICOWANIE) ===
+        // ==========================================================
+        else if (prevBtn && !prevBtn.disabled) {
+            loadAgentReportPage(state.currentReportPage - 1);
+        }
+        else if (nextBtn && !nextBtn.disabled) {
+            loadAgentReportPage(state.currentReportPage + 1);
+        }
+        // ==========================================================
     });
 
-    // ==========================================================
-    // === DEKONSTRUKCJA (KROK 12) ===
-    // Zmieniono logikę listenera sidebara. Usunięto `candidateItem`,
-    // ponieważ listy są teraz tylko do odczytu.
-    // ==========================================================
     ui.sidebarPhasesContainer.addEventListener('click', (e) => {
-        // const candidateItem = e.target.closest('.candidate-item'); // USUNIĘTE
         const accordionToggle = e.target.closest('.accordion-toggle');
-        
-        // if (candidateItem) { ... } // USUNIĘTE
         
         if (accordionToggle) {
             const content = accordionToggle.nextElementSibling;
@@ -1483,8 +1359,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
-    // ==========================================================
-
 
     ui.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); showDashboard(); });
     ui.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); showPortfolio(); });
@@ -1503,13 +1377,9 @@ document.addEventListener('DOMContentLoaded', () => {
     ui.sellModal.cancelBtn.addEventListener('click', hideSellModal);
     ui.sellModal.confirmBtn.addEventListener('click', handleSellConfirm);
     
-    // ==========================================================
-    // === NOWY LISTENER (Krok 6 - Mega Agent) ===
-    // ==========================================================
     if(ui.aiReportModal.closeBtn) {
         ui.aiReportModal.closeBtn.addEventListener('click', hideAIReportModal);
     }
-    // ==========================================================
     
     console.log("Event listeners added.");
 
@@ -1542,11 +1412,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const intervalId = setInterval(async () => {
         logger.info("Sprawdzanie statusu API...");
         try {
-            // ==========================================================
-            // NAPRAWA BŁĘDU: Używamy nowego, poprawnego endpointu
-            // ==========================================================
-            const statusData = await api.getApiRootStatus(); // Testuje główny endpoint API ('/')
-            // ==========================================================
+            const statusData = await api.getApiRootStatus();
             
             if (statusData && statusData.status === "APEX Predator API is running") {
                 logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
