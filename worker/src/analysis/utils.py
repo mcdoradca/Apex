@@ -123,12 +123,16 @@ def get_raw_data_with_cache(
             SET raw_data_json = :raw_data, last_fetched = NOW();
         """)
         
-        # <-- POPRAWKA 1: Konwertuj 'dict' na 'str' JSON przed wysłaniem do bazy
+        # ==================================================================
+        # === POPRAWKA KRYTYCZNA (Błąd Zapisu do Cache) ===
+        # Konwertujemy `dict` na `str` JSON przed wysłaniem do bazy.
+        # ==================================================================
         session.execute(upsert_stmt, {
             'ticker': ticker,
             'data_type': data_type,
             'raw_data': json.dumps(raw_data) # Serializujemy dict do stringa JSON
         })
+        # ==================================================================
         session.commit()
         logger.info(f"[Cache UTILS] Pomyślnie zapisano nowe dane {data_type} dla {ticker} do DB.")
         
