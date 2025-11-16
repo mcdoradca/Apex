@@ -37,7 +37,7 @@ class AlphaVantageClient:
         if not self.api_key:
              return
         # ==================================================================
-        # POPRAWKA BŁĘDU (IndentationError): Przywrócenie pełnej logiki
+        # === POPRAWKA KRYTYCZNA: Logika Rate Limitera została odkomentowana ===
         # ==================================================================
         while self.request_timestamps and (time.monotonic() - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
