@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ==================================================================
 # === KROK 21a: Implementacja Pętli Symulacyjnej dla Hipotezy H2 ===
 # === REFAKTORYZACJA (WYDAJNOŚĆ): Ta funkcja odczytuje teraz wstępnie obliczone metryki ===
-# === ZMODYFIKOWANA O LOGOWANIE METRYK ===
+# === ZMODYFIKOWANA O BEZPIECZNĄ KONWERSJĘ TYPÓW (float()) ===
 # ==================================================================
 
 def _simulate_trades_h2(
@@ -111,18 +111,19 @@ def _simulate_trades_h2(
                 
                 # ==================================================================
                 # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # === POPRAWKA: Konwertujemy wszystko na float() ===
                 # ==================================================================
                 setup_h2 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H2_CONTRARIAN_ENTANGLEMENT", 
-                    "entry_price": entry_price,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit,
+                    "entry_price": float(entry_price),
+                    "stop_loss": float(stop_loss),
+                    "take_profit": float(take_profit),
                     
-                    # --- Dodatkowe metryki do logowania ---
-                    "metric_atr_14": atr_value,
-                    "metric_inst_sync": sync_score,
-                    "metric_retail_herding": herding_score,
+                    # --- Dodatkowe metryki do logowania (BEZPIECZNA KONWERSJA) ---
+                    "metric_atr_14": float(atr_value),
+                    "metric_inst_sync": float(sync_score),
+                    "metric_retail_herding": float(herding_score),
                 }
                 # ==================================================================
                 
