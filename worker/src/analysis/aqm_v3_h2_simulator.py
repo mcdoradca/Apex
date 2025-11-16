@@ -82,10 +82,12 @@ def _simulate_trades_h2(
         # 4. Zastosuj Warunki H2 (wg Specyfikacji Analitycznej)
         
         # Warunek 1: "Wysoki institutional_sync"
-        is_insider_buying = sync_score > 0.5
+        # ORYGINAŁ: is_insider_buying = sync_score > 0.5
+        is_insider_buying = sync_score > 0.3 # ZMIANA: Złagodzenie progu z 0.5 do 0.3
         
         # Warunek 2: "Niski retail_herding"
-        is_retail_panicking = herding_score < -0.2
+        # ORYGINAŁ: is_retail_panicking = herding_score < -0.2
+        is_retail_panicking = herding_score < -0.1 # ZMIANA: Złagodzenie progu z -0.2 do -0.1
         
         # Sygnał KUPNA = Warunek 1 AND Warunek 2
         if is_insider_buying and is_retail_panicking:
