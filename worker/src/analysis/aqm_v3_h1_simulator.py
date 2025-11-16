@@ -13,8 +13,18 @@ logger = logging.getLogger(__name__)
 
 # ==================================================================
 # === LOGIKA EGZEKUCJI TRANSAKCJI (Przeniesiona z backtest_engine) ===
-# === ZMODYFIKOWANA O LOGOWANIE METRYK ===
+# === ZMODYFIKOWANA O BEZPIECZNĄ KONWERSJĘ TYPÓW (float()) ===
 # ==================================================================
+
+def _safe_float_convert(value: Any) -> float | None:
+    """Konwertuje dowolną wartość (w tym np.float64) na natywny float lub None."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        logger.warning(f"Nie można przekonwertować wartości {value} (typ: {type(value)}) na float.")
+        return None
 
 def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
     """
@@ -23,6 +33,8 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
     
     ZMIANA (Głębokie Logowanie): Ta funkcja pobiera teraz dodatkowe
     metryki z `setup` dict i zapisuje je w obiekcie VirtualTrade.
+    
+    ZMIANA (InvalidSchemaName): Konwertuje wszystkie metryki na natywny float().
     """
     try:
         # Pobieramy parametry ze specyfikacji H1
@@ -92,6 +104,7 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         
         # ==================================================================
         # === NOWA LOGIKA: Tworzenie obiektu VirtualTrade z pełnym logowaniem metryk ===
+        # === POPRAWKA: Używamy _safe_float_convert dla każdej metryki ===
         # ==================================================================
         trade = models.VirtualTrade(
             ticker=setup['ticker'],
@@ -105,30 +118,30 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             close_price=float(close_price),
             final_profit_loss_percent=float(p_l_percent),
             
-            # --- ZAPIS METRYK DO BAZY DANYCH ---
+            # --- ZAPIS METRYK DO BAZY DANYCH (BEZPIECZNA KONWERSJA) ---
             # Wspólne
-            metric_atr_14=setup.get('metric_atr_14'),
+            metric_atr_14=_safe_float_convert(setup.get('metric_atr_14')),
             
             # H1
-            metric_time_dilation=setup.get('metric_time_dilation'),
-            metric_price_gravity=setup.get('metric_price_gravity'),
-            metric_td_percentile_90=setup.get('metric_td_percentile_90'),
-            metric_pg_percentile_90=setup.get('metric_pg_percentile_90'),
+            metric_time_dilation=_safe_float_convert(setup.get('metric_time_dilation')),
+            metric_price_gravity=_safe_float_convert(setup.get('metric_price_gravity')),
+            metric_td_percentile_90=_safe_float_convert(setup.get('metric_td_percentile_90')),
+            metric_pg_percentile_90=_safe_float_convert(setup.get('metric_pg_percentile_90')),
             
             # H2
-            metric_inst_sync=setup.get('metric_inst_sync'),
-            metric_retail_herding=setup.get('metric_retail_herding'),
+            metric_inst_sync=_safe_float_convert(setup.get('metric_inst_sync')),
+            metric_retail_herding=_safe_float_convert(setup.get('metric_retail_herding')),
             
             # H3
-            metric_aqm_score_h3=setup.get('metric_aqm_score_h3'),
-            metric_aqm_percentile_95=setup.get('metric_aqm_percentile_95'),
-            metric_J_norm=setup.get('metric_J_norm'),
-            metric_nabla_sq_norm=setup.get('metric_nabla_sq_norm'),
-            metric_m_sq_norm=setup.get('metric_m_sq_norm'),
+            metric_aqm_score_h3=_safe_float_convert(setup.get('metric_aqm_score_h3')),
+            metric_aqm_percentile_95=_safe_float_convert(setup.get('metric_aqm_percentile_95')),
+            metric_J_norm=_safe_float_convert(setup.get('metric_J_norm')),
+            metric_nabla_sq_norm=_safe_float_convert(setup.get('metric_nabla_sq_norm')),
+            metric_m_sq_norm=_safe_float_convert(setup.get('metric_m_sq_norm')),
             
             # H4
-            metric_J=setup.get('metric_J'),
-            metric_J_threshold_2sigma=setup.get('metric_J_threshold_2sigma')
+            metric_J=_safe_float_convert(setup.get('metric_J')),
+            metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma'))
         )
         # ==================================================================
         
@@ -140,7 +153,7 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
 
 # ==================================================================
 # === KROK 19: Implementacja Pętli Symulacyjnej dla Hipotezy H1 ===
-# === ZMODYFIKOWANA O LOGOWANIE METRYK ===
+# === ZMODYFIKOWANA O BEZPIECZNĄ KONWERSJĘ TYPÓW (float()) ===
 # ==================================================================
 
 def _simulate_trades_h1(
@@ -216,20 +229,21 @@ def _simulate_trades_h1(
                 
                 # ==================================================================
                 # === NOWA LOGIKA: Przygotowanie setupu z metrykami do logowania ===
+                # === POPRAWKA: Konwertujemy wszystko na float() ===
                 # ==================================================================
                 setup_h1 = {
                     "ticker": ticker,
                     "setup_type": "AQM_V3_H1_GRAVITY_MEAN_REVERSION", 
-                    "entry_price": entry_price,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit,
+                    "entry_price": float(entry_price),
+                    "stop_loss": float(stop_loss),
+                    "take_profit": float(take_profit),
                     
                     # --- Dodatkowe metryki do logowania ---
-                    "metric_atr_14": atr_value,
-                    "metric_time_dilation": current_time_dilation,
-                    "metric_price_gravity": current_price_gravity,
-                    "metric_td_percentile_90": dilation_percentile_90,
-                    "metric_pg_percentile_90": gravity_percentile_90,
+                    "metric_atr_14": float(atr_value),
+                    "metric_time_dilation": float(current_time_dilation),
+                    "metric_price_gravity": float(current_price_gravity),
+                    "metric_td_percentile_90": float(dilation_percentile_90),
+                    "metric_pg_percentile_90": float(gravity_percentile_90),
                 }
                 # ==================================================================
 
