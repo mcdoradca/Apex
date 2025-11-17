@@ -1,8 +1,11 @@
 import logging
 import sys
 import os
-# ZMIANA: Dodano Response z fastapi
+# ZMIANA: Dodano Response, StreamingResponse, io, csv, datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Response, Query
+from fastapi.responses import StreamingResponse
+import io
+import csv
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -94,8 +97,7 @@ async def startup_event():
     finally:
         db.close()
 
-# --- ENDPOINTY PORTFELA I TRANSAKCJI ---
-# (Reszta endpointów bez zmian)
+# --- ENDPOINTY PORTFELA I TRANSAKCI (Bez zmian) ---
 @app.post("/api/v1/portfolio/buy", response_model=schemas.PortfolioHolding, status_code=201)
 def buy_stock(buy_request: schemas.BuyRequest, db: Session = Depends(get_db)):
     try:
@@ -139,6 +141,8 @@ def get_transactions(limit: int = Query(100, ge=1, le=1000, description="Liczba 
     logger.info(f"Pobieranie historii ostatnich {limit} transakcji.")
     transactions = crud.get_transaction_history(db, limit=limit)
     return transactions
+# --- KONIEC ENDPOINTÓW PORTFELA ---
+
 
 # --- ENDPOINTY ZWIĄZANE Z FAZAMI ANALIZY ---
 
@@ -154,9 +158,6 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     return crud.get_active_and_pending_signals(db)
 
-# ==========================================================
-# KROK 4e (Licznik): Endpoint API do pobierania licznika
-# ==========================================================
 @app.get("/api/v1/signals/discarded-count-24h", response_model=Dict[str, int], summary="Pobiera liczbę sygnałów unieważnionych/zakończonych w ciągu ostatnich 24h")
 def get_discarded_signals_count(db: Session = Depends(get_db)):
     """
@@ -169,12 +170,38 @@ def get_discarded_signals_count(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error fetching discarded signals count: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Nie można pobrać licznika unieważnionych sygnałów.")
-# ==========================================================
+
+# ==================================================================
+# === MODYFIKACJA (EKSPORT DANYCH) ===
+# Dodano nowy endpoint do eksportu CSV
+# ==================================================================
+@app.get("/api/v1/export/trades.csv", response_class=StreamingResponse, summary="Eksportuje wszystkie wirtualne transakcje do pliku CSV")
+def export_virtual_trades(db: Session = Depends(get_db)):
+    """
+    Pobiera *wszystkie* (potencjalnie setki tysięcy) transakcje z tabeli
+    `virtual_trades` i streamuje je jako plik CSV.
+    """
+    try:
+        logger.info("Rozpoczynanie streamingu eksportu CSV...")
+        # crud.stream_all_trades_as_csv zwraca generator
+        csv_generator = crud.stream_all_trades_as_csv(db)
+        
+        # Ustawiamy nagłówki, aby przeglądarka pobrała plik
+        filename = f'apex_virtual_trades_export_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")}.csv'
+        response_headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+        
+        return StreamingResponse(csv_generator, media_type="text/csv", headers=response_headers)
+    
+    except Exception as e:
+        logger.error(f"Błąd podczas generowania eksportu CSV: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Wewnętrzny błąd serwera podczas eksportu CSV: {e}")
+# ==================================================================
+# === KONIEC MODYFIKACJI ===
+# ==================================================================
 
 
-# ==========================================================
-# KROK 5 (Wirtualny Agent): Endpoint API do pobierania raportu
-# ==========================================================
 @app.get("/api/v1/virtual-agent/report", response_model=schemas.VirtualAgentReport, summary="Pobiera pełny raport Wirtualnego Agenta")
 def get_virtual_agent_report_endpoint(db: Session = Depends(get_db)):
     """
@@ -188,49 +215,36 @@ def get_virtual_agent_report_endpoint(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error fetching virtual agent report: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Nie można pobrać raportu Wirtualnego Agenta.")
-# ==========================================================
 
-# ==========================================================
-# === ZMIANA (Dynamiczny Rok): Endpoint Zlecenia Backtestu ===
-# ==========================================================
+
 @app.post("/api/v1/backtest/request", status_code=202, response_model=Dict[str, str])
 def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get_db)):
     """
     Wysyła zlecenie do Workera, aby uruchomił backtest historyczny
     dla określonego ROKU (np. "2010").
     """
-    # Zmieniono 'period_name' na 'year'
     year_to_test = request.year.strip()
     logger.info(f"Backtest request received for year: {year_to_test}.")
     
-    # Prosta walidacja roku (logika workera sprawdzi to dokładniej)
     if not (year_to_test.isdigit() and len(year_to_test) == 4):
          raise HTTPException(status_code=400, detail="Nieprawidłowy format roku. Oczekiwano 4 cyfr, np. '2010'.")
 
-    # Sprawdź, czy worker jest zajęty
     worker_status = crud.get_system_control_value(db, "worker_status")
     if worker_status == 'RUNNING':
             raise HTTPException(status_code=409, detail="Worker jest obecnie zajęty (RUNNING). Spróbuj ponownie, gdy będzie w stanie IDLE.")
             
-    # Sprawdź, czy backtest już nie jest w toku
     current_backtest = crud.get_system_control_value(db, "backtest_request")
     if current_backtest and current_backtest != 'NONE':
             raise HTTPException(status_code=409, detail=f"Backtest jest już w toku lub zlecony: {current_backtest}.")
 
     try:
-        # Ustaw flagę, którą odczyta worker
         crud.set_system_control_value(db, key="backtest_request", value=year_to_test)
         logger.info(f"Backtest request for {year_to_test} has been sent to the worker.")
         return {"message": f"Zlecenie backtestu dla roku '{year_to_test}' zostało wysłane do workera."}
     except Exception as e:
         logger.error(f"Error processing backtest request for {year_to_test}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania backtestu.")
-# ==========================================================
 
-
-# ==========================================================
-# === NOWE ENDPOINTY (Krok 4 - Mega Agent) ===
-# ==========================================================
 
 @app.post("/api/v1/ai-optimizer/request", status_code=202, response_model=Dict[str, str])
 def request_ai_optimizer(request: schemas.AIOptimizerRequest, db: Session = Depends(get_db)):
@@ -240,19 +254,16 @@ def request_ai_optimizer(request: schemas.AIOptimizerRequest, db: Session = Depe
     """
     logger.info("Zlecenie Mega Agenta AI otrzymane.")
 
-    # Sprawdź, czy worker jest zajęty
     worker_status = crud.get_system_control_value(db, "worker_status")
     if worker_status == 'RUNNING':
             raise HTTPException(status_code=409, detail="Worker jest obecnie zajęty (RUNNING). Spróbuj ponownie, gdy będzie w stanie IDLE.")
             
-    # Sprawdź, czy inna analiza AI (Optimizer lub Backtest) już nie jest w toku
     current_optimizer = crud.get_system_control_value(db, "ai_optimizer_request")
     current_backtest = crud.get_system_control_value(db, "backtest_request")
     if (current_optimizer and current_optimizer != 'NONE') or (current_backtest and current_backtest != 'NONE'):
             raise HTTPException(status_code=409, detail=f"Inna analiza (Backtest lub AI Optimizer) jest już w toku.")
 
     try:
-        # Ustaw flagę, którą odczyta worker
         crud.set_system_control_value(db, key="ai_optimizer_request", value='REQUESTED')
         crud.set_system_control_value(db, key="ai_optimizer_report", value='PROCESSING') # Oznacz jako przetwarzanie
         logger.info("Zlecenie Mega Agenta AI zostało wysłane do workera.")
@@ -273,7 +284,6 @@ def get_ai_optimizer_report_endpoint(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Błąd podczas pobierania raportu Mega Agenta AI: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Nie można pobrać raportu Mega Agenta AI.")
-# ==========================================================
 
 
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
@@ -315,22 +325,6 @@ def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
 
 
-# ==========================================================
-# === DEKONSTRUKCJA (KROK 7) ===
-# Usunięto endpointy AI na żądanie (`/ai-analysis/request` 
-# i `/ai-analysis/result/{ticker}`), ponieważ były powiązane
-# ze starą, wygaszoną logiką Fazy 2/3.
-# ==========================================================
-# @app.post("/api/v1/ai-analysis/request", ...)
-# def request_ai_analysis(...):
-#     ... (USUNIĘTE) ...
-
-# @app.get("/api/v1/ai-analysis/result/{ticker}", ...)
-# def get_ai_analysis_result(...):
-#     ... (USUNIĘTE) ...
-# ==========================================================
-
-
 # Endpoint do pobierania ceny
 @app.get("/api/v1/quote/{ticker}", response_model=Optional[Dict[str, Any]])
 def get_live_quote(ticker: str):
@@ -356,14 +350,7 @@ def control_worker(action: str, db: Session = Depends(get_db)):
     command = allowed_actions[action]
     try:
         if action == "start":
-            # ==========================================================
-            # === DEKONSTRUKCJA (KROK 7) ===
-            # Usunięto resetowanie flagi 'ai_analysis_request',
-            # ponieważ flaga nie jest już używana.
-            # ==========================================================
-            # crud.set_system_control_value(db, "ai_analysis_request", 'NONE')
-            # ==========================================================
-            pass # Pozostawiamy 'if' na wypadek przyszłych akcji "start"
+            pass 
         crud.set_system_control_value(db, "worker_command", command)
         logger.info(f"Command '{action}' ({command}) sent to worker.")
         return {"message": f"Command '{action}' sent to worker."}
