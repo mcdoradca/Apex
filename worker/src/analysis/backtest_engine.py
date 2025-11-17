@@ -19,6 +19,11 @@ from . import aqm_v3_h2_simulator
 from . import aqm_v3_h3_simulator
 # === INTEGRACJA H4 (KROK 1): Import nowego symulatora H4 ===
 from . import aqm_v3_h4_simulator
+# === NOWE IMPORTY (AQM V2) ===
+from . import aqm_v2_simulator
+# Importujemy parsery z nowego pliku V2
+from .aqm_v2_simulator import _parse_indicator_data, _parse_macd_data
+# ============================
 # Importujemy funkcje parsowania z H3 loader (potrzebne do przetwarzania surowych danych)
 from .aqm_v3_h3_loader import _parse_bbands, _parse_intraday_5min 
 
@@ -40,14 +45,17 @@ import gc
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# === PAMIĘĆ PODRĘCZNA (CACHE) LITE (Bez zmian) ===
+# === PAMIĘĆ PODRĘCZNA (CACHE) LITE ===
 # ==================================================================
 _backtest_cache = {
+    # Dane V3
     "vix_data": None, 
     "spy_data": None, 
     "sector_etf_data": {}, 
     "tickers_by_sector": {}, 
-    "sector_map": {} 
+    "sector_map": {},
+    # Dane V2
+    "ras_v2_data": None
 }
 
 def _get_tickers_in_sector(sector: str) -> List[str]:
@@ -72,11 +80,12 @@ def _get_sector_for_ticker(session: Session, ticker: str) -> str:
 
 
 # ==================================================================
-# === DETEKTOR REŻIMU RYNKOWEGO (Bez zmian) ===
+# === DETEKTOR REŻIMU RYNKOWEGO (DLA AQM V3) ===
 # ==================================================================
 def _detect_market_regime(current_date_str: str) -> str:
     """
     Wykrywa reżim rynkowy na podstawie danych VXX i SPY z cache.
+    (Używane tylko przez logikę AQM V3)
     """
     try:
         vix_df = _backtest_cache["vix_data"]
@@ -107,6 +116,41 @@ def _detect_market_regime(current_date_str: str) -> str:
         return 'volatile'
 
 # ==================================================================
+# === PARSER DANYCH EARNINGS (DLA AQM V3 i V2) ===
+# ==================================================================
+def _parse_earnings_data(raw_data: Dict[str, Any]) -> pd.DataFrame:
+    """Przetwarza surową odpowiedź JSON z EARNINGS na DataFrame z datami raportów."""
+    try:
+        quarterly_earnings = raw_data.get('quarterlyEarnings', [])
+        if not quarterly_earnings:
+            return pd.DataFrame(columns=['reportDate']).set_index(pd.to_datetime([]))
+
+        dates = []
+        for report in quarterly_earnings:
+            date_str = report.get('reportedDate')
+            if date_str:
+                try:
+                    dates.append(pd.to_datetime(date_str))
+                except (ValueError, TypeError):
+                    continue
+        
+        if not dates:
+            return pd.DataFrame(columns=['reportDate']).set_index(pd.to_datetime([]))
+
+        df = pd.DataFrame(dates, columns=['reportDate'])
+        df.set_index('reportDate', inplace=True)
+        df.sort_index(inplace=True)
+        # Usuwamy zduplikowane daty raportów, jeśli istnieją
+        df = df[~df.index.duplicated(keep='first')]
+        return df
+        
+    except Exception as e:
+        logger.error(f"Błąd podczas parsowania danych EARNINGS: {e}", exc_info=True)
+        return pd.DataFrame(columns=['reportDate']).set_index(pd.to_datetime([]))
+# ==================================================================
+
+
+# ==================================================================
 # === REFAKTORYZACJA (WYDAJNOŚĆ): Ta funkcja jest teraz wywoływana na MAŁYM WYCINKU ===
 # ==================================================================
 def _pre_calculate_metrics(
@@ -116,11 +160,12 @@ def _pre_calculate_metrics(
     bbands_df: pd.DataFrame
 ) -> pd.DataFrame:
     """
+    (Logika AQM V3)
     Wstępnie oblicza *wszystkie* złożone metryki (H2, H3, H4)
     i dodaje je jako kolumny do DataFrame'u.
     """
     ticker = daily_df['ticker'].iloc[0] if 'ticker' in daily_df.columns and not daily_df.empty else 'UNKNOWN'
-    logger.info(f"[{ticker}] Rozpoczynanie wstępnego obliczania metryk (H2, H3, H4) dla {len(daily_df)} dni...")
+    logger.info(f"[{ticker}] (V3) Rozpoczynanie wstępnego obliczania metryk (H2, H3, H4) dla {len(daily_df)} dni...")
     
     # Kopiujemy, aby uniknąć SettingWithCopyWarning
     df = daily_df.copy()
@@ -137,7 +182,7 @@ def _pre_calculate_metrics(
     # Używamy .apply() - jest znacznie szybsze niż pętla w Pythonie
     
     # 1. Metryka 2.1: institutional_sync (ostatnie 90 dni)
-    logger.info(f"[{ticker}] Obliczanie 'institutional_sync' (90d)...")
+    logger.info(f"[{ticker}] (V3) Obliczanie 'institutional_sync' (90d)...")
     # Używamy try-except, ponieważ .apply() może zawieść
     try:
         df['institutional_sync'] = df.apply(
@@ -147,12 +192,12 @@ def _pre_calculate_metrics(
             axis=1
         )
     except Exception as e:
-        logger.error(f"[{ticker}] BŁĄD wektorowy 'institutional_sync': {e}. Ustawiam 0.0")
+        logger.error(f"[{ticker}] (V3) BŁĄD wektorowy 'institutional_sync': {e}. Ustawiam 0.0")
         df['institutional_sync'] = 0.0
 
 
     # 2. Metryka 2.2: retail_herding (ostatnie 7 dni)
-    logger.info(f"[{ticker}] Obliczanie 'retail_herding' (7d)...")
+    logger.info(f"[{ticker}] (V3) Obliczanie 'retail_herding' (7d)...")
     try:
         df['retail_herding'] = df.apply(
             lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(
@@ -161,13 +206,13 @@ def _pre_calculate_metrics(
             axis=1
         )
     except Exception as e:
-        logger.error(f"[{ticker}] BŁĄD wektorowy 'retail_herding': {e}. Ustawiam 0.0")
+        logger.error(f"[{ticker}] (V3) BŁĄD wektorowy 'retail_herding': {e}. Ustawiam 0.0")
         df['retail_herding'] = 0.0
 
     # === Krok 2: Obliczenia H3/H4 (Metryki kroczące) ===
     
     # T = market_temperature (Zmienność dzienna z 30 dni)
-    logger.info(f"[{ticker}] Obliczanie 'market_temperature' (T)...")
+    logger.info(f"[{ticker}] (V3) Obliczanie 'market_temperature' (T)...")
     df['daily_returns'] = df['close'].pct_change()
     df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
 
@@ -177,7 +222,7 @@ def _pre_calculate_metrics(
     # --- Przygotowanie danych do S i m_sq ---
     
     # m_sq (attention_density - Wolumen)
-    logger.info(f"[{ticker}] Obliczanie 'attention_density' (m_sq) - Wolumen...")
+    logger.info(f"[{ticker}] (V3) Obliczanie 'attention_density' (m_sq) - Wolumen...")
     df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
     df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
     df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
@@ -194,7 +239,7 @@ def _pre_calculate_metrics(
     # ==================================================================
 
     # m_sq (attention_density - Newsy) i S (information_entropy)
-    logger.info(f"[{ticker}] Obliczanie 'attention_density' (m_sq) i 'info_entropy' (S) - Newsy...")
+    logger.info(f"[{ticker}] (V3) Obliczanie 'attention_density' (m_sq) i 'info_entropy' (S) - Newsy...")
     if not news_df.empty:
         # a) Zlicz newsy dziennie (na danych naiwnych)
         news_counts_daily = news_df.groupby(news_df.index.date).size()
@@ -229,7 +274,7 @@ def _pre_calculate_metrics(
 
     # === Krok 3: Obliczenie J (entropy_change) ===
     # J = S - (Q / T) + (μ * ΔN)
-    logger.info(f"[{ticker}] Obliczanie 'entropy_change' (J)...")
+    logger.info(f"[{ticker}] (V3) Obliczanie 'entropy_change' (J)...")
     
     # Używamy już obliczonych kolumn
     S = df['information_entropy']
@@ -254,7 +299,7 @@ def _pre_calculate_metrics(
     
     df['J'] = J
 
-    logger.info(f"[{ticker}] Wstępne obliczanie metryk zakończone.")
+    logger.info(f"[{ticker}] (V3) Wstępne obliczanie metryk zakończone.")
     
     # Czyszczenie kolumn pomocniczych
     cols_to_drop = [
@@ -269,154 +314,216 @@ def _pre_calculate_metrics(
 
 
 # ==================================================================
-# === REFAKTORYZACJA (WYDAJNOŚĆ): Ta funkcja już NIE OBLICZA metryk ===
+# === REFAKTORYZACJA (WYDAJNOŚĆ): Ta funkcja ładuje teraz dane dla V3 i V2 ===
 # ==================================================================
 def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session, year_to_test: str) -> Optional[Dict[str, Any]]:
     """
-    Pobiera i wstępnie przetwarza wszystkie dane (H1, H2, H3, H4) dla pojedynczego tickera,
+    Pobiera i wstępnie przetwarza wszystkie dane (dla V3 i V2) dla pojedynczego tickera,
     korzystając z mechanizmu cache w bazie danych.
-    
-    TA FUNKCJA JUŻ NIE WYWOŁUJE `_pre_calculate_metrics`.
     """
     try:
-        # --- KROK 1: ŁADOWANIE H1 (Daily Time Series) ---
+        # --- KROK 1: ŁADOWANIE DANYCH CENOWYCH (Wspólne dla V3 i V2) ---
         
         # TIME_SERIES_DAILY (OHLCV - do HLC/3 Proxy)
         price_data_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='DAILY_OHLCV',
             api_func='get_time_series_daily', outputsize='full'
         )
-        # TIME_SERIES_DAILY_ADJUSTED (Dla time_dilation)
+        # TIME_SERIES_DAILY_ADJUSTED (Główna seria dla V3 i V2)
         daily_adjusted_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='DAILY_ADJUSTED',
             api_func='get_daily_adjusted', outputsize='full'
         )
-        # TIME_SERIES_WEEKLY_ADJUSTED
+        # TIME_SERIES_WEEKLY_ADJUSTED (Główna seria dla V2, V3 jej nie używa)
         weekly_data_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='WEEKLY',
             api_func='get_time_series_weekly', outputsize='full'
         )
         
-        # --- KROK 2: ŁADOWANIE BBANDS (H3) ---
+        # --- KROK 2: ŁADOWANIE DANYCH V3 (H2, H3) ---
         bbands_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='BBANDS',
             api_func='get_bollinger_bands', interval='daily', time_period=20, nbdevup=2, nbdevdn=2
         )
-        
-        # --- KROK 3: DANE INTRADAY (USUWANIE) ---
-        intraday_5min_df = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume']).set_index(pd.to_datetime([]))
-        
-        # --- KROK 4: ŁADOWANIE H2 (Insider i News) ---
         h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, session)
         
-        # --- KROK 5: Walidacja i Przetwarzanie ---
+        # --- KROK 3: ŁADOWANIE DANYCH V2 (QPS, VMS, TCS) ---
+        rsi_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='RSI',
+            api_func='get_rsi', interval='daily', time_period=14, series_type='close' # Spec V2: RSI(14)
+        )
+        macd_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='MACD',
+            api_func='get_macd', interval='daily', series_type='close'
+        )
+        obv_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='OBV',
+            api_func='get_obv', interval='daily'
+        )
+        ad_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='AD',
+            api_func='get_ad', interval='daily'
+        )
+        atr_v2_raw = get_raw_data_with_cache( # Oddzielne ATR(14) dla SL/TP w V2
+            session=session, api_client=api_client, ticker=ticker, data_type='ATR',
+            api_func='get_atr', interval='daily', time_period=14
+        )
+        earnings_raw = get_raw_data_with_cache( # Wspólne dla V3 i V2
+            session=session, api_client=api_client, ticker=ticker, data_type='EARNINGS',
+            api_func='get_earnings'
+        )
+        
+        # --- KROK 4: DANE INTRADAY V3 (USUWANIE) ---
+        intraday_5min_df = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume']).set_index(pd.to_datetime([]))
+        
+        # --- KROK 5: Walidacja i Przetwarzanie (V3) ---
         
         if not price_data_raw or 'Time Series (Daily)' not in price_data_raw or \
            not daily_adjusted_raw or 'Time Series (Daily)' not in daily_adjusted_raw or \
            not weekly_data_raw or 'Weekly Adjusted Time Series' not in weekly_data_raw:
             
-            logger.warning(f"[Backtest V3] Brak podstawowych danych (Daily/Weekly) z cache/API dla {ticker}, pomijanie.")
+            logger.warning(f"[Backtest V3/V2] Brak podstawowych danych (Daily/Weekly) z cache/API dla {ticker}, pomijanie.")
             return None
             
-        # Przetwórz Daily OHLCV (dla HLC/3 proxy)
+        # Przetwórz Daily OHLCV (dla HLC/3 proxy V3)
         daily_ohlcv_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
         daily_ohlcv_df.index = pd.to_datetime(daily_ohlcv_df.index) 
         daily_ohlcv_df = standardize_df_columns(daily_ohlcv_df)
         
-        # Przetwórz Daily Adjusted (dla time_dilation i ATR)
+        # Przetwórz Daily Adjusted (Główny DF dla V3 i V2)
         daily_adjusted_df = pd.DataFrame.from_dict(daily_adjusted_raw['Time Series (Daily)'], orient='index')
         daily_adjusted_df.index = pd.to_datetime(daily_adjusted_df.index)
         daily_adjusted_df = standardize_df_columns(daily_adjusted_df)
 
-        # Przetwórz Weekly (H1)
+        # Przetwórz Weekly (Główny DF dla V2, V3 go nie używa)
         weekly_df = pd.DataFrame.from_dict(weekly_data_raw['Weekly Adjusted Time Series'], orient='index')
         weekly_df.index = pd.to_datetime(weekly_df.index)
         weekly_df = standardize_df_columns(weekly_df)
         
-        # === KLUCZOWA POPRAWKA (VWAP PROXY HLC/3) ===
+        # === KLUCZOWA POPRAWKA (VWAP PROXY HLC/3) - Logika V3 ===
         daily_ohlcv_df['vwap_proxy'] = (daily_ohlcv_df['high'] + daily_ohlcv_df['low'] + daily_ohlcv_df['close']) / 3.0
         
-        # Używamy DF Adjusted jako bazy i dołączamy do niego OHLCV i VWAP Proxy
+        # Używamy DF Adjusted jako bazy i dołączamy do niego OHLCV i VWAP Proxy (dla V3)
         enriched_df = daily_adjusted_df.join(daily_ohlcv_df[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
         
         enriched_df['vwap'] = enriched_df['vwap_proxy']
         
         if enriched_df['vwap'].isnull().all():
-             logger.warning(f"Brak danych HLC/3 VWAP Proxy dla {ticker}.")
+             logger.warning(f"(V3) Brak danych HLC/3 VWAP Proxy dla {ticker}.")
         
-        # === KRYTYCZNA POPRAWKA: TWORZENIE KOLUMNY 'price_gravity' ===
+        # === KRYTYCZNA POPRAWKA: TWORZENIE KOLUMNY 'price_gravity' (dla V3) ===
         close_col = 'close_ohlcv' if 'close_ohlcv' in enriched_df.columns else 'close'
         enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df[close_col]) / enriched_df[close_col]
         # ================================================================
 
-        # Wzbogacanie DataFrame (z użyciem danych SPY z Cache LITE)
+        # Wzbogacanie DataFrame (V3) (z użyciem danych SPY z Cache LITE)
         spy_aligned = _backtest_cache["spy_data"]['close'].reindex(enriched_df.index, method='ffill').rename('spy_close')
         enriched_df = enriched_df.join(spy_aligned) 
         
-        # Obliczamy ATR (na nie-adjustowanych danych HLC, które są w enriched_df)
+        # Obliczamy ATR (V3) (na nie-adjustowanych danych HLC, które są w enriched_df)
         enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
         
-        # Obliczenia H1 (time_dilation)
+        # Obliczenia H1 (time_dilation) (V3)
         ticker_returns_rolling = enriched_df['close'].pct_change().rolling(window=20)
         spy_returns_rolling = enriched_df['spy_close'].pct_change().rolling(window=20)
         std_ticker = ticker_returns_rolling.std()
         std_spy = spy_returns_rolling.std()
         enriched_df['time_dilation'] = std_ticker / std_spy
         
-        # === Dodanie tickera do DF (dla logowania w _pre_calculate_metrics) ===
+        # === Dodanie tickera do DF (dla logowania w _pre_calculate_metrics V3) ===
         enriched_df['ticker'] = ticker
         
         enriched_df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        # Wypełnij NaN wartościami 0 (lub metodą ffill), aby symulatory nie napotkały NaN
+        # Wypełnij NaN wartościami 0 (lub metodą ffill), aby symulatory V3 nie napotkały NaN
         enriched_df['time_dilation'] = enriched_df['time_dilation'].fillna(0)
         enriched_df['price_gravity'] = enriched_df['price_gravity'].fillna(0) # Zapewnienie, że jest kolumna
         
-        # ==================================================================
-        # === NAPRAWA (FutureWarning: .fillna(method='ffill')) ===
-        # Zastąpiono przestarzałe .fillna(method='ffill') nowym .ffill()
-        # enriched_df['atr_14'] = enriched_df['atr_14'].fillna(method='ffill').fillna(0)
-        # enriched_df['vwap'] = enriched_df['vwap'].fillna(method='ffill').fillna(0)
         enriched_df['atr_14'] = enriched_df['atr_14'].ffill().fillna(0)
         enriched_df['vwap'] = enriched_df['vwap'].ffill().fillna(0)
-        # ==================================================================
 
         
-        # Przetwarzanie BBANDS (H3)
+        # Przetwarzanie BBANDS (H3 V3)
         bbands_df = _parse_bbands(bbands_raw)
         
-        # DANE INTRADAY (USUWANIE)
+        # Przetwarzanie EARNINGS (Wspólne dla V3 i V2)
+        earnings_df = _parse_earnings_data(earnings_raw)
+        if earnings_df.index.tz is not None:
+             # Konwertuj na naive, aby pasowało do indeksu daily_df
+            earnings_df.index = earnings_df.index.tz_convert(None)
+        
+        # DANE INTRADAY V3 (USUWANIE)
         intraday_5min_df = pd.DataFrame() 
         
-        # Zdobądź i zapisz sektor (dla spójności)
+        # Zdobądź i zapisz sektor (Wspólne)
         sector = _get_sector_for_ticker(session, ticker)
         
         # ==================================================================
-        # === REFAKTORYZACJA (WYDAJNOŚĆ): Usunięto wywołanie _pre_calculate_metrics ===
-        # Ta funkcja NIE OBLICZA już metryk H2/H3/H4. Robi to pętla główna.
+        # === NOWY KROK: Przetwarzanie i Tworzenie DF dla V2 ===
         # ==================================================================
+        logger.info(f"[{ticker}] (V2) Przetwarzanie wskaźników dla AQM V2...")
+        
+        # Parsujemy nowe wskaźniki V2
+        rsi_df = _parse_indicator_data(rsi_raw, 'Technical Analysis: RSI', 'RSI')
+        macd_df = _parse_macd_data(macd_raw)
+        obv_df = _parse_indicator_data(obv_raw, 'Technical Analysis: OBV', 'OBV')
+        ad_df = _parse_indicator_data(ad_raw, 'Technical Analysis: AD', 'AD')
+        atr_v2_df = _parse_indicator_data(atr_v2_raw, 'Technical Analysis: ATR', 'ATR')
+
+        # Walidacja V2: Sprawdzamy, czy mamy kluczowe wskaźniki
+        aqm_v2_ready = not (rsi_df.empty or macd_df.empty or obv_df.empty or ad_df.empty or atr_v2_df.empty)
+        if not aqm_v2_ready:
+             logger.warning(f"[Backtest V2] Brak kluczowych danych (RSI/MACD/OBV/AD/ATR) dla {ticker}. AQM V2 zostanie pominięte.")
+        
+        # AQM V2 (QPS) wymaga specyficznych EMA (50/200 D, 20/50 W)
+        
+        # V2 Daily DF (baza dla QPS i VMS)
+        daily_v2_df = daily_adjusted_df.copy() # Używamy tej samej bazy cenowej co V3
+        daily_v2_df['ema_50'] = calculate_ema(daily_v2_df['close'], period=50)
+        daily_v2_df['ema_200'] = calculate_ema(daily_v2_df['close'], period=200)
+        # Wolumen jest już w 'daily_adjusted_df' z 'standardize_df_columns'
+        
+        # V2 Weekly DF (baza dla QPS)
+        weekly_v2_df = weekly_df.copy()
+        weekly_v2_df['ema_20'] = calculate_ema(weekly_v2_df['close'], period=20)
+        weekly_v2_df['ema_50'] = calculate_ema(weekly_v2_df['close'], period=50)
+        # ==================================================================
+        
         
         # Zwracamy wszystkie *surowe* przetworzone dane
         return {
-            "daily_raw": enriched_df, # Zwracamy surowy, pełny DF (5066+ dni)
-            "weekly": weekly_df,
+            # Dane V3 (istniejące)
+            "daily_raw": enriched_df, # Używane przez V3
+            "weekly": weekly_df, # Używane przez V3 (chociaż V2 też go używa)
             "insider_df": h2_data["insider_df"], 
             "news_df": h2_data["news_df"],       
-            "bbands_df": bbands_df,             
-            "sector": sector
+            "bbands_df": bbands_df,
+            "earnings_df": earnings_df, # Używane przez V3 (Temporal) i V2 (TCS)
+            "sector": sector,
+            
+            # === NOWE DANE (dla AQM V2) ===
+            "aqm_v2_ready": aqm_v2_ready, # Flaga, czy mamy wszystkie dane
+            "daily_v2": daily_v2_df,
+            "weekly_v2": weekly_v2_df,
+            "ras_df": _backtest_cache["ras_v2_data"], # Załadowane globalnie
+            "rsi_v2": rsi_df,
+            "macd_v2": macd_df,
+            "obv_v2": obv_df,
+            "ad_v2": ad_df,
+            "atr_v2": atr_v2_df
         }
     
     except Exception as e:
-        logger.error(f"[Backtest V3] Błąd ładowania danych dla {ticker}: {e}", exc_info=True)
+        logger.error(f"[Backtest V3/V2] Błąd ładowania danych dla {ticker}: {e}", exc_info=True)
         return None
 # ==================================================================
 
 
 # ==================================================================
-# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (NOWA LOGIKA "SLICE-FIRST") ===
+# === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (NOWA LOGIKA "SLICE-FIRST" + V2) ===
 # ==================================================================
 def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str):
     """
-    Główna funkcja uruchamiająca backtest historyczny.
+    Główna funkcja uruchamiająca backtest historyczny dla V3 i V2.
     REFAKTORYZACJA: Logika "Slice First" zaimplementowana w pętli głównej.
     """
     
@@ -436,20 +543,30 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         append_scan_log(session, f"[Backtest] BŁĄD: Nieprawidłowy format roku: {year}")
         return
         
-    log_msg = f"BACKTEST HISTORYCZNY (Platforma AQM V3): Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
+    log_msg = f"BACKTEST HISTORYCZNY (Platforma AQM V3 + V2): Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
-    # === KROK 1: Czyszczenie Bazy Danych (Bez zmian) ===
+    # === KROK 1: Czyszczenie Bazy Danych (V3 i V2) ===
     try:
-        like_pattern = f"BACKTEST_{year}_AQM_V3_%"
-        logger.info(f"Czyszczenie starych wyników AQM V3 dla wzorca: {like_pattern}...")
+        # Czyszczenie V3
+        like_pattern_v3 = f"BACKTEST_{year}_AQM_V3_%"
+        logger.info(f"Czyszczenie starych wyników AQM V3 dla wzorca: {like_pattern_v3}...")
         
-        delete_stmt = text("DELETE FROM virtual_trades WHERE setup_type LIKE :pattern")
-        result = session.execute(delete_stmt, {'pattern': like_pattern})
+        delete_stmt_v3 = text("DELETE FROM virtual_trades WHERE setup_type LIKE :pattern")
+        result_v3 = session.execute(delete_stmt_v3, {'pattern': like_pattern_v3})
+        
+        logger.info(f"Pomyślnie usunięto {result_v3.rowcount} starych wpisów backtestu AQM V3 dla roku {year}.")
+
+        # === NOWE CZYSZCZENIE (AQM V2) ===
+        like_pattern_v2 = f"BACKTEST_{year}_AQM_V2" # Tylko jeden setup_type
+        logger.info(f"Czyszczenie starych wyników AQM V2 dla wzorca: {like_pattern_v2}...")
+        delete_stmt_v2 = text("DELETE FROM virtual_trades WHERE setup_type = :pattern")
+        result_v2 = session.execute(delete_stmt_v2, {'pattern': like_pattern_v2})
+        logger.info(f"Pomyślnie usunięto {result_v2.rowcount} starych wpisów backtestu AQM V2 dla roku {year}.")
+        # =================================
         
         session.commit()
-        logger.info(f"Pomyślnie usunięto {result.rowcount} starych wpisów backtestu AQM V3 dla roku {year}.")
         
     except Exception as e:
         logger.error(f"Nie udało się wyczyścić starych wyników backtestu: {e}", exc_info=True)
@@ -457,7 +574,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
 
     # === KROK 2: Pobieranie Listy Spółek (Bez zmian) ===
     try:
-        log_msg_tickers = "[Backtest V3] Pobieranie listy spółek z Fazy 1 ('Pierwsze Sito')..."
+        log_msg_tickers = "[Backtest V3/V2] Pobieranie listy spółek z Fazy 1 ('Pierwsze Sito')..."
         logger.info(log_msg_tickers)
         append_scan_log(session, log_msg_tickers)
         
@@ -473,7 +590,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             append_scan_log(session, log_msg)
             return
 
-        log_msg = f"[Backtest V3] Znaleziono {len(initial_tickers_to_test)} spółek z Fazy 1 do przetestowania."
+        log_msg = f"[Backtest V3/V2] Znaleziono {len(initial_tickers_to_test)} spółek z Fazy 1 do przetestowania."
         logger.info(log_msg)
         append_scan_log(session, log_msg)
         
@@ -483,17 +600,18 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         append_scan_log(session, log_msg)
         return
 
-    # === KROK 3: Budowanie Cache (TYLKO DANE GLOBALNE) (Bez zmian) ===
+    # === KROK 3: Budowanie Cache (DANE GLOBALNE V3 i V2) ===
     
     try:
-        logger.info("[Backtest V3] Rozpoczynanie budowania pamięci podręcznej (Cache LITE)...")
+        logger.info("[Backtest V3/V2] Rozpoczynanie budowania pamięci podręcznej (Cache LITE)...")
         _backtest_cache["vix_data"] = None
         _backtest_cache["spy_data"] = None
         _backtest_cache["sector_etf_data"] = {}
         _backtest_cache["tickers_by_sector"] = {}
         _backtest_cache["sector_map"] = {}
+        _backtest_cache["ras_v2_data"] = None # Nowy cache dla V2
 
-        # 1. Pobierz dane Makro (VXX i SPY)
+        # 1. Pobierz dane Makro V3 (VXX i SPY)
         logger.info("[Backtest V3] Cache: Ładowanie VXX i SPY...")
         vix_raw = api_client.get_daily_adjusted('VXX', outputsize='full')
         vix_df = pd.DataFrame.from_dict(vix_raw['Time Series (Daily)'], orient='index')
@@ -509,7 +627,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         spy_df['ema_200'] = calculate_ema(spy_df['close'], period=200)
         _backtest_cache["spy_data"] = spy_df
         
-        # 2. Pobierz dane Sektorowe (ETF-y)
+        # 2. Pobierz dane Sektorowe V3 (ETF-y)
         logger.info("[Backtest V3] Cache: Ładowanie 11 sektorów ETF...")
         for sector_name, etf_ticker in SECTOR_TO_ETF_MAP.items():
             try:
@@ -521,7 +639,49 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             except Exception as e:
                 logger.error(f"  > BŁĄD ładowania danych dla sektora {etf_ticker}: {e}")
         
-        # 3. Wstępne ładowanie mapy sektorów (dla spójności)
+        # ==================================================================
+        # === NOWY KROK: Budowanie Cache dla AQM V2 (RAS) ===
+        # ==================================================================
+        logger.info("[Backtest V2] Cache: Ładowanie danych makro dla RAS (V2)...")
+        
+        # 1. Pobierz dane makro
+        inflation_raw = api_client.get_inflation_rate(interval='monthly')
+        fed_rate_raw = api_client.get_fed_funds_rate(interval='monthly')
+        yield_raw = api_client.get_treasury_yield(interval='monthly', maturity='10year')
+        
+        # 2. Sparsuj je (używamy generycznego parsera V2)
+        inflation_df = _parse_indicator_data(inflation_raw, 'data', 'value').rename(columns={'value': 'inflation'})
+        fed_rate_df = _parse_indicator_data(fed_rate_raw, 'data', 'value').rename(columns={'value': 'fed_rate'})
+        yield_df = _parse_indicator_data(yield_raw, 'data', 'value').rename(columns={'value': 'yield_10y'})
+
+        # 3. Połącz w jeden DataFrame
+        ras_df = pd.merge_asof(
+            _backtest_cache["spy_data"][['close', 'ema_200']], # Użyj SPY jako głównej osi czasu
+            inflation_df, left_index=True, right_index=True, direction='backward'
+        )
+        ras_df = pd.merge_asof(ras_df, fed_rate_df, left_index=True, right_index=True, direction='backward')
+        ras_df = pd.merge_asof(ras_df, yield_df, left_index=True, right_index=True, direction='backward')
+        
+        ras_df = ras_df.ffill() # Wypełnij brakujące dane makro
+
+        # 4. Oblicz logikę reżimu (zgodnie ze specyfikacją V2)
+        # Używamy diff(1), aby sprawdzić, czy ostatnia *publikacja* była wyższa (dane miesięczne)
+        ras_df['fed_rate_rising'] = ras_df['fed_rate'].diff(1) > 0 
+        
+        is_risk_off = (
+            (ras_df['inflation'] > 4.0) |
+            (ras_df['fed_rate_rising'] == True) |
+            (ras_df['yield_10y'] > 4.5) |
+            (ras_df['close'] < ras_df['ema_200'])
+        )
+        
+        ras_df['RAS'] = np.where(is_risk_off, 0.1, 1.0) # 0.1 (kara) lub 1.0 (brak kary)
+        
+        _backtest_cache["ras_v2_data"] = ras_df[['RAS']] # Zapisz tylko wynikową kolumnę
+        logger.info("[Backtest V2] Cache: Obliczanie Regime Adaptation Score (RAS) zakończone.")
+        # ==================================================================
+
+        # 3. Wstępne ładowanie mapy sektorów V3 (dla spójności)
         for ticker in initial_tickers_to_test:
             sector = _get_sector_for_ticker(session, ticker)
             if sector not in _backtest_cache["tickers_by_sector"]:
@@ -529,19 +689,19 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             _backtest_cache["tickers_by_sector"][sector].append(ticker)
 
 
-        logger.info("[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
-        append_scan_log(session, "[Backtest V3] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
+        logger.info("[Backtest V3/V2] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
+        append_scan_log(session, "[Backtest V3/V2] Budowanie pamięci podręcznej (Cache LITE) zakończone.")
         update_scan_progress(session, 0, len(initial_tickers_to_test)) 
 
     except Exception as e:
-        log_msg = f"[Backtest V3] BŁĄD KRYTYCZNY podczas budowania cache LITE: {e}. Zatrzymywanie."
+        log_msg = f"[Backtest V3/V2] BŁĄD KRYTYCZNY podczas budowania cache LITE: {e}. Zatrzymywanie."
         logger.error(log_msg, exc_info=True)
         append_scan_log(session, log_msg)
         return
 
-    # === KROK 4: Uruchomienie Symulacji (NOWA LOGIKA "SLICE-FIRST") ===
+    # === KROK 4: Uruchomienie Symulacji (NOWA LOGIKA "SLICE-FIRST" + V2) ===
     
-    log_msg_aqm = "[Backtest V3] Uruchamianie Pętli Symulacyjnych H1, H2, H3 i H4 (Logika: Slice-First)..."
+    log_msg_aqm = "[Backtest V3/V2] Uruchamianie Pętli Symulacyjnych H1-H4 (V3) oraz AQM_V2..."
     logger.info(log_msg_aqm)
     append_scan_log(session, log_msg_aqm)
     
@@ -549,12 +709,13 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     trades_found_h2 = 0
     trades_found_h3 = 0
     trades_found_h4 = 0
+    trades_found_v2 = 0 # Nowy licznik
     
     total_tickers = len(initial_tickers_to_test)
 
     for i, ticker in enumerate(initial_tickers_to_test):
         if i % 1 == 0: # Loguj każdy ticker, aby widzieć postęp
-            log_msg = f"[Backtest V3] Przetwarzanie {ticker} ({i+1}/{total_tickers})..."
+            log_msg = f"[Backtest V3/V2] Przetwarzanie {ticker} ({i+1}/{total_tickers})..."
             logger.info(log_msg)
             # Loguj do bazy co 20 tickerów
             if i % 20 == 0: 
@@ -564,13 +725,12 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         ticker_data_raw_dict = None # Zmieniona nazwa, aby uniknąć pomyłek
         try:
             # ==================================================================
-            # === NOWA LOGIKA (KROK 4.1): Ładowanie surowych danych ===
-            # Ta funkcja już NIE oblicza metryk. Zwraca surowe DFy.
+            # === NOWA LOGIKA (KROK 4.1): Ładowanie surowych danych (V3 i V2) ===
             # ==================================================================
             ticker_data_raw_dict = _load_all_data_for_ticker(ticker, api_client, session, year)
             
             if not ticker_data_raw_dict or 'daily_raw' not in ticker_data_raw_dict:
-                logger.warning(f"[Backtest V3] Brak surowych danych dla {ticker}. Pomijanie.")
+                logger.warning(f"[Backtest V3/V2] Brak surowych danych dla {ticker}. Pomijanie.")
                 continue
             
             # Pobieramy pełny, surowy DF (5066+ dni)
@@ -578,7 +738,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             
             # ==================================================================
             # === NOWA LOGIKA (KROK 4.2): "SLICE FIRST" (NAPRAWA BŁĘDU "5066 DNI") ===
-            # Znajdź indeks startowy i wycinamy *zanim* cokolwiek obliczymy
             # ==================================================================
             try:
                 # Znajdź pierwszy dzień handlowy ROKU
@@ -586,7 +745,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 if indexer[0] == -1: raise KeyError("Data startu nie znaleziona")
                 start_index = indexer[0]
             except KeyError:
-                logger.warning(f"[Backtest V3] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
+                logger.warning(f"[Backtest V3/V2] Brak danych dla {ticker} w roku {year} lub przed nim. Pomijanie.")
                 continue
 
             # Wymagamy 201 dni historii PRZED startem roku (dla Z-Score i EMA)
@@ -604,9 +763,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 continue
             
             # ==================================================================
-            # === NOWA LOGIKA (KROK 4.3): PRE-CALCULATE (na małym wycinku) ===
+            # === ISTNIEJĄCA LOGIKA (V3) (KROK 4.3): PRE-CALCULATE (na małym wycinku) ===
             # ==================================================================
-            logger.info(f"[{ticker}] Wycinek ({len(data_slice_for_processing)} dni) gotowy. Rozpoczynanie obliczeń metryk...")
+            logger.info(f"[{ticker}] (V3) Wycinek ({len(data_slice_for_processing)} dni) gotowy. Rozpoczynanie obliczeń metryk V3...")
             
             # Ta funkcja jest teraz BARDZO SZYBKA, bo działa na ~450 wierszach
             enriched_slice = _pre_calculate_metrics(
@@ -617,25 +776,26 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             )
             
             # ==================================================================
-            # === NOWA LOGIKA (KROK 4.4): Uruchomienie Symulatorów ===
+            # === ISTNIEJĄCA LOGIKA (V3) (KROK 4.4): Uruchomienie Symulatorów V3 ===
             # ==================================================================
             
-            # Symulator H1 (potrzebuje tylko 'daily' DF)
-            trades_found_h1 += aqm_v3_h1_simulator._simulate_trades_h1(
-                session, 
-                ticker, 
-                enriched_slice, # Przekazujemy wstępnie obliczony WYCINEK
-                year
-            )
-            
-            # Słownik dla symulatorów H2, H3, H4
+            # Słownik dla symulatorów H1, H2, H3, H4
             h_data_slice_dict = {
                 "daily": enriched_slice, # Wzbogacony wycinek
                 "insider_df": ticker_data_raw_dict.get("insider_df"),
                 "news_df": ticker_data_raw_dict.get("news_df"),
-                "bbands_df": ticker_data_raw_dict.get("bbands_df")
+                "bbands_df": ticker_data_raw_dict.get("bbands_df"),
+                "earnings_df": ticker_data_raw_dict.get("earnings_df") # Dodajemy dane o wynikach
             }
 
+            # Symulator H1 (potrzebuje 'daily' DF)
+            trades_found_h1 += aqm_v3_h1_simulator._simulate_trades_h1(
+                session, 
+                ticker, 
+                h_data_slice_dict, 
+                year
+            )
+            
             # Symulator H2
             trades_found_h2 += aqm_v3_h2_simulator._simulate_trades_h2(
                 session,
@@ -660,8 +820,39 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 year
             )
 
+            # ==================================================================
+            # === NOWA LOGIKA: Uruchomienie Symulatora AQM V2 ===
+            # ==================================================================
+            logger.info(f"[{ticker}] (V2) Uruchamianie symulatora AQM V2...")
+            
+            # Sprawdzamy, czy dane dla V2 zostały poprawnie załadowane
+            if ticker_data_raw_dict.get("aqm_v2_ready", False):
+                # Przekazujemy *tylko* te dane, których V2 potrzebuje (dla czystości)
+                v2_data_dict = {
+                    "daily_v2": ticker_data_raw_dict.get("daily_v2"),
+                    "weekly_v2": ticker_data_raw_dict.get("weekly_v2"),
+                    "ras_df": ticker_data_raw_dict.get("ras_df"),
+                    "earnings_v2": ticker_data_raw_dict.get("earnings_df"), # Używamy tego samego co V3
+                    "atr_v2": ticker_data_raw_dict.get("atr_v2"),
+                    "rsi_v2": ticker_data_raw_dict.get("rsi_v2"),
+                    "macd_v2": ticker_data_raw_dict.get("macd_v2"),
+                    "obv_v2": ticker_data_raw_dict.get("obv_v2"),
+                    "ad_v2": ticker_data_raw_dict.get("ad_v2"),
+                }
+                
+                # Używamy tego samego `year`
+                trades_found_v2 += aqm_v2_simulator._simulate_trades_aqm_v2(
+                    session,
+                    ticker,
+                    v2_data_dict, 
+                    year
+                )
+            else:
+                logger.warning(f"[{ticker}] (V2) Pomijanie symulacji AQM V2 z powodu braku kompletnych danych (flaga 'aqm_v2_ready' była False).")
+            # ==================================================================
+
         except Exception as e:
-            logger.error(f"[Backtest V3][GŁÓWNA PĘTLA] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
+            logger.error(f"[Backtest V3/V2][GŁÓWNA PĘTLA] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
             session.rollback()
         finally:
             # Wymuszenie czyszczenia pamięci po każdym tickerze (optymalizacja RAM)
@@ -675,13 +866,18 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
                 del enriched_slice
             if 'h_data_slice_dict' in locals():
                 del h_data_slice_dict
+            if 'v2_data_dict' in locals():
+                del v2_data_dict
             
             gc.collect() # Wymuszenie GC, aby agresywnie zwalniać pamięć
             
             
-    trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4
+    trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4 + trades_found_v2 # Dodano V2
     update_scan_progress(session, total_tickers, total_tickers) 
     
-    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2/H3/H4): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3}, H4: {trades_found_h4})."
+    log_msg_final = f"BACKTEST HISTORYCZNY (V3+V2) ZAKOŃCZONY (Rok '{year}').\n" \
+                    f"  > Model V3 (H1-H4): {trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4} transakcji (H1:{trades_found_h1}, H2:{trades_found_h2}, H3:{trades_found_h3}, H4:{trades_found_h4})\n" \
+                    f"  > Model V2 (AQM): {trades_found_v2} transakcji\n" \
+                    f"  > ŁĄCZNIE: {trades_found_total} transakcji."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
