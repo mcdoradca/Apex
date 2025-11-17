@@ -193,20 +193,6 @@ class AlphaVantageClient:
         params = {"function": "STOCH", "symbol": symbol, "interval": "daily"}
         return self._make_request(params)
 
-    # ==================================================================
-    # === NOWA FUNKCJA (dla AQM V2, Warstwa 3) ===
-    # ==================================================================
-    def get_ad(self, symbol: str, interval: str = 'daily'):
-        """Pobiera dane Chaikin A/D Line (AD)."""
-        logger.info(f"AQM V2: Pobieranie AD (Chaikin A/D Line) dla {symbol}...")
-        params = {
-            "function": "AD",
-            "symbol": symbol,
-            "interval": interval
-        }
-        return self._make_request(params)
-    # ==================================================================
-
     def get_adx(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
         params = {"function": "ADX", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
         return self._make_request(params)
@@ -310,7 +296,7 @@ class AlphaVantageClient:
             }
             
             # 4. Sprawdź i nadpisz cenę danymi z after-market, jeśli istnieją
-            #    (Logika, którą nam pokazałeś w danych JSON)
+            #    (Logika, którą nam pokazałeś w swoich danych JSON)
             ext_price_str = quote_data.get("extended_hours_quote")
             ext_change_str = quote_data.get("extended_hours_change")
             ext_change_pct_str = quote_data.get("extended_hours_change_percent")
