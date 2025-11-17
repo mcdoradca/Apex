@@ -22,28 +22,52 @@ logger = logging.getLogger(__name__)
 def _parse_indicator_data(raw_data: Dict[str, Any], key_name: str, value_name: str) -> pd.DataFrame:
     """
     Generyczna funkcja do parsowania odpowiedzi JSON dla wskaźników jednowartościowych
-    (np. RSI, OBV, AD, ATR).
+    (np. RSI, OBV, AD, ATR) ORAZ wskaźników ekonomicznych (np. INFLATION).
     """
     try:
-        data = raw_data.get(key_name, {})
-        if not data:
+        # === KOREKTA: `raw_data` to pełna odpowiedź JSON. Musimy najpierw wyodrębnić `data`. ===
+        data_payload = raw_data.get(key_name) # Pobieramy ładunek danych (może to być dict lub list)
+        
+        if not data_payload:
+            # logger.warning(f"[Backtest V2] Parser: Nie znaleziono klucza '{key_name}' w surowych danych.")
             return pd.DataFrame(columns=[value_name]).set_index(pd.to_datetime([]))
 
-        # === KOREKTA: Musimy wyodrębnić zagnieżdżoną wartość ===
-        # Poprzednia implementacja błędnie próbowała konwertować obiekt {"RSI": "..."} na liczbę.
         processed_data = []
-        for date_str, values in data.items():
-            try:
-                value = values.get(value_name)
-                if value is not None:
-                    processed_data.append({
-                        'date': pd.to_datetime(date_str),
-                        value_name: pd.to_numeric(value, errors='coerce')
-                    })
-            except (ValueError, TypeError):
-                continue
+
+        if isinstance(data_payload, dict):
+            # Przypadek 1: Wskaźnik Techniczny (np. {"2025-11-17": {"RSI": "45.12"}, ...})
+            for date_str, values in data_payload.items():
+                try:
+                    value = values.get(value_name)
+                    if value is not None:
+                        processed_data.append({
+                            'date': pd.to_datetime(date_str),
+                            value_name: pd.to_numeric(value, errors='coerce')
+                        })
+                except (ValueError, TypeError):
+                    continue
         
+        elif isinstance(data_payload, list):
+            # Przypadek 2: Wskaźnik Ekonomiczny (np. [{"date": "...", "value": "..."}, ...])
+            for item in data_payload:
+                try:
+                    date_str = item.get('date')
+                    value = item.get('value')
+                    if date_str is not None and value is not None:
+                        processed_data.append({
+                            'date': pd.to_datetime(date_str),
+                            value_name: pd.to_numeric(value, errors='coerce')
+                        })
+                except (ValueError, TypeError):
+                    continue
+        
+        else:
+            # Nieznany format
+            logger.error(f"[Backtest V2] Nieznany format danych w parserze dla klucza {key_name}: {type(data_payload)}")
+            return pd.DataFrame(columns=[value_name]).set_index(pd.to_datetime([]))
+
         if not processed_data:
+             # logger.warning(f"[Backtest V2] Parser: Nie znaleziono przetworzonych danych dla klucza '{key_name}'.")
              return pd.DataFrame(columns=[value_name]).set_index(pd.to_datetime([]))
 
         df = pd.DataFrame(processed_data)
@@ -62,13 +86,15 @@ def _parse_macd_data(raw_data: Dict[str, Any]) -> pd.DataFrame:
     Specjalistyczna funkcja do parsowania odpowiedzi JSON dla wskaźnika MACD (3 linie).
     """
     try:
-        data = raw_data.get('Technical Analysis: MACD', {})
-        if not data:
+        # === KOREKTA: `raw_data` to pełna odpowiedź JSON. Musimy najpierw wyodrębnić `data`. ===
+        data_payload = raw_data.get('Technical Analysis: MACD', {})
+        if not data_payload:
+            # logger.warning(f"[Backtest V2] Parser: Nie znaleziono klucza 'Technical Analysis: MACD' w surowych danych.")
             return pd.DataFrame(columns=['MACD', 'MACD_Hist', 'MACD_Signal']).set_index(pd.to_datetime([]))
 
-        # === KOREKTA: Ta sama poprawka co w _parse_indicator_data ===
+        # === KOREKTA: Ta sama poprawka co w _parse_indicator_data (Przypadek 1: dict) ===
         processed_data = []
-        for date_str, values in data.items():
+        for date_str, values in data_payload.items():
             try:
                 processed_data.append({
                     'date': pd.to_datetime(date_str),
@@ -80,6 +106,7 @@ def _parse_macd_data(raw_data: Dict[str, Any]) -> pd.DataFrame:
                 continue
         
         if not processed_data:
+            # logger.warning(f"[Backtest V2] Parser: Nie znaleziono przetworzonych danych dla MACD.")
             return pd.DataFrame(columns=['MACD', 'MACD_Hist', 'MACD_Signal']).set_index(pd.to_datetime([]))
 
         df = pd.DataFrame(processed_data)
