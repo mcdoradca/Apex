@@ -108,6 +108,7 @@ def _detect_market_regime(current_date_str: str) -> str:
 
 # ==================================================================
 # === MODYFIKACJA (OPTYMALIZACJA): Wyłączenie obliczeń H2 ===
+# === NAPRAWA BŁĘDU KRYTYCZNEGO: AttributeError: 'RangeIndex' object has no attribute 'tz' ===
 # ==================================================================
 def _pre_calculate_metrics(
     daily_df: pd.DataFrame, # To jest już "wycinek" (np. 450 dni)
@@ -128,10 +129,27 @@ def _pre_calculate_metrics(
     # === Krok 1: Przygotowanie danych zewnętrznych (News, Insider) ===
     
     # Konwertujemy indeksy na "naiwne" (naive), aby dopasować je do 'df.index'
-    if insider_df.index.tz is not None:
-        insider_df = insider_df.tz_convert(None)
-    if news_df.index.tz is not None:
-        news_df = news_df.tz_convert(None)
+    
+    # ==================================================================
+    # === NAPRAWA BŁĘDU KRYTYCZNEGO (AttributeError: 'RangeIndex' object has no attribute 'tz') ===
+    # Moja optymalizacja (przekazanie pustego pd.DataFrame()) powodowała awarię tutaj.
+    # Dodajemy sprawdzenie, czy DataFrame nie jest pusty ORAZ czy jego indeks
+    # jest typu DatetimeIndex, zanim spróbujemy uzyskać dostęp do atrybutu .tz.
+    # ==================================================================
+    
+    # POPRAWKA DLA insider_df
+    if not insider_df.empty and isinstance(insider_df.index, pd.DatetimeIndex):
+        if insider_df.index.tz is not None:
+            insider_df = insider_df.tz_convert(None)
+    
+    # POPRAWKA DLA news_df
+    if not news_df.empty and isinstance(news_df.index, pd.DatetimeIndex):
+        if news_df.index.tz is not None:
+            news_df = news_df.tz_convert(None)
+    # ==================================================================
+    # === KONIEC NAPRAWY BŁĘDU KRYTYCZNEGO ===
+    # ==================================================================
+
 
     # --- Obliczenia H2 (Metryki zależne od daty) ---
     # ==================================================================
@@ -440,6 +458,7 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         vix_df.index = pd.to_datetime(vix_df.index)
         _backtest_cache["vix_data"] = vix_df
         
+        # ==================================================================
         # === MODYFIKACJA (OPTYMALIZACJA) ===
         # Usunięto ładowanie SPY, nie jest już potrzebne do H1
         # spy_raw = api_client.get_daily_adjusted('SPY', outputsize='full')
