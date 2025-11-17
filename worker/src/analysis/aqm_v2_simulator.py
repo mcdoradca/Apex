@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # ==================================================================
 # === FUNKCJE PARSOWANIA DANYCH (dla `backtest_engine`) ===
+# === KOREKTA BŁĘDU LOGICZNEGO (Nieprawidłowe parsowanie) ===
 # ==================================================================
 
 def _parse_indicator_data(raw_data: Dict[str, Any], key_name: str, value_name: str) -> pd.DataFrame:
@@ -28,14 +29,29 @@ def _parse_indicator_data(raw_data: Dict[str, Any], key_name: str, value_name: s
         if not data:
             return pd.DataFrame(columns=[value_name]).set_index(pd.to_datetime([]))
 
-        df = pd.DataFrame.from_dict(data, orient='index')
-        df.index = pd.to_datetime(df.index)
+        # === KOREKTA: Musimy wyodrębnić zagnieżdżoną wartość ===
+        # Poprzednia implementacja błędnie próbowała konwertować obiekt {"RSI": "..."} na liczbę.
+        processed_data = []
+        for date_str, values in data.items():
+            try:
+                value = values.get(value_name)
+                if value is not None:
+                    processed_data.append({
+                        'date': pd.to_datetime(date_str),
+                        value_name: pd.to_numeric(value, errors='coerce')
+                    })
+            except (ValueError, TypeError):
+                continue
         
-        # Konwertuj na liczby
-        df[value_name] = pd.to_numeric(df[value_name], errors='coerce')
-            
+        if not processed_data:
+             return pd.DataFrame(columns=[value_name]).set_index(pd.to_datetime([]))
+
+        df = pd.DataFrame(processed_data)
+        df.set_index('date', inplace=True)
+        df = df[~df.index.duplicated(keep='first')] # Na wypadek duplikatów dat
         df.sort_index(inplace=True)
         return df
+        # === KONIEC KOREKTY ===
         
     except Exception as e:
         logger.error(f"Błąd podczas parsowania danych wskaźnika ({key_name}): {e}", exc_info=True)
@@ -50,15 +66,28 @@ def _parse_macd_data(raw_data: Dict[str, Any]) -> pd.DataFrame:
         if not data:
             return pd.DataFrame(columns=['MACD', 'MACD_Hist', 'MACD_Signal']).set_index(pd.to_datetime([]))
 
-        df = pd.DataFrame.from_dict(data, orient='index')
-        df.index = pd.to_datetime(df.index)
+        # === KOREKTA: Ta sama poprawka co w _parse_indicator_data ===
+        processed_data = []
+        for date_str, values in data.items():
+            try:
+                processed_data.append({
+                    'date': pd.to_datetime(date_str),
+                    'MACD': pd.to_numeric(values.get('MACD'), errors='coerce'),
+                    'MACD_Hist': pd.to_numeric(values.get('MACD_Hist'), errors='coerce'),
+                    'MACD_Signal': pd.to_numeric(values.get('MACD_Signal'), errors='coerce')
+                })
+            except (ValueError, TypeError):
+                continue
         
-        # Konwertuj na liczby
-        for col in ['MACD', 'MACD_Hist', 'MACD_Signal']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            
+        if not processed_data:
+            return pd.DataFrame(columns=['MACD', 'MACD_Hist', 'MACD_Signal']).set_index(pd.to_datetime([]))
+
+        df = pd.DataFrame(processed_data)
+        df.set_index('date', inplace=True)
+        df = df[~df.index.duplicated(keep='first')]
         df.sort_index(inplace=True)
         return df
+        # === KONIEC KOREKTY ===
         
     except Exception as e:
         logger.error(f"Błąd podczas parsowania danych MACD: {e}", exc_info=True)
@@ -66,6 +95,7 @@ def _parse_macd_data(raw_data: Dict[str, Any]) -> pd.DataFrame:
 
 # ==================================================================
 # === FUNKCJE OBLICZENIOWE AQM V2 (Wektorowe) ===
+# (Logika obliczeniowa pozostaje bez zmian)
 # ==================================================================
 
 def _calculate_qps_vectorized(daily_df: pd.DataFrame, weekly_df: pd.DataFrame, rsi_df: pd.DataFrame, macd_df: pd.DataFrame) -> pd.DataFrame:
@@ -154,6 +184,7 @@ def _check_tcs(current_date: datetime.date, earnings_df: pd.DataFrame) -> bool:
 
 # ==================================================================
 # === GŁÓWNY SYMULATOR AQM V2 ===
+# (Logika pozostaje bez zmian)
 # ==================================================================
 
 def _simulate_trades_aqm_v2(
