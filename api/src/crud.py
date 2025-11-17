@@ -9,6 +9,14 @@ import logging
 from decimal import Decimal, ROUND_HALF_UP
 # NOWY IMPORT dla statystyk
 from collections import defaultdict
+# ==================================================================
+# === MODYFIKACJA (EKSPORT DANYCH) ===
+# Dodano importy dla generatora CSV
+import io
+import csv
+from typing import Generator
+# ==================================================================
+
 
 logger = logging.getLogger(__name__)
 
@@ -291,24 +299,14 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
         } for signal in signals_from_db
     ]
 
-# ==================================================================
-# KROK 4d (Licznik): Dodanie nowej funkcji do zliczania "wyrzuconych"
-# ==================================================================
 def get_discarded_signals_count_24h(db: Session) -> int:
     """
     Zlicza sygnały, które zostały unieważnione (INVALIDATED) lub
     zakończone (COMPLETED) w ciągu ostatnich 24 godzin.
     """
     try:
-        # Definiujemy statusy "wyrzucone" (zakończone lub unieważnione)
         discarded_statuses = ['INVALIDATED', 'COMPLETED']
-        
-        # Obliczamy czas 24 godziny temu
         time_24_hours_ago = datetime.now(timezone.utc) - timedelta(days=1)
-
-        # Budujemy zapytanie
-        # Zliczamy sygnały, których status należy do "wyrzuconych"
-        # ORAZ których data aktualizacji jest w ciągu ostatnich 24h
         count = db.query(func.count(models.TradingSignal.id)).filter(
             models.TradingSignal.status.in_(discarded_statuses),
             models.TradingSignal.updated_at >= time_24_hours_ago
@@ -319,9 +317,7 @@ def get_discarded_signals_count_24h(db: Session) -> int:
     except Exception as e:
         logger.error(f"Error counting discarded signals: {e}", exc_info=True)
         return 0 # Zwróć 0 w przypadku błędu
-# ==================================================================
-# Koniec Krok 4d
-# ==================================================================
+
 
 def delete_phase1_candidate(db: Session, ticker: str):
     # Nieużywane?
@@ -369,14 +365,6 @@ def set_system_control_value(db: Session, key: str, value: str):
 # ==================================================================
 # === DEKONSTRUKCJA (KROK 10) ===
 # Usunięto funkcje `get_ai_analysis_result` i `delete_ai_analysis_result`,
-# ponieważ były powiązane z usuniętymi endpointami API
-# i starą logiką analizy na żądanie.
-# ==================================================================
-# def get_ai_analysis_result(...):
-#     ... (USUNIĘTE) ...
-#
-# def delete_ai_analysis_result(...):
-#     ... (USUNIĘTE) ...
 # ==================================================================
 
 
@@ -543,4 +531,57 @@ def get_ai_optimizer_report(db: Session) -> schemas.AIOptimizerReport:
             status="ERROR",
             report_text=f"Błąd serwera podczas odczytu raportu: {e}"
         )
+# ==================================================================
+
+
+# ==================================================================
+# === MODYFIKACJA (EKSPORT DANYCH) ===
+# Dodano nową funkcję generatora stream_all_trades_as_csv
+# ==================================================================
+def stream_all_trades_as_csv(db: Session) -> Generator[str, None, None]:
+    """
+    Pobiera *wszystkie* transakcje z bazy danych i streamuje je
+    jako wiersze CSV, włącznie z nagłówkiem.
+    Używa `yield_per` do oszczędzania pamięci.
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    
+    # 1. Zdefiniuj nagłówek CSV (musi pasować do modelu)
+    # Pobieramy wszystkie nazwy kolumn bezpośrednio z modelu SQLAlchemy
+    # To jest bardziej niezawodne niż ręczne wpisywanie
+    header = [column.name for column in models.VirtualTrade.__table__.columns]
+    
+    writer.writerow(header)
+    buffer.seek(0)
+    yield buffer.getvalue()
+    buffer.truncate(0)
+    buffer.seek(0)
+    
+    # 2. Streamuj dane z bazy
+    # `yield_per(100)` instruuje SQLAlchemy, aby pobierało 100 wierszy
+    # na raz, zamiast ładować wszystkie 185,000 do pamięci.
+    try:
+        trades_stream = db.query(models.VirtualTrade).order_by(models.VirtualTrade.id).yield_per(100)
+        
+        for trade in trades_stream:
+            # Tworzymy wiersz danych w kolejności nagłówka
+            row_data = [getattr(trade, col) for col in header]
+            writer.writerow(row_data)
+            
+            buffer.seek(0)
+            yield buffer.getvalue()
+            
+            # Wyczyść bufor
+            buffer.truncate(0)
+            buffer.seek(0)
+            
+    except Exception as e:
+        logger.error(f"Błąd podczas streamowania danych CSV: {e}", exc_info=True)
+        # Zwróć błąd w treści CSV
+        writer.writerow([f"BŁĄD PODCZAS STREAMOWANIA: {e}"])
+        buffer.seek(0)
+        yield buffer.getvalue()
+# ==================================================================
+# === KONIEC MODYFIKACJI ===
 # ==================================================================
