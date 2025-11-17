@@ -152,6 +152,8 @@ document.addEventListener('DOMContentLoaded', () => {
             body: JSON.stringify({})
         }),
         getAIOptimizerReport: () => apiRequest('api/v1/ai-optimizer/report'),
+        // UWAGA: Endpoint eksportu CSV nie jest tutaj, ponieważ musi być wywoływany 
+        // bezpośrednio przez 'fetch', aby obsłużyć 'blob', a nie 'json'.
     };
     console.log("Full API object defined.");
 
@@ -356,26 +358,22 @@ document.addEventListener('DOMContentLoaded', () => {
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                             
-                            <!-- Box 1: Status Silnika (Bez zmian) -->
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
                                 <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
                                 <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
                             </div>
                             
-                            <!-- Box 2: Postęp Skanowania (Bez zmian) -->
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
                                 <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
                                 <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
                             </div>
                             
-                            <!-- Box 3: Liczniki Sygnałów (ZMODYFIKOWANY) -->
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center">
                                     <i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały (Aktywne / Wyrzucone)
                                 </h3>
-                                <!-- Nowy kontener flex dla dwóch liczników -->
                                 <div class="flex items-baseline gap-x-4 gap-y-2 mt-2">
                                     <div>
                                         <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
@@ -387,9 +385,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     </div>
                                 </div>
                             </div>
-                            <!-- Koniec Box 3 -->
-
-                        </div>
+                            </div>
                         <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
                         <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
                             <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
@@ -585,38 +581,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
                 
                 return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono">
-                            <!-- Dane Podstawowe (Przyklejone) -->
                             <td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
                             <td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td>
                             <td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td>
                             
-                            <!-- Wynik Transakcji -->
                             <td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td>
                             <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td>
                             <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td>
                             <td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td>
                             
-                            <!-- Metryka Wspólna -->
                             <td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td>
                             
-                            <!-- Metryki H1 -->
                             <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td>
 
-                            <!-- Metryki H2 -->
                             <td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td>
 
-                            <!-- Metryki H3 -->
                             <td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td>
 
-                            <!-- Metryki H4 -->
                             <td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td>
                             <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td>
                         </tr>`;
@@ -639,7 +628,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const backtestSection = `
                 <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                     <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
-                    <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku. Testy zostaną uruchomione na liście Twoich aktualnych sygnałów z Fazy 3.</p>
+                    <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p>
                     <div class="flex items-start gap-3">
                         <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}">
                         <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
@@ -654,7 +643,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const aiOptimizerSection = `
                 <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                     <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4>
-                    <p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane (powyżej) i zasugerował optymalizacje strategii. Wymaga skonfigurowanego klucza API Gemini.</p>
+                    <p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane (powyżej) i zasugerował optymalizacje strategii.</p>
                     <div class="flex items-start gap-3">
                         <button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
                             <i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>
@@ -668,6 +657,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div>
                 </div>
             `;
+
+            // ==========================================================
+            // === NOWA SEKCJA: Przycisk Eksportu CSV ===
+            // ==========================================================
+            const exportSection = `
+                <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
+                    <h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4>
+                    <p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje z bazy danych jako plik CSV do własnej analizy.</p>
+                    <div class="flex items-start gap-3">
+                        <button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                            <i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>
+                            Eksportuj do CSV
+                        </button>
+                    </div>
+                    <div id="csv-export-status-message" class="text-sm mt-3 h-4"></div>
+                </div>
+            `;
+            // ==========================================================
+
 
             // === NOWA SEKCJA STRONICOWANIA ===
             const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
@@ -706,7 +714,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>
                         ${setupTable}
                         
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-8">
                             <div>
                                 <h3 class="text-xl font-bold text-gray-300 mb-4">Uruchom Backtesting</h3>
                                 ${backtestSection}
@@ -715,13 +723,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <h3 class="text-xl font-bold text-gray-300 mb-4">Optymalizacja AI</h3>
                                 ${aiOptimizerSection}
                             </div>
+                            <div class="lg:col-span-1">
+                                <h3 class="text-xl font-bold text-gray-300 mb-4">Pobierz Dane</h3>
+                                ${exportSection}
+                            </div>
                         </div>
 
                         <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji (z Metrykami)</h3>
                         ${paginationControls}
                         ${tradeTable}
-                        ${paginationControls} <!-- Kontrolki także na dole -->
-                    </div>`;
+                        ${paginationControls} </div>`;
         }
         // ==========================================================
     };
@@ -1306,6 +1317,66 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // ==========================================================
+    // === NOWA FUNKCJA: Obsługa Eksportu CSV ===
+    // ==========================================================
+    async function handleCsvExport() {
+        const exportBtn = document.getElementById('run-csv-export-btn');
+        const statusMsg = document.getElementById('csv-export-status-message');
+        if (!exportBtn || !statusMsg) return;
+
+        exportBtn.disabled = true;
+        exportBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Pobieranie...`;
+        lucide.createIcons();
+        statusMsg.className = 'text-sm mt-3 text-sky-400';
+        statusMsg.textContent = 'Trwa pobieranie danych... to może potrwać chwilę.';
+
+        try {
+            // Musimy użyć 'fetch' bezpośrednio, aby obsłużyć blob, a nie 'apiRequest' (który oczekuje JSON)
+            const response = await fetch(`${API_BASE_URL}/api/v1/export/trades.csv`);
+            
+            if (!response.ok) {
+                throw new Error(`Błąd serwera: ${response.status} ${response.statusText}`);
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            
+            // Pobranie nazwy pliku z nagłówka Content-Disposition
+            const disposition = response.headers.get('content-disposition');
+            let filename = 'apex_virtual_trades_export.csv';
+            if (disposition && disposition.indexOf('attachment') !== -1) {
+                const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                const matches = filenameRegex.exec(disposition);
+                if (matches != null && matches[1]) {
+                    filename = matches[1].replace(/['"]/g, '');
+                }
+            }
+
+            link.setAttribute('download', filename);
+            document.body.appendChild(link);
+            link.click();
+            
+            // Sprzątanie
+            link.parentNode.removeChild(link);
+            window.URL.revokeObjectURL(url);
+
+            statusMsg.className = 'text-sm mt-3 text-green-400';
+            statusMsg.textContent = 'Eksport zakończony pomyślnie.';
+
+        } catch (e) {
+            logger.error("Błąd eksportu CSV:", e);
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd eksportu: ${e.message}`;
+        } finally {
+            exportBtn.disabled = false;
+            exportBtn.innerHTML = `<i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i> Eksportuj do CSV`;
+            lucide.createIcons();
+        }
+    }
+    // ==========================================================
     
     // --- Handlery Zdarzeń (Dodawane od razu) ---
     
@@ -1315,7 +1386,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const runAIOptimizerBtn = e.target.closest('#run-ai-optimizer-btn');
         const viewAIReportBtn = e.target.closest('#view-ai-report-btn');
         // ==========================================================
-        // === NOWE LISTENERY (STRONICOWANIE) ===
+        // === NOWY LISTENER (CSV) ===
+        // ==========================================================
+        const exportCsvBtn = e.target.closest('#run-csv-export-btn');
         // ==========================================================
         const prevBtn = e.target.closest('#report-prev-btn');
         const nextBtn = e.target.closest('#report-next-btn');
@@ -1330,6 +1403,13 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (viewAIReportBtn) {
             handleViewAIOptimizerReport();
         }
+        // ==========================================================
+        // === NOWY HANDLER (CSV) ===
+        // ==========================================================
+        else if (exportCsvBtn) {
+            handleCsvExport();
+        }
+        // ==========================================================
         else if (sellBtn) {
              const ticker = sellBtn.dataset.ticker;
              const quantity = parseInt(sellBtn.dataset.quantity, 10);
