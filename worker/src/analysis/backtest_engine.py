@@ -240,37 +240,34 @@ def _pre_calculate_metrics(
 
 
 # ==================================================================
-# === MODYFIKACJA (OPTYMALIZACJA): Wyłączenie ładowania danych H1 i H2 ===
+# === NAPRAWA BŁĘDU (PRZYWRÓCENIE DANYCH): Przywrócenie ładowania PEŁNEJ historii ===
 # ==================================================================
 def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, session: Session, year_to_test: str) -> Optional[Dict[str, Any]]:
     """
     Pobiera i wstępnie przetwarza wszystkie dane (H1, H2, H3, H4) dla pojedynczego tickera,
     korzystając z mechanizmu cache w bazie danych.
     
-    MODYFIKACJA: Nie ładuje już danych H1 (Adjusted, Weekly) ani H2 (Insider, News).
+    MODYFIKACJA: Nie ładuje już danych H1 (Weekly) ani H2 (Insider, News).
+    NAPRAWA: MUSI ładować H1 (Adjusted) dla pełnej historii.
     """
     try:
-        # --- KROK 1: ŁADOWANIE H1 (Daily Time Series) ---
+        # --- KROK 1: ŁADOWANIE DANYCH ---
         
-        # TIME_SERIES_DAILY (OHLCV - do HLC/3 Proxy) - NADAL POTRZEBNE DLA H3
+        # TIME_SERIES_DAILY (OHLCV) - Potrzebne dla kolumny 'vwap' oraz 'open', 'high', 'low'
         price_data_raw = get_raw_data_with_cache(
             session=session, api_client=api_client, ticker=ticker, data_type='DAILY_OHLCV',
             api_func='get_time_series_daily', outputsize='full'
         )
         
         # ==================================================================
-        # === MODYFIKACJA (OPTYMALIZACJA) ===
-        # Wyłączono ładowanie danych H1 (Adjusted i Weekly)
-        #
-        # daily_adjusted_raw = get_raw_data_with_cache(
-        #     session=session, api_client=api_client, ticker=ticker, data_type='DAILY_ADJUSTED',
-        #     api_func='get_daily_adjusted', outputsize='full'
-        # )
-        # weekly_data_raw = get_raw_data_with_cache(
-        #     session=session, api_client=api_client, ticker=ticker, data_type='WEEKLY',
-        #     api_func='get_time_series_weekly', outputsize='full'
-        # )
-        weekly_df = pd.DataFrame() # Pusty DataFrame
+        # === NAPRAWA BŁĘDU (PRZYWRÓCENIE DANYCH) ===
+        # MUSIMY pobrać ...ADJUSTED, ponieważ jest to jedyne źródło PEŁNEJ historii OHLC.
+        # Endpoint ...DAILY (powyżej) jest potrzebny TYLKO dla kolumny 'vwap'.
+        daily_adjusted_raw = get_raw_data_with_cache(
+            session=session, api_client=api_client, ticker=ticker, data_type='DAILY_ADJUSTED',
+            api_func='get_daily_adjusted', outputsize='full'
+        )
+        weekly_df = pd.DataFrame() # Pusty DataFrame (H1 wyłączone)
         # ==================================================================
         
         
@@ -297,38 +294,79 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
         
         # --- KROK 5: Walidacja i Przetwarzanie ---
         
-        if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
-            logger.warning(f"[Backtest V3] Brak podstawowych danych (Daily OHLCV) z cache/API dla {ticker}, pomijanie.")
-            return None
+        # ==================================================================
+        # === NAPRAWA BŁĘDU (PRZYWRÓCENIE DANYCH) ===
+        # Walidacja musi teraz sprawdzać OBA źródła danych
+        if (not price_data_raw or 'Time Series (Daily)' not in price_data_raw or
+            not daily_adjusted_raw or 'Time Series (Daily)' not in daily_adjusted_raw):
             
-        # Przetwórz Daily OHLCV (dla HLC/3 proxy)
+            logger.warning(f"[Backtest V3] Brak podstawowych danych (Daily OHLCV lub Daily Adjusted) z cache/API dla {ticker}, pomijanie.")
+            return None
+        # ==================================================================
+            
+        # Przetwórz Daily OHLCV (dla 'vwap', 'high', 'low', 'open')
         daily_ohlcv_df = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
         daily_ohlcv_df.index = pd.to_datetime(daily_ohlcv_df.index) 
         daily_ohlcv_df = standardize_df_columns(daily_ohlcv_df)
         
         # ==================================================================
-        # === MODYFIKACJA (OPTYMALIZACJA) ===
-        # `enriched_df` jest teraz oparte bezpośrednio na `daily_ohlcv_df`
-        enriched_df = daily_ohlcv_df.copy()
+        # === NAPRAWA BŁĘDU (PRZYWRÓCENIE DANYCH) ===
+        # Przetwórz Daily Adjusted (to jest nasza BAZA z pełną historią 'close' i 'volume')
+        daily_adjusted_df = pd.DataFrame.from_dict(daily_adjusted_raw['Time Series (Daily)'], orient='index')
+        daily_adjusted_df.index = pd.to_datetime(daily_adjusted_df.index)
+        daily_adjusted_df = standardize_df_columns(daily_adjusted_df)
+
+        # Używamy DF Adjusted (z pełną historią) jako bazy
+        # Wybieramy tylko 'close' i 'volume', których potrzebujemy
+        enriched_df = daily_adjusted_df[['close', 'volume']].copy()
+        
+        # Dołączamy kolumny 'open', 'high', 'low', 'vwap' z ...DAILY (które mogą mieć niepełną historię)
+        columns_to_join = ['open', 'high', 'low', 'vwap']
+        columns_present = [col for col in columns_to_join if col in daily_ohlcv_df.columns]
+        
+        if columns_present:
+             # Używamy join, który dopasuje daty. 'enriched_df' będzie miał pełną historię
+             # dat, a 'daily_ohlcv_df' wypełni tylko te daty, które posiada.
+             enriched_df = enriched_df.join(daily_ohlcv_df[columns_present])
         # ==================================================================
         
+        
         # === KLUCZOWA POPRAWKA (VWAP PROXY HLC/3) ===
-        # Używamy `vwap` z API (TIME_SERIES_DAILY), jeśli jest. Jeśli nie, używamy proxy.
-        # Kolumna 'vwap' jest już standaryzowana przez standardize_df_columns
+        # Używamy `vwap` z API (...DAILY), jeśli jest. Jeśli nie, używamy proxy.
         if 'vwap' not in enriched_df.columns or enriched_df['vwap'].isnull().all():
              logger.warning(f"[{ticker}] Brak danych VWAP z API. Używam proxy HLC/3.")
-             enriched_df['vwap'] = (enriched_df['high'] + enriched_df['low'] + enriched_df['close']) / 3.0
+             # Musimy się upewnić, że mamy 'high' i 'low' (które właśnie dołączyliśmy)
+             if 'high' in enriched_df.columns and 'low' in enriched_df.columns:
+                 enriched_df['vwap'] = (enriched_df['high'] + enriched_df['low'] + enriched_df['close']) / 3.0
+             else:
+                 logger.error(f"[{ticker}] Nie można obliczyć proxy VWAP. Brak kolumn 'high' lub 'low'. Używam 'close'.")
+                 enriched_df['vwap'] = enriched_df['close'] # Awaryjny fallback
         else:
              logger.info(f"[{ticker}] Pomyślnie użyto danych VWAP z API.")
         
         if enriched_df['vwap'].isnull().all():
              logger.warning(f"Brak danych VWAP (API i Proxy) dla {ticker}.")
         
-        # === KRYTYCZNA POPRAWKA: TWORZENIE KOLUMNY 'price_gravity' ===
+        # === TWORZENIE KOLUMNY 'price_gravity' ===
         enriched_df['price_gravity'] = (enriched_df['vwap'] - enriched_df['close']) / enriched_df['close']
         # ================================================================
 
         # Obliczamy ATR (na nie-adjustowanych danych HLC)
+        # Musimy wypełnić `high` i `low` (które mają braki) przed obliczeniem ATR
+        # Najlepiej wypełnić je wartością 'close' z tego samego dnia
+        if 'high' in enriched_df.columns:
+            enriched_df['high'].fillna(enriched_df['close'], inplace=True)
+        else:
+            logger.warning(f"[{ticker}] Brak kolumny 'high'. Używam 'close' do obliczeń ATR.")
+            enriched_df['high'] = enriched_df['close'] # Fallback dla ATR
+            
+        if 'low' in enriched_df.columns:
+            enriched_df['low'].fillna(enriched_df['close'], inplace=True)
+        else:
+            logger.warning(f"[{ticker}] Brak kolumny 'low'. Używam 'close' do obliczeń ATR.")
+            enriched_df['low'] = enriched_df['close'] # Fallback dla ATR
+            
+        # Obliczamy ATR *po* wypełnieniu braków w H/L
         enriched_df['atr_14'] = calculate_atr(enriched_df, period=14)
         
         # Obliczenia H1 (time_dilation) - Ustawiamy na 0, ponieważ nie jest już używane
