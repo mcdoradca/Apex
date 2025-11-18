@@ -1,6 +1,7 @@
 import logging
 import sys
 import os
+import json # <-- NOWY IMPORT: Do obsługi parametrów backtestu
 # ZMIANA: Dodano Response, StreamingResponse, io, csv, datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Response, Query
 from fastapi.responses import StreamingResponse
@@ -79,6 +80,10 @@ async def startup_event():
             # ==========================================================
             'system_alert': 'NONE',
             'backtest_request': 'NONE',
+            # ==========================================================
+            # === NOWA WARTOŚĆ (Dynamiczne Parametry) ===
+            # ==========================================================
+            'backtest_parameters': '{}', # Domyślnie pusty JSON
             # ==========================================================
             # === NOWA WARTOŚĆ (Krok 4 - Mega Agent) ===
             # ==========================================================
@@ -226,10 +231,13 @@ def get_virtual_agent_report_endpoint(db: Session = Depends(get_db)):
 def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get_db)):
     """
     Wysyła zlecenie do Workera, aby uruchomił backtest historyczny
-    dla określonego ROKU (np. "2010").
+    dla określonego ROKU (np. "2010") z opcjonalnymi parametrami strategii.
     """
     year_to_test = request.year.strip()
-    logger.info(f"Backtest request received for year: {year_to_test}.")
+    
+    # Logowanie parametrów, jeśli są dostępne
+    params_info = f" z parametrami: {request.parameters}" if request.parameters else ""
+    logger.info(f"Backtest request received for year: {year_to_test}{params_info}.")
     
     if not (year_to_test.isdigit() and len(year_to_test) == 4):
          raise HTTPException(status_code=400, detail="Nieprawidłowy format roku. Oczekiwano 4 cyfr, np. '2010'.")
@@ -243,6 +251,19 @@ def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get
             raise HTTPException(status_code=409, detail=f"Backtest jest już w toku lub zlecony: {current_backtest}.")
 
     try:
+        # ==================================================================
+        # === NOWOŚĆ (Krok 3B): Zapis Parametrów ===
+        # ==================================================================
+        if request.parameters:
+            # Jeśli frontend wysłał parametry, serializuj je do JSON i zapisz w DB
+            params_json = json.dumps(request.parameters)
+            crud.set_system_control_value(db, key="backtest_parameters", value=params_json)
+            logger.info(f"Zapisano niestandardowe parametry backtestu: {params_json}")
+        else:
+            # Jeśli brak parametrów, wyczyść wpis (ustaw na pusty JSON), aby worker użył domyślnych
+            crud.set_system_control_value(db, key="backtest_parameters", value="{}")
+        # ==================================================================
+
         crud.set_system_control_value(db, key="backtest_request", value=year_to_test)
         logger.info(f"Backtest request for {year_to_test} has been sent to the worker.")
         return {"message": f"Zlecenie backtestu dla roku '{year_to_test}' zostało wysłane do workera."}
