@@ -621,12 +621,15 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             # ==================================================================
             
             # Symulator H1 (potrzebuje tylko 'daily' DF)
-            trades_found_h1 += aqm_v3_h1_simulator._simulate_trades_h1(
-                session, 
-                ticker, 
-                enriched_slice, # Przekazujemy wstępnie obliczony WYCINEK
-                year
-            )
+            # ==================================================================
+            # === MIĘKKIE WYŁĄCZENIE H1 (Szybsze Testowanie H3) ===
+            # trades_found_h1 += aqm_v3_h1_simulator._simulate_trades_h1(
+            #     session, 
+            #     ticker, 
+            #     enriched_slice, # Przekazujemy wstępnie obliczony WYCINEK
+            #     year
+            # )
+            # ==================================================================
             
             # Słownik dla symulatorów H2, H3, H4
             h_data_slice_dict = {
@@ -637,12 +640,15 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             }
 
             # Symulator H2
-            trades_found_h2 += aqm_v3_h2_simulator._simulate_trades_h2(
-                session,
-                ticker,
-                h_data_slice_dict, 
-                year
-            )
+            # ==================================================================
+            # === MIĘKKIE WYŁĄCZENIE H2 (Szybsze Testowanie H3) ===
+            # trades_found_h2 += aqm_v3_h2_simulator._simulate_trades_h2(
+            #     session,
+            #     ticker,
+            #     h_data_slice_dict, 
+            #     year
+            # )
+            # ==================================================================
             
             # Symulator H3
             trades_found_h3 += aqm_v3_h3_simulator._simulate_trades_h3(
@@ -653,12 +659,15 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             )
 
             # Symulator H4
-            trades_found_h4 += aqm_v3_h4_simulator._simulate_trades_h4(
-                session,
-                ticker,
-                h_data_slice_dict, 
-                year
-            )
+            # ==================================================================
+            # === MIĘKKIE WYŁĄCZENIE H4 (Szybsze Testowanie H3) ===
+            # trades_found_h4 += aqm_v3_h4_simulator._simulate_trades_h4(
+            #     session,
+            #     ticker,
+            #     h_data_slice_dict, 
+            #     year
+            # )
+            # ==================================================================
 
         except Exception as e:
             logger.error(f"[Backtest V3][GŁÓWNA PĘTLA] Błąd krytyczny dla {ticker}: {e}", exc_info=True)
@@ -682,6 +691,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
     trades_found_total = trades_found_h1 + trades_found_h2 + trades_found_h3 + trades_found_h4
     update_scan_progress(session, total_tickers, total_tickers) 
     
-    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H1/H2/H3/H4): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3}, H4: {trades_found_h4})."
+    log_msg_final = f"BACKTEST HISTORYCZNY (AQM V3/H3 ONLY): Zakończono test dla roku '{year}'. Znaleziono łącznie {trades_found_total} transakcji (H1: {trades_found_h1}, H2: {trades_found_h2}, H3: {trades_found_h3}, H4: {trades_found_h4})."
     logger.info(log_msg_final)
     append_scan_log(session, log_msg_final)
