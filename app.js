@@ -17,7 +17,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // ==========================================================
         // === NOWY STAN (STRONICOWANIE) ===
         // ==========================================================
-        currentReportPage: 1
+        currentReportPage: 1,
+        // ==========================================================
+        // === NOWY STAN (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        activeH3DeepDivePolling: null
     };
 
     // --- SELEKTORY UI (Definiowane od razu) ---
@@ -63,6 +67,18 @@ document.addEventListener('DOMContentLoaded', () => {
             content: document.getElementById('ai-report-content'),
             closeBtn: document.getElementById('ai-report-close-btn')
         },
+        // ==========================================================
+        // === NOWY SELEKTOR (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        h3DeepDiveModal: {
+            backdrop: document.getElementById('h3-deep-dive-modal'),
+            yearInput: document.getElementById('h3-deep-dive-year-input'),
+            runBtn: document.getElementById('run-h3-deep-dive-btn'),
+            statusMsg: document.getElementById('h3-deep-dive-status-message'),
+            content: document.getElementById('h3-deep-dive-report-content'),
+            closeBtn: document.getElementById('h3-deep-dive-close-btn')
+        },
+        // ==========================================================
         sidebar: document.getElementById('app-sidebar'),
         sidebarBackdrop: document.getElementById('sidebar-backdrop'),
         mobileMenuBtn: document.getElementById('mobile-menu-btn'),
@@ -78,6 +94,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund
     const ALERT_POLL_INTERVAL = 7000; // 7 sekund
     const AI_OPTIMIZER_POLL_INTERVAL = 5000; // 5 sekund
+    // ==========================================================
+    // === NOWA STAŁA (Krok 4B - H3 Deep Dive) ===
+    // ==========================================================
+    const H3_DEEP_DIVE_POLL_INTERVAL = 5000; // 5 sekund
+    // ==========================================================
     const PROFIT_ALERT_THRESHOLD = 1.02; // +2%
     // ==========================================================
     // === NOWA STAŁA (STRONICOWANIE) ===
@@ -152,6 +173,16 @@ document.addEventListener('DOMContentLoaded', () => {
             body: JSON.stringify({})
         }),
         getAIOptimizerReport: () => apiRequest('api/v1/ai-optimizer/report'),
+        // ==========================================================
+        // === NOWE FUNKCJE API (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        requestH3DeepDive: (year) => apiRequest('api/v1/analysis/h3-deep-dive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year: year })
+        }),
+        getH3DeepDiveReport: () => apiRequest('api/v1/analysis/h3-deep-dive-report'),
+        // ==========================================================
         // UWAGA: Endpoint eksportu CSV nie jest tutaj, ponieważ musi być wywoływany 
         // bezpośrednio przez 'fetch', aby obsłużyć 'blob', a nie 'json'.
     };
@@ -553,7 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const headerClasses = [
                 'sticky left-0', // Data Otwarcia
                 'sticky left-[90px]', // Ticker
-                'sticky left-[240px]', // Strategia (szersza)
+                'sticky left-[160px]', // Strategia (krótsza)
                 'text-right', // Status
                 'text-right', // Cena Wejścia
                 'text-right', // Cena Zamknięcia
@@ -676,6 +707,24 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             // ==========================================================
 
+            // ==========================================================
+            // === NOWA SEKCJA (Krok 4B - H3 Deep Dive) ===
+            // ==========================================================
+            const h3DeepDiveSection = `
+                <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
+                    <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3 (Deep Dive)</h4>
+                    <p class="text-sm text-gray-500 mb-4">Uruchom analizę "słabego roku", aby dowiedzieć się, dlaczego transakcje H3 zawiodły w tym okresie.</p>
+                    <div class="flex items-start gap-3">
+                        <button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                            <i data-lucide="search-check" class="w-4 h-4 mr-2"></i>
+                            Uruchom Analizę Porażek
+                        </button>
+                    </div>
+                    <div id="h3-deep-dive-main-status" class="text-sm mt-3 h-4"></div>
+                </div>
+            `;
+            // ==========================================================
+
 
             // === NOWA SEKCJA STRONICOWANIA ===
             const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
@@ -714,19 +763,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         <h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>
                         ${setupTable}
                         
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-8">
-                            <div>
-                                <h3 class="text-xl font-bold text-gray-300 mb-4">Uruchom Backtesting</h3>
-                                ${backtestSection}
-                            </div>
-                            <div>
-                                <h3 class="text-xl font-bold text-gray-300 mb-4">Optymalizacja AI</h3>
-                                ${aiOptimizerSection}
-                            </div>
-                            <div class="lg:col-span-1">
-                                <h3 class="text-xl font-bold text-gray-300 mb-4">Pobierz Dane</h3>
-                                ${exportSection}
-                            </div>
+                        <!-- ZAKTUALIZOWANA SEKCJA KONTROLEK -->
+                        <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6 mt-6">
+                            ${backtestSection}
+                            ${aiOptimizerSection}
+                            ${h3DeepDiveSection}
+                            ${exportSection}
                         </div>
 
                         <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji (z Metrykami)</h3>
@@ -883,11 +926,17 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (statusData.status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
             else if (statusData.status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
             
+            // ==========================================================
+            // === AKTUALIZACJA (Krok 4B - H3 Deep Dive) ===
+            // ==========================================================
             if (statusData.phase === 'BACKTESTING') {
                 statusClass = 'bg-purple-600/20 text-purple-400';
             } else if (statusData.phase === 'AI_OPTIMIZING') {
                 statusClass = 'bg-pink-600/20 text-pink-400';
+            } else if (statusData.phase === 'DEEP_DIVE_H3') {
+                statusClass = 'bg-cyan-600/20 text-cyan-400';
             }
+            // ==========================================================
 
             ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass} transition-colors`;
             ui.workerStatusText.textContent = statusData.phase === 'NONE' ? statusData.status : statusData.phase; // Pokaż fazę, jeśli jest aktywna
@@ -937,6 +986,11 @@ document.addEventListener('DOMContentLoaded', () => {
         logger.info("Zatrzymywanie wszystkich aktywnych timerów odpytywania.");
         if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
         if (state.activeAIOptimizerPolling) { clearTimeout(state.activeAIOptimizerPolling); state.activeAIOptimizerPolling = null; }
+        // ==========================================================
+        // === NOWA LINIA (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        if (state.activeH3DeepDivePolling) { clearTimeout(state.activeH3DeepDivePolling); state.activeH3DeepDivePolling = null; }
+        // ==========================================================
         stopMarketCountdown(); 
     }
 
@@ -1303,9 +1357,9 @@ document.addEventListener('DOMContentLoaded', () => {
             statusMsg.className = 'text-sm mt-3 text-green-400';
             statusMsg.textContent = response.message || `Zlecono test dla ${year}. Worker rozpoczął pracę.`;
             setTimeout(() => {
-                if (document.getElementById('dashboard-view')) {
-                    pollWorkerStatus();
-                }
+                // Nie przechodź do dashboardu, ale zaktualizuj status workera
+                // (ponieważ użytkownik jest już na stronie raportu)
+                pollWorkerStatus();
             }, 2000);
         } catch (e) {
             statusMsg.className = 'text-sm mt-3 text-red-400';
@@ -1378,6 +1432,158 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // ==========================================================
     
+    // ==========================================================
+    // === NOWE FUNKCJE (Krok 4B - H3 Deep Dive) ===
+    // ==========================================================
+    function showH3DeepDiveModal() {
+        if (ui.h3DeepDiveModal.backdrop) {
+            ui.h3DeepDiveModal.backdrop.classList.remove('hidden');
+            ui.h3DeepDiveModal.yearInput.value = ''; // Wyczyść input
+            ui.h3DeepDiveModal.statusMsg.textContent = ''; // Wyczyść status
+            ui.h3DeepDiveModal.runBtn.disabled = false;
+            ui.h3DeepDiveModal.runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+            lucide.createIcons();
+            // Automatycznie spróbuj załadować ostatni raport
+            handleViewH3DeepDiveReport();
+        }
+    }
+
+    function hideH3DeepDiveModal() {
+        if (ui.h3DeepDiveModal.backdrop) {
+            ui.h3DeepDiveModal.backdrop.classList.add('hidden');
+            ui.h3DeepDiveModal.content.innerHTML = ''; // Wyczyść zawartość
+        }
+    }
+
+    async function handleRunH3DeepDive() {
+        const yearInput = ui.h3DeepDiveModal.yearInput;
+        const runBtn = ui.h3DeepDiveModal.runBtn;
+        const statusMsg = ui.h3DeepDiveModal.statusMsg;
+        if (!yearInput || !runBtn || !statusMsg) return;
+
+        const yearStr = yearInput.value.trim();
+        const year = parseInt(yearStr, 10);
+        const currentYear = new Date().getFullYear();
+
+        if (!yearStr || isNaN(year) || year < 2000 || year > currentYear) {
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd: Wprowadź poprawny rok (np. 2000 - ${currentYear}).`;
+            return;
+        }
+
+        runBtn.disabled = true;
+        runBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Zlecanie...`;
+        lucide.createIcons();
+        statusMsg.className = 'text-sm mt-3 text-sky-400';
+        statusMsg.textContent = `Zlecanie analizy H3 Deep Dive dla roku ${year}...`;
+
+        try {
+            const response = await api.requestH3DeepDive(year);
+            statusMsg.className = 'text-sm mt-3 text-green-400';
+            statusMsg.textContent = response.message || `Zlecono analizę dla ${year}. Worker rozpoczął pracę.`;
+            pollH3DeepDiveReport(); // Zacznij odpytywać o wyniki
+        } catch (e) {
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd zlecenia: ${e.message}`;
+            runBtn.disabled = false;
+            runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+            lucide.createIcons();
+        }
+    }
+
+    async function pollH3DeepDiveReport() {
+        if (state.activeH3DeepDivePolling) {
+            clearTimeout(state.activeH3DeepDivePolling);
+        }
+        
+        // Sprawdź, czy modal jest nadal otwarty
+        if (!ui.h3DeepDiveModal.backdrop || ui.h3DeepDiveModal.backdrop.classList.contains('hidden')) {
+            logger.info("Modal H3 Deep Dive zamknięty, zatrzymuję odpytywanie.");
+            return; // Zatrzymaj odpytywanie, jeśli modal jest zamknięty
+        }
+
+        const statusMsg = ui.h3DeepDiveModal.statusMsg;
+        const contentEl = ui.h3DeepDiveModal.content;
+        const runBtn = ui.h3DeepDiveModal.runBtn;
+
+        try {
+            const reportData = await api.getH3DeepDiveReport();
+            
+            if (reportData.status === 'PROCESSING') {
+                if(statusMsg) statusMsg.textContent = 'Worker przetwarza dane... (Sprawdzam ponownie za 5s)';
+                if(contentEl) contentEl.innerHTML = renderers.loading('Przetwarzanie danych...');
+                lucide.createIcons();
+                state.activeH3DeepDivePolling = setTimeout(pollH3DeepDiveReport, H3_DEEP_DIVE_POLL_INTERVAL);
+            
+            } else if (reportData.status === 'DONE') {
+                if(statusMsg) {
+                    statusMsg.className = 'text-sm mt-3 text-green-400';
+                    statusMsg.textContent = `Analiza H3 zakończona (${new Date(reportData.last_updated).toLocaleString()}).`;
+                }
+                if (runBtn) {
+                     runBtn.disabled = false;
+                     runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+                     lucide.createIcons();
+                }
+                if (contentEl) {
+                    contentEl.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
+                }
+
+            } else { // 'NONE' lub 'ERROR'
+                if(statusMsg) {
+                    statusMsg.className = 'text-sm mt-3 text-gray-400';
+                    statusMsg.textContent = reportData.status === 'ERROR' ? reportData.report_text : 'Gotowy do analizy.';
+                }
+                if (contentEl) {
+                    contentEl.innerHTML = `<p class="text-gray-500">${reportData.status === 'ERROR' ? reportData.report_text : 'Zleć analizę roku, aby zobaczyć raport.'}</p>`;
+                }
+                if (runBtn) {
+                     runBtn.disabled = false;
+                     runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+                     lucide.createIcons();
+                }
+            }
+        } catch (e) {
+            logger.error('Błąd podczas odpytywania o raport H3 Deep Dive', e);
+            if(statusMsg) {
+                statusMsg.className = 'text-sm mt-3 text-red-400';
+                statusMsg.textContent = `Błąd odpytywania: ${e.message}`;
+            }
+        }
+    }
+
+    async function handleViewH3DeepDiveReport() {
+        // Ta funkcja jest teraz wywoływana przy otwarciu modala
+        const contentEl = ui.h3DeepDiveModal.content;
+        const statusMsg = ui.h3DeepDiveModal.statusMsg;
+        if (!contentEl || !statusMsg) return;
+
+        contentEl.innerHTML = renderers.loading('Pobieranie ostatniego raportu...');
+        lucide.createIcons();
+        statusMsg.textContent = '';
+
+        try {
+            const reportData = await api.getH3DeepDiveReport();
+            
+            if (reportData.status === 'DONE' && reportData.report_text) {
+                 contentEl.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
+                 statusMsg.textContent = `Załadowano ostatni raport z ${new Date(reportData.last_updated).toLocaleString()}.`;
+                 statusMsg.className = 'text-sm mt-3 text-gray-400';
+            } else if (reportData.status === 'PROCESSING') {
+                contentEl.innerHTML = renderers.loading('Analiza w toku... Worker nadal przetwarza dane.');
+                lucide.createIcons();
+                pollH3DeepDiveReport(); // Rozpocznij odpytywanie
+            } else {
+                 contentEl.innerHTML = `<p class="text-gray-500">Brak dostępnego raportu. Uruchom najpierw analizę.</p>`;
+                 statusMsg.textContent = 'Gotowy do analizy.';
+                 statusMsg.className = 'text-sm mt-3 text-gray-400';
+            }
+        } catch (e) {
+             contentEl.innerHTML = `<p class="text-red-400">Błąd pobierania raportu: ${e.message}</p>`;
+        }
+    }
+    // ==========================================================
+
     // --- Handlery Zdarzeń (Dodawane od razu) ---
     
     ui.mainContent.addEventListener('click', async e => {
@@ -1389,6 +1595,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // === NOWY LISTENER (CSV) ===
         // ==========================================================
         const exportCsvBtn = e.target.closest('#run-csv-export-btn');
+        // ==========================================================
+        // === NOWY LISTENER (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        const h3DeepDiveModalBtn = e.target.closest('#run-h3-deep-dive-modal-btn');
         // ==========================================================
         const prevBtn = e.target.closest('#report-prev-btn');
         const nextBtn = e.target.closest('#report-next-btn');
@@ -1408,6 +1618,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // ==========================================================
         else if (exportCsvBtn) {
             handleCsvExport();
+        }
+        // ==========================================================
+        // === NOWY HANDLER (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        else if (h3DeepDiveModalBtn) {
+            showH3DeepDiveModal();
         }
         // ==========================================================
         else if (sellBtn) {
@@ -1460,6 +1676,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if(ui.aiReportModal.closeBtn) {
         ui.aiReportModal.closeBtn.addEventListener('click', hideAIReportModal);
     }
+    
+    // ==========================================================
+    // === NOWE HANDLERY (Krok 4B - H3 Deep Dive) ===
+    // ==========================================================
+    if(ui.h3DeepDiveModal.closeBtn) {
+        ui.h3DeepDiveModal.closeBtn.addEventListener('click', hideH3DeepDiveModal);
+    }
+    if(ui.h3DeepDiveModal.runBtn) {
+        ui.h3DeepDiveModal.runBtn.addEventListener('click', handleRunH3DeepDive);
+    }
+    // ==========================================================
     
     console.log("Event listeners added.");
 
