@@ -147,13 +147,22 @@ def _simulate_trades_h3(
                     "stop_loss": float(stop_loss),
                     "take_profit": float(take_profit),
                     
-                    # Metrics for logging
+                    # Metrics for logging (H3)
                     "metric_atr_14": float(atr_value),
                     "metric_aqm_score_h3": float(current_aqm_score),
                     "metric_aqm_percentile_95": float(current_threshold), 
                     "metric_J_norm": float(j_norm.iloc[i]),
                     "metric_nabla_sq_norm": float(nabla_norm.iloc[i]),
                     "metric_m_sq_norm": float(current_m_norm),
+                    
+                    # === NOWE: DODANIE BRAKUJĄCYCH METRYK (DLA AI AGENTA) ===
+                    # Te metryki są potrzebne do analizy porażek przez Deep Dive / AI,
+                    # nawet jeśli symulatory H1/H2/H4 są wyłączone.
+                    "metric_J": float(candle_D['J']),
+                    "metric_inst_sync": float(candle_D['institutional_sync']),
+                    "metric_retail_herding": float(candle_D['retail_herding']),
+                    "metric_time_dilation": float(candle_D['time_dilation']),
+                    "metric_price_gravity": float(candle_D['price_gravity']),
                 }
 
                 trade = _resolve_trade(
