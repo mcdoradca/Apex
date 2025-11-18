@@ -414,10 +414,11 @@ def _load_all_data_for_ticker(ticker: str, api_client: AlphaVantageClient, sessi
 # ==================================================================
 # === GŁÓWNA FUNKCJA URUCHAMIAJĄCA (NOWA LOGIKA "SLICE-FIRST") ===
 # ==================================================================
-def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str):
+def run_historical_backtest(session: Session, api_client: AlphaVantageClient, year: str, parameters: Dict[str, Any] = None):
     """
     Główna funkcja uruchamiająca backtest historyczny.
     REFAKTORYZACJA: Logika "Slice First" zaimplementowana w pętli głównej.
+    Akceptuje opcjonalny słownik 'parameters' do dynamicznego sterowania strategią H3.
     """
     
     try:
@@ -437,6 +438,9 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         return
         
     log_msg = f"BACKTEST HISTORYCZNY (Platforma AQM V3): Rozpoczynanie testu dla roku '{year}' ({start_date} do {end_date})"
+    if parameters:
+        log_msg += f" [Z parametrami: {parameters}]"
+    
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
@@ -650,12 +654,13 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
             # )
             # ==================================================================
             
-            # Symulator H3
+            # Symulator H3 (z dynamicznymi parametrami)
             trades_found_h3 += aqm_v3_h3_simulator._simulate_trades_h3(
                 session,
                 ticker,
                 h_data_slice_dict, 
-                year
+                year,
+                parameters=parameters # Przekazujemy parametry z Dashboardu
             )
 
             # Symulator H4
