@@ -535,6 +535,49 @@ def get_ai_optimizer_report(db: Session) -> schemas.AIOptimizerReport:
 
 
 # ==================================================================
+# === NOWA FUNKCJA (Krok 3B - H3 Deep Dive) ===
+# ==================================================================
+def get_h3_deep_dive_report(db: Session) -> schemas.H3DeepDiveReport:
+    """
+    Pobiera ostatni wygenerowany raport H3 Deep Dive z bazy danych.
+    """
+    try:
+        # Pobieramy wiersz z tabeli system_control
+        report_row = db.query(models.SystemControl).filter(
+            models.SystemControl.key == 'h3_deep_dive_report'
+        ).first()
+
+        if not report_row or not report_row.value or report_row.value == 'NONE':
+            return schemas.H3DeepDiveReport(status="NONE")
+        
+        if report_row.value == 'PROCESSING':
+             return schemas.H3DeepDiveReport(status="PROCESSING", last_updated=report_row.updated_at)
+        
+        # Jeśli to błąd zapisany przez workera
+        if report_row.value.startswith("BŁĄD:"):
+            return schemas.H3DeepDiveReport(
+                status="ERROR",
+                report_text=report_row.value,
+                last_updated=report_row.updated_at
+            )
+
+        # Jeśli mamy raport, zwracamy go
+        return schemas.H3DeepDiveReport(
+            status="DONE",
+            report_text=report_row.value,
+            last_updated=report_row.updated_at
+        )
+        
+    except Exception as e:
+        logger.error(f"Nie można pobrać raportu H3 Deep Dive: {e}", exc_info=True)
+        return schemas.H3DeepDiveReport(
+            status="ERROR",
+            report_text=f"Błąd serwera podczas odczytu raportu: {e}"
+        )
+# ==================================================================
+
+
+# ==================================================================
 # === MODYFIKACJA (EKSPORT DANYCH) ===
 # Dodano nową funkcję generatora stream_all_trades_as_csv
 # ==================================================================
