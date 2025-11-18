@@ -66,6 +66,10 @@
         .modal-button-secondary { background-color: #30363D; color: #f0f0f0; }
         .modal-button-secondary:hover { background-color: #4b5563; }
         .hidden { display: none; }
+        
+        /* Nowe style dla dashboardu parametrów */
+        .param-group label { display: block; font-size: 0.75rem; color: #9ca3af; margin-bottom: 0.25rem; }
+        .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     </style>
 </head>
 <body class="text-gray-200">
@@ -283,6 +287,60 @@
                 <!-- Tutaj wstawimy <pre> z raportem -->
                 <p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p>
             </div>
+        </div>
+    </div>
+    <!-- ========================================================== -->
+
+    <!-- ========================================================== -->
+    <!-- === NOWY MODAL (Krok 4A - Pulpit Strategii H3) === -->
+    <!-- ========================================================== -->
+    <div id="h3-strategy-modal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-white">Parametry Strategii H3</h3>
+                <button id="h3-strategy-close-btn" class="p-1 text-gray-500 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            
+            <div class="mb-4">
+                <div class="param-group mb-3">
+                    <label for="h3-strategy-year">Rok Testowy</label>
+                    <input type="number" id="h3-strategy-year" class="modal-input" placeholder="YYYY" value="2025" min="2000" max="2100">
+                </div>
+                
+                <div class="param-group mb-3">
+                    <label for="h3-param-percentile">Próg Percentyla (AQM Score)</label>
+                    <input type="number" id="h3-param-percentile" class="modal-input" step="0.01" value="0.95">
+                </div>
+                
+                <div class="param-group mb-3">
+                    <label for="h3-param-m-sq">Próg Masy/Uwagi (m² norm)</label>
+                    <input type="number" id="h3-param-m-sq" class="modal-input" step="0.1" value="-0.5">
+                </div>
+                
+                <div class="param-grid">
+                    <div class="param-group">
+                        <label for="h3-param-tp">Mnożnik Take Profit</label>
+                        <input type="number" id="h3-param-tp" class="modal-input" step="0.1" value="5.0">
+                    </div>
+                    <div class="param-group">
+                        <label for="h3-param-sl">Mnożnik Stop Loss</label>
+                        <input type="number" id="h3-param-sl" class="modal-input" step="0.1" value="2.0">
+                    </div>
+                </div>
+                
+                <div class="param-group mb-3">
+                    <label for="h3-param-hold">Max Dni Trzymania</label>
+                    <input type="number" id="h3-param-hold" class="modal-input" step="1" value="5">
+                </div>
+            </div>
+            
+            <button id="run-h3-strategy-btn" class="modal-button modal-button-primary w-full flex justify-center items-center">
+                <i data-lucide="play" class="w-4 h-4 mr-2"></i>
+                Uruchom Test z Parametrami
+            </button>
+            <div id="h3-strategy-status" class="text-sm mt-3 h-4 text-center"></div>
         </div>
     </div>
     <!-- ========================================================== -->
