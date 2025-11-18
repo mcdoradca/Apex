@@ -1,1088 +1,1741 @@
-/**
- * APEX PREDATOR AQM V3 - FRONTEND CONTROLLER
- * Wersja: Production-Ready (Full Implementation)
- * Autor: Apex Team
- * * Ten plik zawiera kompletną logikę obsługi interfejsu użytkownika, 
- * komunikacji z API (mikroserwisy Python), zarządzania stanem aplikacji
- * oraz obsługi nowych funkcji analitycznych (H3, Deep Dive, AI).
- */
-
 document.addEventListener('DOMContentLoaded', () => {
-    console.log(" [SYSTEM] DOM fully loaded. Initializing Apex Predator Frontend...");
+    console.log("DOM fully loaded. Starting script initialization.");
 
-    // ==========================================================================
-    // 1. ZARZĄDZANIE STANEM APLIKACJI (GLOBAL STATE)
-    // ==========================================================================
+    // --- STAN APLIKACJI ---
     const state = {
-        // Dane Rynkowe i Skaner
-        phase1: [], 
-        phase2: [], 
-        phase3: [],
-        
-        // Dane Portfela
+        phase1: [], phase2: [], phase3: [],
         portfolio: [],
         transactions: [],
-        liveQuotes: {}, // Cache dla cen live
-        
-        // Status Workera
-        workerStatus: { 
-            status: 'UNKNOWN', 
-            phase: 'NONE', 
-            progress: { processed: 0, total: 0 },
-            last_heartbeat_utc: null,
-            log: ''
-        },
+        liveQuotes: {},
+        workerStatus: { status: 'IDLE', phase: 'NONE', progress: { processed: 0, total: 0 } },
         discardedSignalCount: 0,
-        
-        // Timery i Interwały (dla czyszczenia przy zmianie widoku)
         activePortfolioPolling: null,
-        activeWorkerPolling: null,
-        activeAlertPolling: null,
-        activeAIOptimizerPolling: null,
-        activeH3DeepDivePolling: null,
-        
-        // Alerty
+        activeCountdownPolling: null, 
         profitAlertsSent: {}, 
         snoozedAlerts: {},
-        
-        // UI State
+        activeAIOptimizerPolling: null,
+        // ==========================================================
+        // === NOWY STAN (STRONICOWANIE) ===
+        // ==========================================================
         currentReportPage: 1,
-        isSidebarOpen: window.innerWidth >= 768, // Domyślnie otwarty na desktopie
-        currentView: 'dashboard'
+        // ==========================================================
+        // === NOWY STAN (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        activeH3DeepDivePolling: null
     };
 
-    // ==========================================================================
-    // 2. KONFIGURACJA I STAŁE
-    // ==========================================================================
-    const CONSTANTS = {
-        API_BASE_URL: "https://apex-predator-api-x0l8.onrender.com",
-        POLL_INTERVALS: {
-            WORKER: 5000,      // 5 sekund
-            PORTFOLIO: 30000,  // 30 sekund
-            ALERTS: 10000,     // 10 sekund
-            AI_REPORT: 5000,   // 5 sekund
-            DEEP_DIVE: 5000    // 5 sekund
-        },
-        THRESHOLDS: {
-            PROFIT_ALERT: 1.02, // +2%
-            LOSS_ALERT: 0.95    // -5%
-        },
-        PAGINATION: {
-            REPORT_PAGE_SIZE: 200
-        }
-    };
-
-    // Logger systemowy z formatowaniem czasu
-    const logger = {
-        log: (msg, data = '') => console.log(`[${new Date().toLocaleTimeString()}] INFO: ${msg}`, data),
-        error: (msg, err = '') => console.error(`[${new Date().toLocaleTimeString()}] ERROR: ${msg}`, err),
-        warn: (msg, data = '') => console.warn(`[${new Date().toLocaleTimeString()}] WARN: ${msg}`, data)
-    };
-
-    // ==========================================================================
-    // 3. SELEKTORY DOM (UI REFERENCES)
-    // ==========================================================================
+    // --- SELEKTORY UI (Definiowane od razu) ---
     const ui = {
-        // Ekrany Główne
-        screens: {
-            login: document.getElementById('login-screen'),
-            dashboard: document.getElementById('dashboard'),
-            mainContent: document.getElementById('main-content')
+        loginScreen: document.getElementById('login-screen'),
+        dashboardScreen: document.getElementById('dashboard'),
+        loginButton: document.getElementById('login-button'),
+        loginStatusText: document.getElementById('login-status-text'),
+        mainContent: document.getElementById('main-content'),
+        startBtn: document.getElementById('start-btn'),
+        pauseBtn: document.getElementById('pause-btn'),
+        resumeBtn: document.getElementById('resume-btn'),
+        apiStatus: document.getElementById('api-status'),
+        workerStatusText: document.getElementById('worker-status-text'),
+        dashboardLink: document.getElementById('dashboard-link'),
+        portfolioLink: document.getElementById('portfolio-link'),
+        transactionsLink: document.getElementById('transactions-link'),
+        agentReportLink: document.getElementById('agent-report-link'),
+        heartbeatStatus: document.getElementById('heartbeat-status'),
+        alertContainer: document.getElementById('system-alert-container'),
+        phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
+        phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
+        phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
+        buyModal: { 
+            backdrop: document.getElementById('buy-modal'), 
+            tickerSpan: document.getElementById('buy-modal-ticker'), 
+            quantityInput: document.getElementById('buy-quantity'), 
+            priceInput: document.getElementById('buy-price'),
+            cancelBtn: document.getElementById('buy-cancel-btn'),
+            confirmBtn: document.getElementById('buy-confirm-btn')
         },
-        
-        // Logowanie
-        login: {
-            form: document.getElementById('login-form'),
-            btn: document.getElementById('login-button'),
-            status: document.getElementById('login-status-text')
+        sellModal: { 
+            backdrop: document.getElementById('sell-modal'), 
+            tickerSpan: document.getElementById('sell-modal-ticker'), 
+            maxQuantitySpan: document.getElementById('sell-max-quantity'), 
+            quantityInput: document.getElementById('sell-quantity'), 
+            priceInput: document.getElementById('sell-price'),
+            cancelBtn: document.getElementById('sell-cancel-btn'),
+            confirmBtn: document.getElementById('sell-confirm-btn')
         },
-
-        // Pasek Boczny (Sidebar)
-        sidebar: {
-            container: document.getElementById('app-sidebar'),
-            backdrop: document.getElementById('sidebar-backdrop'),
-            mobileOpenBtn: document.getElementById('mobile-menu-btn'),
-            mobileCloseBtn: document.getElementById('mobile-sidebar-close'),
-            navLinks: document.querySelector('#app-sidebar nav'),
-            phasesContainer: document.getElementById('phases-container'),
-            statusIndicators: {
-                api: document.getElementById('api-status'),
-                worker: document.getElementById('worker-status-text'),
-                heartbeat: document.getElementById('heartbeat-status')
-            }
+        aiReportModal: {
+            backdrop: document.getElementById('ai-report-modal'),
+            content: document.getElementById('ai-report-content'),
+            closeBtn: document.getElementById('ai-report-close-btn')
         },
-
-        // Linki Nawigacyjne
-        nav: {
-            dashboard: document.getElementById('dashboard-link'),
-            portfolio: document.getElementById('portfolio-link'),
-            transactions: document.getElementById('transactions-link'),
-            agentReport: document.getElementById('agent-report-link')
+        // ==========================================================
+        // === NOWY SELEKTOR (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        h3DeepDiveModal: {
+            backdrop: document.getElementById('h3-deep-dive-modal'),
+            yearInput: document.getElementById('h3-deep-dive-year-input'),
+            runBtn: document.getElementById('run-h3-deep-dive-btn'),
+            statusMsg: document.getElementById('h3-deep-dive-status-message'),
+            content: document.getElementById('h3-deep-dive-report-content'),
+            closeBtn: document.getElementById('h3-deep-dive-close-btn')
         },
-
-        // Listy Skanera (Fazy)
-        phases: {
-            p1List: document.getElementById('phase-1-list'),
-            p1Count: document.getElementById('phase-1-count'),
-            p2List: document.getElementById('phase-2-list'),
-            p2Count: document.getElementById('phase-2-count'),
-            p3List: document.getElementById('phase-3-list'),
-            p3Count: document.getElementById('phase-3-count')
-        },
-
-        // Kontrolki Workera
-        controls: {
-            start: document.getElementById('start-btn'),
-            pause: document.getElementById('pause-btn'),
-            resume: document.getElementById('resume-btn')
-        },
-
-        // Kontener Alertów
-        alerts: document.getElementById('system-alert-container'),
-
-        // --- MODALE ---
-        modals: {
-            buy: {
-                el: document.getElementById('buy-modal'),
-                ticker: document.getElementById('buy-modal-ticker'),
-                qty: document.getElementById('buy-quantity'),
-                price: document.getElementById('buy-price'),
-                cancel: document.getElementById('buy-cancel-btn'),
-                confirm: document.getElementById('buy-confirm-btn')
-            },
-            sell: {
-                el: document.getElementById('sell-modal'),
-                ticker: document.getElementById('sell-modal-ticker'),
-                maxQty: document.getElementById('sell-max-quantity'),
-                qty: document.getElementById('sell-quantity'),
-                price: document.getElementById('sell-price'),
-                cancel: document.getElementById('sell-cancel-btn'),
-                confirm: document.getElementById('sell-confirm-btn')
-            },
-            aiReport: {
-                el: document.getElementById('ai-report-modal'),
-                content: document.getElementById('ai-report-content'),
-                close: document.getElementById('ai-report-close-btn')
-            },
-            h3DeepDive: {
-                el: document.getElementById('h3-deep-dive-modal'),
-                yearInput: document.getElementById('h3-deep-dive-year-input'),
-                runBtn: document.getElementById('run-h3-deep-dive-btn'),
-                status: document.getElementById('h3-deep-dive-status-message'),
-                content: document.getElementById('h3-deep-dive-report-content'),
-                close: document.getElementById('h3-deep-dive-close-btn')
-            },
-            h3Strategy: {
-                el: document.getElementById('h3-strategy-modal'),
-                inputs: {
-                    year: document.getElementById('h3-strategy-year'),
-                    percentile: document.getElementById('h3-param-percentile'),
-                    mSq: document.getElementById('h3-param-m-sq'),
-                    tp: document.getElementById('h3-param-tp'),
-                    sl: document.getElementById('h3-param-sl'),
-                    hold: document.getElementById('h3-param-hold')
-                },
-                runBtn: document.getElementById('run-h3-strategy-btn'),
-                status: document.getElementById('h3-strategy-status'),
-                close: document.getElementById('h3-strategy-close-btn')
-            }
-        }
+        // ==========================================================
+        sidebar: document.getElementById('app-sidebar'),
+        sidebarBackdrop: document.getElementById('sidebar-backdrop'),
+        mobileMenuBtn: document.getElementById('mobile-menu-btn'),
+        mobileSidebarCloseBtn: document.getElementById('mobile-sidebar-close'),
+        sidebarNav: document.querySelector('#app-sidebar nav'),
+        sidebarPhasesContainer: document.getElementById('phases-container')
     };
+    console.log("UI Selectors defined.");
 
-    // ==========================================================================
-    // 4. WARSTWA API (KOMUNIKACJA Z BACKENDEM)
-    // ==========================================================================
+    // --- KONFIGURACJA API ---
+    const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
     
-    const api = {
-        // Helper do zapytań
-        async fetch(endpoint, options = {}) {
-            const url = endpoint ? `${CONSTANTS.API_BASE_URL}/${endpoint}` : CONSTANTS.API_BASE_URL;
-            try {
-                const response = await fetch(url, options);
-                
-                // Aktualizacja wskaźnika statusu API
-                if (ui.sidebar.statusIndicators.api) {
-                    ui.sidebar.statusIndicators.api.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
-                }
+    const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30 sekund
+    const ALERT_POLL_INTERVAL = 7000; // 7 sekund
+    const AI_OPTIMIZER_POLL_INTERVAL = 5000; // 5 sekund
+    // ==========================================================
+    // === NOWA STAŁA (Krok 4B - H3 Deep Dive) ===
+    // ==========================================================
+    const H3_DEEP_DIVE_POLL_INTERVAL = 5000; // 5 sekund
+    // ==========================================================
+    const PROFIT_ALERT_THRESHOLD = 1.02; // +2%
+    // ==========================================================
+    // === NOWA STAŁA (STRONICOWANIE) ===
+    // ==========================================================
+    const REPORT_PAGE_SIZE = 200; // Musi być zgodne z limitem w api/src/crud.py
 
-                if (!response.ok) {
-                    let errorDetail = response.statusText;
-                    try {
-                        const errorJson = await response.json();
-                        errorDetail = errorJson.detail || errorDetail;
-                    } catch (e) {} // Ignoruj jeśli nie ma JSONa
-                    
-                    if (response.status === 409) throw new Error("Zasób zablokowany (Worker zajęty).");
-                    throw new Error(`API Error (${response.status}): ${errorDetail}`);
-                }
-                
-                // Obsługa 204 No Content
-                if (response.status === 204) return null;
-                
-                return await response.json();
-            } catch (error) {
-                logger.error(`Request failed: ${url}`, error);
-                if (ui.sidebar.statusIndicators.api) {
-                    ui.sidebar.statusIndicators.api.innerHTML = '<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline';
-                }
-                throw error;
-            }
-        },
-
-        // Metody API
-        checkHealth: () => api.fetch(''),
-        
-        // Worker
-        getWorkerStatus: () => api.fetch('api/v1/worker/status'),
-        sendControl: (action) => api.fetch(`api/v1/worker/control/${action}`, { method: 'POST' }),
-        
-        // Fazy
-        getPhase1: () => api.fetch('api/v1/candidates/phase1'),
-        getPhase2: () => api.fetch('api/v1/results/phase2'),
-        getPhase3: () => api.fetch('api/v1/signals/phase3'),
-        getDiscardedStats: () => api.fetch('api/v1/signals/discarded-count-24h'),
-        
-        // Portfel & Market
-        getLiveQuote: (ticker) => api.fetch(`api/v1/quote/${ticker}`),
-        getPortfolio: () => api.fetch('api/v1/portfolio'),
-        buyStock: (data) => api.fetch('api/v1/portfolio/buy', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-        sellStock: (data) => api.fetch('api/v1/portfolio/sell', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-        getTransactions: () => api.fetch('api/v1/transactions'),
-        
-        // System
-        getAlerts: () => api.fetch('api/v1/system/alert'),
-        
-        // NOWE FUNKCJE: Raporty i AI
-        getVirtualAgentReport: (page = 1) => api.fetch(`api/v1/virtual-agent/report?page=${page}&page_size=${CONSTANTS.PAGINATION.REPORT_PAGE_SIZE}`),
-        
-        // Backtest & H3
-        requestBacktest: (year, params = null) => api.fetch('api/v1/backtest/request', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ year, parameters: params })
-        }),
-        
-        // AI Optimizer
-        requestAIOptimizer: () => api.fetch('api/v1/ai-optimizer/request', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})
-        }),
-        getAIOptimizerReport: () => api.fetch('api/v1/ai-optimizer/report'),
-        
-        // Deep Dive
-        requestH3DeepDive: (year) => api.fetch('api/v1/analysis/h3-deep-dive', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ year })
-        }),
-        getH3DeepDiveReport: () => api.fetch('api/v1/analysis/h3-deep-dive-report')
+    const logger = {
+        error: (message, ...args) => console.error(message, ...args),
+        info: (message, ...args) => console.log(message, ...args),
+        warn: (message) => console.warn(message)
     };
 
-    // ==========================================================================
-    // 5. LOGIKA UI (UKŁAD, SIDEBAR, NAWIGACJA)
-    // ==========================================================================
-
-    // --- Naprawa Layoutu (Sidebar) ---
-    function initLayout() {
-        // Sprawdź rozmiar ekranu i ustaw początkowy stan sidebara
-        if (window.innerWidth >= 768) {
-            ui.sidebar.container.classList.remove('-translate-x-full');
-            ui.sidebar.container.classList.add('translate-x-0');
-            ui.sidebar.backdrop.classList.add('hidden');
-        } else {
-            ui.sidebar.container.classList.add('-translate-x-full');
-            ui.sidebar.container.classList.remove('translate-x-0');
-            ui.sidebar.backdrop.classList.add('hidden');
-        }
-        // Ikony
-        lucide.createIcons();
-    }
-
-    // Obsługa Sidebara (Mobile)
-    function toggleSidebar(show) {
-        if (show) {
-            ui.sidebar.container.classList.remove('-translate-x-full');
-            ui.sidebar.container.classList.add('translate-x-0');
-            ui.sidebar.backdrop.classList.remove('hidden');
-        } else {
-            ui.sidebar.container.classList.add('-translate-x-full');
-            ui.sidebar.container.classList.remove('translate-x-0');
-            ui.sidebar.backdrop.classList.add('hidden');
-        }
-    }
-
-    // Listenery Sidebara
-    if(ui.sidebar.mobileOpenBtn) ui.sidebar.mobileOpenBtn.addEventListener('click', () => toggleSidebar(true));
-    if(ui.sidebar.mobileCloseBtn) ui.sidebar.mobileCloseBtn.addEventListener('click', () => toggleSidebar(false));
-    if(ui.sidebar.backdrop) ui.sidebar.backdrop.addEventListener('click', () => toggleSidebar(false));
-
-    // --- Nawigacja (Routing SPA) ---
-    function clearAllIntervals() {
-        if (state.activePortfolioPolling) clearInterval(state.activePortfolioPolling);
-        if (state.activeAIOptimizerPolling) clearTimeout(state.activeAIOptimizerPolling);
-        if (state.activeH3DeepDivePolling) clearTimeout(state.activeH3DeepDivePolling);
-    }
-
-    async function navigateTo(viewName) {
-        logger.log(`Navigating to: ${viewName}`);
-        clearAllIntervals();
-        
-        // Aktualizacja aktywnego linku
-        document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('sidebar-item-active'));
-        if (ui.nav[viewName]) ui.nav[viewName].classList.add('sidebar-item-active');
-
-        // Pokaż spinner ładowania
-        ui.screens.mainContent.innerHTML = renderers.loadingSpinner("Ładowanie widoku...");
-
+    const apiRequest = async (endpoint, options = {}) => {
+        const url = endpoint ? `${API_BASE_URL}/${endpoint}` : API_BASE_URL;
         try {
-            switch (viewName) {
-                case 'dashboard':
-                    ui.screens.mainContent.innerHTML = renderers.dashboard();
-                    updateDashboard(state.workerStatus); // Odśwież natychmiast
-                    break;
+            const response = await fetch(url, options);
+            if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
+            if (!response.ok) {
+                let errorText = response.statusText;
+                try {
+                    const errorJson = await response.json();
+                    errorText = errorJson.detail || errorText;
+                } catch (e) {
+                    errorText = await response.text() || errorText;
+                }
                 
-                case 'portfolio':
-                    const portfolioData = await api.getPortfolio();
-                    state.portfolio = portfolioData;
-                    state.liveQuotes = {}; // Reset cache cen
-                    ui.screens.mainContent.innerHTML = renderers.portfolio(portfolioData);
-                    startPortfolioPolling();
-                    break;
+                logger.error(`API Error ${response.status} for ${url}: ${errorText}`);
+                if (response.status === 404) throw new Error(`404 - Nie znaleziono zasobu`);
+                if (response.status === 409) throw new Error(`409 - Konflikt: Worker jest zajęty.`);
+                if (response.status === 400) throw new Error(`400 - Błędne żądanie: ${errorText}`);
+                if (response.status === 422) throw new Error(`422 - Błąd walidacji: ${errorText}`);
                 
-                case 'transactions':
-                    const txData = await api.getTransactions();
-                    state.transactions = txData;
-                    ui.screens.mainContent.innerHTML = renderers.transactions(txData);
-                    break;
-                
-                case 'agentReport':
-                    await loadAgentReport(1); // Załaduj stronę 1
-                    break;
+                throw new Error(`Błąd serwera: ${response.status} - ${errorText}`);
             }
-            
-            // Inicjalizacja ikon po wyrenderowaniu HTML
-            lucide.createIcons();
-            
-            // Na mobile zamknij sidebar po kliknięciu
-            if (window.innerWidth < 768) toggleSidebar(false);
-
+            if (response.status === 204 || response.headers.get("Content-Length") === "0") return null;
+            return await response.json();
         } catch (error) {
-            ui.screens.mainContent.innerHTML = renderers.errorState(`Nie udało się załadować widoku: ${error.message}`);
+             logger.error(`Network or API Error for ${url}:`, error.message);
+             if (ui.apiStatus) ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-red-500 mr-2"></span>Offline';
+             throw error;
+        }
+    };
+
+    const api = {
+        getWorkerStatus: () => apiRequest('api/v1/worker/status'),
+        sendWorkerControl: (action) => apiRequest(`api/v1/worker/control/${action}`, { method: 'POST' }),
+        getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
+        getPhase2Results: () => apiRequest('api/v1/results/phase2'),
+        getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
+        getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
+        getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
+        addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
+        getSystemAlert: () => apiRequest('api/v1/system/alert'),
+        getPortfolio: () => apiRequest('api/v1/portfolio'),
+        buyStock: (data) => apiRequest('api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+        sellStock: (data) => apiRequest('api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+        getTransactionHistory: () => apiRequest('api/v1/transactions'),
+        // ==========================================================
+        // === AKTUALIZACJA (STRONICOWANIE) ===
+        // ==========================================================
+        getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
+        // ==========================================================
+        requestBacktest: (year) => apiRequest('api/v1/backtest/request', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ year: year })
+        }),
+        getApiRootStatus: () => apiRequest(''),
+        requestAIOptimizer: () => apiRequest('api/v1/ai-optimizer/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        }),
+        getAIOptimizerReport: () => apiRequest('api/v1/ai-optimizer/report'),
+        // ==========================================================
+        // === NOWE FUNKCJE API (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        requestH3DeepDive: (year) => apiRequest('api/v1/analysis/h3-deep-dive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year: year })
+        }),
+        getH3DeepDiveReport: () => apiRequest('api/v1/analysis/h3-deep-dive-report'),
+        // ==========================================================
+        // UWAGA: Endpoint eksportu CSV nie jest tutaj, ponieważ musi być wywoływany 
+        // bezpośrednio przez 'fetch', aby obsłużyć 'blob', a nie 'json'.
+    };
+    console.log("Full API object defined.");
+
+    // --- Sterowanie Mobilnym Sidebarem ---
+    function openSidebar() {
+        if (ui.sidebar) {
+            ui.sidebar.classList.remove('-translate-x-full');
+            ui.sidebar.classList.add('translate-x-0');
+        }
+        if (ui.sidebarBackdrop) {
+            ui.sidebarBackdrop.classList.remove('hidden');
         }
     }
 
-    // ==========================================================================
-    // 6. RENDERERY (HTML GENERATORS)
-    // ==========================================================================
-    const renderers = {
-        loadingSpinner: (text) => `
-            <div class="flex flex-col items-center justify-center h-full min-h-[400px]">
-                <i data-lucide="loader-2" class="w-12 h-12 text-sky-500 animate-spin mb-4"></i>
-                <p class="text-gray-400 text-lg font-medium">${text}</p>
-            </div>`,
+    function closeSidebar() {
+        if (ui.sidebar) {
+            ui.sidebar.classList.add('-translate-x-full');
+            ui.sidebar.classList.remove('translate-x-0');
+        }
+        if (ui.sidebarBackdrop) {
+            ui.sidebarBackdrop.classList.add('hidden');
+        }
+    }
 
-        errorState: (msg) => `
-            <div class="p-6 bg-red-900/20 border border-red-500/30 rounded-xl text-center m-4">
-                <i data-lucide="alert-triangle" class="w-12 h-12 text-red-500 mx-auto mb-3"></i>
-                <h3 class="text-xl font-bold text-red-400 mb-2">Wystąpił błąd</h3>
-                <p class="text-gray-300">${msg}</p>
-            </div>`,
+    if (ui.mobileMenuBtn) ui.mobileMenuBtn.addEventListener('click', openSidebar);
+    if (ui.mobileSidebarCloseBtn) ui.mobileSidebarCloseBtn.addEventListener('click', closeSidebar);
+    if (ui.sidebarBackdrop) ui.sidebarBackdrop.addEventListener('click', closeSidebar);
+    if (ui.sidebarNav) {
+        ui.sidebarNav.addEventListener('click', (e) => {
+            if (e.target.closest('a')) {
+                closeSidebar();
+            }
+        });
+    }
+    console.log("Mobile sidebar logic initialized.");
 
-        // --- DASHBOARD (Pełny) ---
-        dashboard: () => `
-            <div class="max-w-7xl mx-auto space-y-6 animate-fade-in">
-                <div class="flex items-center justify-between border-b border-gray-800 pb-4">
-                    <h2 class="text-3xl font-bold text-sky-400">Centrum Dowodzenia</h2>
-                    <span class="text-xs text-gray-500 font-mono">AQM V3 ENGINE</span>
-                </div>
+    // --- Funkcje Minutnika Rynkowego ---
+    function getNYTime() {
+        try {
+            const options = {
+                timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+            };
+            const formatter = new Intl.DateTimeFormat('en-US', options);
+            const parts = formatter.formatToParts(new Date());
+            const find = (type) => parts.find(p => p.type === type)?.value;
+            const year = find('year'), month = find('month'), day = find('day');
+            const hour = find('hour') === '24' ? '00' : find('hour');
+            const minute = find('minute'), second = find('second');
+            return new Date(year, parseInt(month) - 1, day, hour, minute, second);
+        } catch (e) {
+            logger.error("Błąd pobierania czasu NY, używam czasu lokalnego.", e);
+            return new Date();
+        }
+    }
 
-                <!-- Karty Statusu -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <!-- Karta 1: Silnik -->
-                    <div class="bg-[#161B22] p-6 rounded-xl shadow-lg border border-gray-700 relative overflow-hidden group">
-                        <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                            <i data-lucide="cpu" class="w-24 h-24 text-sky-500"></i>
-                        </div>
-                        <h3 class="font-semibold text-gray-400 flex items-center mb-4">
-                            <i data-lucide="activity" class="w-5 h-5 mr-2 text-sky-400"></i>Status Silnika
-                        </h3>
-                        <p id="dashboard-worker-status" class="text-4xl font-extrabold text-white mt-auto tracking-tight">ŁADOWANIE...</p>
-                        <div class="mt-2 flex items-center">
-                            <div class="h-2 w-2 rounded-full bg-gray-500 mr-2" id="status-dot"></div>
-                            <p id="dashboard-current-phase" class="text-sm text-gray-400 font-mono">Inicjalizacja...</p>
-                        </div>
-                    </div>
+    function formatCountdown(ms) {
+        if (ms < 0) ms = 0;
+        const totalSeconds = Math.floor(ms / 1000);
+        const totalMinutes = Math.floor(totalSeconds / 60);
+        const totalHours = Math.floor(totalMinutes / 60);
+        const days = Math.floor(totalHours / 24);
+        const hours = totalHours % 24;
+        const minutes = totalMinutes % 60;
+        const seconds = totalSeconds % 60;
+        let str = '';
+        if (days > 0) str += `${days}d `;
+        str += `${String(hours).padStart(2, '0')}g ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+        return str;
+    }
 
-                    <!-- Karta 2: Postęp -->
-                    <div class="bg-[#161B22] p-6 rounded-xl shadow-lg border border-gray-700 relative overflow-hidden">
-                        <h3 class="font-semibold text-gray-400 flex items-center mb-4">
-                            <i data-lucide="scan-line" class="w-5 h-5 mr-2 text-yellow-400"></i>Postęp Skanowania
-                        </h3>
-                        <div class="mt-auto">
-                            <div class="flex justify-between items-end mb-2">
-                                <span id="progress-text" class="text-3xl font-bold text-white">0 / 0</span>
-                                <span class="text-xs text-gray-500 uppercase">Tickers</span>
-                            </div>
-                            <div class="w-full bg-gray-800 rounded-full h-3 overflow-hidden">
-                                <div id="progress-bar" class="bg-gradient-to-r from-yellow-600 to-yellow-400 h-full rounded-full transition-all duration-500 ease-out" style="width: 0%"></div>
-                            </div>
-                        </div>
-                    </div>
+    function getMarketCountdown() {
+        const now = getNYTime();
+        const dayOfWeek = now.getDay();
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+        const preMarketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 4, 0, 0);
+        const marketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 30, 0);
+        const marketClose = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 16, 0, 0);
+        let message = '', targetTime = null;
 
-                    <!-- Karta 3: Sygnały -->
-                    <div class="bg-[#161B22] p-6 rounded-xl shadow-lg border border-gray-700 relative overflow-hidden">
-                        <h3 class="font-semibold text-gray-400 flex items-center mb-4">
-                            <i data-lucide="zap" class="w-5 h-5 mr-2 text-red-500"></i>Aktywne Sygnały
-                        </h3>
-                        <div class="flex items-baseline gap-8 mt-auto">
-                            <div>
-                                <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
-                                <p class="text-xs text-gray-500 uppercase mt-1 font-semibold">W Grze</p>
-                            </div>
-                            <div class="border-l border-gray-700 pl-8">
-                                <p id="dashboard-discarded-signals" class="text-4xl font-extrabold text-gray-500">0</p>
-                                <p class="text-xs text-gray-500 uppercase mt-1 font-semibold">Odrzucone (24h)</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+        if (isWeekend) {
+            let daysToAdd = (dayOfWeek === 6) ? 2 : 1;
+            targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+            message = 'Do otwarcia Pre-Market: ';
+        } else {
+            if (now < preMarketOpen) {
+                targetTime = preMarketOpen;
+                message = 'Do otwarcia Pre-Market: ';
+            } else if (now >= preMarketOpen && now < marketOpen) {
+                targetTime = marketOpen;
+                message = 'Do otwarcia Rynku: ';
+            } else if (now >= marketOpen && now < marketClose) {
+                targetTime = marketClose;
+                message = 'Do zamknięcia Rynku: ';
+            } else {
+                let daysToAdd = (dayOfWeek === 5) ? 3 : 1;
+                targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+                message = 'Do otwarcia Pre-Market: ';
+            }
+        }
+        const diff = targetTime.getTime() - now.getTime();
+        return message + formatCountdown(diff);
+    }
 
-                <!-- Placeholder Wykresów (Dla zachowania układu) -->
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div class="bg-[#161B22] rounded-xl border border-gray-700 p-6 h-64 flex flex-col items-center justify-center text-center group hover:border-sky-500/30 transition-colors">
-                        <div class="bg-gray-800/50 p-4 rounded-full mb-4 group-hover:bg-sky-500/10 transition-colors">
-                            <i data-lucide="bar-chart" class="w-8 h-8 text-gray-500 group-hover:text-sky-400"></i>
-                        </div>
-                        <h4 class="text-lg font-medium text-gray-300">Analiza Wolumenu</h4>
-                        <p class="text-sm text-gray-500 max-w-xs mt-2">Wizualizacja wolumenu skumulowanego będzie dostępna po zakończeniu Fazy 2.</p>
-                    </div>
-                    <div class="bg-[#161B22] rounded-xl border border-gray-700 p-6 h-64 flex flex-col items-center justify-center text-center group hover:border-purple-500/30 transition-colors">
-                        <div class="bg-gray-800/50 p-4 rounded-full mb-4 group-hover:bg-purple-500/10 transition-colors">
-                            <i data-lucide="pie-chart" class="w-8 h-8 text-gray-500 group-hover:text-purple-400"></i>
-                        </div>
-                        <h4 class="text-lg font-medium text-gray-300">Dystrybucja Sektorowa</h4>
-                        <p class="text-sm text-gray-500 max-w-xs mt-2">Mapa cieplna sektorów zostanie wygenerowana przez Agenta Makro.</p>
-                    </div>
-                </div>
+    function updateCountdownTimer() {
+        const timerElement = document.getElementById('market-countdown-timer');
+        if (timerElement) {
+            timerElement.textContent = getMarketCountdown();
+        }
+    }
 
-                <!-- Terminal Logów -->
-                <div class="bg-[#161B22] rounded-xl shadow-lg border border-gray-700 overflow-hidden flex flex-col h-[400px]">
-                    <div class="bg-[#0d1117] px-4 py-3 border-b border-gray-700 flex justify-between items-center shrink-0">
-                        <h3 class="font-semibold text-gray-300 flex items-center text-sm">
-                            <i data-lucide="terminal" class="w-4 h-4 mr-2 text-green-400"></i>Logi Systemowe
-                        </h3>
-                        <div class="flex items-center gap-2">
-                            <span class="flex h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-                            <span class="text-xs text-gray-500 font-mono">LIVE STREAM</span>
-                        </div>
-                    </div>
-                    <div id="scan-log-container" class="flex-1 overflow-y-auto p-4 bg-[#0d1117] font-mono text-xs leading-relaxed scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-                        <pre id="scan-log" class="text-green-400/90 whitespace-pre-wrap">Inicjalizacja połączenia z serwerem...</pre>
-                    </div>
-                </div>
-            </div>`,
+    function startMarketCountdown() {
+        stopMarketCountdown();
+        logger.info("Rozpoczynam odliczanie rynkowe (co 1s).");
+        updateCountdownTimer();
+        state.activeCountdownPolling = setInterval(updateCountdownTimer, 1000);
+    }
 
-        // --- PORTFOLIO ---
-        portfolio: (holdings, quotes = {}) => {
-            let totalVal = 0, totalPL = 0;
+    function stopMarketCountdown() {
+        if (state.activeCountdownPolling) {
+            logger.info("Zatrzymuję odliczanie rynkowe.");
+            clearInterval(state.activeCountdownPolling);
+            state.activeCountdownPolling = null;
+        }
+    }
+
+    // --- Renderowanie i Widoki ---
+    const renderQuoteBox = (quote, market) => {
+         if (!quote || Object.keys(quote).length === 0) {
+            return `<div class="bg-gray-800/20 border border-gray-700 p-4 rounded-lg text-sm text-gray-500 text-center">Brak danych cenowych.</div>`;
+        }
+         const safeMarket = market || { status: 'UNKNOWN', time_ny: 'N/A', date_ny: 'N/A' };
+        try {
+            const cleanedQuote = Object.fromEntries(
+                Object.entries(quote).map(([key, value]) => [key.includes('. ') ? key.substring(key.indexOf('.') + 2) : key, value])
+            );
             
-            const rows = holdings.map(h => {
-                const quote = quotes[h.ticker];
-                let currentPrice = quote && quote['05. price'] ? parseFloat(quote['05. price']) : 0;
-                let val = h.quantity * currentPrice;
-                let cost = h.quantity * h.average_buy_price;
-                let pl = currentPrice ? (val - cost) : 0;
-                let plPercent = cost ? (pl / cost * 100) : 0;
-                
-                if (currentPrice) {
-                    totalVal += val;
-                    totalPL += pl;
-                }
+            const price = parseFloat(cleanedQuote['price']);
+            const change = parseFloat(cleanedQuote['change']);
+            const changePercentStr = cleanedQuote['change percent'];
+            const changePercent = parseFloat(changePercentStr ? changePercentStr.replace('%', '') : '0');
+            const prevClose = parseFloat(cleanedQuote['previous close']);
 
-                const plColor = pl >= 0 ? 'text-green-400' : 'text-red-400';
-                const plBg = pl >= 0 ? 'bg-green-400/10' : 'bg-red-400/10';
-
-                return `
-                <tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors group">
-                    <td class="p-4">
-                        <div class="font-bold text-sky-400 text-lg">${h.ticker}</div>
-                        <div class="text-xs text-gray-500">${new Date(h.first_purchase_date).toLocaleDateString()}</div>
-                    </td>
-                    <td class="p-4 text-right font-mono text-gray-300">${h.quantity}</td>
-                    <td class="p-4 text-right font-mono text-gray-400">${h.average_buy_price.toFixed(2)}</td>
-                    <td class="p-4 text-right font-mono font-bold text-white">${currentPrice ? currentPrice.toFixed(2) : '<span class="animate-pulse">...</span>'}</td>
-                    <td class="p-4 text-right font-mono text-cyan-400">${h.take_profit ? h.take_profit.toFixed(2) : '-'}</td>
-                    <td class="p-4 text-right">
-                        <div class="${plColor} font-mono font-bold">${pl ? (pl > 0 ? '+' : '') + pl.toFixed(2) : '-'} $</div>
-                        <div class="text-xs ${plColor}">${plPercent.toFixed(2)}%</div>
-                    </td>
-                    <td class="p-4 text-right">
-                        <button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn opacity-0 group-hover:opacity-100 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 px-3 py-1 rounded text-xs transition-all">
-                            Zamknij
-                        </button>
-                    </td>
-                </tr>`;
-            }).join('');
-
+            if (isNaN(price) || isNaN(change) || isNaN(changePercent) || isNaN(prevClose)) throw new Error(`Nieprawidłowe dane liczbowe w quote.`);
+            
+            const isPositive = change >= 0;
+            const changeClass = isPositive ? 'text-green-500' : 'text-red-500';
+            const changeIcon = isPositive ? 'trending-up' : 'trending-down';
+            
+            let statusText = 'Rynek Zamknięty';
+            let statusClass = 'bg-gray-600';
+            if (safeMarket.status === 'MARKET_OPEN') { statusText = 'Rynek Otwarty'; statusClass = 'bg-green-600'; }
+            else if (safeMarket.status === 'PRE_MARKET') { statusText = 'Pre-Market'; statusClass = 'bg-yellow-600'; }
+            else if (safeMarket.status === 'AFTER_MARKET') { statusText = 'After-Market'; statusClass = 'bg-blue-600'; }
+            else if (safeMarket.status === 'UNKNOWN') { statusText = 'Status Nieznany'; statusClass = 'bg-purple-600'; }
+            
             return `
-            <div id="portfolio-view" class="max-w-6xl mx-auto animate-fade-in">
-                <!-- Nagłówek Portfela -->
-                <div class="bg-[#161B22] rounded-xl p-6 border border-gray-700 mb-8 shadow-lg flex flex-col md:flex-row justify-between items-center gap-6">
+                <div class="flex flex-wrap justify-between items-start gap-4">
                     <div>
-                        <h2 class="text-3xl font-bold text-white mb-1">Twój Portfel</h2>
-                        <p class="text-sm text-gray-400">Podsumowanie aktywów i wyników</p>
+                        <div class="flex items-end gap-3">
+                            <span class="text-4xl font-bold text-white">${price.toFixed(2)}</span>
+                            <div class="${changeClass} flex items-center gap-1 mb-1">
+                                <i data-lucide="${changeIcon}" class="w-5 h-5"></i>
+                                <span class="font-semibold">${change.toFixed(2)} (${changePercent.toFixed(2)}%)</span>
+                            </div>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-1">Poprz. zamkn.: ${prevClose.toFixed(2)}</p>
                     </div>
-                    <div class="flex gap-6">
-                        <div class="text-right">
-                            <p class="text-xs text-gray-500 uppercase font-semibold">Wartość Całkowita</p>
-                            <p class="text-3xl font-extrabold text-white tracking-tight">${totalVal.toFixed(2)} <span class="text-lg text-gray-500">USD</span></p>
-                        </div>
-                        <div class="h-12 w-px bg-gray-700"></div>
-                        <div class="text-right">
-                            <p class="text-xs text-gray-500 uppercase font-semibold">Zysk / Strata</p>
-                            <p class="text-3xl font-extrabold ${totalPL >= 0 ? 'text-green-500' : 'text-red-500'} tracking-tight">
-                                ${totalPL > 0 ? '+' : ''}${totalPL.toFixed(2)} <span class="text-lg text-gray-500">USD</span>
-                            </p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tabela -->
-                ${holdings.length === 0 ? 
-                    `<div class="text-center py-20 bg-[#161B22] rounded-xl border border-gray-700 border-dashed">
-                        <div class="bg-gray-800/50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <i data-lucide="wallet" class="w-10 h-10 text-gray-600"></i>
-                        </div>
-                        <h3 class="text-xl font-bold text-gray-300">Portfel jest pusty</h3>
-                        <p class="text-gray-500 mt-2">Czekaj na sygnały lub dodaj pozycję ręcznie.</p>
-                    </div>` : 
-                    `<div class="bg-[#161B22] rounded-xl border border-gray-700 shadow-xl overflow-hidden">
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-sm text-left">
-                                <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] border-b border-gray-700">
-                                    <tr>
-                                        <th class="p-4 font-semibold">Instrument</th>
-                                        <th class="p-4 text-right font-semibold">Ilość</th>
-                                        <th class="p-4 text-right font-semibold">Śr. Cena</th>
-                                        <th class="p-4 text-right font-semibold">Kurs Live</th>
-                                        <th class="p-4 text-right font-semibold">Target</th>
-                                        <th class="p-4 text-right font-semibold">P/L</th>
-                                        <th class="p-4 text-right font-semibold">Akcja</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-800 text-gray-300">
-                                    ${rows}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>`
-                }
-            </div>`;
-        },
-
-        // --- TRANSAKCJE ---
-        transactions: (txs) => {
-            const rows = txs.map(t => `
-                <tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
-                    <td class="p-4 text-gray-400 font-mono text-xs">${new Date(t.transaction_date).toLocaleString()}</td>
-                    <td class="p-4 font-bold text-sky-400">${t.ticker}</td>
-                    <td class="p-4">
-                        <span class="px-2 py-1 rounded text-xs font-bold ${t.transaction_type === 'BUY' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}">
-                            ${t.transaction_type}
+                    <div class="text-right">
+                        <span class="flex items-center justify-end gap-2 text-sm font-semibold text-gray-300">
+                            <span class="relative flex h-3 w-3">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full ${statusClass} opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-3 w-3 ${statusClass}"></span>
+                            </span>
+                            ${statusText}
                         </span>
-                    </td>
-                    <td class="p-4 text-right font-mono">${t.quantity}</td>
-                    <td class="p-4 text-right font-mono text-gray-300">${t.price_per_share.toFixed(2)}</td>
-                    <td class="p-4 text-right font-mono font-bold ${t.profit_loss_usd >= 0 ? 'text-green-400' : 'text-red-400'}">
-                        ${t.profit_loss_usd !== null ? (t.profit_loss_usd > 0 ? '+' : '') + t.profit_loss_usd.toFixed(2) : '-'}
-                    </td>
-                </tr>
-            `).join('');
-
-            return `
-            <div class="max-w-6xl mx-auto animate-fade-in">
-                <h2 class="text-3xl font-bold text-sky-400 mb-6 pb-2 border-b border-gray-800">Historia Operacji</h2>
-                <div class="bg-[#161B22] rounded-xl border border-gray-700 shadow-xl overflow-hidden">
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-sm text-left">
-                            <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] border-b border-gray-700">
-                                <tr>
-                                    <th class="p-4">Data</th>
-                                    <th class="p-4">Ticker</th>
-                                    <th class="p-4">Typ</th>
-                                    <th class="p-4 text-right">Ilość</th>
-                                    <th class="p-4 text-right">Cena Exec</th>
-                                    <th class="p-4 text-right">Wynik (P/L)</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-800 text-gray-300">${rows}</tbody>
-                        </table>
-                        ${txs.length === 0 ? '<div class="p-8 text-center text-gray-500">Brak historii transakcji</div>' : ''}
-                    </div>
-                </div>
-            </div>`;
-        },
-
-        // --- RAPORT AGENTA ---
-        agentReport: (report) => {
-            const stats = report.stats;
-            const setupRows = Object.entries(stats.by_setup).map(([k, v]) => `
-                <tr class="border-b border-gray-800 hover:bg-[#1f2937]">
-                    <td class="p-3 text-sky-400 font-semibold">${k}</td>
-                    <td class="p-3 text-right font-mono">${v.total_trades}</td>
-                    <td class="p-3 text-right font-mono ${v.win_rate_percent >= 50 ? 'text-green-400' : 'text-red-400'}">${v.win_rate_percent.toFixed(1)}%</td>
-                    <td class="p-3 text-right font-mono font-bold ${v.total_p_l_percent >= 0 ? 'text-green-400' : 'text-red-400'}">${v.total_p_l_percent.toFixed(2)}%</td>
-                </tr>`).join('');
-
-            const tradeRows = report.trades.map(t => `
-                <tr class="border-b border-gray-800 text-xs font-mono hover:bg-[#1f2937] transition-colors">
-                    <td class="p-3 text-gray-400">${new Date(t.open_date).toLocaleDateString()}</td>
-                    <td class="p-3 font-bold text-sky-400">${t.ticker}</td>
-                    <td class="p-3 text-gray-300">${t.setup_type.replace('BACKTEST_', '').substring(0, 20)}...</td>
-                    <td class="p-3 text-right"><span class="px-2 py-0.5 rounded ${t.status.includes('TP') ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}">${t.status}</span></td>
-                    <td class="p-3 text-right font-bold ${t.final_profit_loss_percent >= 0 ? 'text-green-400' : 'text-red-400'}">${t.final_profit_loss_percent ? t.final_profit_loss_percent.toFixed(2) + '%' : '-'}</td>
-                    <td class="p-3 text-right text-yellow-300 font-bold">${t.metric_aqm_score_h3 ? t.metric_aqm_score_h3.toFixed(3) : '-'}</td>
-                </tr>
-            `).join('');
-
-            // Panel Narzędzi (Backtest, AI, Deep Dive)
-            const toolsHtml = `
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
-                    <!-- Backtest -->
-                    <div class="bg-[#161B22] p-6 rounded-xl border border-gray-700 shadow-md hover:border-gray-600 transition-colors">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="p-2 bg-purple-500/10 rounded-lg"><i data-lucide="history" class="w-6 h-6 text-purple-400"></i></div>
-                            <div><h4 class="text-lg font-bold text-white">Backtest Historyczny</h4><p class="text-xs text-gray-500">Symulacja Slice-First na danych EOD</p></div>
-                        </div>
-                        <div class="flex gap-2 mb-3">
-                            <input type="number" id="backtest-year-input" class="modal-input bg-gray-900 border-gray-600 text-white flex-1 rounded px-3 py-2" placeholder="Rok (np. 2022)" min="2000" max="2099">
-                            <button id="run-backtest-year-btn" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded font-medium flex items-center transition-colors"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Start</button>
-                        </div>
-                        <button id="open-h3-strategy-modal-btn" class="w-full text-xs text-purple-300 hover:text-white py-2 border border-dashed border-purple-500/30 hover:border-purple-500 rounded transition-colors flex justify-center items-center gap-2">
-                            <i data-lucide="settings-2" class="w-3 h-3"></i> Konfiguruj Parametry H3
-                        </button>
-                        <div id="backtest-status-message" class="text-sm mt-2 h-4 font-mono text-gray-400"></div>
-                    </div>
-
-                    <!-- AI Tools -->
-                    <div class="bg-[#161B22] p-6 rounded-xl border border-gray-700 shadow-md hover:border-gray-600 transition-colors flex flex-col gap-4">
-                        <div>
-                            <div class="flex items-center gap-3 mb-3">
-                                <div class="p-2 bg-pink-500/10 rounded-lg"><i data-lucide="brain-circuit" class="w-6 h-6 text-pink-400"></i></div>
-                                <div><h4 class="text-lg font-bold text-white">Mega Agent AI</h4><p class="text-xs text-gray-500">Analiza wyników przez LLM Gemini</p></div>
-                            </div>
-                            <div class="flex gap-2">
-                                <button id="run-ai-optimizer-btn" class="flex-1 bg-pink-600 hover:bg-pink-700 text-white px-4 py-2 rounded font-medium flex items-center justify-center transition-colors"><i data-lucide="sparkles" class="w-4 h-4 mr-2"></i>Optymalizuj</button>
-                                <button id="view-ai-report-btn" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded transition-colors"><i data-lucide="file-text" class="w-4 h-4"></i></button>
-                            </div>
-                            <div id="ai-optimizer-status-message" class="text-sm mt-1 h-4 font-mono text-gray-400"></div>
-                        </div>
-                        <div class="border-t border-gray-700 pt-4 flex gap-2">
-                             <button id="run-h3-deep-dive-modal-btn" class="flex-1 flex items-center justify-center text-sm bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 px-3 py-2 rounded transition-all"><i data-lucide="microscope" class="w-4 h-4 mr-2"></i>Deep Dive</button>
-                             <button id="run-csv-export-btn" class="flex-1 flex items-center justify-center text-sm bg-green-500/10 hover:bg-green-500/20 text-green-400 border border-green-500/30 px-3 py-2 rounded transition-all"><i data-lucide="download" class="w-4 h-4 mr-2"></i>CSV</button>
-                        </div>
-                         <div id="csv-export-status-message" class="text-sm h-4 text-center font-mono text-gray-500"></div>
+                        <p class="text-xs text-gray-500 mt-1">Dane na ${safeMarket.date_ny} ${safeMarket.time_ny}</p>
+                        <p class="text-xs text-yellow-400 font-mono mt-2" id="market-countdown-timer">Obliczanie...</p>
                     </div>
                 </div>`;
 
-            return `
-            <div id="agent-report-view" class="max-w-6xl mx-auto pb-12 animate-fade-in">
-                <div class="flex justify-between items-end mb-6 border-b border-gray-800 pb-4">
-                    <h2 class="text-3xl font-bold text-sky-400">Centrum Analityczne</h2>
-                    <span class="text-sm text-gray-500">Wyniki symulacji i AI</span>
-                </div>
-                
-                <!-- KPI Cards -->
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                    <div class="bg-[#161B22] p-5 rounded-xl border border-gray-700 shadow-lg">
-                        <span class="text-gray-400 text-xs uppercase font-bold">Całkowity P/L</span>
-                        <p class="text-3xl font-extrabold ${stats.total_p_l_percent >= 0 ? 'text-green-400' : 'text-red-400'} mt-1">${stats.total_p_l_percent.toFixed(2)}%</p>
-                    </div>
-                    <div class="bg-[#161B22] p-5 rounded-xl border border-gray-700 shadow-lg">
-                        <span class="text-gray-400 text-xs uppercase font-bold">Win Rate</span>
-                        <p class="text-3xl font-extrabold text-white mt-1">${stats.win_rate_percent.toFixed(1)}%</p>
-                    </div>
-                    <div class="bg-[#161B22] p-5 rounded-xl border border-gray-700 shadow-lg">
-                        <span class="text-gray-400 text-xs uppercase font-bold">Profit Factor</span>
-                        <p class="text-3xl font-extrabold text-sky-400 mt-1">${stats.profit_factor.toFixed(2)}</p>
-                    </div>
-                    <div class="bg-[#161B22] p-5 rounded-xl border border-gray-700 shadow-lg">
-                        <span class="text-gray-400 text-xs uppercase font-bold">Liczba Transakcji</span>
-                        <p class="text-3xl font-extrabold text-white mt-1">${stats.total_trades}</p>
-                    </div>
-                </div>
+        } catch (e) {
+            logger.error("Błąd renderowania quoteBox:", e, { quote, market: safeMarket });
+            return `<div class="bg-red-900/20 border border-red-500/30 p-4 rounded-lg text-sm text-red-400 text-center">Błąd parsowania danych cenowych: ${e.message}</div>`;
+        }
+    };
 
-                <!-- Tabela Strategii -->
-                <div class="bg-[#161B22] rounded-xl border border-gray-700 shadow-xl mb-8 overflow-hidden">
-                    <div class="px-6 py-3 bg-[#0D1117] border-b border-gray-700"><h3 class="text-sm font-bold text-gray-300 uppercase">Wyniki wg Strategii</h3></div>
+    const renderers = {
+        loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
+        
+        phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+        phase2List: (results) => results.map(r => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+        phase3List: (signals) => signals.map(s => {
+            let statusClass, statusText, icon;
+            if (s.status === 'ACTIVE') { statusClass = 'text-green-400'; statusText = 'AKTYWNY'; icon = 'zap';}
+            else if (s.status === 'PENDING') { statusClass = 'text-yellow-400'; statusText = 'OCZEKUJĄCY'; icon = 'hourglass'; }
+            else { statusClass = 'text-gray-500'; statusText = s.status.toUpperCase(); icon = 'help-circle'; }
+            return `<div class="candidate-item flex items-center text-xs p-2 rounded-md cursor-default transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
+        }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
+        
+        dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
+                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                            
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
+                                <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
+                                <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
+                            </div>
+                            
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
+                                <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
+                                <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
+                            </div>
+                            
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center">
+                                    <i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały (Aktywne / Wyrzucone)
+                                </h3>
+                                <div class="flex items-baseline gap-x-4 gap-y-2 mt-2">
+                                    <div>
+                                        <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
+                                        <p class="text-sm text-gray-500 mt-1">Sygnały Aktywne</p>
+                                    </div>
+                                    <div class="border-l border-gray-700 pl-4">
+                                        <p id="dashboard-discarded-signals" class="text-4xl font-extrabold text-gray-500">0</p>
+                                        <p class="text-sm text-gray-500 mt-1">Wyrzucone (24h)</p>
+                                    </div>
+                                </div>
+                            </div>
+                            </div>
+                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
+                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
+                            <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
+                        </div>
+                    </div>`,
+        
+        portfolio: (holdings, quotes) => {
+            let totalPortfolioValue = 0;
+            let totalProfitLoss = 0;
+            const rows = holdings.map(h => {
+                const quote = quotes[h.ticker];
+                let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
+                let priceClass = 'text-gray-400';
+                
+                if (quote && quote['05. price']) {
+                    try {
+                        currentPrice = parseFloat(quote['05. price']);
+                        dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
+                        priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
+                        currentValue = h.quantity * currentPrice;
+                        const costBasis = h.quantity * h.average_buy_price;
+                        profitLoss = currentValue - costBasis;
+                        totalPortfolioValue += currentValue;
+                        totalProfitLoss += profitLoss;
+                    } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
+                }
+                const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
+                
+                const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
+                
+                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
+                            <td class="p-3 font-bold text-sky-400">${h.ticker}</td>
+                            <td class="p-3 text-right">${h.quantity}</td>
+                            <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
+                            <td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td>
+                            <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
+                            <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
+                            <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
+                        </tr>`;
+            }).join('');
+            const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
+            
+            const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                                    <tr>
+                                        <th scope="col" class="p-3">Ticker</th>
+                                        <th scope="col" class="p-3 text-right">Ilość</th>
+                                        <th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th>
+                                        <th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th>
+                                        <th scope="col" class="p-3 text-right">Cena Docelowa (USD)</th>
+                                        <th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th>
+                                        <th scope="col" class="p-3 text-right">Akcja</th>
+                                    </tr>
+                                 </thead>`;
+                                 
+            return `<div id="portfolio-view" class="max-w-6xl mx-auto">
+                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">
+                            Portfel Inwestycyjny
+                            <span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span>
+                        </h2>
+                        ${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : 
+                        `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
+                            <table class="w-full text-sm text-left text-gray-300">
+                                ${tableHeader}
+                                <tbody>${rows}</tbody>
+                            </table>
+                         </div>` }
+                    </div>`;
+        },
+        
+        transactions: (transactions) => {
+             const rows = transactions.map(t => {
+                const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
+                const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
+                const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL');
+                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${transactionDate}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${typeClass}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${profitLossClass}">${t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
+            }).join('');
+            return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+        },
+        
+        // ==========================================================
+        // === AKTUALIZACJA (STRONICOWANIE I GŁĘBOKIE LOGOWANIE) ===
+        // ==========================================================
+        agentReport: (report) => {
+            const stats = report.stats;
+            const trades = report.trades;
+            const total_trades_count = report.total_trades_count;
+            
+            // === Funkcje pomocnicze do formatowania ===
+            const formatMetric = (val) => {
+                if (typeof val !== 'number' || isNaN(val)) {
+                    return `<span class="text-gray-600">---</span>`;
+                }
+                return val.toFixed(3);
+            };
+            const formatPercent = (val) => {
+                if (typeof val !== 'number' || isNaN(val)) {
+                    return `<span class="text-gray-500">---</span>`;
+                }
+                const color = val >= 0 ? 'text-green-500' : 'text-red-500';
+                return `<span class="${color}">${val.toFixed(2)}%</span>`;
+            };
+            const formatProfitFactor = (val) => {
+                 if (typeof val !== 'number' || isNaN(val)) {
+                    return `<span class="text-gray-500">---</span>`;
+                }
+                 const color = val >= 1 ? 'text-green-500' : 'text-red-500';
+                 return `<span class="${color}">${val.toFixed(2)}</span>`;
+            };
+            const formatNumber = (val) => {
+                if (typeof val !== 'number' || isNaN(val)) {
+                    return `<span class="text-gray-500">---</span>`;
+                }
+                return val.toFixed(2);
+            };
+            // === Koniec funkcji pomocniczych ===
+
+            const createStatCard = (label, value, icon) => {
+                return `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                            <h3 class="font-semibold text-gray-400 flex items-center text-sm">
+                                <i data-lucide="${icon}" class="w-4 h-4 mr-2 text-sky-400"></i>${label}
+                            </h3>
+                            <p class="text-3xl font-extrabold mt-2 text-white">${value}</p>
+                        </div>`;
+            };
+            
+            // --- Tabela statystyk per strategia (bez zmian) ---
+            const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => {
+                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
+                            <td class="p-3 font-semibold text-sky-400">${setupName}</td>
+                            <td class="p-3 text-right">${setupStats.total_trades}</td>
+                            <td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td>
+                            <td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td>
+                            <td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td>
+                        </tr>`;
+            }).join('');
+            
+            const setupTable = setupRows.length > 0 ? 
+                `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
                     <table class="w-full text-sm text-left text-gray-300">
-                        <thead class="text-xs text-gray-500 bg-[#0D1117]"><tr><th class="p-4">Nazwa</th><th class="p-4 text-right">Ilość</th><th class="p-4 text-right">Win Rate</th><th class="p-4 text-right">Wynik</th></tr></thead>
+                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                            <tr>
+                                <th scope="col" class="p-3">Strategia</th>
+                                <th scope="col" class="p-3 text-right">Ilość Transakcji</th>
+                                <th scope="col" class="p-3 text-right">Win Rate (%)</th>
+                                <th scope="col" class="p-3 text-right">Całkowity P/L (%)</th>
+                                <th scope="col" class="p-3 text-right">Profit Factor</th>
+                            </tr>
+                        </thead>
                         <tbody>${setupRows}</tbody>
                     </table>
-                </div>
+                 </div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
 
-                ${toolsHtml}
+            // === NOWA, SZCZEGÓŁOWA TABELA HISTORII TRANSAKCJI ===
+            
+            // Definiujemy wszystkie nagłówki naszej nowej, szerokiej tabeli
+            const tradeHeaders = [
+                'Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)',
+                'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile',
+                'Inst. Sync', 'Retail Herd.',
+                'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)',
+                'J (H4)', 'J Thresh.'
+            ];
+            
+            // Definiujemy klasy CSS dla nagłówków (dla pozycjonowania i przyklejania)
+            const headerClasses = [
+                'sticky left-0', // Data Otwarcia
+                'sticky left-[90px]', // Ticker
+                'sticky left-[160px]', // Strategia (krótsza)
+                'text-right', // Status
+                'text-right', // Cena Wejścia
+                'text-right', // Cena Zamknięcia
+                'text-right', // P/L (%)
+                'text-right', // ATR
+                'text-right', // T. Dil.
+                'text-right', // P. Grav.
+                'text-right', // TD %tile
+                'text-right', // PG %tile
+                'text-right', // Inst. Sync
+                'text-right', // Retail Herd.
+                'text-right', // AQM H3
+                'text-right', // AQM %tile
+                'text-right', // J (Norm)
+                'text-right', // ∇² (Norm)
+                'text-right', // m² (Norm)
+                'text-right', // J (H4)
+                'text-right'  // J Thresh.
+            ];
 
-                <h3 class="text-xl font-bold text-gray-300 mt-10 mb-4 flex items-center"><i data-lucide="list" class="w-5 h-5 mr-2"></i>Dziennik Transakcji</h3>
-                <div class="bg-[#161B22] rounded-xl border border-gray-700 shadow-xl max-h-[500px] overflow-y-auto custom-scrollbar">
-                    <table class="w-full text-sm text-left text-gray-300">
-                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10 shadow-md"><tr><th class="p-3">Data</th><th class="p-3">Ticker</th><th class="p-3">Setup</th><th class="p-3 text-right">Status</th><th class="p-3 text-right">P/L</th><th class="p-3 text-right">AQM H3</th></tr></thead>
+            // Generujemy wiersze tabeli, teraz z nowymi danymi
+            const tradeRows = trades.map(t => {
+                const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
+                // Skracamy nazwę strategii dla czytelności
+                const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
+                
+                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono">
+                            <td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
+                            <td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td>
+                            <td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td>
+                            
+                            <td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td>
+                            <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td>
+                            <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td>
+                            <td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td>
+                            
+                            <td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td>
+                            
+                            <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td>
+
+                            <td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td>
+
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td>
+
+                            <td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td>
+                            <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td>
+                        </tr>`;
+            }).join('');
+
+            // Tworzymy finalną tabelę z kontenerem do przewijania
+            const tradeTable = trades.length > 0 ?
+                 `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto">
+                    <table class="w-full text-sm text-left text-gray-300 min-w-[2400px]">
+                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10">
+                            <tr>
+                                ${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}
+                            </tr>
+                        </thead>
                         <tbody>${tradeRows}</tbody>
                     </table>
+                 </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
+            
+            // --- Sekcje Backtestu i AI (bez zmian) ---
+            const backtestSection = `
+                <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
+                    <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
+                    <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p>
+                    <div class="flex items-start gap-3">
+                        <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}">
+                        <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                            <i data-lucide="play" class="w-4 h-4 mr-2"></i>
+                            Uruchom Test Roczny
+                        </button>
+                    </div>
+                    <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
                 </div>
-            </div>`;
+            `;
+            
+            const aiOptimizerSection = `
+                <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
+                    <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4>
+                    <p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane (powyżej) i zasugerował optymalizacje strategii.</p>
+                    <div class="flex items-start gap-3">
+                        <button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                            <i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>
+                            Uruchom Analizę AI
+                        </button>
+                        <button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0">
+                            <i data-lucide="eye" class="w-4 h-4 mr-2"></i>
+                            Pokaż Ostatni Raport
+                        </button>
+                    </div>
+                    <div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div>
+                </div>
+            `;
+
+            // ==========================================================
+            // === NOWA SEKCJA: Przycisk Eksportu CSV ===
+            // ==========================================================
+            const exportSection = `
+                <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
+                    <h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4>
+                    <p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje z bazy danych jako plik CSV do własnej analizy.</p>
+                    <div class="flex items-start gap-3">
+                        <button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                            <i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>
+                            Eksportuj do CSV
+                        </button>
+                    </div>
+                    <div id="csv-export-status-message" class="text-sm mt-3 h-4"></div>
+                </div>
+            `;
+            // ==========================================================
+
+            // ==========================================================
+            // === NOWA SEKCJA (Krok 4B - H3 Deep Dive) ===
+            // ==========================================================
+            const h3DeepDiveSection = `
+                <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
+                    <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3 (Deep Dive)</h4>
+                    <p class="text-sm text-gray-500 mb-4">Uruchom analizę "słabego roku", aby dowiedzieć się, dlaczego transakcje H3 zawiodły w tym okresie.</p>
+                    <div class="flex items-start gap-3">
+                        <button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                            <i data-lucide="search-check" class="w-4 h-4 mr-2"></i>
+                            Uruchom Analizę Porażek
+                        </button>
+                    </div>
+                    <div id="h3-deep-dive-main-status" class="text-sm mt-3 h-4"></div>
+                </div>
+            `;
+            // ==========================================================
+
+
+            // === NOWA SEKCJA STRONICOWANIA ===
+            const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
+            const startTrade = (state.currentReportPage - 1) * REPORT_PAGE_SIZE + 1;
+            const endTrade = Math.min(state.currentReportPage * REPORT_PAGE_SIZE, total_trades_count);
+
+            const paginationControls = totalPages > 1 ? `
+                <div class="flex justify-between items-center mt-4">
+                    <span class="text-sm text-gray-400">
+                        Wyświetlanie ${startTrade}-${endTrade} z ${total_trades_count} transakcji
+                    </span>
+                    <div class="flex gap-2">
+                        <button id="report-prev-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === 1 ? 'disabled' : ''}>
+                            <i data-lucide="arrow-left" class="w-4 h-4"></i>
+                        </button>
+                        <span class="text-sm text-gray-400 p-2">Strona ${state.currentReportPage} / ${totalPages}</span>
+                        <button id="report-next-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === totalPages ? 'disabled' : ''}>
+                            <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+            ` : '';
+
+            // --- OSTATECZNY HTML ---
+            return `<div id="agent-report-view" class="max-w-6xl mx-auto">
+                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
+                        
+                        <h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie ${stats.total_trades} Transakcji)</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                            ${createStatCard('Całkowity P/L (%)', formatPercent(stats.total_p_l_percent), 'percent')}
+                            ${createStatCard('Win Rate (%)', formatPercent(stats.win_rate_percent), 'target')}
+                            ${createStatCard('Profit Factor', formatProfitFactor(stats.profit_factor), 'ratio')}
+                            ${createStatCard('Ilość Transakcji', stats.total_trades, 'bar-chart-2')}
+                        </div>
+                        
+                        <h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>
+                        ${setupTable}
+                        
+                        <!-- ZAKTUALIZOWANA SEKCJA KONTROLEK -->
+                        <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6 mt-6">
+                            ${backtestSection}
+                            ${aiOptimizerSection}
+                            ${h3DeepDiveSection}
+                            ${exportSection}
+                        </div>
+
+                        <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji (z Metrykami)</h3>
+                        ${paginationControls}
+                        ${tradeTable}
+                        ${paginationControls} </div>`;
         }
+        // ==========================================================
     };
+    console.log("Renderers defined.");
 
-    // ==========================================================================
-    // 7. LOGIKA BIZNESOWA (CONTROLLER)
-    // ==========================================================================
+    // --- GŁÓWNE FUNKCJE KONTROLI APLIKACJI ---
+    
+    function updateDashboardCounters() {
+        const activeEl = document.getElementById('dashboard-active-signals');
+        const discardedEl = document.getElementById('dashboard-discarded-signals');
+        
+        if (activeEl) {
+            activeEl.textContent = state.phase3.length;
+        }
+        if (discardedEl) {
+            discardedEl.textContent = state.discardedSignalCount;
+        }
+    }
 
-    // --- Aktualizacja Dashboardu ---
-    function updateDashboard(status) {
-        const els = {
+    function updateDashboardUI(statusData) {
+        if (!document.getElementById('dashboard-view')) return;
+        
+        const ui_dash = {
             status: document.getElementById('dashboard-worker-status'),
             phase: document.getElementById('dashboard-current-phase'),
-            dot: document.getElementById('status-dot'),
-            progText: document.getElementById('progress-text'),
-            progBar: document.getElementById('progress-bar'),
-            log: document.getElementById('scan-log'),
-            active: document.getElementById('dashboard-active-signals'),
-            discarded: document.getElementById('dashboard-discarded-signals')
+            progressText: document.getElementById('progress-text'),
+            progressBar: document.getElementById('progress-bar'),
+            scanLog: document.getElementById('scan-log'),
         };
-
-        // Aktualizacja Liczników Fazy w Sidebarze
-        if(ui.phases.p1Count) ui.phases.p1Count.textContent = state.phase1.length;
-        if(ui.phases.p2Count) ui.phases.p2Count.textContent = state.phase2.length;
-        if(ui.phases.p3Count) ui.phases.p3Count.textContent = state.phase3.length;
-
-        // Jeśli nie jesteśmy na widoku Dashboard, przerywamy aktualizację DOM dashboardu
-        if (!els.status) return;
-
-        // Status Workera
-        if (status.status === 'RUNNING') {
-            els.status.textContent = 'AKTYWNY';
-            els.status.className = 'text-4xl font-extrabold text-green-400 mt-auto tracking-tight animate-pulse';
-            if(els.dot) els.dot.className = 'h-2 w-2 rounded-full bg-green-500 mr-2 animate-ping';
-        } else if (status.status.includes('BUSY')) {
-            els.status.textContent = 'ZAJĘTY';
-            els.status.className = 'text-4xl font-extrabold text-purple-400 mt-auto tracking-tight';
-            if(els.dot) els.dot.className = 'h-2 w-2 rounded-full bg-purple-500 mr-2 animate-pulse';
-        } else if (status.status === 'ERROR') {
-            els.status.textContent = 'BŁĄD';
-            els.status.className = 'text-4xl font-extrabold text-red-500 mt-auto tracking-tight';
-            if(els.dot) els.dot.className = 'h-2 w-2 rounded-full bg-red-500 mr-2';
-        } else {
-            els.status.textContent = 'IDLE';
-            els.status.className = 'text-4xl font-extrabold text-gray-500 mt-auto tracking-tight';
-            if(els.dot) els.dot.className = 'h-2 w-2 rounded-full bg-gray-500 mr-2';
-        }
-
-        if(els.phase) els.phase.textContent = `Faza: ${status.phase}`;
-        
-        // Pasek Postępu
-        if(els.progText) els.progText.textContent = `${status.progress.processed} / ${status.progress.total}`;
-        if(els.progBar) els.progBar.style.width = status.progress.total > 0 ? `${(status.progress.processed/status.progress.total)*100}%` : '0%';
-
-        // Logi (Auto-scroll)
-        if (els.log && els.log.textContent !== status.log) {
-            els.log.textContent = status.log || 'Oczekiwanie na logi...';
-            const container = document.getElementById('scan-log-container');
-            if (container) container.scrollTop = container.scrollHeight;
-        }
-
-        // Liczniki
-        if(els.active) els.active.textContent = state.phase3.length;
-        if(els.discarded) els.discarded.textContent = state.discardedSignalCount;
-    }
-
-    // --- Polling Danych w Tle ---
-    async function pollWorkerLoop() {
-        try {
-            const status = await api.getWorkerStatus();
-            state.workerStatus = status;
-            
-            // Aktualizacja małego statusu w sidebarze
-            if (ui.sidebar.statusIndicators.worker) {
-                ui.sidebar.statusIndicators.worker.textContent = status.phase !== 'NONE' ? status.phase : status.status;
-                ui.sidebar.statusIndicators.worker.className = `font-mono px-2 py-1 rounded-md text-xs transition-colors ${status.status === 'RUNNING' ? 'bg-green-900/50 text-green-400 border border-green-800' : 'bg-gray-800 text-gray-400 border border-gray-700'}`;
-            }
-            if (ui.sidebar.statusIndicators.heartbeat && status.last_heartbeat_utc) {
-                const lastBeat = new Date(status.last_heartbeat_utc);
-                const diff = (new Date() - lastBeat) / 1000;
-                ui.sidebar.statusIndicators.heartbeat.textContent = diff > 60 ? 'ZATRZYMANY' : lastBeat.toLocaleTimeString();
-                ui.sidebar.statusIndicators.heartbeat.className = diff > 60 ? 'text-xs text-red-500' : 'text-xs text-green-500';
-            }
-
-            // Aktywacja Przycisków
-            const isBusy = status.status !== 'IDLE' && status.status !== 'ERROR' && status.status !== 'PAUSED';
-            if(ui.controls.start) ui.controls.start.disabled = isBusy;
-            if(ui.controls.pause) ui.controls.pause.disabled = status.status !== 'RUNNING';
-            if(ui.controls.resume) ui.controls.resume.disabled = status.status !== 'PAUSED';
-
-            // Odśwież dashboard jeśli jest aktywny
-            if (state.currentView === 'dashboard') updateDashboard(status);
-
-        } catch (e) {}
-        state.activeWorkerPolling = setTimeout(pollWorkerLoop, CONSTANTS.POLL_INTERVALS.WORKER);
-    }
-
-    async function refreshDataLoop() {
-        try {
-            const [p1, p2, p3, discarded] = await Promise.all([
-                api.getPhase1(), api.getPhase2(), api.getPhase3(), api.getDiscardedStats()
-            ]);
-            state.phase1 = p1 || [];
-            state.phase2 = p2 || [];
-            state.phase3 = p3 || [];
-            state.discardedSignalCount = discarded?.discarded_count_24h ?? 0;
-            
-            // Renderowanie list w sidebarze
-            if(ui.phases.p1List) ui.phases.p1List.innerHTML = renderers.phase1List(state.phase1);
-            if(ui.phases.p2List) ui.phases.p2List.innerHTML = renderers.phase2List(state.phase2);
-            if(ui.phases.p3List) ui.phases.p3List.innerHTML = renderers.phase3List(state.phase3);
-            
-        } catch(e) {}
-        // Mniej częste odświeżanie list bocznych
-        setTimeout(refreshDataLoop, 15000);
-    }
-
-    async function pollPortfolioLoop() {
-        if (!state.portfolio.length || state.currentView !== 'portfolio') return;
-        try {
-            const tickers = state.portfolio.map(h => h.ticker);
-            const results = await Promise.all(tickers.map(t => api.getLiveQuote(t)));
-            let updated = false;
-            results.forEach((q, i) => { 
-                if (q) { 
-                    state.liveQuotes[tickers[i]] = q; 
-                    updated = true; 
-                } 
-            });
-            if (updated) {
-                ui.screens.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
-                lucide.createIcons();
-            }
-        } catch(e) {}
-        state.activePortfolioPolling = setTimeout(pollPortfolioLoop, CONSTANTS.POLL_INTERVALS.PORTFOLIO);
-    }
-
-    // --- ACTIONS & HANDLERS ---
-    
-    async function loadAgentReport(page) {
-        try {
-            const report = await api.getVirtualAgentReport(page);
-            ui.screens.mainContent.innerHTML = renderers.agentReport(report);
-            lucide.createIcons();
-        } catch(e) {
-            ui.screens.mainContent.innerHTML = renderers.errorState("Błąd ładowania raportu agenta: " + e.message);
-        }
-    }
-
-    // Obsługa Backtestu
-    async function handleBacktest() {
-        const input = document.getElementById('backtest-year-input');
-        const msg = document.getElementById('backtest-status-message');
-        const year = input.value;
-        
-        if(!year || year.length !== 4) {
-            if(msg) msg.textContent = "Podaj poprawny rok (YYYY)";
+        if (!ui_dash.status || !ui_dash.scanLog) {
+            logger.warn("Elementy UI dashboardu nie znalezione, pomijam aktualizację.");
             return;
         }
+        ui_dash.status.textContent = statusData.status;
+        ui_dash.phase.textContent = `Faza: ${statusData.phase || 'NONE'}`;
+        const processed = statusData.progress.processed, total = statusData.progress.total;
+        const percent = total > 0 ? Math.min((processed / total) * 100, 100) : 0;
+        ui_dash.progressText.textContent = `${processed} / ${total}`;
+        ui_dash.progressBar.style.width = `${percent.toFixed(0)}%`;
         
-        if(msg) msg.textContent = "Wysyłanie zlecenia...";
-        try {
-            await api.requestBacktest(year);
-            if(msg) {
-                msg.textContent = "Zlecono pomyślnie. Worker rozpoczyna pracę.";
-                msg.className = "text-sm mt-2 h-4 font-mono text-green-400";
-            }
-        } catch(e) {
-            if(msg) {
-                msg.textContent = "Błąd: " + e.message;
-                msg.className = "text-sm mt-2 h-4 font-mono text-red-400";
-            }
+        if (ui_dash.scanLog.textContent !== statusData.log) {
+            ui_dash.scanLog.textContent = statusData.log || 'Czekam na rozpoczęcie skanowania...';
+            const logContainer = document.getElementById('scan-log-container');
+            if(logContainer) logContainer.scrollTop = 0; 
         }
     }
 
-    // Obsługa AI
-    async function handleAIOptimizer() {
-        const msg = document.getElementById('ai-optimizer-status-message');
-        if(msg) msg.textContent = "Zlecanie analizy...";
+    function displaySystemAlert(message) {
+        if (!message || message === 'NONE') return;
+
+        let alertKey = 'GENERAL';
         try {
-            await api.requestAIOptimizer();
-            pollAIReport();
-        } catch(e) {
-            if(msg) msg.textContent = "Błąd: " + e.message;
-        }
-    }
-    
-    async function pollAIReport() {
-        try {
-            const res = await api.getAIOptimizerReport();
-            const msg = document.getElementById('ai-optimizer-status-message');
+            const parts = message.split(' ');
+            const ticker = parts.find(p => p.length > 2 && p.length < 6 && p === p.toUpperCase());
             
-            if (res.status === 'PROCESSING') {
-                if(msg) msg.textContent = "AI analizuje dane... proszę czekać.";
-                state.activeAIOptimizerPolling = setTimeout(pollAIReport, CONSTANTS.POLL_INTERVALS.AI_REPORT);
-            } else if (res.status === 'DONE') {
-                if(msg) msg.textContent = "Analiza zakończona.";
-                ui.modals.aiReport.content.innerHTML = `<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap">${res.report_text}</pre>`;
-                ui.modals.aiReport.el.classList.remove('hidden');
+            if (message.includes('ALERT ZYSKU')) alertKey = `PROFIT-${ticker || 'UNKNOWN'}`;
+            else if (message.includes('ALARM CENOWY')) alertKey = `PRICE-${ticker || 'UNKNOWN'}`;
+            else if (message.includes('PILNY ALERT')) alertKey = `NEWS-${ticker || 'UNKNOWN'}`;
+            else if (message.includes('TAKE PROFIT')) alertKey = `TP-${ticker || 'UNKNOWN'}`;
+            else if (message.includes('STOP LOSS')) alertKey = `SL-${ticker || 'UNKNOWN'}`;
+
+        } catch(e) { 
+            logger.warn("Nie udało się wygenerować klucza alertu", e);
+        }
+
+        if (state.snoozedAlerts[alertKey] && Date.now() < state.snoozedAlerts[alertKey]) {
+            logger.info(`Alert ${alertKey} jest wyciszony. Pomijanie.`);
+            return;
+        }
+
+        let alertClass = 'bg-sky-500';
+        let alertIcon = 'bell-ring';
+
+        if (message.includes('PILNY ALERT') && message.includes('NEGATYWNY')) {
+            alertClass = 'bg-red-600';
+            alertIcon = 'alert-octagon';
+        } else if (message.includes('PILNY ALERT') && message.includes('POZYTYWNY')) {
+            alertClass = 'bg-green-600';
+            alertIcon = 'check-circle';
+        } else if (message.includes('ALARM CENOWY') || message.includes('ALERT ZYSKU')) {
+            alertClass = 'bg-yellow-500';
+            alertIcon = 'dollar-sign';
+        } else if (message.includes('TAKE PROFIT')) {
+            alertClass = 'bg-green-600';
+            alertIcon = 'trending-up';
+        } else if (message.includes('STOP LOSS')) {
+            alertClass = 'bg-red-600';
+            alertIcon = 'trending-down';
+        }
+
+
+        const alertId = `alert-${Date.now()}`;
+        const alertElement = document.createElement('div');
+        alertElement.id = alertId;
+        alertElement.className = `alert-bar flex items-center justify-between gap-4 ${alertClass} text-white p-3 shadow-lg rounded-md animate-pulse-once`;
+        
+        alertElement.innerHTML = `
+            <div class="flex items-center gap-3">
+                <i data-lucide="${alertIcon}" class="w-6 h-6"></i>
+                <span class="font-semibold">${message}</span>
+            </div>
+            <button data-alert-id="${alertId}" data-alert-key="${alertKey}" class="close-alert-btn p-1 rounded-full hover:bg-black/20 transition-colors">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        `;
+        ui.alertContainer.appendChild(alertElement);
+        lucide.createIcons();
+
+        const closeButton = alertElement.querySelector('.close-alert-btn');
+        closeButton.addEventListener('click', () => {
+            const keyToSnooze = closeButton.dataset.alertKey;
+            if (keyToSnooze) {
+                const snoozeDuration = 30 * 60 * 1000; // 30 minut
+                state.snoozedAlerts[keyToSnooze] = Date.now() + snoozeDuration;
+                logger.info(`Wyciszono alert '${keyToSnooze}' na 30 minut.`);
             }
-        } catch(e) {}
+            alertElement.remove();
+        });
+
+        setTimeout(() => {
+            const elToRemove = document.getElementById(alertId);
+            if (elToRemove) {
+                elToRemove.remove();
+            }
+        }, 20000);
     }
 
-    // Obsługa H3 Deep Dive
-    async function handleDeepDive() {
-        // Pobieramy rok z modala Deep Dive (musi być otwarty)
-        const year = ui.modals.h3DeepDive.yearInput.value;
-        if(!year) return;
-        
-        ui.modals.h3DeepDive.status.textContent = "Zlecanie analizy...";
+
+    async function pollSystemAlerts() {
         try {
-            await api.requestH3DeepDive(year);
-            pollDeepDive();
-        } catch(e) {
-            ui.modals.h3DeepDive.status.textContent = "Błąd: " + e.message;
+            const alertData = await api.getSystemAlert();
+            if (alertData && alertData.message !== 'NONE') {
+                displaySystemAlert(alertData.message);
+            }
+        } catch (e) {
+        } finally {
+            setTimeout(pollSystemAlerts, ALERT_POLL_INTERVAL);
+        }
+    }
+
+
+    async function pollWorkerStatus() {
+        try {
+            const statusData = await api.getWorkerStatus();
+            state.workerStatus = statusData;
+            let statusClass = 'bg-gray-700 text-gray-200';
+            if (statusData.status === 'RUNNING') statusClass = 'bg-green-600/20 text-green-400';
+            else if (statusData.status === 'PAUSED') statusClass = 'bg-yellow-600/20 text-yellow-400';
+            else if (statusData.status === 'ERROR') statusClass = 'bg-red-600/20 text-red-400';
+            
+            // ==========================================================
+            // === AKTUALIZACJA (Krok 4B - H3 Deep Dive) ===
+            // ==========================================================
+            if (statusData.phase === 'BACKTESTING') {
+                statusClass = 'bg-purple-600/20 text-purple-400';
+            } else if (statusData.phase === 'AI_OPTIMIZING') {
+                statusClass = 'bg-pink-600/20 text-pink-400';
+            } else if (statusData.phase === 'DEEP_DIVE_H3') {
+                statusClass = 'bg-cyan-600/20 text-cyan-400';
+            }
+            // ==========================================================
+
+            ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${statusClass} transition-colors`;
+            ui.workerStatusText.textContent = statusData.phase === 'NONE' ? statusData.status : statusData.phase; // Pokaż fazę, jeśli jest aktywna
+
+            if (statusData.last_heartbeat_utc) {
+                const diffSeconds = (new Date() - new Date(statusData.last_heartbeat_utc)) / 1000;
+                ui.heartbeatStatus.className = `text-xs ${diffSeconds > 30 ? 'text-red-500' : 'text-green-500'}`;
+                ui.heartbeatStatus.textContent = diffSeconds > 30 ? 'PRZERWANY' : new Date(statusData.last_heartbeat_utc).toLocaleTimeString();
+            }
+            ui.startBtn.disabled = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
+            ui.pauseBtn.disabled = statusData.status !== 'RUNNING';
+            ui.resumeBtn.disabled = statusData.status !== 'PAUSED';
+            updateDashboardUI(statusData);
+        } catch (e) { /* Błędy logowane w apiRequest */ }
+        setTimeout(pollWorkerStatus, 5000);
+    }
+
+    async function refreshSidebarData() {
+        try {
+            const [phase1, phase2, phase3, discardedCountData] = await Promise.all([
+                api.getPhase1Candidates(), 
+                api.getPhase2Results(), 
+                api.getPhase3Signals(),
+                api.getDiscardedCount()
+            ]);
+            
+            state.phase1 = phase1 || [];
+            state.phase2 = phase2 || [];
+            state.phase3 = phase3 || [];
+            state.discardedSignalCount = discardedCountData?.discarded_count_24h ?? 0;
+
+            ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
+            ui.phase1.count.textContent = state.phase1.length;
+            ui.phase2.list.innerHTML = renderers.phase2List(state.phase2);
+            ui.phase2.count.textContent = state.phase2.length;
+            ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
+            ui.phase3.count.textContent = state.phase3.length;
+            
+            updateDashboardCounters();
+
+            lucide.createIcons();
+        } catch (e) { /* Błędy logowane w apiRequest */ }
+        setTimeout(refreshSidebarData, 15000); // Interwał bez zmian
+    }
+
+    function stopAllPolling() {
+        logger.info("Zatrzymywanie wszystkich aktywnych timerów odpytywania.");
+        if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
+        if (state.activeAIOptimizerPolling) { clearTimeout(state.activeAIOptimizerPolling); state.activeAIOptimizerPolling = null; }
+        // ==========================================================
+        // === NOWA LINIA (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        if (state.activeH3DeepDivePolling) { clearTimeout(state.activeH3DeepDivePolling); state.activeH3DeepDivePolling = null; }
+        // ==========================================================
+        stopMarketCountdown(); 
+    }
+
+    function setActiveSidebar(linkElement) {
+        document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('sidebar-item-active'));
+        if (linkElement) linkElement.classList.add('sidebar-item-active');
+    }
+
+    async function showDashboard() {
+         stopAllPolling();
+         setActiveSidebar(ui.dashboardLink);
+         ui.mainContent.innerHTML = renderers.dashboard();
+         updateDashboardUI(state.workerStatus);
+         updateDashboardCounters();
+         lucide.createIcons();
+    }
+
+    async function showPortfolio() {
+        stopAllPolling();
+        setActiveSidebar(ui.portfolioLink);
+        ui.mainContent.innerHTML = renderers.loading("Ładowanie portfela...");
+        try {
+            const holdings = await api.getPortfolio();
+            state.portfolio = holdings;
+            state.liveQuotes = {}; // Wyczyść cache cen
+            state.profitAlertsSent = {}; // Resetuj przy każdym załadowaniu portfela
+            ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
+            lucide.createIcons();
+            startPortfolioPolling(); // Rozpocznij odświeżanie cen
+        } catch (e) {
+             ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania portfela: ${e.message}</div>`;
+        }
+    }
+
+    async function showTransactions() {
+        stopAllPolling();
+        setActiveSidebar(ui.transactionsLink);
+        ui.mainContent.innerHTML = renderers.loading("Ładowanie historii transakcji...");
+        try {
+            const transactions = await api.getTransactionHistory();
+            state.transactions = transactions;
+            ui.mainContent.innerHTML = renderers.transactions(state.transactions);
+            lucide.createIcons();
+        } catch (e) {
+             ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania transakcji: ${e.message}</div>`;
         }
     }
     
-    async function pollDeepDive() {
+    // ==========================================================
+    // === AKTUALIZACJA (STRONICOWANIE) ===
+    // ==========================================================
+    async function showAgentReport() {
+        stopAllPolling();
+        setActiveSidebar(ui.agentReportLink);
+        // Resetuj na pierwszą stronę za każdym razem, gdy wchodzisz w ten widok
+        await loadAgentReportPage(1);
+    }
+    
+    async function loadAgentReportPage(page) {
+        state.currentReportPage = page;
+        ui.mainContent.innerHTML = renderers.loading(`Ładowanie raportu... (Strona ${page})`);
         try {
-            const res = await api.getH3DeepDiveReport();
-            if (res.status === 'PROCESSING') {
-                ui.modals.h3DeepDive.status.textContent = "Analiza w toku...";
-                state.activeH3DeepDivePolling = setTimeout(pollDeepDive, CONSTANTS.POLL_INTERVALS.DEEP_DIVE);
-            } else if (res.status === 'DONE') {
-                ui.modals.h3DeepDive.status.textContent = "Zakończono.";
-                ui.modals.h3DeepDive.content.innerHTML = `<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap">${res.report_text}</pre>`;
-            } else if (res.status === 'ERROR') {
-                ui.modals.h3DeepDive.status.textContent = "Błąd analizy.";
-                ui.modals.h3DeepDive.content.innerHTML = `<p class="text-red-400">${res.report_text}</p>`;
+            // Pobierz konkretną stronę raportu
+            const report = await api.getVirtualAgentReport(page);
+            ui.mainContent.innerHTML = renderers.agentReport(report);
+            lucide.createIcons();
+        } catch (e) {
+             ui.mainContent.innerHTML = `<div class="bg-red-900/20 border border-red-500/30 text-red-300 p-6 rounded-lg text-center">Błąd ładowania raportu agenta: ${e.message}</div>`;
+        }
+    }
+    // ==========================================================
+    
+    async function pollPortfolioQuotes() {
+         const portfolioTickers = state.portfolio.map(h => h.ticker);
+         if (portfolioTickers.length === 0) { 
+            state.activePortfolioPolling = null; 
+            return; 
+         }
+         
+         logger.info(`Odświeżanie cen dla portfela: ${portfolioTickers.join(', ')}`);
+         let quotesUpdated = false;
+         try {
+             const quotePromises = portfolioTickers.map(ticker => api.getLiveQuote(ticker));
+             const quoteResults = await Promise.all(quotePromises);
+             
+             const newQuotes = { ...state.liveQuotes };
+             quoteResults.forEach((quoteData, index) => {
+                 const ticker = portfolioTickers[index];
+                 if (quoteData) { 
+                     newQuotes[ticker] = quoteData; 
+                     quotesUpdated = true; 
+                 }
+             });
+             state.liveQuotes = newQuotes; 
+
+             if (quotesUpdated && document.getElementById('portfolio-view')) {
+                  ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
+                  lucide.createIcons();
+             }
+
+            checkPortfolioProfitAlerts();
+
+         } catch (e) {
+             logger.error("Błąd podczas odświeżania cen portfela:", e);
+         } finally {
+              state.activePortfolioPolling = setTimeout(pollPortfolioQuotes, PORTFOLIO_QUOTE_POLL_INTERVAL);
+         }
+    }
+    
+    function checkPortfolioProfitAlerts() {
+        logger.info("Sprawdzanie alertów zysku w portfelu...");
+        state.portfolio.forEach(holding => {
+            const quote = state.liveQuotes[holding.ticker];
+            if (quote && quote['05. price']) {
+                try {
+                    const currentPrice = parseFloat(quote['05. price']);
+                    const avgBuyPrice = holding.average_buy_price;
+                    
+                    if (currentPrice >= (avgBuyPrice * PROFIT_ALERT_THRESHOLD)) {
+                        if (!state.profitAlertsSent[holding.ticker]) {
+                            const profitPercent = ((currentPrice / avgBuyPrice) - 1) * 100;
+                            const alertMsg = `ALERT ZYSKU: ${holding.ticker} osiągnął +${profitPercent.toFixed(1)}% (Cena: ${currentPrice.toFixed(2)})`;
+                            logger.warn(alertMsg);
+                            displaySystemAlert(alertMsg);
+                            state.profitAlertsSent[holding.ticker] = true; 
+                        }
+                    } else {
+                        if (state.profitAlertsSent[holding.ticker]) {
+                            logger.info(`Resetowanie alertu zysku dla ${holding.ticker}, cena spadła poniżej progu.`);
+                            state.profitAlertsSent[holding.ticker] = false;
+                        }
+                    }
+                } catch(e) {
+                    logger.error(`Błąd podczas sprawdzania alertu zysku dla ${holding.ticker}:`, e);
+                }
             }
-        } catch(e) {}
+        });
     }
 
-    // Obsługa CSV
-    async function handleExportCSV() {
-        const msg = document.getElementById('csv-export-status-message');
-        if(msg) msg.textContent = "Generowanie...";
+    function startPortfolioPolling() {
+         stopPortfolioPolling();
+         if (state.portfolio.length > 0) {
+             logger.info("Rozpoczynam odświeżanie cen portfela.");
+             pollPortfolioQuotes();
+         }
+    }
+    function stopPortfolioPolling() {
+         if (state.activePortfolioPolling) {
+             logger.info("Zatrzymuję odświeżanie cen portfela.");
+             clearTimeout(state.activePortfolioPolling);
+             state.activePortfolioPolling = null;
+         }
+    }
+
+    // --- Funkcje Obsługi Modali ---
+    function showBuyModal(ticker) {
+        ui.buyModal.tickerSpan.textContent = ticker;
+        ui.buyModal.quantityInput.value = '';
+        ui.buyModal.priceInput.value = '';
+        ui.buyModal.confirmBtn.dataset.ticker = ticker;
+        ui.buyModal.backdrop.classList.remove('hidden');
+        ui.buyModal.quantityInput.focus();
+    }
+    function hideBuyModal() { ui.buyModal.backdrop.classList.add('hidden'); }
+    
+    async function handleBuyConfirm() {
+         const ticker = ui.buyModal.confirmBtn.dataset.ticker;
+         const quantity = parseInt(ui.buyModal.quantityInput.value, 10);
+         const price = parseFloat(ui.buyModal.priceInput.value);
+         if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
+             displaySystemAlert("BŁĄD: Proszę wprowadzić poprawną ilość i cenę.");
+             return; 
+         }
+         ui.buyModal.confirmBtn.disabled = true; ui.buyModal.confirmBtn.textContent = "Przetwarzanie...";
+         try {
+            await api.buyStock({ ticker, quantity, price_per_share: price });
+            hideBuyModal();
+            showPortfolio();
+        } catch (e) { displaySystemAlert(`Błąd zakupu: ${e.message}`);
+        } finally { ui.buyModal.confirmBtn.disabled = false; ui.buyModal.confirmBtn.textContent = "Inwestuj"; }
+    }
+    
+    function showSellModal(ticker, maxQuantity) {
+         ui.sellModal.tickerSpan.textContent = ticker;
+         ui.sellModal.maxQuantitySpan.textContent = maxQuantity;
+         ui.sellModal.quantityInput.value = '';
+         ui.sellModal.quantityInput.max = maxQuantity;
+         ui.sellModal.priceInput.value = '';
+         ui.sellModal.confirmBtn.dataset.ticker = ticker;
+         ui.sellModal.confirmBtn.dataset.maxQuantity = maxQuantity;
+         ui.sellModal.backdrop.classList.remove('hidden');
+         ui.sellModal.quantityInput.focus();
+    }
+    function hideSellModal() { ui.sellModal.backdrop.classList.add('hidden'); }
+    
+    async function handleSellConfirm() {
+         const ticker = ui.sellModal.confirmBtn.dataset.ticker;
+         const maxQuantity = parseInt(ui.sellModal.confirmBtn.dataset.maxQuantity, 10);
+         const quantity = parseInt(ui.sellModal.quantityInput.value, 10);
+         const price = parseFloat(ui.sellModal.priceInput.value);
+         if (!ticker || isNaN(quantity) || quantity <= 0 || isNaN(price) || price <= 0) {
+             displaySystemAlert("BŁĄD: Proszę wprowadzić poprawną ilość i cenę."); 
+             return; 
+         }
+          if (quantity > maxQuantity) { 
+              displaySystemAlert(`BŁĄD: Nie możesz sprzedać więcej akcji niż posiadasz (${maxQuantity}).`); 
+              return; 
+          }
+         ui.sellModal.confirmBtn.disabled = true; ui.sellModal.confirmBtn.textContent = "Przetwarzanie...";
+         try {
+             await api.sellStock({ ticker, quantity, price_per_share: price });
+             hideSellModal();
+             await showPortfolio();
+         } catch (e) { displaySystemAlert(`Błąd sprzedaży: ${e.message}`);
+         } finally { ui.sellModal.confirmBtn.disabled = false; ui.sellModal.confirmBtn.textContent = "Realizuj"; }
+    }
+    
+    function showAIReportModal() {
+        if (ui.aiReportModal.backdrop) {
+            ui.aiReportModal.backdrop.classList.remove('hidden');
+            ui.aiReportModal.content.innerHTML = renderers.loading('Pobieranie raportu...');
+            lucide.createIcons();
+        }
+    }
+    function hideAIReportModal() {
+        if (ui.aiReportModal.backdrop) {
+            ui.aiReportModal.backdrop.classList.add('hidden');
+            ui.aiReportModal.content.innerHTML = ''; // Wyczyść zawartość
+        }
+    }
+
+    async function handleRunAIOptimizer() {
+        const runBtn = document.getElementById('run-ai-optimizer-btn');
+        const viewBtn = document.getElementById('view-ai-report-btn');
+        const statusMsg = document.getElementById('ai-optimizer-status-message');
+        if (!runBtn || !viewBtn || !statusMsg) return;
+
+        runBtn.disabled = true;
+        viewBtn.disabled = true;
+        runBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Zlecanie...`;
+        lucide.createIcons();
+        statusMsg.className = 'text-sm mt-3 text-sky-400';
+        statusMsg.textContent = 'Zlecanie analizy Mega Agentowi...';
+
         try {
-            const response = await fetch(`${CONSTANTS.API_BASE_URL}/api/v1/export/trades.csv`);
-            if (!response.ok) throw new Error("Network response was not ok");
+            const response = await api.requestAIOptimizer();
+            statusMsg.className = 'text-sm mt-3 text-green-400';
+            statusMsg.textContent = response.message || 'Zlecono analizę. Worker rozpoczął pracę.';
+            pollAIOptimizerReport();
+        } catch (e) {
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd zlecenia: ${e.message}`;
+            runBtn.disabled = false;
+            viewBtn.disabled = false;
+            runBtn.innerHTML = `<i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i> Uruchom Analizę AI`;
+            lucide.createIcons();
+        }
+    }
+    
+    async function pollAIOptimizerReport() {
+        if (state.activeAIOptimizerPolling) {
+            clearTimeout(state.activeAIOptimizerPolling);
+        }
+        
+        const statusMsg = document.getElementById('ai-optimizer-status-message');
+        
+        try {
+            const reportData = await api.getAIOptimizerReport();
+            
+            if (reportData.status === 'PROCESSING') {
+                if(statusMsg) statusMsg.textContent = 'Worker przetwarza dane i konsultuje się z AI... (Sprawdzam ponownie za 5s)';
+                state.activeAIOptimizerPolling = setTimeout(pollAIOptimizerReport, AI_OPTIMIZER_POLL_INTERVAL);
+            } else if (reportData.status === 'DONE') {
+                if(statusMsg) {
+                    statusMsg.className = 'text-sm mt-3 text-green-400';
+                    statusMsg.textContent = `Analiza AI zakończona (${new Date(reportData.last_updated).toLocaleString()}).`;
+                }
+                const runBtn = document.getElementById('run-ai-optimizer-btn');
+                const viewBtn = document.getElementById('view-ai-report-btn');
+                if (runBtn) {
+                     runBtn.disabled = false;
+                     runBtn.innerHTML = `<i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i> Uruchom Analizę AI`;
+                     lucide.createIcons();
+                }
+                if (viewBtn) viewBtn.disabled = false;
+                
+                showAIReportModal();
+                if (ui.aiReportModal.content) {
+                    ui.aiReportModal.content.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
+                }
+
+            } else { // 'NONE' lub 'ERROR'
+                if(statusMsg) {
+                    statusMsg.className = 'text-sm mt-3 text-gray-400';
+                    statusMsg.textContent = reportData.status === 'ERROR' ? reportData.report_text : 'Gotowy do analizy.';
+                }
+                const runBtn = document.getElementById('run-ai-optimizer-btn');
+                const viewBtn = document.getElementById('view-ai-report-btn');
+                if (runBtn) {
+                     runBtn.disabled = false;
+                     runBtn.innerHTML = `<i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i> Uruchom Analizę AI`;
+                     lucide.createIcons();
+                }
+                if (viewBtn) viewBtn.disabled = false;
+            }
+
+        } catch (e) {
+            logger.error('Błąd podczas odpytywania o raport AI', e);
+            if(statusMsg) {
+                statusMsg.className = 'text-sm mt-3 text-red-400';
+                statusMsg.textContent = `Błąd odpytywania: ${e.message}`;
+            }
+        }
+    }
+
+    async function handleViewAIOptimizerReport() {
+        showAIReportModal();
+        try {
+            const reportData = await api.getAIOptimizerReport();
+            if (reportData.status === 'DONE' && reportData.report_text) {
+                 if (ui.aiReportModal.content) {
+                    ui.aiReportModal.content.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
+                }
+            } else if (reportData.status === 'PROCESSING') {
+                if (ui.aiReportModal.content) {
+                    ui.aiReportModal.content.innerHTML = renderers.loading('Analiza w toku... Worker nadal przetwarza dane.');
+                    lucide.createIcons();
+                }
+            } else {
+                 if (ui.aiReportModal.content) {
+                    ui.aiReportModal.content.innerHTML = `<p class="text-gray-400">Brak dostępnego raportu. Uruchom najpierw analizę.</p>`;
+                }
+            }
+        } catch (e) {
+             if (ui.aiReportModal.content) {
+                ui.aiReportModal.content.innerHTML = `<p class="text-red-400">Błąd pobierania raportu: ${e.message}</p>`;
+            }
+        }
+    }
+    
+    async function handleYearBacktestRequest() {
+        const yearInput = document.getElementById('backtest-year-input');
+        const yearBtn = document.getElementById('run-backtest-year-btn');
+        const statusMsg = document.getElementById('backtest-status-message');
+        if (!yearInput || !yearBtn || !statusMsg) return;
+
+        const year = yearInput.value.trim();
+        const currentYear = new Date().getFullYear();
+
+        if (!year || year.length !== 4 || !/^\d{4}$/.test(year) || parseInt(year) < 2000 || parseInt(year) > currentYear) {
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd: Wprowadź poprawny rok (np. 2000 - ${currentYear}).`;
+            return;
+        }
+
+        yearBtn.disabled = true;
+        yearBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Zlecanie...`;
+        lucide.createIcons();
+        statusMsg.className = 'text-sm mt-3 text-sky-400';
+        statusMsg.textContent = `Zlecanie testu dla roku ${year}...`;
+
+        try {
+            const response = await api.requestBacktest(year);
+            statusMsg.className = 'text-sm mt-3 text-green-400';
+            statusMsg.textContent = response.message || `Zlecono test dla ${year}. Worker rozpoczął pracę.`;
+            setTimeout(() => {
+                // Nie przechodź do dashboardu, ale zaktualizuj status workera
+                // (ponieważ użytkownik jest już na stronie raportu)
+                pollWorkerStatus();
+            }, 2000);
+        } catch (e) {
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd zlecenia: ${e.message}`;
+        } finally {
+            yearBtn.disabled = false;
+            yearBtn.innerHTML = `<i data-lucide="play" class="w-4 h-4 mr-2"></i> Uruchom Test Roczny`;
+            lucide.createIcons();
+        }
+    }
+    
+    // ==========================================================
+    // === NOWA FUNKCJA: Obsługa Eksportu CSV ===
+    // ==========================================================
+    async function handleCsvExport() {
+        const exportBtn = document.getElementById('run-csv-export-btn');
+        const statusMsg = document.getElementById('csv-export-status-message');
+        if (!exportBtn || !statusMsg) return;
+
+        exportBtn.disabled = true;
+        exportBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Pobieranie...`;
+        lucide.createIcons();
+        statusMsg.className = 'text-sm mt-3 text-sky-400';
+        statusMsg.textContent = 'Trwa pobieranie danych... to może potrwać chwilę.';
+
+        try {
+            // Musimy użyć 'fetch' bezpośrednio, aby obsłużyć blob, a nie 'apiRequest' (który oczekuje JSON)
+            const response = await fetch(`${API_BASE_URL}/api/v1/export/trades.csv`);
+            
+            if (!response.ok) {
+                throw new Error(`Błąd serwera: ${response.status} ${response.statusText}`);
+            }
+
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `apex_trades_${new Date().toISOString().slice(0,10)}.csv`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            if(msg) msg.textContent = "Pobrano pomyślnie.";
-        } catch(e) {
-            if(msg) msg.textContent = "Błąd pobierania.";
+            const link = document.createElement('a');
+            link.href = url;
+            
+            // Pobranie nazwy pliku z nagłówka Content-Disposition
+            const disposition = response.headers.get('content-disposition');
+            let filename = 'apex_virtual_trades_export.csv';
+            if (disposition && disposition.indexOf('attachment') !== -1) {
+                const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                const matches = filenameRegex.exec(disposition);
+                if (matches != null && matches[1]) {
+                    filename = matches[1].replace(/['"]/g, '');
+                }
+            }
+
+            link.setAttribute('download', filename);
+            document.body.appendChild(link);
+            link.click();
+            
+            // Sprzątanie
+            link.parentNode.removeChild(link);
+            window.URL.revokeObjectURL(url);
+
+            statusMsg.className = 'text-sm mt-3 text-green-400';
+            statusMsg.textContent = 'Eksport zakończony pomyślnie.';
+
+        } catch (e) {
+            logger.error("Błąd eksportu CSV:", e);
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd eksportu: ${e.message}`;
+        } finally {
+            exportBtn.disabled = false;
+            exportBtn.innerHTML = `<i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i> Eksportuj do CSV`;
+            lucide.createIcons();
+        }
+    }
+    // ==========================================================
+    
+    // ==========================================================
+    // === NOWE FUNKCJE (Krok 4B - H3 Deep Dive) ===
+    // ==========================================================
+    function showH3DeepDiveModal() {
+        if (ui.h3DeepDiveModal.backdrop) {
+            ui.h3DeepDiveModal.backdrop.classList.remove('hidden');
+            ui.h3DeepDiveModal.yearInput.value = ''; // Wyczyść input
+            ui.h3DeepDiveModal.statusMsg.textContent = ''; // Wyczyść status
+            ui.h3DeepDiveModal.runBtn.disabled = false;
+            ui.h3DeepDiveModal.runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+            lucide.createIcons();
+            // Automatycznie spróbuj załadować ostatni raport
+            handleViewH3DeepDiveReport();
         }
     }
 
-    // ==========================================================================
-    // 8. EVENT LISTENERS & INIT
-    // ==========================================================================
-
-    // Globalny Delegator Zdarzeń (Obsługuje dynamicznie dodawane elementy)
-    document.body.addEventListener('click', (e) => {
-        // Modale Kupna/Sprzedaży
-        if (e.target.closest('.sell-stock-btn')) {
-            const btn = e.target.closest('.sell-stock-btn');
-            ui.modals.sell.ticker.textContent = btn.dataset.ticker;
-            ui.modals.sell.maxQty.textContent = btn.dataset.quantity;
-            ui.modals.sell.qty.max = btn.dataset.quantity;
-            ui.modals.sell.confirm.dataset.ticker = btn.dataset.ticker;
-            ui.modals.sell.el.classList.remove('hidden');
+    function hideH3DeepDiveModal() {
+        if (ui.h3DeepDiveModal.backdrop) {
+            ui.h3DeepDiveModal.backdrop.classList.add('hidden');
+            ui.h3DeepDiveModal.content.innerHTML = ''; // Wyczyść zawartość
         }
-        
-        // Przyciski w raporcie Agenta
-        if (e.target.id === 'run-backtest-year-btn') handleBacktest();
-        if (e.target.id === 'run-ai-optimizer-btn') handleAIOptimizer();
-        if (e.target.id === 'view-ai-report-btn') pollAIReport();
-        if (e.target.id === 'run-h3-deep-dive-modal-btn') ui.modals.h3DeepDive.el.classList.remove('hidden');
-        if (e.target.id === 'run-csv-export-btn') handleExportCSV();
-        if (e.target.id === 'open-h3-strategy-modal-btn') ui.modals.h3Strategy.el.classList.remove('hidden');
-    });
+    }
 
-    // Nawigacja Sidebar
-    ui.nav.dashboard.onclick = (e) => { e.preventDefault(); state.currentView='dashboard'; navigateTo('dashboard'); };
-    ui.nav.portfolio.onclick = (e) => { e.preventDefault(); state.currentView='portfolio'; navigateTo('portfolio'); };
-    ui.nav.transactions.onclick = (e) => { e.preventDefault(); state.currentView='transactions'; navigateTo('transactions'); };
-    ui.nav.agentReport.onclick = (e) => { e.preventDefault(); state.currentView='agentReport'; navigateTo('agentReport'); };
+    async function handleRunH3DeepDive() {
+        const yearInput = ui.h3DeepDiveModal.yearInput;
+        const runBtn = ui.h3DeepDiveModal.runBtn;
+        const statusMsg = ui.h3DeepDiveModal.statusMsg;
+        if (!yearInput || !runBtn || !statusMsg) return;
 
-    // Kontrolki Workera
-    ui.controls.start.onclick = () => api.sendControl('start');
-    ui.controls.pause.onclick = () => api.sendControl('pause');
-    ui.controls.resume.onclick = () => api.sendControl('resume');
+        const yearStr = yearInput.value.trim();
+        const year = parseInt(yearStr, 10);
+        const currentYear = new Date().getFullYear();
 
-    // Zamykanie Modali
-    const closeModals = () => document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.add('hidden'));
-    document.querySelectorAll('.modal-button-secondary').forEach(btn => btn.addEventListener('click', closeModals));
-    // Specjalne przyciski zamykania (X)
-    if(ui.modals.aiReport.close) ui.modals.aiReport.close.onclick = () => ui.modals.aiReport.el.classList.add('hidden');
-    if(ui.modals.h3DeepDive.close) ui.modals.h3DeepDive.close.onclick = () => ui.modals.h3DeepDive.el.classList.add('hidden');
-    if(ui.modals.h3Strategy.close) ui.modals.h3Strategy.close.onclick = () => ui.modals.h3Strategy.el.classList.add('hidden');
-
-    // Logika przycisków w modalach
-    ui.modals.h3DeepDive.runBtn.onclick = handleDeepDive;
-    ui.modals.h3Strategy.runBtn.onclick = async () => {
-        const inputs = ui.modals.h3Strategy.inputs;
-        const params = {
-            h3_percentile: parseFloat(inputs.percentile.value),
-            h3_m_sq_threshold: parseFloat(inputs.mSq.value),
-            h3_tp_multiplier: parseFloat(inputs.tp.value),
-            h3_sl_multiplier: parseFloat(inputs.sl.value),
-            h3_max_hold: parseInt(inputs.hold.value),
-            setup_name: `H3_CUSTOM_${new Date().getTime()}`
-        };
-        ui.modals.h3Strategy.status.textContent = "Wysyłanie...";
-        try {
-            await api.requestBacktest(inputs.year.value, params);
-            ui.modals.h3Strategy.status.textContent = "Zlecono pomyślnie.";
-            setTimeout(() => ui.modals.h3Strategy.el.classList.add('hidden'), 1500);
-        } catch(e) {
-            ui.modals.h3Strategy.status.textContent = "Błąd: " + e.message;
+        if (!yearStr || isNaN(year) || year < 2000 || year > currentYear) {
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd: Wprowadź poprawny rok (np. 2000 - ${currentYear}).`;
+            return;
         }
-    };
 
-    // Logowanie
-    ui.login.form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        ui.login.btn.textContent = "Łączenie...";
-        ui.login.btn.disabled = true;
-        
-        try {
-            const status = await api.checkHealth();
-            if (status) {
-                ui.screens.login.classList.add('hidden');
-                ui.screens.dashboard.classList.remove('hidden');
-                initLayout(); // Ustaw Sidebar
-                
-                // Uruchom pętle
-                navigateTo('dashboard');
-                pollWorkerLoop();
-                refreshDataLoop();
-                // pollAlertsLoop();
-            }
-        } catch (error) {
-            ui.login.status.textContent = "Nie można połączyć z serwerem API.";
-            ui.login.btn.textContent = "Wejdź do Aplikacji";
-            ui.login.btn.disabled = false;
-        }
-    });
+        runBtn.disabled = true;
+        runBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Zlecanie...`;
+        lucide.createIcons();
+        statusMsg.className = 'text-sm mt-3 text-sky-400';
+        statusMsg.textContent = `Zlecanie analizy H3 Deep Dive dla roku ${year}...`;
 
-    // Auto-Check na starcie (dla dev)
-    (async () => {
         try {
-            await api.checkHealth();
-            ui.login.btn.disabled = false;
-            console.log(" [SYSTEM] API Online. Ready to login.");
+            const response = await api.requestH3DeepDive(year);
+            statusMsg.className = 'text-sm mt-3 text-green-400';
+            statusMsg.textContent = response.message || `Zlecono analizę dla ${year}. Worker rozpoczął pracę.`;
+            pollH3DeepDiveReport(); // Zacznij odpytywać o wyniki
         } catch (e) {
-            console.log(" [SYSTEM] API Offline.");
-            ui.login.status.textContent = "API Offline. Sprawdź Render.com";
+            statusMsg.className = 'text-sm mt-3 text-red-400';
+            statusMsg.textContent = `Błąd zlecenia: ${e.message}`;
+            runBtn.disabled = false;
+            runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+            lucide.createIcons();
         }
-    })();
-});
+    }
+
+    async function pollH3DeepDiveReport() {
+        if (state.activeH3DeepDivePolling) {
+            clearTimeout(state.activeH3DeepDivePolling);
+        }
+        
+        // Sprawdź, czy modal jest nadal otwarty
+        if (!ui.h3DeepDiveModal.backdrop || ui.h3DeepDiveModal.backdrop.classList.contains('hidden')) {
+            logger.info("Modal H3 Deep Dive zamknięty, zatrzymuję odpytywanie.");
+            return; // Zatrzymaj odpytywanie, jeśli modal jest zamknięty
+        }
+
+        const statusMsg = ui.h3DeepDiveModal.statusMsg;
+        const contentEl = ui.h3DeepDiveModal.content;
+        const runBtn = ui.h3DeepDiveModal.runBtn;
+
+        try {
+            const reportData = await api.getH3DeepDiveReport();
+            
+            if (reportData.status === 'PROCESSING') {
+                if(statusMsg) statusMsg.textContent = 'Worker przetwarza dane... (Sprawdzam ponownie za 5s)';
+                if(contentEl) contentEl.innerHTML = renderers.loading('Przetwarzanie danych...');
+                lucide.createIcons();
+                state.activeH3DeepDivePolling = setTimeout(pollH3DeepDiveReport, H3_DEEP_DIVE_POLL_INTERVAL);
+            
+            } else if (reportData.status === 'DONE') {
+                if(statusMsg) {
+                    statusMsg.className = 'text-sm mt-3 text-green-400';
+                    statusMsg.textContent = `Analiza H3 zakończona (${new Date(reportData.last_updated).toLocaleString()}).`;
+                }
+                if (runBtn) {
+                     runBtn.disabled = false;
+                     runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+                     lucide.createIcons();
+                }
+                if (contentEl) {
+                    contentEl.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
+                }
+
+            } else { // 'NONE' lub 'ERROR'
+                if(statusMsg) {
+                    statusMsg.className = 'text-sm mt-3 text-gray-400';
+                    statusMsg.textContent = reportData.status === 'ERROR' ? reportData.report_text : 'Gotowy do analizy.';
+                }
+                if (contentEl) {
+                    contentEl.innerHTML = `<p class="text-gray-500">${reportData.status === 'ERROR' ? reportData.report_text : 'Zleć analizę roku, aby zobaczyć raport.'}</p>`;
+                }
+                if (runBtn) {
+                     runBtn.disabled = false;
+                     runBtn.innerHTML = `<i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok`;
+                     lucide.createIcons();
+                }
+            }
+        } catch (e) {
+            logger.error('Błąd podczas odpytywania o raport H3 Deep Dive', e);
+            if(statusMsg) {
+                statusMsg.className = 'text-sm mt-3 text-red-400';
+                statusMsg.textContent = `Błąd odpytywania: ${e.message}`;
+            }
+        }
+    }
+
+    async function handleViewH3DeepDiveReport() {
+        // Ta funkcja jest teraz wywoływana przy otwarciu modala
+        const contentEl = ui.h3DeepDiveModal.content;
+        const statusMsg = ui.h3DeepDiveModal.statusMsg;
+        if (!contentEl || !statusMsg) return;
+
+        contentEl.innerHTML = renderers.loading('Pobieranie ostatniego raportu...');
+        lucide.createIcons();
+        statusMsg.textContent = '';
+
+        try {
+            const reportData = await api.getH3DeepDiveReport();
+            
+            if (reportData.status === 'DONE' && reportData.report_text) {
+                 contentEl.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
+                 statusMsg.textContent = `Załadowano ostatni raport z ${new Date(reportData.last_updated).toLocaleString()}.`;
+                 statusMsg.className = 'text-sm mt-3 text-gray-400';
+            } else if (reportData.status === 'PROCESSING') {
+                contentEl.innerHTML = renderers.loading('Analiza w toku... Worker nadal przetwarza dane.');
+                lucide.createIcons();
+                pollH3DeepDiveReport(); // Rozpocznij odpytywanie
+            } else {
+                 contentEl.innerHTML = `<p class="text-gray-500">Brak dostępnego raportu. Uruchom najpierw analizę.</p>`;
+                 statusMsg.textContent = 'Gotowy do analizy.';
+                 statusMsg.className = 'text-sm mt-3 text-gray-400';
+            }
+        } catch (e) {
+             contentEl.innerHTML = `<p class="text-red-400">Błąd pobierania raportu: ${e.message}</p>`;
+        }
+    }
+    // ==========================================================
+
+    // --- Handlery Zdarzeń (Dodawane od razu) ---
+    
+    ui.mainContent.addEventListener('click', async e => {
+        const sellBtn = e.target.closest('.sell-stock-btn');
+        const backtestYearBtn = e.target.closest('#run-backtest-year-btn');
+        const runAIOptimizerBtn = e.target.closest('#run-ai-optimizer-btn');
+        const viewAIReportBtn = e.target.closest('#view-ai-report-btn');
+        // ==========================================================
+        // === NOWY LISTENER (CSV) ===
+        // ==========================================================
+        const exportCsvBtn = e.target.closest('#run-csv-export-btn');
+        // ==========================================================
+        // === NOWY LISTENER (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        const h3DeepDiveModalBtn = e.target.closest('#run-h3-deep-dive-modal-btn');
+        // ==========================================================
+        const prevBtn = e.target.closest('#report-prev-btn');
+        const nextBtn = e.target.closest('#report-next-btn');
+        // ==========================================================
+
+        if (backtestYearBtn) {
+            handleYearBacktestRequest();
+        }
+        else if (runAIOptimizerBtn) {
+            handleRunAIOptimizer();
+        }
+        else if (viewAIReportBtn) {
+            handleViewAIOptimizerReport();
+        }
+        // ==========================================================
+        // === NOWY HANDLER (CSV) ===
+        // ==========================================================
+        else if (exportCsvBtn) {
+            handleCsvExport();
+        }
+        // ==========================================================
+        // === NOWY HANDLER (Krok 4B - H3 Deep Dive) ===
+        // ==========================================================
+        else if (h3DeepDiveModalBtn) {
+            showH3DeepDiveModal();
+        }
+        // ==========================================================
+        else if (sellBtn) {
+             const ticker = sellBtn.dataset.ticker;
+             const quantity = parseInt(sellBtn.dataset.quantity, 10);
+             if (ticker && !isNaN(quantity)) showSellModal(ticker, quantity);
+        }
+        // ==========================================================
+        // === NOWE HANDLERY (STRONICOWANIE) ===
+        // ==========================================================
+        else if (prevBtn && !prevBtn.disabled) {
+            loadAgentReportPage(state.currentReportPage - 1);
+        }
+        else if (nextBtn && !nextBtn.disabled) {
+            loadAgentReportPage(state.currentReportPage + 1);
+        }
+        // ==========================================================
+    });
+
+    ui.sidebarPhasesContainer.addEventListener('click', (e) => {
+        const accordionToggle = e.target.closest('.accordion-toggle');
+        
+        if (accordionToggle) {
+            const content = accordionToggle.nextElementSibling;
+            const icon = accordionToggle.querySelector('.accordion-icon');
+            if (content && icon) {
+                 content.classList.toggle('hidden');
+                 icon.classList.toggle('rotate-180');
+            }
+        }
+    });
+
+    ui.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); showDashboard(); });
+    ui.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); showPortfolio(); });
+    ui.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); showTransactions(); });
+    ui.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); showAgentReport(); });
+
+    ['start', 'pause', 'resume'].forEach(action => {
+        document.getElementById(`${action}-btn`).addEventListener('click', async () => {
+            try { await api.sendWorkerControl(action); await pollWorkerStatus(); }
+            catch(e) { logger.error(`Błąd kontroli workera (${action}):`, e); }
+        });
+    });
+    
+    ui.buyModal.cancelBtn.addEventListener('click', hideBuyModal);
+    ui.buyModal.confirmBtn.addEventListener('click', handleBuyConfirm);
+    ui.sellModal.cancelBtn.addEventListener('click', hideSellModal);
+    ui.sellModal.confirmBtn.addEventListener('click', handleSellConfirm);
+    
+    if(ui.aiReportModal.closeBtn) {
+        ui.aiReportModal.closeBtn.addEventListener('click', hideAIReportModal);
+    }
+    
+    // ==========================================================
+    // === NOWE HANDLERY (Krok 4B - H3 Deep Dive) ===
+    // ==========================================================
+    if(ui.h3DeepDiveModal.closeBtn) {
+        ui.h3DeepDiveModal.closeBtn.addEventListener('click', hideH3DeepDiveModal);
+    }
+    if(ui.h3DeepDiveModal.runBtn) {
+        ui.h3DeepDiveModal.runBtn.addEventListener('click', handleRunH3DeepDive);
+    }
+    // ==========================================================
+    
+    console.log("Event listeners added.");
+
+    // --- INICJALIZACJA ---
+    function startApp() {
+        logger.info("startApp called - Hiding login, showing dashboard.");
+        ui.loginScreen.classList.add('hidden');
+        ui.dashboardScreen.classList.remove('hidden');
+        ui.apiStatus.innerHTML = '<span class="h-2 w-2 rounded-full bg-green-500 mr-2"></span>Online';
+        showDashboard();
+        pollWorkerStatus();
+        refreshSidebarData();
+        pollSystemAlerts(); 
+        try { lucide.createIcons(); } catch(e) { logger.error("Lucide error:", e); }
+    }
+    console.log("startApp function defined.");
+
+    document.getElementById('login-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (ui.loginButton && !ui.loginButton.disabled) {
+            startApp();
+        } else {
+             logger.warn("Próba zalogowania, gdy przycisk zablokowany.");
+        }
+    });
+    console.log("Login form listener added.");
+
+    // --- BLOK STARTOWY (Tylko pętla sprawdzająca) ---
+    logger.info("Starting initial API status check interval...");
+    const intervalId = setInterval(async () => {
+        logger.info("Sprawdzanie statusu API...");
+        try {
+            const statusData = await api.getApiRootStatus();
+            
+            if (statusData && statusData.status === "APEX Predator API is running") {
+                logger.info("API OK, czyszczenie interwału i odblokowanie logowania.");
+                clearInterval(intervalId);
+                ui.loginStatusText.textContent = 'System gotowy.';
+                ui.loginButton.disabled = false;
+                ui.loginButton.textContent = 'Wejdź do Aplikacji';
+            } else {
+                 logger.warn("API zwróciło 200 OK, ale nieprawidłowe dane:", statusData);
+                 ui.loginStatusText.textContent = 'Problem z odp. API...';
+            }
+        } catch (e) {
+            logger.error("Błąd podczas sprawdzania statusu API:", e.message);
+            ui.loginStatusText.textContent = 'Backend nie gotowy...';
+        }
+    }, 3000);
+    console.log("Initial API status check interval started.");
+
+}); // Koniec DOMContentLoaded
