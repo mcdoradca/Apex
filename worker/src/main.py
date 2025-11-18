@@ -4,7 +4,7 @@ import schedule
 import logging
 import sys
 import json
-from datetime import datetime, timezone, timedelta # Dodano timedelta
+from datetime import datetime, timezone, timedelta 
 from dotenv import load_dotenv
 from sqlalchemy import text, select, func
 
@@ -47,29 +47,34 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 
 
 # ==================================================================
-# === DEKONSTRUKCJA (KROK 7) ===
-# Cała funkcja `handle_ai_analysis_request` została usunięta,
-# ponieważ była powiązana z wygaszoną funkcją analizy na żądanie.
-# ==================================================================
-# def handle_ai_analysis_request(session):
-# ... (kod usunięty) ...
-# ==================================================================
-
-
-# ==================================================================
 # === NOWA FUNKCJA (Krok 2 - Backtest) ===
+# POPRAWKA: Wczytanie i przekazanie dynamicznych parametrów H3.
 # ==================================================================
 def handle_backtest_request(session, api_client) -> str:
     """
     Sprawdza i wykonuje nowe zlecenie backtestu historycznego.
     Zwraca 'BUSY', jeśli backtest jest w toku, lub 'IDLE', jeśli nie.
     """
-    # ZMIANA (Dynamiczny Rok): Ta zmienna będzie teraz zawierać rok, np. "2010"
     period_to_test = utils.get_system_control_value(session, 'backtest_request') 
     
     if period_to_test and period_to_test not in ['NONE', 'PROCESSING']:
         logger.warning(f"Zlecenie Backtestu Historycznego otrzymane dla: {period_to_test}.")
         
+        # --- KLUCZOWA ZMIANA ---
+        # 1. POBIERZ SUROWY TEKST JSON Z PARAMETRAMI
+        params_json_str = utils.get_system_control_value(session, 'backtest_parameters')
+        params = {}
+        if params_json_str and params_json_str != '{}':
+            try:
+                # 2. SPRÓBUJ SPARSIĆ GO DO SŁOWNIKA
+                params = json.loads(params_json_str)
+                logger.info(f"Wczytano niestandardowe parametry backtestu: {params}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Błąd parsowania parametrów backtestu JSON: {e}")
+                utils.append_scan_log(session, "BŁĄD: Nie można wczytać parametrów H3. Użyto domyślnych.")
+                params = {} # Użyj pustego słownika w razie błędu
+        # --- KONIEC KLUCZOWEJ ZMIANY ---
+
         # ==================================================================
         # === POPRAWKA (TimeoutError): Ustawienie globalnej blokady ===
         # ==================================================================
@@ -83,8 +88,8 @@ def handle_backtest_request(session, api_client) -> str:
 
         try:
             # Uruchom silnik backtestu (to jest operacja blokująca)
-            # ZMIANA (Dynamiczny Rok): Przekazujemy rok (np. "2010") do silnika
-            backtest_engine.run_historical_backtest(session, api_client, period_to_test) 
+            # KLUCZOWA ZMIANA: PRZEKAŻ SŁOWNIK 'params' DO SILNIKA
+            backtest_engine.run_historical_backtest(session, api_client, period_to_test, parameters=params) 
             
             logger.info(f"Backtest Historyczny dla {period_to_test} zakończony pomyślnie.")
             utils.append_scan_log(session, f"Backtest Historyczny dla '{period_to_test}' zakończony.")
