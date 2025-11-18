@@ -116,14 +116,26 @@ def _simulate_trades_h3(
         
         current_aqm_score = aqm_score_series.iloc[i]
         percentile_95 = percentile_95_series.iloc[i]
+        
+        # === TEST 1 (Analityk): Odczyt m_norm dla filtru ===
+        current_m_norm = m_norm.iloc[i]
+        # ===================================================
 
         # ==================================================================
 
         # Sygnał KUPNA = Warunek 1 (AQM_V3_SCORE > 95. percentyl)
         if pd.isna(current_aqm_score) or pd.isna(percentile_95):
             continue
-            
-        if current_aqm_score > percentile_95:
+        
+        # === TEST 1 (Analityk): Dodano warunek (current_m_norm < -1.0) ===
+        # Hipoteza: Unikajmy sygnałów, które są już "zbyt popularne" (wysokie m_sq).
+        # Uwaga: m_norm jest odejmowane we wzorze na AQM_SCORE (J - nabla - m), 
+        # więc niskie m_norm (ujemne) zwiększa wynik AQM.
+        # Ale analityk prosił o warunek `m_sq_norm < -1.0`.
+        # Jeśli m_sq_norm jest < -1.0, to znaczy, że uwaga jest BARDZO NISKA (poniżej średniej).
+        # To zgodne z logiką "unikania popularności".
+        if (current_aqm_score > percentile_95) and (current_m_norm < -1.0):
+        # ==================================================================
             
             # --- ZNALEZIONO SYGNAŁ H3 ---
             
@@ -150,7 +162,9 @@ def _simulate_trades_h3(
                 # ==================================================================
                 setup_h3 = {
                     "ticker": ticker,
-                    "setup_type": "AQM_V3_H3_QUANTUM_FIELD", 
+                    # === ZMIANA NAZWY SETUPU DLA TESTU 1 ===
+                    "setup_type": "AQM_V3_H3_QUANTUM_FIELD_TEST1", 
+                    # =======================================
                     "entry_price": float(entry_price),
                     "stop_loss": float(stop_loss),
                     "take_profit": float(take_profit),
@@ -161,7 +175,7 @@ def _simulate_trades_h3(
                     "metric_aqm_percentile_95": float(percentile_95),
                     "metric_J_norm": float(j_norm.iloc[i]),
                     "metric_nabla_sq_norm": float(nabla_norm.iloc[i]),
-                    "metric_m_sq_norm": float(m_norm.iloc[i]),
+                    "metric_m_sq_norm": float(current_m_norm),
                 }
                 # ==================================================================
 
@@ -187,7 +201,7 @@ def _simulate_trades_h3(
     if trades_found > 0:
         try:
             session.commit()
-            logger.info(f"[Backtest H3] Pomyślnie zapisano {trades_found} transakcji H3 dla {ticker} (Rok: {year}).")
+            logger.info(f"[Backtest H3] Pomyślnie zapisano {trades_found} transakcji H3 (TEST 1) dla {ticker} (Rok: {year}).")
         except Exception as e:
             logger.error(f"Błąd podczas commitowania transakcji H3 dla {ticker}: {e}")
             session.rollback()
