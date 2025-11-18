@@ -82,7 +82,12 @@ async def startup_event():
             # ==========================================================
             # === NOWA WARTOŚĆ (Krok 4 - Mega Agent) ===
             # ==========================================================
-            'ai_optimizer_report': 'NONE'
+            'ai_optimizer_report': 'NONE',
+            # ==========================================================
+            # === NOWA WARTOŚĆ (Krok 3C - H3 Deep Dive) ===
+            # ==========================================================
+            'h3_deep_dive_request': 'NONE',
+            'h3_deep_dive_report': 'NONE'
             # ==========================================================
         }
         for key, value in initial_values.items():
@@ -284,6 +289,62 @@ def get_ai_optimizer_report_endpoint(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Błąd podczas pobierania raportu Mega Agenta AI: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Nie można pobrać raportu Mega Agenta AI.")
+
+# ==================================================================
+# === NOWE ENDPOINTY (Krok 3C - H3 Deep Dive) ===
+# ==================================================================
+
+@app.post("/api/v1/analysis/h3-deep-dive", status_code=202, response_model=Dict[str, str])
+def request_h3_deep_dive(request: schemas.H3DeepDiveRequest, db: Session = Depends(get_db)):
+    """
+    Wysyła zlecenie do Workera, aby uruchomił analizę H3 Deep Dive
+    dla określonego ROKU (np. 2023).
+    """
+    year_to_test_str = str(request.year)
+    logger.info(f"Zlecenie H3 Deep Dive otrzymane dla roku: {year_to_test_str}.")
+
+    # Sprawdź, czy worker nie jest już zajęty czymś innym
+    worker_status = crud.get_system_control_value(db, "worker_status")
+    if worker_status != 'IDLE':
+            raise HTTPException(status_code=409, detail=f"Worker jest obecnie zajęty ({worker_status}). Spróbuj ponownie, gdy będzie w stanie IDLE.")
+            
+    # Sprawdź, czy inne zadanie nie jest już zlecone
+    current_backtest = crud.get_system_control_value(db, "backtest_request")
+    current_optimizer = crud.get_system_control_value(db, "ai_optimizer_request")
+    current_deep_dive = crud.get_system_control_value(db, "h3_deep_dive_request")
+
+    if (current_backtest and current_backtest != 'NONE') or \
+       (current_optimizer and current_optimizer != 'NONE') or \
+       (current_deep_dive and current_deep_dive != 'NONE'):
+            raise HTTPException(status_code=409, detail="Inna analiza (Backtest, AI Optimizer lub Deep Dive) jest już w toku lub zlecona.")
+
+    try:
+        # Zleć zadanie
+        crud.set_system_control_value(db, key="h3_deep_dive_request", value=year_to_test_str)
+        # Ustaw raport na "PRZETWARZANIE", aby frontend wiedział, że coś się dzieje
+        crud.set_system_control_value(db, key="h3_deep_dive_report", value='PROCESSING') 
+        logger.info(f"Zlecenie H3 Deep Dive dla {year_to_test_str} zostało wysłane do workera.")
+        return {"message": f"Zlecenie analizy H3 Deep Dive dla roku '{year_to_test_str}' zostało wysłane do workera."}
+    except Exception as e:
+        logger.error(f"Błąd podczas zlecania H3 Deep Dive dla {year_to_test_str}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera podczas zlecania analizy.")
+
+@app.get("/api/v1/analysis/h3-deep-dive-report", response_model=schemas.H3DeepDiveReport, summary="Pobiera ostatni raport H3 Deep Dive")
+def get_h3_deep_dive_report_endpoint(db: Session = Depends(get_db)):
+    """
+    Pobiera ostatni wygenerowany raport tekstowy H3 Deep Dive
+    z bazy danych (z klucza 'h3_deep_dive_report').
+    """
+    try:
+        report = crud.get_h3_deep_dive_report(db)
+        return report
+    except Exception as e:
+        logger.error(f"Błąd podczas pobierania raportu H3 Deep Dive: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Nie można pobrać raportu H3 Deep Dive.")
+
+# ==================================================================
+# === KONIEC NOWYCH ENDPOINTÓW ===
+# ==================================================================
 
 
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
