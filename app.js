@@ -30,17 +30,31 @@ document.addEventListener('DOMContentLoaded', () => {
         resumeBtn: document.getElementById('resume-btn'),
         apiStatus: document.getElementById('api-status'),
         workerStatusText: document.getElementById('worker-status-text'),
+        
+        // Linki nawigacyjne
         dashboardLink: document.getElementById('dashboard-link'),
         portfolioLink: document.getElementById('portfolio-link'),
         transactionsLink: document.getElementById('transactions-link'),
         agentReportLink: document.getElementById('agent-report-link'),
+        
+        // Statusy
         heartbeatStatus: document.getElementById('heartbeat-status'),
         alertContainer: document.getElementById('system-alert-container'),
+        
+        // Listy faz
         phase1: { list: document.getElementById('phase-1-list'), count: document.getElementById('phase-1-count') },
         phase2: { list: document.getElementById('phase-2-list'), count: document.getElementById('phase-2-count') },
         phase3: { list: document.getElementById('phase-3-list'), count: document.getElementById('phase-3-count') },
         
-        // Modale Transakcyjne
+        // Sidebar
+        sidebar: document.getElementById('app-sidebar'),
+        sidebarBackdrop: document.getElementById('sidebar-backdrop'),
+        mobileMenuBtn: document.getElementById('mobile-menu-btn'),
+        mobileSidebarCloseBtn: document.getElementById('mobile-sidebar-close'),
+        sidebarNav: document.querySelector('#app-sidebar nav'),
+        sidebarPhasesContainer: document.getElementById('phases-container'),
+
+        // Modale
         buyModal: { 
             backdrop: document.getElementById('buy-modal'), 
             tickerSpan: document.getElementById('buy-modal-ticker'), 
@@ -58,15 +72,11 @@ document.addEventListener('DOMContentLoaded', () => {
             cancelBtn: document.getElementById('sell-cancel-btn'),
             confirmBtn: document.getElementById('sell-confirm-btn')
         },
-        
-        // Modal Raportu AI
         aiReportModal: {
             backdrop: document.getElementById('ai-report-modal'),
             content: document.getElementById('ai-report-content'),
             closeBtn: document.getElementById('ai-report-close-btn')
         },
-
-        // Modal H3 Deep Dive (Analiza Porażek)
         h3DeepDiveModal: {
             backdrop: document.getElementById('h3-deep-dive-modal'),
             yearInput: document.getElementById('h3-deep-dive-year-input'),
@@ -75,8 +85,6 @@ document.addEventListener('DOMContentLoaded', () => {
             content: document.getElementById('h3-deep-dive-report-content'),
             closeBtn: document.getElementById('h3-deep-dive-close-btn')
         },
-
-        // Modal Pulpitu Strategii H3 (Dynamiczne Parametry)
         h3StrategyModal: {
             backdrop: document.getElementById('h3-strategy-modal'),
             yearInput: document.getElementById('h3-strategy-year'),
@@ -88,25 +96,16 @@ document.addEventListener('DOMContentLoaded', () => {
             runBtn: document.getElementById('run-h3-strategy-btn'),
             statusMsg: document.getElementById('h3-strategy-status'),
             closeBtn: document.getElementById('h3-strategy-close-btn')
-        },
-
-        // Sidebar Mobilny
-        sidebar: document.getElementById('app-sidebar'),
-        sidebarBackdrop: document.getElementById('sidebar-backdrop'),
-        mobileMenuBtn: document.getElementById('mobile-menu-btn'),
-        mobileSidebarCloseBtn: document.getElementById('mobile-sidebar-close'),
-        sidebarNav: document.querySelector('#app-sidebar nav'),
-        sidebarPhasesContainer: document.getElementById('phases-container')
+        }
     };
 
     // --- KONFIGURACJA API ---
-    const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com"; // Upewnij się, że to poprawny URL twojego backendu
+    const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
     
-    const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000; // 30s
-    const ALERT_POLL_INTERVAL = 7000; // 7s
-    const AI_OPTIMIZER_POLL_INTERVAL = 5000; // 5s
-    const H3_DEEP_DIVE_POLL_INTERVAL = 5000; // 5s
-    const PROFIT_ALERT_THRESHOLD = 1.02; // +2%
+    const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000;
+    const ALERT_POLL_INTERVAL = 7000;
+    const AI_OPTIMIZER_POLL_INTERVAL = 5000;
+    const H3_DEEP_DIVE_POLL_INTERVAL = 5000;
     const REPORT_PAGE_SIZE = 200;
 
     const logger = {
@@ -142,6 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // API Methods
     const api = {
         getApiRootStatus: () => apiRequest(''),
         getWorkerStatus: () => apiRequest('api/v1/worker/status'),
@@ -156,38 +156,40 @@ document.addEventListener('DOMContentLoaded', () => {
         buyStock: (data) => apiRequest('api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
         sellStock: (data) => apiRequest('api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
         getTransactionHistory: () => apiRequest('api/v1/transactions'),
-        
-        // Raporty i Analiza
         getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
-        
-        // Backtest (Zaktualizowany o parametry)
-        requestBacktest: (year, parameters = null) => apiRequest('api/v1/backtest/request', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ year: year, parameters: parameters })
-        }),
-        
-        // AI Optimizer
-        requestAIOptimizer: () => apiRequest('api/v1/ai-optimizer/request', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
-        }),
+        requestBacktest: (year, parameters = null) => apiRequest('api/v1/backtest/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year, parameters: parameters }) }),
+        requestAIOptimizer: () => apiRequest('api/v1/ai-optimizer/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }),
         getAIOptimizerReport: () => apiRequest('api/v1/ai-optimizer/report'),
-        
-        // H3 Deep Dive
-        requestH3DeepDive: (year) => apiRequest('api/v1/analysis/h3-deep-dive', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year })
-        }),
+        requestH3DeepDive: (year) => apiRequest('api/v1/analysis/h3-deep-dive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year }) }),
         getH3DeepDiveReport: () => apiRequest('api/v1/analysis/h3-deep-dive-report'),
     };
 
-    // --- OBSŁUGA SIDEBARA (MOBILE) ---
+    // --- NAPRAWA SIDEBARA (Responsive) ---
+    // Dodajemy funkcję, która sprawdza rozmiar ekranu i wymusza poprawne klasy
+    function checkSidebarState() {
+        if (window.innerWidth >= 768) {
+            // Desktop: Sidebar widoczny
+            if (ui.sidebar) {
+                ui.sidebar.classList.remove('-translate-x-full');
+                ui.sidebar.classList.add('translate-x-0');
+            }
+            if (ui.sidebarBackdrop) ui.sidebarBackdrop.classList.add('hidden');
+        } else {
+            // Mobile: Sidebar domyślnie ukryty
+            // (Nie wymuszamy ukrycia przy ładowaniu, żeby nie migać, ale logika open/close to obsłuży)
+        }
+    }
+    window.addEventListener('resize', checkSidebarState);
+
     function openSidebar() {
         if (ui.sidebar) { ui.sidebar.classList.remove('-translate-x-full'); ui.sidebar.classList.add('translate-x-0'); }
         if (ui.sidebarBackdrop) ui.sidebarBackdrop.classList.remove('hidden');
     }
     function closeSidebar() {
-        if (ui.sidebar) { ui.sidebar.classList.add('-translate-x-full'); ui.sidebar.classList.remove('translate-x-0'); }
-        if (ui.sidebarBackdrop) ui.sidebarBackdrop.classList.add('hidden');
+        if (window.innerWidth < 768) { // Tylko na mobile zamykamy
+            if (ui.sidebar) { ui.sidebar.classList.add('-translate-x-full'); ui.sidebar.classList.remove('translate-x-0'); }
+            if (ui.sidebarBackdrop) ui.sidebarBackdrop.classList.add('hidden');
+        }
     }
     if (ui.mobileMenuBtn) ui.mobileMenuBtn.addEventListener('click', openSidebar);
     if (ui.mobileSidebarCloseBtn) ui.mobileSidebarCloseBtn.addEventListener('click', closeSidebar);
@@ -195,10 +197,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ui.sidebarNav) ui.sidebarNav.addEventListener('click', (e) => { if (e.target.closest('a')) closeSidebar(); });
 
 
-    // --- RENDERERY HTML ---
+    // --- RENDERERY HTML (POPRAWIONE) ---
     const renderers = {
-        loading: (text) => `<div class="text-center py-10"><div class="flex flex-col items-center"><i data-lucide="loader-2" class="w-8 h-8 text-sky-500 animate-spin mb-2"></i><p class="text-sky-400">${text}</p></div></div>`,
+        loading: (text) => `<div class="text-center py-20"><div class="flex flex-col items-center"><i data-lucide="loader-2" class="w-12 h-12 text-sky-500 animate-spin mb-4"></i><p class="text-sky-400 text-lg font-semibold">${text}</p></div></div>`,
         
+        // Listy w sidebarze
         phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
         phase2List: (results) => results.map(r => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
         phase3List: (signals) => signals.map(s => {
@@ -206,31 +209,53 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<div class="candidate-item flex items-center text-xs p-2 rounded-md cursor-default transition-colors ${color}"><span class="font-bold mr-2">${s.ticker}</span><span class="ml-auto">${s.status}</span></div>`;
         }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
         
+        // DASHBOARD - Dodano placeholdery wykresów
         dashboard: () => `
-            <div id="dashboard-view" class="max-w-4xl mx-auto">
-                <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                    <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                        <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
-                        <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
+            <div id="dashboard-view" class="max-w-5xl mx-auto space-y-6">
+                <h2 class="text-3xl font-bold text-sky-400 pb-2 border-b border-gray-800">Panel Kontrolny</h2>
+                
+                <!-- Karty Statusu -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="bg-[#161B22] p-6 rounded-xl shadow-lg border border-gray-700 flex flex-col">
+                        <h3 class="font-semibold text-gray-400 flex items-center mb-4"><i data-lucide="cpu" class="w-5 h-5 mr-2 text-sky-400"></i>Status Silnika</h3>
+                        <p id="dashboard-worker-status" class="text-4xl font-extrabold text-green-500 mt-auto">IDLE</p>
                         <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
                     </div>
-                    <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                        <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
-                        <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
-                        <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
+                    <div class="bg-[#161B22] p-6 rounded-xl shadow-lg border border-gray-700 flex flex-col">
+                        <h3 class="font-semibold text-gray-400 flex items-center mb-4"><i data-lucide="bar-chart-2" class="w-5 h-5 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
+                        <div class="mt-auto">
+                            <span id="progress-text" class="text-3xl font-bold text-white">0 / 0</span>
+                            <span class="text-gray-500 text-sm ml-1">tickers</span>
+                        </div>
+                        <div class="w-full bg-gray-800 rounded-full h-2 mt-3"><div id="progress-bar" class="bg-sky-600 h-2 rounded-full transition-all duration-500" style="width: 0%"></div></div>
                     </div>
-                    <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                        <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały (Aktywne / Wyrzucone)</h3>
-                        <div class="flex items-baseline gap-x-4 gap-y-2 mt-2">
-                            <div><p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Aktywne</p></div>
-                            <div class="border-l border-gray-700 pl-4"><p id="dashboard-discarded-signals" class="text-4xl font-extrabold text-gray-500">0</p><p class="text-sm text-gray-500 mt-1">Wyrzucone (24h)</p></div>
+                    <div class="bg-[#161B22] p-6 rounded-xl shadow-lg border border-gray-700 flex flex-col">
+                        <h3 class="font-semibold text-gray-400 flex items-center mb-4"><i data-lucide="activity" class="w-5 h-5 mr-2 text-red-500"></i>Sygnały Rynkowe</h3>
+                        <div class="flex items-baseline gap-6 mt-auto">
+                            <div><p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p><p class="text-xs text-gray-500 uppercase mt-1">Aktywne</p></div>
+                            <div class="border-l border-gray-700 pl-6"><p id="dashboard-discarded-signals" class="text-4xl font-extrabold text-gray-500">0</p><p class="text-xs text-gray-500 uppercase mt-1">Odrzucone (24h)</p></div>
                         </div>
                     </div>
                 </div>
-                <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
-                <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
-                    <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
+
+                <!-- Placeholder Wykresu (dla lepszego wyglądu) -->
+                <div class="bg-[#161B22] rounded-xl border border-gray-700 p-8 text-center">
+                     <div class="flex flex-col items-center justify-center h-48 text-gray-600">
+                        <i data-lucide="line-chart" class="w-16 h-16 mb-4 opacity-20"></i>
+                        <p class="text-lg font-medium">Wykresy Analityczne</p>
+                        <p class="text-sm">Szczegółowa wizualizacja dostępna po zakończeniu Fazy 3.</p>
+                     </div>
+                </div>
+
+                <!-- Logi -->
+                <div class="bg-[#161B22] rounded-xl shadow-lg border border-gray-700 overflow-hidden">
+                    <div class="bg-[#0d1117] px-4 py-3 border-b border-gray-700 flex justify-between items-center">
+                        <h3 class="font-semibold text-gray-300 flex items-center"><i data-lucide="terminal" class="w-4 h-4 mr-2 text-green-400"></i>Logi Systemowe</h3>
+                        <span class="text-xs text-gray-500">Live Stream</span>
+                    </div>
+                    <div id="scan-log-container" class="h-64 overflow-y-auto p-4 bg-[#0d1117]">
+                        <pre id="scan-log" class="text-xs font-mono text-green-400/80 whitespace-pre-wrap">Inicjalizacja systemu...</pre>
+                    </div>
                 </div>
             </div>`,
         
@@ -246,23 +271,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     totalVal += val; totalPL += pl;
                 }
                 const plColor = pl >= 0 ? 'text-green-500' : 'text-red-500';
-                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
-                    <td class="p-3 font-bold text-sky-400">${h.ticker}</td>
-                    <td class="p-3 text-right">${h.quantity}</td>
-                    <td class="p-3 text-right">${h.average_buy_price.toFixed(2)}</td>
-                    <td class="p-3 text-right">${price ? price.toFixed(2) : '---'}</td>
-                    <td class="p-3 text-right text-cyan-400 font-bold">${h.take_profit ? h.take_profit.toFixed(2) : '---'}</td>
-                    <td class="p-3 text-right ${plColor}">${pl ? pl.toFixed(2) : '---'} USD</td>
-                    <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
+                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
+                    <td class="p-4 font-bold text-sky-400">${h.ticker}</td>
+                    <td class="p-4 text-right font-mono">${h.quantity}</td>
+                    <td class="p-4 text-right font-mono text-gray-400">${h.average_buy_price.toFixed(2)}</td>
+                    <td class="p-4 text-right font-mono font-semibold text-white">${price ? price.toFixed(2) : '---'}</td>
+                    <td class="p-4 text-right font-mono text-cyan-400">${h.take_profit ? h.take_profit.toFixed(2) : '---'}</td>
+                    <td class="p-4 text-right font-mono font-bold ${plColor}">${pl ? (pl > 0 ? '+' : '') + pl.toFixed(2) : '---'} USD</td>
+                    <td class="p-4 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 hover:border-red-500/50 py-1.5 px-3 rounded transition-all">Sprzedaj</button></td>
                 </tr>`;
             }).join('');
             const totalPLColor = totalPL >= 0 ? 'text-green-500' : 'text-red-500';
             return `<div id="portfolio-view" class="max-w-6xl mx-auto">
-                <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">
-                    Portfel Inwestycyjny <span class="text-lg text-gray-400">Wartość: ${totalVal.toFixed(2)} USD | Z/S: <span class="${totalPLColor}">${totalPL.toFixed(2)} USD</span></span>
-                </h2>
-                ${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Portfel pusty.</p>' : 
-                `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th class="p-3">Ticker</th><th class="p-3 text-right">Ilość</th><th class="p-3 text-right">Śr. Cena</th><th class="p-3 text-right">Cena</th><th class="p-3 text-right">Cel</th><th class="p-3 text-right">Z/S</th><th class="p-3 text-right">Akcja</th></tr></thead><tbody>${rows}</tbody></table></div>`}
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-6 pb-4 border-b border-gray-800 gap-4">
+                    <h2 class="text-3xl font-bold text-sky-400">Twój Portfel</h2>
+                    <div class="flex gap-6 bg-[#161B22] px-6 py-3 rounded-lg border border-gray-700">
+                        <div><p class="text-xs text-gray-500 uppercase">Wartość</p><p class="text-xl font-bold text-white">${totalVal.toFixed(2)} USD</p></div>
+                        <div class="border-l border-gray-600 pl-6"><p class="text-xs text-gray-500 uppercase">Zysk/Strata</p><p class="text-xl font-bold ${totalPLColor}">${totalPL > 0 ? '+' : ''}${totalPL.toFixed(2)} USD</p></div>
+                    </div>
+                </div>
+                ${holdings.length === 0 ? '<div class="bg-[#161B22] rounded-xl p-12 text-center border border-gray-700"><i data-lucide="wallet" class="w-12 h-12 text-gray-600 mx-auto mb-4"></i><p class="text-gray-400 text-lg">Twój portfel jest pusty.</p></div>' : 
+                `<div class="overflow-hidden bg-[#161B22] rounded-xl border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] border-b border-gray-700"><tr><th class="p-4">Ticker</th><th class="p-4 text-right">Ilość</th><th class="p-4 text-right">Śr. Cena</th><th class="p-4 text-right">Obecna</th><th class="p-4 text-right">Target</th><th class="p-4 text-right">P/L</th><th class="p-4 text-right">Akcja</th></tr></thead><tbody>${rows}</tbody></table></div>`}
             </div>`;
         },
         
@@ -270,107 +299,95 @@ document.addEventListener('DOMContentLoaded', () => {
              const rows = transactions.map(t => {
                 const color = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
                 const plColor = t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500';
-                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${new Date(t.transaction_date).toLocaleString()}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${color}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${plColor}">${t.profit_loss_usd ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
+                return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors"><td class="p-4 text-gray-400 text-xs">${new Date(t.transaction_date).toLocaleString()}</td><td class="p-4 font-bold text-sky-400">${t.ticker}</td><td class="p-4 font-bold ${color}">${t.transaction_type}</td><td class="p-4 text-right font-mono">${t.quantity}</td><td class="p-4 text-right font-mono text-gray-300">${t.price_per_share.toFixed(4)}</td><td class="p-4 text-right font-mono font-bold ${plColor}">${t.profit_loss_usd ? (t.profit_loss_usd > 0 ? '+' : '') + t.profit_loss_usd.toFixed(2) + ' USD' : '-'}</td></tr>`;
             }).join('');
-            return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th class="p-3">Data</th><th class="p-3">Ticker</th><th class="p-3">Typ</th><th class="p-3 text-right">Ilość</th><th class="p-3 text-right">Cena</th><th class="p-3 text-right">Z/S</th></tr></thead><tbody>${rows}</tbody></table></div>`}</div>`;
+            return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-3xl font-bold text-sky-400 mb-6 pb-2 border-b border-gray-800">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii.</p>' : `<div class="overflow-hidden bg-[#161B22] rounded-xl border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] border-b border-gray-700"><tr><th class="p-4">Data</th><th class="p-4">Ticker</th><th class="p-4">Typ</th><th class="p-4 text-right">Ilość</th><th class="p-4 text-right">Cena</th><th class="p-4 text-right">Wynik</th></tr></thead><tbody>${rows}</tbody></table></div>`}</div>`;
         },
 
         agentReport: (report) => {
             const stats = report.stats;
-            // Sekcja Kart Statystyk
-            const createStatCard = (l, v, i) => `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center text-sm"><i data-lucide="${i}" class="w-4 h-4 mr-2 text-sky-400"></i>${l}</h3><p class="text-3xl font-extrabold mt-2 text-white">${v}</p></div>`;
+            const createStatCard = (l, v, i) => `<div class="bg-[#161B22] p-6 rounded-xl shadow-lg border border-gray-700 flex items-center justify-between"><div class="flex flex-col"><span class="text-gray-400 text-xs uppercase font-semibold mb-1">${l}</span><span class="text-3xl font-extrabold text-white">${v}</span></div><div class="bg-gray-800/50 p-3 rounded-lg"><i data-lucide="${i}" class="w-6 h-6 text-sky-400"></i></div></div>`;
             
-            // Tabela Strategii
             const setupRows = Object.entries(stats.by_setup).map(([k, v]) => `
                 <tr class="border-b border-gray-800 hover:bg-[#1f2937]">
                     <td class="p-3 text-sky-400 font-semibold">${k}</td>
-                    <td class="p-3 text-right">${v.total_trades}</td>
-                    <td class="p-3 text-right ${v.win_rate_percent >= 50 ? 'text-green-400' : 'text-red-400'}">${v.win_rate_percent.toFixed(1)}%</td>
-                    <td class="p-3 text-right font-bold ${v.total_p_l_percent >= 0 ? 'text-green-400' : 'text-red-400'}">${v.total_p_l_percent.toFixed(2)}%</td>
+                    <td class="p-3 text-right font-mono">${v.total_trades}</td>
+                    <td class="p-3 text-right font-mono ${v.win_rate_percent >= 50 ? 'text-green-400' : 'text-red-400'}">${v.win_rate_percent.toFixed(1)}%</td>
+                    <td class="p-3 text-right font-mono font-bold ${v.total_p_l_percent >= 0 ? 'text-green-400' : 'text-red-400'}">${v.total_p_l_percent.toFixed(2)}%</td>
                 </tr>`).join('');
 
-            // Panele sterowania (Backtest / AI / Deep Dive / Export)
             const toolsPanel = `
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-                    <!-- Backtest & H3 Strategy -->
-                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-700">
-                        <h4 class="text-lg font-semibold text-gray-300 mb-3">Symulacja Historyczna</h4>
-                        <div class="flex gap-2 mb-2">
-                            <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="Rok" min="2000" max="2099">
-                            <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex-1"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Start</button>
+                    <!-- Backtest -->
+                    <div class="bg-[#161B22] p-6 rounded-xl border border-gray-700 shadow-md">
+                        <div class="flex items-center gap-3 mb-4"><div class="p-2 bg-purple-500/10 rounded-lg"><i data-lucide="history" class="w-5 h-5 text-purple-400"></i></div><h4 class="text-lg font-bold text-white">Backtest Historyczny</h4></div>
+                        <div class="flex gap-2 mb-3">
+                            <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0 bg-gray-900 border-gray-600" placeholder="Rok" min="2000" max="2099">
+                            <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex-1 bg-purple-600 hover:bg-purple-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Start</button>
                         </div>
-                        <button id="open-h3-strategy-modal-btn" class="w-full text-xs text-sky-400 hover:text-sky-300 py-2 border border-dashed border-gray-600 rounded hover:border-sky-400 transition-colors mt-2">
-                            + Otwórz Pulpit Strategii H3 (Parametry)
+                        <button id="open-h3-strategy-modal-btn" class="w-full text-xs text-gray-400 hover:text-white py-2 border border-dashed border-gray-700 rounded hover:border-gray-500 transition-colors">
+                            + Konfiguracja Strategii H3
                         </button>
-                        <div id="backtest-status-message" class="text-sm mt-2 h-4"></div>
+                        <div id="backtest-status-message" class="text-sm mt-2 h-4 font-mono"></div>
                     </div>
 
-                    <!-- Mega Agent AI -->
-                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-700">
-                        <h4 class="text-lg font-semibold text-gray-300 mb-3">Mega Agent AI</h4>
-                        <div class="flex gap-2">
-                            <button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex-1"><i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>Analizuj</button>
-                            <button id="view-ai-report-btn" class="modal-button modal-button-secondary"><i data-lucide="file-text" class="w-4 h-4"></i>Raport</button>
+                    <!-- AI & Deep Dive -->
+                    <div class="bg-[#161B22] p-6 rounded-xl border border-gray-700 shadow-md flex flex-col gap-4">
+                        <div>
+                            <div class="flex items-center gap-3 mb-3"><div class="p-2 bg-pink-500/10 rounded-lg"><i data-lucide="brain-circuit" class="w-5 h-5 text-pink-400"></i></div><h4 class="text-lg font-bold text-white">Mega Agent AI</h4></div>
+                            <div class="flex gap-2">
+                                <button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex-1 bg-pink-600 hover:bg-pink-700"><i data-lucide="sparkles" class="w-4 h-4 mr-2"></i>Optymalizuj</button>
+                                <button id="view-ai-report-btn" class="modal-button modal-button-secondary"><i data-lucide="file-text" class="w-4 h-4"></i></button>
+                            </div>
+                            <div id="ai-optimizer-status-message" class="text-sm mt-1 h-4 font-mono"></div>
                         </div>
-                        <div id="ai-optimizer-status-message" class="text-sm mt-2 h-4"></div>
-                    </div>
-
-                    <!-- H3 Deep Dive -->
-                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-700">
-                        <h4 class="text-lg font-semibold text-gray-300 mb-3">H3 Deep Dive</h4>
-                        <button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary w-full"><i data-lucide="search" class="w-4 h-4 mr-2"></i>Analiza Porażek</button>
-                        <div id="h3-deep-dive-main-status" class="text-sm mt-2 h-4"></div>
-                    </div>
-
-                    <!-- Export CSV -->
-                    <div class="bg-[#161B22] p-6 rounded-lg border border-gray-700">
-                        <h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4>
-                        <button id="run-csv-export-btn" class="modal-button modal-button-secondary w-full"><i data-lucide="download" class="w-4 h-4 mr-2"></i>Pobierz CSV</button>
-                        <div id="csv-export-status-message" class="text-sm mt-2 h-4"></div>
+                        <div class="border-t border-gray-700 pt-4">
+                             <button id="run-h3-deep-dive-modal-btn" class="w-full flex items-center justify-center text-sm text-sky-400 hover:text-sky-300 font-semibold"><i data-lucide="microscope" class="w-4 h-4 mr-2"></i>Analiza Porażek (Deep Dive)</button>
+                             <button id="run-csv-export-btn" class="w-full flex items-center justify-center text-sm text-gray-400 hover:text-white mt-3"><i data-lucide="download" class="w-4 h-4 mr-2"></i>Eksportuj CSV</button>
+                             <div id="csv-export-status-message" class="text-sm mt-1 h-4 text-center font-mono"></div>
+                        </div>
                     </div>
                 </div>
             `;
 
-            // Tabela Transakcji (uproszczona dla czytelności, pełna w CSV)
             const tradeRows = report.trades.map(t => `
-                <tr class="border-b border-gray-800 text-xs font-mono hover:bg-[#1f2937]">
-                    <td class="p-2 text-gray-400">${new Date(t.open_date).toLocaleDateString()}</td>
-                    <td class="p-2 font-bold text-sky-400">${t.ticker}</td>
-                    <td class="p-2 text-gray-300">${t.setup_type.replace('BACKTEST_', '')}</td>
-                    <td class="p-2 text-right ${t.status.includes('TP') ? 'text-green-400' : 'text-red-400'}">${t.status}</td>
-                    <td class="p-2 text-right font-bold ${t.final_profit_loss_percent >= 0 ? 'text-green-400' : 'text-red-400'}">${t.final_profit_loss_percent ? t.final_profit_loss_percent.toFixed(2) + '%' : '---'}</td>
-                    <td class="p-2 text-right text-yellow-300 font-bold">${t.metric_aqm_score_h3 ? t.metric_aqm_score_h3.toFixed(3) : '-'}</td>
+                <tr class="border-b border-gray-800 text-xs font-mono hover:bg-[#1f2937] transition-colors">
+                    <td class="p-3 text-gray-400">${new Date(t.open_date).toLocaleDateString()}</td>
+                    <td class="p-3 font-bold text-sky-400">${t.ticker}</td>
+                    <td class="p-3 text-gray-300">${t.setup_type.replace('BACKTEST_', '')}</td>
+                    <td class="p-3 text-right ${t.status.includes('TP') ? 'text-green-400' : 'text-red-400'}">${t.status}</td>
+                    <td class="p-3 text-right font-bold ${t.final_profit_loss_percent >= 0 ? 'text-green-400' : 'text-red-400'}">${t.final_profit_loss_percent ? t.final_profit_loss_percent.toFixed(2) + '%' : '---'}</td>
+                    <td class="p-3 text-right text-yellow-300 font-bold">${t.metric_aqm_score_h3 ? t.metric_aqm_score_h3.toFixed(3) : '-'}</td>
                 </tr>
             `).join('');
 
-            return `<div id="agent-report-view" class="max-w-6xl mx-auto">
-                <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            return `<div id="agent-report-view" class="max-w-6xl mx-auto pb-10">
+                <h2 class="text-3xl font-bold text-sky-400 mb-6 pb-2 border-b border-gray-800">Centrum Analityczne</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                     ${createStatCard('Całkowity P/L', `${stats.total_p_l_percent.toFixed(2)}%`, 'percent')}
-                    ${createStatCard('Win Rate', `${stats.win_rate_percent.toFixed(1)}%`, 'target')}
+                    ${createStatCard('Win Rate', `${stats.win_rate_percent.toFixed(1)}%`, 'crosshair')}
                     ${createStatCard('Profit Factor', stats.profit_factor.toFixed(2), 'scale')}
-                    ${createStatCard('Transakcje', stats.total_trades, 'hash')}
+                    ${createStatCard('Transakcje', stats.total_trades, 'layers')}
                 </div>
-                <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 mb-8">
+                <div class="overflow-hidden bg-[#161B22] rounded-xl border border-gray-700 shadow-xl mb-8">
                     <table class="w-full text-sm text-left text-gray-300">
-                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th class="p-3">Strategia</th><th class="p-3 text-right">Ilość</th><th class="p-3 text-right">WR%</th><th class="p-3 text-right">P/L%</th></tr></thead>
+                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] border-b border-gray-700"><tr><th class="p-3">Strategia</th><th class="p-3 text-right">Ilość</th><th class="p-3 text-right">WR%</th><th class="p-3 text-right">P/L%</th></tr></thead>
                         <tbody>${setupRows}</tbody>
                     </table>
                 </div>
                 ${toolsPanel}
-                <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Transakcji (Ostatnie)</h3>
-                <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[400px] overflow-y-auto">
+                <h3 class="text-xl font-bold text-gray-300 mt-10 mb-4 flex items-center"><i data-lucide="list" class="w-5 h-5 mr-2"></i>Ostatnie Transakcje</h3>
+                <div class="overflow-hidden bg-[#161B22] rounded-xl border border-gray-700 shadow-xl max-h-[500px] overflow-y-auto">
                     <table class="w-full text-sm text-left text-gray-300">
-                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr><th class="p-2">Data</th><th class="p-2">Ticker</th><th class="p-2">Setup</th><th class="p-2 text-right">Status</th><th class="p-2 text-right">P/L</th><th class="p-2 text-right">AQM H3</th></tr></thead>
+                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10 shadow-md"><tr><th class="p-3">Data</th><th class="p-3">Ticker</th><th class="p-3">Setup</th><th class="p-3 text-right">Status</th><th class="p-3 text-right">P/L</th><th class="p-3 text-right">AQM H3</th></tr></thead>
                         <tbody>${tradeRows}</tbody>
                     </table>
                 </div>
-                <!-- Pagination controls placeholder if needed -->
             </div>`;
         }
     };
 
-    // --- LOGIKA BIZNESOWA I KONTROLERY ---
+    // --- LOGIKA BIZNESOWA ---
 
     function updateDashboardUI(status) {
         if (!document.getElementById('dashboard-view')) return;
@@ -384,22 +401,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (elStatus) {
             let cls = 'text-gray-500';
-            if (status.status === 'RUNNING') cls = 'text-green-500';
+            if (status.status === 'RUNNING') cls = 'text-green-500 animate-pulse';
             else if (status.status.includes('BUSY')) cls = 'text-purple-400';
             else if (status.status === 'ERROR') cls = 'text-red-500';
             
-            elStatus.className = `text-4xl font-extrabold mt-2 ${cls}`;
+            elStatus.className = `text-4xl font-extrabold mt-auto ${cls}`;
             elStatus.textContent = status.status;
         }
         if (elPhase) elPhase.textContent = `Faza: ${status.phase}`;
         if (elProgText) elProgText.textContent = `${status.progress.processed} / ${status.progress.total}`;
         if (elProgBar) elProgBar.style.width = status.progress.total > 0 ? `${(status.progress.processed/status.progress.total)*100}%` : '0%';
-        if (elLog && elLog.textContent !== status.log) elLog.textContent = status.log || '...';
+        
+        // Logika autoscrolla dla logów
+        if (elLog && elLog.textContent !== status.log) {
+            elLog.textContent = status.log || '...';
+            const container = document.getElementById('scan-log-container');
+            if(container) container.scrollTop = container.scrollHeight;
+        }
         
         if (elActive) elActive.textContent = state.phase3.length;
         if (elDiscarded) elDiscarded.textContent = state.discardedSignalCount;
 
-        // Aktualizacja paska statusu w sidebarze
         ui.workerStatusText.textContent = status.phase !== 'NONE' ? status.phase : status.status;
         ui.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs transition-colors ${status.status === 'RUNNING' ? 'bg-green-900 text-green-400' : 'bg-gray-700 text-gray-300'}`;
     }
@@ -409,13 +431,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const status = await api.getWorkerStatus();
             state.workerStatus = status;
             updateDashboardUI(status);
-            
-            // Aktywacja przycisków
             const isBusy = status.status !== 'IDLE' && status.status !== 'ERROR';
             ui.startBtn.disabled = isBusy;
             ui.pauseBtn.disabled = status.status !== 'RUNNING';
             ui.resumeBtn.disabled = status.status !== 'PAUSED';
-
         } catch(e) {}
         setTimeout(pollWorkerStatus, 5000);
     }
@@ -424,11 +443,9 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const alert = await api.getSystemAlert();
             if (alert && alert.message !== 'NONE') {
-                // Tu można dodać logikę wyświetlania toasta
-                logger.info("System Alert:", alert.message);
                 const div = document.createElement('div');
-                div.className = 'alert-bar bg-red-600 text-white p-3 shadow-lg rounded-md animate-bounce mb-2 cursor-pointer';
-                div.innerHTML = `<i data-lucide="alert-circle" class="inline w-5 h-5 mr-2"></i> ${alert.message}`;
+                div.className = 'alert-bar bg-red-600 text-white p-4 shadow-xl rounded-lg animate-bounce mb-3 cursor-pointer border border-red-400 flex items-center';
+                div.innerHTML = `<i data-lucide="alert-circle" class="inline w-6 h-6 mr-3"></i><span class="font-bold">${alert.message}</span>`;
                 div.onclick = () => div.remove();
                 ui.alertContainer.appendChild(div);
                 lucide.createIcons();
@@ -446,11 +463,16 @@ document.addEventListener('DOMContentLoaded', () => {
             state.phase1 = p1 || []; state.phase2 = p2 || []; state.phase3 = p3 || [];
             state.discardedSignalCount = discarded?.discarded_count_24h ?? 0;
             
-            ui.phase1.list.innerHTML = renderers.phase1List(state.phase1); ui.phase1.count.textContent = state.phase1.length;
-            ui.phase2.list.innerHTML = renderers.phase2List(state.phase2); ui.phase2.count.textContent = state.phase2.length;
-            ui.phase3.list.innerHTML = renderers.phase3List(state.phase3); ui.phase3.count.textContent = state.phase3.length;
+            if(ui.phase1.list) ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
+            if(ui.phase1.count) ui.phase1.count.textContent = state.phase1.length;
             
-            updateDashboardUI(state.workerStatus); // Odśwież liczniki w dashboardzie
+            if(ui.phase2.list) ui.phase2.list.innerHTML = renderers.phase2List(state.phase2);
+            if(ui.phase2.count) ui.phase2.count.textContent = state.phase2.length;
+            
+            if(ui.phase3.list) ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
+            if(ui.phase3.count) ui.phase3.count.textContent = state.phase3.length;
+            
+            updateDashboardUI(state.workerStatus); 
         } catch(e) {}
         setTimeout(refreshData, 15000);
     }
@@ -466,31 +488,32 @@ document.addEventListener('DOMContentLoaded', () => {
         stopAllPolling();
         document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('sidebar-item-active'));
         
-        if (view === 'dashboard') {
-            ui.dashboardLink.classList.add('sidebar-item-active');
-            ui.mainContent.innerHTML = renderers.dashboard();
-            updateDashboardUI(state.workerStatus);
-        } else if (view === 'portfolio') {
-            ui.portfolioLink.classList.add('sidebar-item-active');
-            ui.mainContent.innerHTML = renderers.loading("Ładowanie portfela...");
-            try {
+        try {
+            if (view === 'dashboard') {
+                ui.dashboardLink.classList.add('sidebar-item-active');
+                ui.mainContent.innerHTML = renderers.dashboard();
+                updateDashboardUI(state.workerStatus);
+            } else if (view === 'portfolio') {
+                ui.portfolioLink.classList.add('sidebar-item-active');
+                ui.mainContent.innerHTML = renderers.loading("Ładowanie portfela...");
                 state.portfolio = await api.getPortfolio();
                 state.liveQuotes = {};
                 ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, {});
                 pollPortfolioQuotes();
-            } catch(e) { ui.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd: ${e.message}</p>`; }
-        } else if (view === 'transactions') {
-            ui.transactionsLink.classList.add('sidebar-item-active');
-            ui.mainContent.innerHTML = renderers.loading("Ładowanie historii...");
-            try {
+            } else if (view === 'transactions') {
+                ui.transactionsLink.classList.add('sidebar-item-active');
+                ui.mainContent.innerHTML = renderers.loading("Ładowanie historii...");
                 state.transactions = await api.getTransactionHistory();
                 ui.mainContent.innerHTML = renderers.transactions(state.transactions);
-            } catch(e) { ui.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd: ${e.message}</p>`; }
-        } else if (view === 'agentReport') {
-            ui.agentReportLink.classList.add('sidebar-item-active');
-            loadAgentReport(1);
+            } else if (view === 'agentReport') {
+                ui.agentReportLink.classList.add('sidebar-item-active');
+                loadAgentReport(1);
+            }
+            lucide.createIcons();
+        } catch(e) {
+            ui.mainContent.innerHTML = `<div class="p-8 text-center text-red-500 bg-red-900/20 rounded-xl border border-red-500/30"><h3 class="text-xl font-bold mb-2">Błąd Widoku</h3><p>${e.message}</p></div>`;
         }
-        lucide.createIcons();
+        
         if (window.innerWidth < 768) closeSidebar();
     }
 
@@ -519,8 +542,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- MODALE I AKCJE ---
-
-    // Kupno / Sprzedaż
     function showBuyModal(t) { ui.buyModal.tickerSpan.textContent = t; ui.buyModal.confirmBtn.dataset.ticker = t; ui.buyModal.backdrop.classList.remove('hidden'); }
     function hideBuyModal() { ui.buyModal.backdrop.classList.add('hidden'); }
     async function handleBuy() {
@@ -550,7 +571,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch(e) { msg.textContent = e.message; msg.className = "text-red-400 text-sm mt-2"; }
     }
 
-    // Pulpit Strategii H3 (Dynamiczne Parametry)
+    // Pulpit Strategii H3
     function showH3StrategyModal() { ui.h3StrategyModal.backdrop.classList.remove('hidden'); ui.h3StrategyModal.statusMsg.textContent = ''; }
     function hideH3StrategyModal() { ui.h3StrategyModal.backdrop.classList.add('hidden'); }
     
@@ -570,33 +591,22 @@ document.addEventListener('DOMContentLoaded', () => {
             ui.h3StrategyModal.statusMsg.className = "text-red-400 text-sm mt-3";
             return;
         }
-
-        ui.h3StrategyModal.runBtn.disabled = true;
-        ui.h3StrategyModal.runBtn.textContent = "Wysyłanie...";
+        ui.h3StrategyModal.runBtn.disabled = true; ui.h3StrategyModal.runBtn.textContent = "Wysyłanie...";
         
         try {
             await api.requestBacktest(year, params);
-            ui.h3StrategyModal.statusMsg.textContent = "Zlecono test z parametrami.";
-            ui.h3StrategyModal.statusMsg.className = "text-green-400 text-sm mt-3";
+            ui.h3StrategyModal.statusMsg.textContent = "Zlecono test z parametrami."; ui.h3StrategyModal.statusMsg.className = "text-green-400 text-sm mt-3";
             setTimeout(hideH3StrategyModal, 2000);
         } catch(e) {
-            ui.h3StrategyModal.statusMsg.textContent = e.message;
-            ui.h3StrategyModal.statusMsg.className = "text-red-400 text-sm mt-3";
-        } finally {
-            ui.h3StrategyModal.runBtn.disabled = false;
-            ui.h3StrategyModal.runBtn.textContent = "Uruchom Test z Parametrami";
-        }
+            ui.h3StrategyModal.statusMsg.textContent = e.message; ui.h3StrategyModal.statusMsg.className = "text-red-400 text-sm mt-3";
+        } finally { ui.h3StrategyModal.runBtn.disabled = false; ui.h3StrategyModal.runBtn.textContent = "Uruchom Test z Parametrami"; }
     }
 
-    // AI Optimizer
+    // AI Optimizer & H3 Deep Dive & Export
     async function handleRunAIOptimizer() {
         const msg = document.getElementById('ai-optimizer-status-message');
         if(msg) msg.textContent = "Zlecanie...";
-        try {
-            await api.requestAIOptimizer();
-            if(msg) msg.textContent = "Worker pracuje...";
-            pollAIOptimizer();
-        } catch(e) { if(msg) msg.textContent = e.message; }
+        try { await api.requestAIOptimizer(); if(msg) msg.textContent = "Worker pracuje..."; pollAIOptimizer(); } catch(e) { if(msg) msg.textContent = e.message; }
     }
     async function pollAIOptimizer() {
         try {
@@ -612,41 +622,25 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch(e) {}
     }
-
-    // H3 Deep Dive
     function showH3DeepDiveModal() { ui.h3DeepDiveModal.backdrop.classList.remove('hidden'); ui.h3DeepDiveModal.statusMsg.textContent = ''; }
     function hideH3DeepDiveModal() { ui.h3DeepDiveModal.backdrop.classList.add('hidden'); state.activeH3DeepDivePolling && clearTimeout(state.activeH3DeepDivePolling); }
-    
     async function handleRunH3DeepDive() {
         const year = ui.h3DeepDiveModal.yearInput.value;
         if (!year) return;
         ui.h3DeepDiveModal.statusMsg.textContent = "Zlecanie...";
-        try {
-            await api.requestH3DeepDive(year);
-            pollH3DeepDive();
-        } catch(e) { ui.h3DeepDiveModal.statusMsg.textContent = e.message; }
+        try { await api.requestH3DeepDive(year); pollH3DeepDive(); } catch(e) { ui.h3DeepDiveModal.statusMsg.textContent = e.message; }
     }
-
     async function pollH3DeepDive() {
         try {
             const res = await api.getH3DeepDiveReport();
-            if (res.status === 'PROCESSING') {
-                ui.h3DeepDiveModal.statusMsg.textContent = "Analiza w toku...";
-                state.activeH3DeepDivePolling = setTimeout(pollH3DeepDive, H3_DEEP_DIVE_POLL_INTERVAL);
-            } else if (res.status === 'DONE') {
-                ui.h3DeepDiveModal.statusMsg.textContent = "Zakończono.";
-                ui.h3DeepDiveModal.content.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono text-gray-300">${res.report_text}</pre>`;
-            } else if (res.status === 'ERROR') {
-                ui.h3DeepDiveModal.statusMsg.textContent = "Błąd analizy.";
-                ui.h3DeepDiveModal.content.innerHTML = `<p class="text-red-400">${res.report_text}</p>`;
-            }
+            if (res.status === 'PROCESSING') { ui.h3DeepDiveModal.statusMsg.textContent = "Analiza w toku..."; state.activeH3DeepDivePolling = setTimeout(pollH3DeepDive, H3_DEEP_DIVE_POLL_INTERVAL); }
+            else if (res.status === 'DONE') { ui.h3DeepDiveModal.statusMsg.textContent = "Zakończono."; ui.h3DeepDiveModal.content.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono text-gray-300">${res.report_text}</pre>`; }
+            else if (res.status === 'ERROR') { ui.h3DeepDiveModal.statusMsg.textContent = "Błąd analizy."; ui.h3DeepDiveModal.content.innerHTML = `<p class="text-red-400">${res.report_text}</p>`; }
         } catch(e) {}
     }
-
-    // CSV Export
     async function handleCsvExport() {
         const msg = document.getElementById('csv-export-status-message');
-        if(msg) { msg.textContent = "Generowanie..."; msg.className = "text-yellow-400 text-sm mt-2"; }
+        if(msg) { msg.textContent = "Generowanie..."; msg.className = "text-yellow-400 text-sm mt-1"; }
         try {
             const response = await fetch(`${API_BASE_URL}/api/v1/export/trades.csv`);
             if (!response.ok) throw new Error("Błąd pobierania");
@@ -655,8 +649,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const a = document.createElement('a');
             a.href = url; a.download = `apex_trades_${new Date().toISOString().slice(0,10)}.csv`;
             document.body.appendChild(a); a.click(); a.remove();
-            if(msg) { msg.textContent = "Pobrano."; msg.className = "text-green-400 text-sm mt-2"; }
-        } catch(e) { if(msg) { msg.textContent = e.message; msg.className = "text-red-400 text-sm mt-2"; } }
+            if(msg) { msg.textContent = "Pobrano."; msg.className = "text-green-400 text-sm mt-1"; }
+        } catch(e) { if(msg) { msg.textContent = e.message; msg.className = "text-red-400 text-sm mt-1"; } }
     }
 
     // --- EVENT LISTENERS ---
@@ -669,30 +663,17 @@ document.addEventListener('DOMContentLoaded', () => {
     ui.pauseBtn.onclick = () => api.sendWorkerControl('pause');
     ui.resumeBtn.onclick = () => api.sendWorkerControl('resume');
 
-    ui.buyModal.cancelBtn.onclick = hideBuyModal;
-    ui.buyModal.confirmBtn.onclick = handleBuy;
-    ui.sellModal.cancelBtn.onclick = hideSellModal;
-    ui.sellModal.confirmBtn.onclick = handleSell;
+    ui.buyModal.cancelBtn.onclick = hideBuyModal; ui.buyModal.confirmBtn.onclick = handleBuy;
+    ui.sellModal.cancelBtn.onclick = hideSellModal; ui.sellModal.confirmBtn.onclick = handleSell;
     ui.aiReportModal.closeBtn.onclick = () => ui.aiReportModal.backdrop.classList.add('hidden');
+    ui.h3DeepDiveModal.closeBtn.onclick = hideH3DeepDiveModal; ui.h3DeepDiveModal.runBtn.onclick = handleRunH3DeepDive;
+    ui.h3StrategyModal.closeBtn.onclick = hideH3StrategyModal; ui.h3StrategyModal.runBtn.onclick = handleRunH3Strategy;
 
-    // Listenery Modali Analitycznych
-    ui.h3DeepDiveModal.closeBtn.onclick = hideH3DeepDiveModal;
-    ui.h3DeepDiveModal.runBtn.onclick = handleRunH3DeepDive;
-    
-    ui.h3StrategyModal.closeBtn.onclick = hideH3StrategyModal;
-    ui.h3StrategyModal.runBtn.onclick = handleRunH3Strategy;
-
-    // Globalny Delegator Zdarzeń (dla dynamicznych elementów)
     document.body.addEventListener('click', (e) => {
-        // Przyciski w tabeli portfela
-        if (e.target.closest('.sell-stock-btn')) {
-            const btn = e.target.closest('.sell-stock-btn');
-            showSellModal(btn.dataset.ticker, parseInt(btn.dataset.quantity));
-        }
-        // Przyciski w raporcie Agenta
+        if (e.target.closest('.sell-stock-btn')) { const btn = e.target.closest('.sell-stock-btn'); showSellModal(btn.dataset.ticker, parseInt(btn.dataset.quantity)); }
         if (e.target.id === 'run-backtest-year-btn') handleRunBacktest();
         if (e.target.id === 'run-ai-optimizer-btn') handleRunAIOptimizer();
-        if (e.target.id === 'view-ai-report-btn') pollAIOptimizer(); // Ponowne sprawdzenie/pokazanie
+        if (e.target.id === 'view-ai-report-btn') pollAIOptimizer();
         if (e.target.id === 'run-h3-deep-dive-modal-btn') showH3DeepDiveModal();
         if (e.target.id === 'run-csv-export-btn') handleCsvExport();
         if (e.target.id === 'open-h3-strategy-modal-btn') showH3StrategyModal();
@@ -707,6 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (status) {
                 ui.loginScreen.classList.add('hidden');
                 ui.dashboardScreen.classList.remove('hidden');
+                checkSidebarState(); // Wymuszenie poprawnego stanu Sidebara
                 navigate('dashboard');
                 pollWorkerStatus();
                 refreshData();
@@ -718,11 +700,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Wstępne sprawdzenie API
+    // Wstępne sprawdzenie (Auto-check)
     (async () => {
-        try {
-            await api.getApiRootStatus();
-            ui.loginButton.disabled = false; ui.loginButton.textContent = "Wejdź do Systemu";
-        } catch(e) { ui.loginStatusText.textContent = "API Offline"; }
+        try { await api.getApiRootStatus(); ui.loginButton.disabled = false; ui.loginButton.textContent = "Wejdź do Systemu"; } catch(e) { ui.loginStatusText.textContent = "API Offline"; }
     })();
 });
