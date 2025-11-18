@@ -90,6 +90,11 @@ def _simulate_trades_h3(
     for i in range(history_buffer, len(daily_df) - 1): 
         
         # --- Dzień D ---
+        # === POPRAWKA BŁĘDU NameError ===
+        # Musimy zdefiniować candle_D na początku pętli, aby mieć dostęp do ATR
+        candle_D = daily_df.iloc[i] 
+        # ================================
+
         current_aqm_score = aqm_score_series.iloc[i]
         current_threshold = percentile_threshold_series.iloc[i]
         current_m_norm = m_norm.iloc[i]
@@ -107,6 +112,8 @@ def _simulate_trades_h3(
             try:
                 candle_D_plus_1 = daily_df.iloc[i + 1]
                 entry_price = candle_D_plus_1['open']
+                
+                # Teraz candle_D jest zdefiniowane, więc to zadziała
                 atr_value = candle_D['atr_14']
                 
                 if pd.isna(entry_price) or pd.isna(atr_value) or atr_value == 0:
