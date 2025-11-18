@@ -215,3 +215,22 @@ class AIOptimizerReport(BaseModel):
     status: str # np. 'DONE', 'PROCESSING', 'NONE'
     report_text: Optional[str] = None
     last_updated: Optional[datetime] = None
+
+# ==========================================================
+# === NOWE SCHEMATY (Krok 3 - H3 Deep Dive) ===
+# ==========================================================
+
+class H3DeepDiveRequest(BaseModel):
+    """
+    Schemat zlecenia analizy H3 Deep Dive.
+    """
+    # Używamy int, aby Pydantic automatycznie walidował, że to liczba
+    year: int = Field(..., description="Rok do analizy, np. 2023", ge=2000, le=2100)
+
+class H3DeepDiveReport(BaseModel):
+    """
+    Schemat odpowiedzi zwracający raport tekstowy H3 Deep Dive.
+    """
+    status: str # np. 'DONE', 'PROCESSING', 'NONE'
+    report_text: Optional[str] = None
+    last_updated: Optional[datetime] = None
