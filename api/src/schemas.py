@@ -26,7 +26,7 @@ class PortfolioHoldingBase(BaseModel):
 class PortfolioHolding(PortfolioHoldingBase):
     first_purchase_date: datetime
     last_updated: datetime
-    take_profit: Optional[float] = None # <-- POPRAWIONE POLE (Take Profit)
+    take_profit: Optional[float] = None 
 
     model_config = ConfigDict(from_attributes=True) # Umożliwia tworzenie z obiektów ORM
 
@@ -48,21 +48,7 @@ class TransactionHistory(TransactionHistoryBase):
 
 
 # ==========================================================
-# === Pozostałe, istniejące schematy (bez zmian) ===
-# ==========================================================
-
-# ==========================================================
-# === DEKONSTRUKCJA (KROK 8) ===
-# Usunięto schematy `AIAnalysisRequestResponse`, `OnDemandRequest`
-# oraz `AIAnalysisResult`, ponieważ były powiązane
-# z usuniętymi endpointami API.
-# ==========================================================
-# class AIAnalysisRequestResponse(BaseModel):
-#     message: str
-#     ticker: str
-#
-# class OnDemandRequest(BaseModel):
-#     ticker: str
+# === Pozostałe, istniejące schematy ===
 # ==========================================================
 
 class Progress(BaseModel):
@@ -105,23 +91,18 @@ class Phase2Result(BaseModel):
 class TradingSignal(BaseModel):
     id: int
     ticker: str
-    generation_date: datetime # Zmieniono na datetime dla spójności
+    generation_date: datetime 
     status: str
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
-    signal_candle_timestamp: Optional[datetime] = None # Zmieniono na datetime
+    signal_candle_timestamp: Optional[datetime] = None 
     entry_zone_bottom: Optional[float] = None
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
-
-# ==========================================================
-# class AIAnalysisResult(BaseModel):
-#     ... (USUNIĘTE) ...
-# ==========================================================
 
 
 # ==========================================================
@@ -141,35 +122,21 @@ class VirtualTrade(BaseModel):
     close_price: Optional[float] = None
     final_profit_loss_percent: Optional[float] = None
     
-    # ==========================================================
-    # === AKTUALIZACJA (GŁĘBOKIE LOGOWANIE) ===
-    # Dodajemy wszystkie nowe pola metryk, aby API mogło je odczytać
-    # ==========================================================
-    
-    # Wspólne
+    # Metryki (Głębokie Logowanie)
     metric_atr_14: Optional[float] = None
-    
-    # H1
     metric_time_dilation: Optional[float] = None
     metric_price_gravity: Optional[float] = None
     metric_td_percentile_90: Optional[float] = None
     metric_pg_percentile_90: Optional[float] = None
-
-    # H2
     metric_inst_sync: Optional[float] = None
     metric_retail_herding: Optional[float] = None
-    
-    # H3
     metric_aqm_score_h3: Optional[float] = None
     metric_aqm_percentile_95: Optional[float] = None
     metric_J_norm: Optional[float] = None
     metric_nabla_sq_norm: Optional[float] = None
     metric_m_sq_norm: Optional[float] = None
-    
-    # H4
     metric_J: Optional[float] = None
     metric_J_threshold_2sigma: Optional[float] = None
-    # ==========================================================
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -178,59 +145,41 @@ class VirtualAgentStats(BaseModel):
     win_rate_percent: float
     total_p_l_percent: float
     profit_factor: float
-    by_setup: Dict[str, Any] # Tu będą statystyki dla każdego setup_type
+    by_setup: Dict[str, Any] 
 
-# ==========================================================
-# === AKTUALIZACJA (STRONICOWANIE) ===
-# Schemat raportu jest teraz podzielony
-# ==========================================================
 class VirtualAgentReport(BaseModel):
-    stats: VirtualAgentStats # Statystyki są globalne
-    trades: List[VirtualTrade] # To będzie tylko bieżąca strona transakcji
-    total_trades_count: int # Całkowita liczba transakcji (dla paginacji)
-# ==========================================================
-
+    stats: VirtualAgentStats 
+    trades: List[VirtualTrade] 
+    total_trades_count: int 
 
 # ==========================================================
-# ZMIANA (Dynamiczny Rok): Schemat Zlecenia Backtestu
+# ZMIANA (Dynamiczne Parametry): Schemat Zlecenia Backtestu
 # ==========================================================
 class BacktestRequest(BaseModel):
     year: str = Field(..., description="Rok do przetestowania, np. '2010'")
+    # NOWOŚĆ: Opcjonalny słownik parametrów
+    parameters: Optional[Dict[str, Any]] = Field(default=None, description="Dynamiczne parametry strategii (np. progi H3)")
 
 # ==========================================================
-# === NOWE SCHEMATY (Krok 2 - Mega Agent) ===
+# === SCHEMATY (Mega Agent) ===
 # ==========================================================
 
 class AIOptimizerRequest(BaseModel):
-    """
-    Puste ciało, sam fakt wysłania tego żądania
-    jest traktowany jako zlecenie analizy.
-    """
     pass
 
 class AIOptimizerReport(BaseModel):
-    """
-    Schemat odpowiedzi zwracający raport tekstowy od Mega Agenta.
-    """
-    status: str # np. 'DONE', 'PROCESSING', 'NONE'
+    status: str 
     report_text: Optional[str] = None
     last_updated: Optional[datetime] = None
 
 # ==========================================================
-# === NOWE SCHEMATY (Krok 3 - H3 Deep Dive) ===
+# === SCHEMATY (H3 Deep Dive) ===
 # ==========================================================
 
 class H3DeepDiveRequest(BaseModel):
-    """
-    Schemat zlecenia analizy H3 Deep Dive.
-    """
-    # Używamy int, aby Pydantic automatycznie walidował, że to liczba
     year: int = Field(..., description="Rok do analizy, np. 2023", ge=2000, le=2100)
 
 class H3DeepDiveReport(BaseModel):
-    """
-    Schemat odpowiedzi zwracający raport tekstowy H3 Deep Dive.
-    """
-    status: str # np. 'DONE', 'PROCESSING', 'NONE'
+    status: str 
     report_text: Optional[str] = None
     last_updated: Optional[datetime] = None
