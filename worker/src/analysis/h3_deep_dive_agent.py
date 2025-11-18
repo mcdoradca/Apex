@@ -84,7 +84,7 @@ def run_h3_deep_dive_analysis(session: Session, weak_year_to_analyze: int):
             report_lines.append(f"Brak danych dla roku {weak_year_to_analyze}. Zmień rok i spróbuj ponownie.")
             logger.warning(f"Brak danych dla roku {weak_year_to_analyze}.")
         else:
-            df_sl_trades = df_weak_year[df_weak_year['status'] == 'CLOSED_SL']
+            df_sl_trades = df_weak_year[df_weak_year['status'] == 'CLOSED_SL'].copy() # Dodajemy .copy(), aby jawnie stworzyć kopię
             
             if df_sl_trades.empty:
                 report_lines.append(f"W roku {weak_year_to_analyze} nie znaleziono żadnych transakcji 'CLOSED_SL'.")
@@ -99,12 +99,20 @@ def run_h3_deep_dive_analysis(session: Session, weak_year_to_analyze: int):
                 valid_metrics = []
                 for metric in h3_metrics:
                     if metric in df_sl_trades.columns:
-                        df_sl_trades[metric] = pd.to_numeric(df_sl_trades[metric], errors='coerce')
+                        # ==========================================================
+                        # === POPRAWKA 1 (Linia 102) ===
+                        # Używamy .loc, aby jawnie zmodyfikować DataFrame
+                        # ==========================================================
+                        df_sl_trades.loc[:, metric] = pd.to_numeric(df_sl_trades[metric], errors='coerce')
                         valid_metrics.append(metric)
                     else:
                         logger.warning(f"Ostrzeżenie: Brak kolumny '{metric}' w bazie danych.")
-                        
-                df_sl_trades.dropna(subset=valid_metrics, inplace=True)
+                
+                # ==========================================================
+                # === POPRAWKA 2 (Linia 107) ===
+                # Unikamy 'inplace=True' na kopii i przypisujemy wynik z powrotem
+                # ==========================================================
+                df_sl_trades = df_sl_trades.dropna(subset=valid_metrics)
 
                 if df_sl_trades.empty:
                     report_lines.append("Brak pełnych danych metryk dla transakcji SL.")
@@ -113,10 +121,12 @@ def run_h3_deep_dive_analysis(session: Session, weak_year_to_analyze: int):
                     report_lines.append(df_sl_trades[valid_metrics].mean().to_string(float_format="%.3f"))
                     
                     report_lines.append(f"\nŚrednie wartości metryk dla WSZYSTKICH transakcji w {weak_year_to_analyze}:")
+                    
+                    # Poprawiamy również ten blok, aby uniknąć przyszłych ostrzeżeń
                     df_all_trades_year = df_weak_year.copy()
                     for metric in valid_metrics:
-                        df_all_trades_year[metric] = pd.to_numeric(df_all_trades_year[metric], errors='coerce')
-                    df_all_trades_year.dropna(subset=valid_metrics, inplace=True)
+                        df_all_trades_year.loc[:, metric] = pd.to_numeric(df_all_trades_year[metric], errors='coerce')
+                    df_all_trades_year = df_all_trades_year.dropna(subset=valid_metrics)
                     
                     report_lines.append(df_all_trades_year[valid_metrics].mean().to_string(float_format="%.3f"))
 
@@ -124,10 +134,12 @@ def run_h3_deep_dive_analysis(session: Session, weak_year_to_analyze: int):
         report_lines.append("\n\n--- Krok 3: Analiza korelacji AQM Score z P/L ---")
         
         h3_metrics_with_pnl = ['final_profit_loss_percent', 'metric_aqm_score_h3']
+        
+        # Poprawiamy również ten blok
         df_h3_corr = df_h3[h3_metrics_with_pnl].copy()
         for col in h3_metrics_with_pnl:
-            df_h3_corr[col] = pd.to_numeric(df_h3_corr[col], errors='coerce')
-        df_h3_corr.dropna(inplace=True)
+             df_h3_corr.loc[:, col] = pd.to_numeric(df_h3_corr[col], errors='coerce')
+        df_h3_corr = df_h3_corr.dropna()
 
         if not df_h3_corr.empty:
             correlation = df_h3_corr['metric_aqm_score_h3'].corr(df_h3_corr['final_profit_loss_percent'])
