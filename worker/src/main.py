@@ -22,7 +22,8 @@ from .analysis import (
     phase0_macro_agent, # <-- POPRAWKA: Import Fazy 0
     virtual_agent, # <-- KROK 4 (Wirtualny Agent): Import nowego modułu
     backtest_engine, # <-- NOWY IMPORT (Krok 2 - Backtest)
-    ai_optimizer # <-- NOWY IMPORT (Krok 5 - Mega Agent)
+    ai_optimizer, # <-- NOWY IMPORT (Krok 5 - Mega Agent)
+    h3_deep_dive_agent # <-- KROK 2: NOWY IMPORT (H3 Deep Dive)
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -150,6 +151,57 @@ def handle_ai_optimizer_request(session) -> str:
     return 'IDLE' # Brak zlecenia
 # ==================================================================
 
+# ==================================================================
+# === NOWA FUNKCJA (Krok 2 - H3 Deep Dive) ===
+# ==================================================================
+def handle_h3_deep_dive_request(session) -> str:
+    """
+    Sprawdza i wykonuje nowe zlecenie analizy H3 Deep Dive dla danego roku.
+    Zwraca 'BUSY', jeśli analiza jest w toku, lub 'IDLE', jeśli nie.
+    """
+    # Wartość flagi będzie rokiem, np. "2023"
+    year_to_analyze_str = utils.get_system_control_value(session, 'h3_deep_dive_request') 
+    
+    if year_to_analyze_str and year_to_analyze_str not in ['NONE', 'PROCESSING']:
+        try:
+            # Walidacja, czy to jest rok (liczba)
+            year_to_analyze = int(year_to_analyze_str)
+            logger.warning(f"Zlecenie H3 Deep Dive otrzymane dla roku: {year_to_analyze}.")
+        except ValueError:
+            logger.error(f"Otrzymano nieprawidłową wartość dla H3 Deep Dive: {year_to_analyze_str}. Oczekiwano roku.")
+            utils.update_system_control(session, 'h3_deep_dive_report', f"BŁĄD: Otrzymano nieprawidłowy rok {year_to_analyze_str}")
+            utils.update_system_control(session, 'h3_deep_dive_request', 'NONE')
+            return 'IDLE'
+
+        # Zablokuj workera na czas analizy
+        utils.update_system_control(session, 'worker_status', 'BUSY_DEEP_DIVE')
+        utils.update_system_control(session, 'current_phase', 'DEEP_DIVE_H3')
+        utils.update_system_control(session, 'h3_deep_dive_request', 'PROCESSING')
+        utils.append_scan_log(session, f"Rozpoczynanie analizy H3 Deep Dive dla roku '{year_to_analyze}'...")
+
+        try:
+            # Uruchom agenta analitycznego (to jest operacja blokująca)
+            h3_deep_dive_agent.run_h3_deep_dive_analysis(session, year_to_analyze)
+            
+            logger.info(f"Analiza H3 Deep Dive dla {year_to_analyze} zakończona pomyślie.")
+            utils.append_scan_log(session, f"Analiza H3 Deep Dive dla '{year_to_analyze}' zakończona.")
+        except Exception as e:
+            logger.error(f"Krytyczny błąd podczas analizy H3 Deep Dive dla {year_to_analyze}: {e}", exc_info=True)
+            utils.append_scan_log(session, f"BŁĄD KRYTYCZNY H3 Deep Dive: {e}")
+            utils.update_system_control(session, 'h3_deep_dive_report', f"BŁĄD KRYTYCZNY: {e}")
+        finally:
+            # Zawsze resetuj flagi po zakończeniu (nawet po błędzie)
+            utils.update_system_control(session, 'worker_status', 'IDLE')
+            utils.update_system_control(session, 'current_phase', 'NONE')
+            utils.update_system_control(session, 'h3_deep_dive_request', 'NONE')
+            return 'IDLE' # Właśnie skończyliśmy
+
+    elif year_to_analyze_str == 'PROCESSING':
+        return 'BUSY' # Analiza wciąż działa
+        
+    return 'IDLE' # Brak zlecenia
+# ==================================================================
+
 
 def run_full_analysis_cycle():
     global current_state
@@ -196,7 +248,7 @@ def run_full_analysis_cycle():
         # ==================================================================
 
         
-        # Czyścimy tylko przestarzałe dane Fazy 1 i Fazy 2
+        # Czyścimy only przestarzałe dane Fazy 1 i Fazy 2
         session.execute(text("DELETE FROM phase2_results WHERE analysis_date < CURRENT_DATE - INTERVAL '1 day';"))
         session.execute(text("DELETE FROM phase1_candidates WHERE analysis_date < CURRENT_DATE - INTERVAL '1 day';"))
         # Czyścimy stare wiadomości, aby umożliwić ponowną analizę
@@ -388,6 +440,11 @@ def main_loop():
         utils.update_system_control(initial_session, 'ai_optimizer_request', 'NONE')
         utils.update_system_control(initial_session, 'ai_optimizer_report', 'NONE') # Upewnij się, że raport też jest czysty
         # ==================================================================
+        # === NOWA WARTOŚĆ (Krok 2 - H3 Deep Dive) ===
+        # ==================================================================
+        utils.update_system_control(initial_session, 'h3_deep_dive_request', 'NONE')
+        utils.update_system_control(initial_session, 'h3_deep_dive_report', 'NONE')
+        # ==================================================================
         utils.report_heartbeat(initial_session)
 
     while True:
@@ -406,6 +463,7 @@ def main_loop():
                 # Te funkcje teraz same ustawiają status 'BUSY'
                 backtest_status = handle_backtest_request(session, api_client)
                 optimizer_status = handle_ai_optimizer_request(session)
+                deep_dive_status = handle_h3_deep_dive_request(session) # <-- KROK 2: NOWE WYWOŁANIE
                 
                 # Pobierz aktualny status (mógł zostać zmieniony przez funkcje powyżej)
                 worker_status = utils.get_system_control_value(session, 'worker_status')
