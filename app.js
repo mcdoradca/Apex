@@ -161,10 +161,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // ==========================================================
         getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
         // ==========================================================
-        requestBacktest: (year) => apiRequest('api/v1/backtest/request', { 
+        // ZAKTUALIZOWANA FUNKCJA (Przyjmuje opcjonalne parametry)
+        requestBacktest: (year, params = null) => apiRequest('api/v1/backtest/request', { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ year: year })
+            body: JSON.stringify({ year: year, parameters: params })
         }),
         getApiRootStatus: () => apiRequest(''),
         requestAIOptimizer: () => apiRequest('api/v1/ai-optimizer/request', {
@@ -655,18 +656,62 @@ document.addEventListener('DOMContentLoaded', () => {
                     </table>
                  </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
             
-            // --- Sekcje Backtestu i AI (bez zmian) ---
+            // --- Sekcje Backtestu i AI (Zaktualizowana o parametry H3) ---
             const backtestSection = `
                 <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                     <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
                     <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p>
-                    <div class="flex items-start gap-3">
+                    
+                    <div class="flex items-start gap-3 mb-4">
                         <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}">
                         <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
                             <i data-lucide="play" class="w-4 h-4 mr-2"></i>
-                            Uruchom Test Roczny
+                            Uruchom Test
                         </button>
                     </div>
+
+                    <!-- SEKJA ZAAWANSOWANA H3 -->
+                    <div class="border-t border-gray-700 pt-3">
+                        <button id="toggle-h3-params" class="text-xs text-sky-400 flex items-center hover:text-sky-300 transition-colors mb-3">
+                            <i data-lucide="settings-2" class="w-3 h-3 mr-1"></i>
+                            Zaawansowana Konfiguracja H3 (Symulator)
+                            <i data-lucide="chevron-down" id="h3-params-icon" class="w-3 h-3 ml-1 transition-transform"></i>
+                        </button>
+                        
+                        <div id="h3-params-container" class="hidden grid grid-cols-1 md:grid-cols-3 gap-3 bg-gray-800/30 p-3 rounded-md border border-gray-700/50">
+                            
+                            <div>
+                                <label class="text-[10px] text-gray-400 uppercase font-bold">Percentyl AQM (Domyślny: 0.95)</label>
+                                <input type="number" id="h3-param-percentile" class="modal-input text-xs !py-1 !h-8" placeholder="0.95" step="0.01" min="0.80" max="0.99">
+                            </div>
+                            
+                            <div>
+                                <label class="text-[10px] text-gray-400 uppercase font-bold">Próg Masy m² (Domyślny: -0.5)</label>
+                                <input type="number" id="h3-param-mass" class="modal-input text-xs !py-1 !h-8" placeholder="-0.5" step="0.1" max="0">
+                            </div>
+
+                            <div>
+                                <label class="text-[10px] text-gray-400 uppercase font-bold">Mnożnik TP (ATR) (Domyślny: 5.0)</label>
+                                <input type="number" id="h3-param-tp" class="modal-input text-xs !py-1 !h-8" placeholder="5.0" step="0.5">
+                            </div>
+
+                            <div>
+                                <label class="text-[10px] text-gray-400 uppercase font-bold">Mnożnik SL (ATR) (Domyślny: 2.0)</label>
+                                <input type="number" id="h3-param-sl" class="modal-input text-xs !py-1 !h-8" placeholder="2.0" step="0.5">
+                            </div>
+
+                             <div>
+                                <label class="text-[10px] text-gray-400 uppercase font-bold">Max Hold (Dni) (Domyślny: 5)</label>
+                                <input type="number" id="h3-param-hold" class="modal-input text-xs !py-1 !h-8" placeholder="5" step="1">
+                            </div>
+
+                            <div>
+                                <label class="text-[10px] text-gray-400 uppercase font-bold">Nazwa Setupu (Suffix)</label>
+                                <input type="text" id="h3-param-name" class="modal-input text-xs !py-1 !h-8" placeholder="CUSTOM_TEST_1">
+                            </div>
+                        </div>
+                    </div>
+
                     <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
                 </div>
             `;
@@ -1335,6 +1380,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const yearInput = document.getElementById('backtest-year-input');
         const yearBtn = document.getElementById('run-backtest-year-btn');
         const statusMsg = document.getElementById('backtest-status-message');
+        
+        // Pobieranie parametrów H3
+        const paramPercentile = document.getElementById('h3-param-percentile');
+        const paramMass = document.getElementById('h3-param-mass');
+        const paramTp = document.getElementById('h3-param-tp');
+        const paramSl = document.getElementById('h3-param-sl');
+        const paramHold = document.getElementById('h3-param-hold');
+        const paramName = document.getElementById('h3-param-name');
+
         if (!yearInput || !yearBtn || !statusMsg) return;
 
         const year = yearInput.value.trim();
@@ -1346,14 +1400,26 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Budowanie obiektu parametrów (tylko wypełnione pola)
+        const h3Params = {};
+        if (paramPercentile && paramPercentile.value) h3Params.h3_percentile = parseFloat(paramPercentile.value);
+        if (paramMass && paramMass.value) h3Params.h3_m_sq_threshold = parseFloat(paramMass.value);
+        if (paramTp && paramTp.value) h3Params.h3_tp_multiplier = parseFloat(paramTp.value);
+        if (paramSl && paramSl.value) h3Params.h3_sl_multiplier = parseFloat(paramSl.value);
+        if (paramHold && paramHold.value) h3Params.h3_max_hold = parseInt(paramHold.value);
+        if (paramName && paramName.value) h3Params.setup_name = paramName.value.trim();
+
         yearBtn.disabled = true;
         yearBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Zlecanie...`;
         lucide.createIcons();
         statusMsg.className = 'text-sm mt-3 text-sky-400';
-        statusMsg.textContent = `Zlecanie testu dla roku ${year}...`;
+        
+        const hasParams = Object.keys(h3Params).length > 0;
+        statusMsg.textContent = `Zlecanie testu dla roku ${year} ${hasParams ? '(z niestandardowymi parametrami)' : ''}...`;
 
         try {
-            const response = await api.requestBacktest(year);
+            // Przekazujemy h3Params (może być pusty, wtedy backend użyje domyślnych)
+            const response = await api.requestBacktest(year, Object.keys(h3Params).length ? h3Params : null);
             statusMsg.className = 'text-sm mt-3 text-green-400';
             statusMsg.textContent = response.message || `Zlecono test dla ${year}. Worker rozpoczął pracę.`;
             setTimeout(() => {
@@ -1366,7 +1432,7 @@ document.addEventListener('DOMContentLoaded', () => {
             statusMsg.textContent = `Błąd zlecenia: ${e.message}`;
         } finally {
             yearBtn.disabled = false;
-            yearBtn.innerHTML = `<i data-lucide="play" class="w-4 h-4 mr-2"></i> Uruchom Test Roczny`;
+            yearBtn.innerHTML = `<i data-lucide="play" class="w-4 h-4 mr-2"></i> Uruchom Test`; // Skrócona nazwa
             lucide.createIcons();
         }
     }
@@ -1603,10 +1669,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const prevBtn = e.target.closest('#report-prev-btn');
         const nextBtn = e.target.closest('#report-next-btn');
         // ==========================================================
+        // === OBSŁUGA UI ZAAWANSOWANEGO BACKTESTU ===
+        const toggleH3ParamsBtn = e.target.closest('#toggle-h3-params');
+        // ==========================================================
 
         if (backtestYearBtn) {
             handleYearBacktestRequest();
         }
+        // ==========================================================
+        // === TOGGLE DLA PARAMETRÓW H3 ===
+        else if (toggleH3ParamsBtn) {
+            const container = document.getElementById('h3-params-container');
+            const icon = document.getElementById('h3-params-icon');
+            if (container && icon) {
+                container.classList.toggle('hidden');
+                icon.classList.toggle('rotate-180');
+            }
+        }
+        // ==========================================================
         else if (runAIOptimizerBtn) {
             handleRunAIOptimizer();
         }
