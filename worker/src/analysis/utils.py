@@ -1,6 +1,6 @@
 import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, Row
 from datetime import datetime, timezone, timedelta 
 import pytz
 import pandas as pd
@@ -29,7 +29,7 @@ if not TELEGRAM_CHAT_ID:
     logger.warning("TELEGRAM_CHAT_ID not found. Telegram alerts are DISABLED.")
 
 # ==================================================================
-# ZMIANA: Dodano parametr `expiry_hours` (domyślnie None = użyj CACHE_EXPIRY_DAYS)
+# Funkcja Cache (z obsługą expiry_hours)
 # ==================================================================
 def get_raw_data_with_cache(
     session: Session, 
@@ -37,7 +37,7 @@ def get_raw_data_with_cache(
     ticker: str, 
     data_type: str, 
     api_func: str, 
-    expiry_hours: Optional[int] = None, # <-- NOWY PARAMETR
+    expiry_hours: Optional[int] = None, 
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -116,6 +116,9 @@ def get_raw_data_with_cache(
     return raw_data
 
 
+# ==================================================================
+# Funkcje Telegrama i Systemowe
+# ==================================================================
 _sent_alert_hashes = set()
 
 def clear_alert_memory_cache():
@@ -200,6 +203,9 @@ def safe_float(value) -> float | None:
     try: return float(str(value).replace(',', '').replace('%', ''))
     except: return None
 
+# ==================================================================
+# Kalkulatory Finansowe
+# ==================================================================
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     mapping = {'1. open':'open', '2. high':'high', '3. low':'low', '4. close':'close', '5. vwap':'vwap', '5. volume':'volume', '6. volume':'volume', '7. adjusted close':'adjusted close'}
@@ -244,3 +250,85 @@ def calculate_ad(df: pd.DataFrame) -> pd_Series:
     if not all(c in df.columns for c in ['high','low','close','volume']): return pd.Series(dtype=float)
     mfm = np.where(df['high']==df['low'], 0.0, ((df['close']-df['low']) - (df['high']-df['close'])) / (df['high']-df['low']))
     return (mfm * df['volume']).cumsum()
+
+# ==================================================================
+# === FUNKCJE TRANSAKCYJNE (Przywrócone) ===
+# ==================================================================
+
+def _safe_float_convert(value: Any) -> float | None:
+    """Konwertuje dowolną wartość na float dla bazy danych."""
+    if value is None: return None
+    try: return float(value)
+    except: return None
+
+def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
+    """
+    Uniwersalna funkcja do symulacji wyniku transakcji ("spoglądanie w przyszłość").
+    Obsługuje logikę SL/TP oraz wyjście czasowe.
+    """
+    try:
+        entry_price = setup['entry_price']
+        stop_loss = setup['stop_loss']
+        take_profit = setup['take_profit']
+        
+        close_price = entry_price
+        status = 'CLOSED_EXPIRED'
+        
+        # Pętla sprawdzająca kolejne dni
+        for i in range(0, max_hold_days): 
+            curr_idx = entry_index + i
+            if curr_idx >= len(historical_data):
+                # Koniec danych
+                close_price = historical_data.iloc[-1]['close']
+                break
+            
+            candle = historical_data.iloc[curr_idx]
+            if direction == 'LONG':
+                if candle['low'] <= stop_loss:
+                    close_price = stop_loss
+                    status = 'CLOSED_SL'
+                    break
+                if candle['high'] >= take_profit:
+                    close_price = take_profit
+                    status = 'CLOSED_TP'
+                    break
+        else:
+            # Wyjście czasowe po X dniach
+            final_idx = min(entry_index + max_hold_days - 1, len(historical_data) - 1)
+            close_price = historical_data.iloc[final_idx]['close']
+            status = 'CLOSED_EXPIRED'
+
+        p_l_percent = 0.0 if entry_price == 0 else ((close_price - entry_price) / entry_price) * 100
+        
+        return models.VirtualTrade(
+            ticker=setup['ticker'],
+            status=status,
+            setup_type=f"BACKTEST_{year}_{setup['setup_type']}",
+            entry_price=float(entry_price),
+            stop_loss=float(stop_loss),
+            take_profit=float(take_profit),
+            open_date=historical_data.index[entry_index].to_pydatetime(),
+            close_date=historical_data.iloc[min(entry_index + max_hold_days - 1, len(historical_data) - 1)].name.to_pydatetime(),
+            close_price=float(close_price),
+            final_profit_loss_percent=float(p_l_percent),
+            
+            # Metryki (z mapowania)
+            metric_atr_14=_safe_float_convert(setup.get('metric_atr_14')),
+            metric_time_dilation=_safe_float_convert(setup.get('metric_time_dilation')),
+            metric_price_gravity=_safe_float_convert(setup.get('metric_price_gravity')),
+            metric_td_percentile_90=_safe_float_convert(setup.get('metric_td_percentile_90')),
+            metric_pg_percentile_90=_safe_float_convert(setup.get('metric_pg_percentile_90')),
+            metric_inst_sync=_safe_float_convert(setup.get('metric_inst_sync')),
+            metric_retail_herding=_safe_float_convert(setup.get('metric_retail_herding')),
+            metric_aqm_score_h3=_safe_float_convert(setup.get('metric_aqm_score_h3')),
+            metric_aqm_percentile_95=_safe_float_convert(setup.get('metric_aqm_percentile_95')),
+            metric_J_norm=_safe_float_convert(setup.get('metric_J_norm')),
+            metric_nabla_sq_norm=_safe_float_convert(setup.get('metric_nabla_sq_norm')),
+            metric_m_sq_norm=_safe_float_convert(setup.get('metric_m_sq_norm')),
+            metric_J=_safe_float_convert(setup.get('metric_J')),
+            metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma'))
+        )
+
+    except Exception as e:
+        logger.error(f"[Backtest Utils] Błąd rozwiązywania transakcji dla {setup.get('ticker')}: {e}", exc_info=True)
+        return None
