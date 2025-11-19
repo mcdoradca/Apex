@@ -52,6 +52,19 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (nextBtn && !nextBtn.disabled) Logic.loadAgentReportPage(state.currentReportPage + 1);
     });
 
+    if (UI.btnPhase1) {
+        UI.btnPhase1.addEventListener('click', async () => {
+            UI.btnPhase1.disabled = true;
+            try { await api.sendWorkerControl('start_phase1'); } catch(e) {}
+        });
+    }
+    if (UI.btnPhase3) {
+        UI.btnPhase3.addEventListener('click', async () => {
+            UI.btnPhase3.disabled = true;
+            try { await api.sendWorkerControl('start_phase3'); } catch(e) {}
+        });
+    }
+
     UI.sidebarPhasesContainer.addEventListener('click', (e) => {
         const toggle = e.target.closest('.accordion-toggle');
         if (toggle) {
