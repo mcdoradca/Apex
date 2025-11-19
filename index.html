@@ -88,20 +88,12 @@
         </div>
     </div>
 
-    <!-- ZMIANA: Usunięto 'flex' z głównego kontenera, sidebar będzie 'fixed' na mobile -->
     <div id="dashboard" class="h-screen flex hidden">
         
-        <!-- ZMIANA: Tło/Backdrop dla mobilnego menu, domyślnie ukryte -->
         <div id="sidebar-backdrop" class="fixed inset-0 bg-black/60 z-20 md:hidden hidden"></div>
 
-        <!-- 
-          ZMIANA: Klasy dla responsywności
-          - Domyślnie (mobile): 'fixed', 'z-30', 'inset-y-0 left-0', '-translate-x-full' (schowany)
-          - Na desktopie (md:): 'relative', 'z-auto', 'translate-x-0', 'shrink-0' (wraca do normy)
-        -->
         <aside id="app-sidebar" class="fixed inset-y-0 left-0 z-30 w-72 bg-[#161B22] p-4 flex flex-col transform -translate-x-full md:relative md:translate-x-0 md:shrink-0 transition-transform duration-300 ease-in-out">
             <div class="shrink-0">
-                <!-- ZMIANA: Dodano przycisk zamykania 'x' widoczny tylko na mobile (md:hidden) -->
                 <div class="flex items-center justify-between mb-8">
                     <div class="flex items-center">
                         <img src="https://lh3.googleusercontent.com/d/14xBoVSaztOmVy6rQ1u7yV_oS2K4Zq2U1" alt="Logo" class="w-10 h-10 mr-3">
@@ -115,11 +107,7 @@
                     <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
                     <a href="#portfolio-view" id="portfolio-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="briefcase" class="mr-3 w-5 h-5"></i><span>Portfel</span></a>
                     <a href="#transactions-view" id="transactions-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="history" class="mr-3 w-5 h-5"></i><span>Transakcje</span></a>
-                    <!-- ========================================================== -->
-                    <!-- KROK 5 (Frontend): Nowy link nawigacyjny -->
-                    <!-- ========================================================== -->
                     <a href="#agent-report-view" id="agent-report-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="clipboard-check" class="mr-3 w-5 h-5"></i><span>Wydajność Agenta</span></a>
-                    <!-- ========================================================== -->
                 </nav>
                  <div class="pt-4"><h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
                     <div class="pl-2 mt-2 border-l border-gray-700 space-y-2">
@@ -174,36 +162,21 @@
             </div>
         </aside>
 
-        <!-- ZMIANA: Na mobile 'main' automatycznie zajmie 100% szerokości, bo 'aside' jest 'fixed' -->
         <main class="flex-1 bg-[#0D1117] flex flex-col overflow-y-auto">
-            
-            <!-- 
-            ==========================================================
-            === DEKONSTRUKCJA (KROK 11) ===
-            Usunięto pasek wyszukiwania (`#ticker-input`) z nagłówka,
-            ponieważ cała powiązana z nim logika backendu (stara
-            analiza AI na żądanie) została usunięta.
-            ==========================================================
-            -->
             <header class="p-4 border-b border-gray-800 shrink-0">
                 <div class="max-w-xl mx-auto flex items-center gap-2">
                     <button id="mobile-menu-btn" class="md:hidden p-1 -ml-1 text-gray-400 hover:text-white rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500">
                         <i data-lucide="menu" class="w-6 h-6"></i>
                     </button>
-                    <!-- ZMIANA: Usunięto pasek wyszukiwania i wstawiono tytuł -->
                     <h2 class="text-lg font-semibold text-gray-300">APEX Predator</h2>
                 </div>
             </header>
-            <!-- ========================================================== -->
-
 
             <div id="main-content" class="p-6 flex-grow">
-                <!-- Zawartość będzie renderowana przez JavaScript -->
-            </div>
+                </div>
         </main>
     </div>
 
-    <!-- Modale -->
     <div id="buy-modal" class="modal-backdrop hidden">
         <div class="modal-content">
             <h3 class="text-xl font-bold mb-4 text-white">Kup <span id="buy-modal-ticker"></span></h3>
@@ -232,10 +205,6 @@
         </div>
     </div>
 
-    <!-- ========================================================== -->
-    <!-- === NOWY MODAL (Krok 6 - Mega Agent) === -->
-    <!-- (Ten modal POZOSTAJE, jest używany przez nową funkcję) -->
-    <!-- ========================================================== -->
     <div id="ai-report-modal" class="modal-backdrop hidden">
         <div class="modal-content modal-content-lg">
             <div class="flex justify-between items-center mb-4">
@@ -244,19 +213,12 @@
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
-            <!-- Zawartość raportu będzie ładowana tutaj -->
-            <div id="ai-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[70vh] overflow-y-auto">
-                <!-- Tutaj wstawimy <pre> z raportem -->
-            </div>
+            <div id="ai-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[70vh] overflow-y-auto"></div>
         </div>
     </div>
-    <!-- ========================================================== -->
 
-    <!-- ========================================================== -->
-    <!-- === NOWY MODAL (Krok 4A - H3 Deep Dive) === -->
-    <!-- ========================================================== -->
     <div id="h3-deep-dive-modal" class="modal-backdrop hidden">
-        <div class="modal-content modal-content-lg"> <!-- Użyjemy large, bo raport może być długi -->
+        <div class="modal-content modal-content-lg">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="text-xl font-bold text-white">Analiza H3 Deep Dive</h3>
                 <button id="h3-deep-dive-close-btn" class="p-1 text-gray-500 hover:text-white">
@@ -264,7 +226,6 @@
                 </button>
             </div>
             
-            <!-- Sekcja zlecania analizy -->
             <div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4>
                 <p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p>
@@ -278,22 +239,13 @@
                 <div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div>
             </div>
             
-            <!-- Zawartość raportu będzie ładowana tutaj -->
             <div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto">
-                <!-- Tutaj wstawimy <pre> z raportem -->
                 <p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p>
             </div>
         </div>
     </div>
-    <!-- ========================================================== -->
 
-
-    <!-- ========================================================== -->
-    <!-- === GŁÓWNA ZMIANA (OPTYMALIZACJA) === -->
-    <!-- Cała logika JavaScript jest teraz w oddzielnym pliku -->
-    <!-- ========================================================== -->
-    <script src="app.js" defer></script>
-    <!-- ========================================================== -->
+    <script type="module" src="js/app.js"></script>
     
 </body>
 </html>
