@@ -10,38 +10,10 @@ logger = logging.getLogger(__name__)
 # URL do oficjalnego pliku z listą instrumentów notowanych na NASDAQ
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 
-# ==================================================================
-# === NOWA FUNKCJA: Całkowite czyszczenie historii zamkniętych transakcji ===
-# ==================================================================
-def _wipe_all_closed_trades(session: Session):
-    """
-    Usuwa WSZYSTKIE zamknięte transakcje z bazy danych (status != 'OPEN').
-    Czyści to tabelę "Historia Zamkniętych Transakcji (z Metrykami)" w UI.
-    Pozostawia otwarte pozycje (status 'OPEN') nienaruszone.
-    """
-    logger.info("🧹 HARD CLEANUP: Rozpoczynanie całkowitego czyszczenia historii zamkniętych transakcji...")
-    
-    try:
-        # Usuwamy wszystko co jest CLOSED_TP, CLOSED_SL, CLOSED_EXPIRED, itp.
-        stmt = text("DELETE FROM virtual_trades WHERE status != 'OPEN'")
-        result = session.execute(stmt)
-        
-        if result.rowcount > 0:
-            session.commit()
-            logger.info(f"🧹 HARD CLEANUP: Sukces. Usunięto {result.rowcount} wpisów z historii.")
-        else:
-            logger.info("🧹 HARD CLEANUP: Historia jest już czysta (brak zamkniętych transakcji).")
-            
-    except Exception as e:
-        logger.error(f"Błąd podczas czyszczenia historii transakcji: {e}")
-        session.rollback()
-# ==================================================================
-
-
 def _run_schema_and_index_migration(session: Session):
     """
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
-    Ta funkcja działa teraz w swojej własnej, niezależnej transakcji.
+    Ta funkcja jest BEZPIECZNA i nie usuwa danych.
     """
     try:
         logger.info("Starting database schema and index migration...")
@@ -53,7 +25,6 @@ def _run_schema_and_index_migration(session: Session):
         if 'trading_signals' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('trading_signals')]
             
-            # Używamy IF NOT EXISTS dla bezpieczeństwa
             if 'entry_zone_bottom' not in columns:
                 logger.warning("Migration needed: Adding column 'entry_zone_bottom'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS entry_zone_bottom NUMERIC(12, 2)"))
@@ -63,14 +34,10 @@ def _run_schema_and_index_migration(session: Session):
             if 'updated_at' not in columns:
                 logger.warning("Migration needed: Adding column 'updated_at' to 'trading_signals' table.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
-                logger.info("Successfully added 'updated_at' column.")
 
-        # === MIGRACJA TABELI 2: Stworzenie indeksu (jeśli go brakuje) ===
+        # === MIGRACJA TABELI 2: Stworzenie indeksu ===
         index_name = 'uq_active_pending_ticker'
-        logger.info(f"Attempting to create or verify partial unique index '{index_name}'...")
-        # Usunięcie starego, potencjalnie konfliktowego ograniczenia (bezpieczne, jeśli nie istnieje)
         session.execute(text("ALTER TABLE trading_signals DROP CONSTRAINT IF EXISTS trading_signals_ticker_key;"))
-        # Stworzenie poprawnego indeksu
         create_index_sql = text(f"""
             CREATE UNIQUE INDEX IF NOT EXISTS {index_name}
             ON trading_signals (ticker)
@@ -78,16 +45,8 @@ def _run_schema_and_index_migration(session: Session):
         """)
         session.execute(create_index_sql)
         
-        # ==================================================================
-        # === OSTATECZNA NAPRAWA BŁĘDU (DuplicateColumn / UndefinedColumn) ===
-        # Używamy teraz polecenia 'ADD COLUMN IF NOT EXISTS', które jest
-        # idempotentne i obsługiwane przez PostgreSQL.
-        # ==================================================================
-        
+        # === MIGRACJA TABELI 3: virtual_trades (Metryki) ===
         if 'virtual_trades' in inspector.get_table_names():
-            logger.info("Checking schema for 'virtual_trades' table using robust migration...")
-            
-            # Lista wszystkich 14 nowych kolumn (używamy NUMERIC(12, 6) dla większej precyzji)
             metric_columns_to_add = [
                 ("metric_atr_14", "NUMERIC(12, 6)"),
                 # H1
@@ -109,70 +68,37 @@ def _run_schema_and_index_migration(session: Session):
                 ("metric_J_threshold_2sigma", "NUMERIC(12, 6)")
             ]
             
-            # Pętla dodająca brakujące kolumny w sposób odporny na błędy
-            columns_added_count = 0
             for col_name, col_type in metric_columns_to_add:
                 try:
-                    # Używamy cudzysłowów, aby zachować wielkość liter (np. "metric_J_norm")
-                    # To polecenie DODA kolumnę, jeśli jej nie ma, i NIE ZGŁOSI BŁĘDU, jeśli już istnieje.
                     sql_command = f'ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS "{col_name}" {col_type}'
                     session.execute(text(sql_command))
-                    columns_added_count += 1 # Liczymy próby, niekoniecznie sukcesy
-                except Exception as e:
-                    # Ten błąd nie powinien się już zdarzyć, ale zabezpieczamy
-                    logger.error(f"Failed to execute 'ADD COLUMN IF NOT EXISTS' for {col_name}: {e}")
-                    session.rollback() # Wycofaj tylko tę jedną nieudaną operację
-            
-            if columns_added_count > 0:
-                logger.info(f"Migration: Successfully executed 'ADD IF NOT EXISTS' for all {columns_added_count} metric columns.")
-            
-        # ==================================================================
-        # === KONIEC OSTATECZNEJ NAPRAWY ===
-        # ==================================================================
+                except Exception:
+                    pass # Ignoruj błędy, jeśli kolumna już istnieje
 
-        session.commit() # Zapisujemy wszystkie zmiany w schemacie
-        logger.info(f"Successfully committed all schema and index migrations.")
+        session.commit()
+        logger.info("Schema migration completed successfully.")
 
     except Exception as e:
         logger.critical(f"FATAL: Error during database schema/index migration: {e}", exc_info=True)
         session.rollback()
-        # Rzucamy błąd dalej, aby zatrzymać aplikację, jeśli migracja się nie powiedzie
         raise
 
 def initialize_database_if_empty(session: Session, api_client):
     """
-    Sprawdza, czy tabela 'companies' jest pusta i w razie potrzeby ją uzupełnia.
-    Migracja schematu jest teraz wywoływana osobno.
-    
-    NOWA LOGIKA: Powrót do bezpiecznego trybu "run-once".
-    Agresywne czyszczenie zostało USUNIĘTE, aby chronić 
-    wyniki backtestów (virtual_trades).
+    Inicjalizuje bazę danych.
+    ZMIANA: Usunięto wszelkie funkcje czyszczące (DELETE).
+    Dane historyczne są teraz BEZPIECZNE i trwałe.
     """
-    # 1. ZAWSZE URUCHAMIAJ MIGRACJĘ PRZY STARCIE W OSOBNEJ TRANSAKCJI
+    # 1. Migracja schematu (bezpieczna)
     _run_schema_and_index_migration(session)
-    
-    # ==================================================================
-    # === CLEANUP: Całkowite czyszczenie historii przy starcie ===
-    # (Zastępuje poprzednie selektywne czyszczenie)
-    # ==================================================================
-    _wipe_all_closed_trades(session)
-    # ==================================================================
 
-    # 2. Teraz, w nowej transakcji, sprawdź i uzupełnij dane
+    # 2. Sprawdzenie i seedowanie firm (bezpieczne - uruchamia się tylko raz na pustej bazie)
     try:
-        # ==================================================================
-        # === POWRÓT DO BEZPIECZNEJ LOGIKI (OCHRONA DANYCH) ===
-        # Sprawdzamy, czy baza danych już zawiera spółki.
-        # ==================================================================
         count_result = session.execute(text("SELECT COUNT(*) FROM companies")).scalar_one()
         if count_result > 0:
-            # Jeśli baza MA dane (nawet te 3600 "brudnych"), nic nie rób.
-            # Pozwól, aby Faza 1 je przefiltrowała.
-            logger.info(f"Database already seeded with {count_result} companies. Skipping data initialization.")
+            logger.info(f"Database already seeded with {count_result} companies. No action needed.")
             return
-        # ==================================================================
 
-        # Ten kod uruchomi się tylko raz, jeśli baza danych jest FIZYCZNIE pusta
         logger.info("Table 'companies' is empty. Initializing with official data from NASDAQ...")
         response = requests.get(NASDAQ_LISTED_URL, timeout=60)
         response.raise_for_status()
@@ -184,48 +110,29 @@ def initialize_database_if_empty(session: Session, api_client):
         companies_to_insert = []
         excluded_count = 0
         
-        # ==================================================================
-        # === NOWY, RYGORYSTYCZNY FILTR (ZGODNIE Z PANA SUGESTIĄ) ===
-        # ==================================================================
         for row in reader:
             try:
                 symbol = row.get('Symbol')
                 security_name = row.get('Security Name', '').lower()
-                
-                # Definiujemy złe słowa kluczowe, które oznaczają instrumenty inne niż akcje
                 excluded_keywords = ['warrant', 'right', 'unit', 'note', 'fund', 'etf']
 
-                # WARUNEK 1: Podstawowa walidacja (czy to nie ETF i nie Test)
-                if (row.get('ETF') == 'Y' or 
-                    row.get('Test Issue') == 'Y' or 
-                    not symbol):
-                    excluded_count += 1
-                    continue
-                    
-                # WARUNEK 2: Walidacja symbolu (filtr .PAR, $ itp.)
+                if (row.get('ETF') == 'Y' or row.get('Test Issue') == 'Y' or not symbol):
+                    excluded_count += 1; continue
                 if '.' in symbol or '$' in symbol or len(symbol) > 5:
-                    excluded_count += 1
-                    continue
-                    
-                # WARUNEK 3: Walidacja nazwy (filtr Warrantów, Praw, Funduszy itp.)
+                    excluded_count += 1; continue
                 if any(keyword in security_name for keyword in excluded_keywords):
-                    excluded_count += 1
-                    continue
+                    excluded_count += 1; continue
                 
-                # Jeśli wszystko przeszło, dodajemy spółkę
                 companies_to_insert.append({
                     "ticker": symbol, 
                     "company_name": row.get('Security Name'), 
                     "exchange": "NASDAQ"
                 })
 
-            except Exception as e:
-                logger.warning(f"Błąd parsowania wiersza w data_initializer: {e} | Wiersz: {row}")
+            except Exception:
                 excluded_count += 1
-        # ==================================================================
         
         if not companies_to_insert:
-            logger.warning("No valid companies found after filtering. Halting initialization.")
             return
 
         insert_stmt = text("""
@@ -235,9 +142,8 @@ def initialize_database_if_empty(session: Session, api_client):
         """)
         session.execute(insert_stmt, companies_to_insert)
         session.commit()
-        logger.info(f"Successfully inserted {len(companies_to_insert)} companies into the database.")
-        logger.info(f"Excluded {excluded_count} non-stock instruments (ETFs, Warrants, Tests, etc.).")
+        logger.info(f"Successfully inserted {len(companies_to_insert)} companies. Excluded: {excluded_count}.")
 
     except Exception as e:
-        logger.error(f"An error occurred during data initialization (schema migration was not affected): {e}", exc_info=True)
+        logger.error(f"An error occurred during data initialization: {e}", exc_info=True)
         session.rollback()
