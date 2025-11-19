@@ -7,7 +7,7 @@ export const PROFIT_ALERT_THRESHOLD = 1.02;
 export const REPORT_PAGE_SIZE = 200;
 
 export const state = {
-    phase1: [], phase2: [], phase3: [],
+    phase1: [], // Zostawiamy tylko F1
     portfolio: [],
     transactions: [],
     liveQuotes: {},
