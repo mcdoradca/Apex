@@ -157,10 +157,74 @@
         </main>
     </div>
 
-    <div id="buy-modal" class="modal-backdrop hidden"><div class="modal-content"><h3 class="text-xl font-bold mb-4 text-white">Kup <span id="buy-modal-ticker"></span></h3><label class="block text-sm font-medium text-gray-400 mb-1">Ilość akcji</label><input type="number" id="buy-quantity" min="1" step="1" class="modal-input" placeholder="np. 100"><label class="block text-sm font-medium text-gray-400 mb-1">Cena zakupu (za 1 akcję)</label><input type="number" id="buy-price" min="0.01" step="0.01" class="modal-input" placeholder="np. 150.25"><div class="flex justify-end gap-3 mt-6"><button id="buy-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button><button id="buy-confirm-btn" class="modal-button modal-button-primary">Inwestuj</button></div></div></div>
-    <div id="sell-modal" class="modal-backdrop hidden"><div class="modal-content"><h3 class="text-xl font-bold mb-4 text-white">Sprzedaj <span id="sell-modal-ticker"></span></h3><p class="text-sm text-gray-400 mb-3">Posiadasz: <span id="sell-max-quantity" class="font-bold">0</span> akcji.</p><label class="block text-sm font-medium text-gray-400 mb-1">Ilość akcji do sprzedaży</label><input type="number" id="sell-quantity" min="1" step="1" class="modal-input" placeholder="np. 50"><label class="block text-sm font-medium text-gray-400 mb-1">Cena sprzedaży (za 1 akcję)</label><input type="number" id="sell-price" min="0.01" step="0.01" class="modal-input" placeholder="np. 160.50"><div class="flex justify-end gap-3 mt-6"><button id="sell-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button><button id="sell-confirm-btn" class="modal-button modal-button-primary">Realizuj</button></div></div></div>
-    <div id="ai-report-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Raport Mega Agenta AI</h3><button id="ai-report-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div id="ai-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[70vh] overflow-y-auto"></div></div></div>
-    <div id="h3-deep-dive-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Analiza H3 Deep Dive</h3><button id="h3-deep-dive-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p><div class="flex items-start gap-3"><input type="number" id="h3-deep-dive-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="2100"><button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok</button></div><div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div></div><div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto"><p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p></div></div></div>
+    <div id="buy-modal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <h3 class="text-xl font-bold mb-4 text-white">Kup <span id="buy-modal-ticker"></span></h3>
+            <label class="block text-sm font-medium text-gray-400 mb-1">Ilość akcji</label>
+            <input type="number" id="buy-quantity" min="1" step="1" class="modal-input" placeholder="np. 100">
+            <label class="block text-sm font-medium text-gray-400 mb-1">Cena zakupu (za 1 akcję)</label>
+            <input type="number" id="buy-price" min="0.01" step="0.01" class="modal-input" placeholder="np. 150.25">
+            <div class="flex justify-end gap-3 mt-6">
+                <button id="buy-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
+                <button id="buy-confirm-btn" class="modal-button modal-button-primary">Inwestuj</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="sell-modal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <h3 class="text-xl font-bold mb-4 text-white">Sprzedaj <span id="sell-modal-ticker"></span></h3>
+            <p class="text-sm text-gray-400 mb-3">Posiadasz: <span id="sell-max-quantity" class="font-bold">0</span> akcji.</p>
+            <label class="block text-sm font-medium text-gray-400 mb-1">Ilość akcji do sprzedaży</label>
+            <input type="number" id="sell-quantity" min="1" step="1" class="modal-input" placeholder="np. 50">
+            <label class="block text-sm font-medium text-gray-400 mb-1">Cena sprzedaży (za 1 akcję)</label>
+            <input type="number" id="sell-price" min="0.01" step="0.01" class="modal-input" placeholder="np. 160.50">
+            <div class="flex justify-end gap-3 mt-6">
+                <button id="sell-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
+                <button id="sell-confirm-btn" class="modal-button modal-button-primary">Realizuj</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="ai-report-modal" class="modal-backdrop hidden">
+        <div class="modal-content modal-content-lg">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-white">Raport Mega Agenta AI</h3>
+                <button id="ai-report-close-btn" class="p-1 text-gray-500 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div id="ai-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[70vh] overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <div id="h3-deep-dive-modal" class="modal-backdrop hidden">
+        <div class="modal-content modal-content-lg">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-white">Analiza H3 Deep Dive</h3>
+                <button id="h3-deep-dive-close-btn" class="p-1 text-gray-500 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            
+            <div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md">
+                <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4>
+                <p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p>
+                <div class="flex items-start gap-3">
+                    <input type="number" id="h3-deep-dive-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="2100">
+                    <button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                        <i data-lucide="search-check" class="w-4 h-4 mr-2"></i>
+                        Analizuj Rok
+                    </button>
+                </div>
+                <div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div>
+            </div>
+            
+            <div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto">
+                <p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p>
+            </div>
+        </div>
+    </div>
 
     <div id="h3-live-modal" class="modal-backdrop hidden">
         <div class="modal-content">
@@ -173,19 +237,19 @@
             <div class="grid grid-cols-1 gap-3">
                 <div>
                     <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Percentyl AQM</label>
-                    <input type="number" id="h3-live-percentile" class="modal-input" placeholder="0.95" step="0.01" min="0.80" max="0.99" value="0.95">
+                    <input type="number" id="h3-live-percentile" class="modal-input" placeholder="0.95" step="0.01" value="0.95">
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Próg Masy m²</label>
-                    <input type="number" id="h3-live-mass" class="modal-input" placeholder="-0.5" step="0.1" max="0" value="-0.5">
+                    <input type="number" id="h3-live-mass" class="modal-input" placeholder="-0.5" step="0.1" value="-0.5">
                 </div>
                 <div class="grid grid-cols-2 gap-2">
                     <div>
-                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik TP</label>
+                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik TP (ATR)</label>
                         <input type="number" id="h3-live-tp" class="modal-input" placeholder="5.0" step="0.5" value="5.0">
                     </div>
                     <div>
-                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik SL</label>
+                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik SL (ATR)</label>
                         <input type="number" id="h3-live-sl" class="modal-input" placeholder="2.0" step="0.5" value="2.0">
                     </div>
                 </div>
