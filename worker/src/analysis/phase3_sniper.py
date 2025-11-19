@@ -23,6 +23,17 @@ from .aqm_v3_h3_loader import _parse_bbands
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# === STAŁE KONFIGURACYJNE H3 (LIVE - Defaults) ===
+# ============================================================================
+DEFAULT_PERCENTILE = 0.95
+DEFAULT_M_SQ_THRESHOLD = -0.5
+DEFAULT_MIN_SCORE = 0.0 # <-- NOWY DOMYŚLNY
+DEFAULT_TP_MULT = 5.0
+DEFAULT_SL_MULT = 2.0
+H3_WINDOW = 100 
+H3_HISTORY_BUFFER = 201 
+
 def _pre_calculate_metrics_live(daily_df: pd.DataFrame, insider_df: pd.DataFrame, news_df: pd.DataFrame) -> pd.DataFrame:
     df = daily_df.copy()
     if insider_df.index.tz is not None: insider_df = insider_df.tz_convert(None)
@@ -62,22 +73,16 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     logger.info("Uruchamianie Fazy 3: H3 LIVE ENGINE...")
     append_scan_log(session, "Faza 3 (H3): Rozpoczynanie analizy kwantowej kandydatów...")
     
-    # Konfiguracja parametrów
+    # Konfiguracja parametrów z obsługą domyślnych
     params = parameters or {}
-    H3_PERCENTILE = 0.95
-    H3_M_SQ_THRESHOLD = -0.5
-    H3_TP_MULT = 5.0
-    H3_SL_MULT = 2.0
-    H3_WINDOW = 100 
-    H3_HISTORY_BUFFER = 201 
     
-    try:
-        if params.get('h3_percentile') is not None: H3_PERCENTILE = float(params.get('h3_percentile'))
-        if params.get('h3_m_sq_threshold') is not None: H3_M_SQ_THRESHOLD = float(params.get('h3_m_sq_threshold'))
-        if params.get('h3_tp_multiplier') is not None: H3_TP_MULT = float(params.get('h3_tp_multiplier'))
-        if params.get('h3_sl_multiplier') is not None: H3_SL_MULT = float(params.get('h3_sl_multiplier'))
-    except: pass
-
+    # Pobieramy parametry, używając stałych DEFAULT jako fallback
+    h3_percentile = float(params.get('h3_percentile', DEFAULT_PERCENTILE))
+    h3_m_sq_threshold = float(params.get('h3_m_sq_threshold', DEFAULT_M_SQ_THRESHOLD))
+    h3_min_score = float(params.get('h3_min_score', DEFAULT_MIN_SCORE)) # <-- NOWY PARAMETR
+    h3_tp_mult = float(params.get('h3_tp_multiplier', DEFAULT_TP_MULT))
+    h3_sl_mult = float(params.get('h3_sl_multiplier', DEFAULT_SL_MULT))
+    
     signals_generated = 0
     total_candidates = len(candidates)
 
@@ -120,18 +125,24 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             m_norm = ((df['m_sq'] - m_mean) / m_std).fillna(0)
             
             aqm_score_series = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
-            threshold_series = aqm_score_series.rolling(window=H3_WINDOW).quantile(H3_PERCENTILE)
+            threshold_series = aqm_score_series.rolling(window=H3_WINDOW).quantile(h3_percentile)
 
             last_idx = -1
             current_aqm = aqm_score_series.iloc[last_idx]
             current_thresh = threshold_series.iloc[last_idx]
             current_m = m_norm.iloc[last_idx]
             
-            if (current_aqm > current_thresh) and (current_m < H3_M_SQ_THRESHOLD):
+            # ============================================================
+            # === WARUNEK WEJŚCIA H3 + HARD FLOOR (DYNAMICZNY) ===
+            # ============================================================
+            if (current_aqm > current_thresh) and \
+               (current_m < h3_m_sq_threshold) and \
+               (current_aqm > h3_min_score):  # <--- UŻYCIE PARAMETRU
+               
                 atr = df['atr_14'].iloc[last_idx]
                 ref_price = df['close'].iloc[last_idx] 
-                take_profit = ref_price + (H3_TP_MULT * atr)
-                stop_loss = ref_price - (H3_SL_MULT * atr)
+                take_profit = ref_price + (h3_tp_mult * atr)
+                stop_loss = ref_price - (h3_sl_mult * atr)
                 
                 logger.info(f"H3 SIGNAL FOUND: {ticker} (AQM: {current_aqm:.2f} > {current_thresh:.2f}).")
                 existing = session.query(models.TradingSignal).filter(
@@ -144,7 +155,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                     new_signal = models.TradingSignal(
                         ticker=ticker, status='PENDING', generation_date=datetime.now(timezone.utc),
                         entry_price=float(ref_price), stop_loss=float(stop_loss), take_profit=float(take_profit),
-                        risk_reward_ratio=float(H3_TP_MULT/H3_SL_MULT),
+                        risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
                         entry_zone_top=float(ref_price + (0.5 * atr)), entry_zone_bottom=float(ref_price - (0.5 * atr)),
                         notes=f"AQM H3 Live Setup. Score: {current_aqm:.2f}. J:{df['J'].iloc[-1]:.2f}, N:{df['nabla_sq'].iloc[-1]:.2f}, M:{df['m_sq'].iloc[-1]:.2f}"
                     )
