@@ -27,23 +27,17 @@ current_state = "IDLE"
 api_client = AlphaVantageClient(api_key=API_KEY)
 
 def run_phase_1_cycle(session):
-    """Uruchamia tylko Faze 0 (Makro) i Faze 1 (Skaner)."""
-    # ZMIANA: Wymuszone czyszczenie sesji
     session.rollback() 
     try:
         logger.info("Starting Phase 1 Cycle (Macro + Scan)...")
-        # ZMIANA: Natychmiastowy log do bazy
         utils.append_scan_log(session, ">>> Rozpoczynanie Fazy 1 (Skanowanie rynku)...") 
         utils.update_system_control(session, 'worker_status', 'RUNNING')
-
-        # Faza 0
         utils.update_system_control(session, 'current_phase', 'PHASE_0')
         macro_sentiment = phase0_macro_agent.run_macro_analysis(session, api_client)
         if macro_sentiment == 'RISK_OFF':
             utils.append_scan_log(session, "Faza 0: RISK_OFF. Skanowanie przerwane.")
             return
 
-        # Faza 1
         session.execute(text("DELETE FROM phase1_candidates")) 
         session.commit()
         
@@ -63,11 +57,17 @@ def run_phase_1_cycle(session):
         utils.update_system_control(session, 'current_phase', 'NONE')
 
 def run_phase_3_cycle(session):
-    """Uruchamia tylko Faze 3 (H3 Live) na podstawie istniejących kandydatów."""
     session.rollback()
     try:
         logger.info("Starting Phase 3 Cycle (H3 Live)...")
-        utils.append_scan_log(session, ">>> Rozpoczynanie Fazy 3 (Szukanie sygnałów H3)...")
+        
+        params_json = utils.get_system_control_value(session, 'h3_live_parameters')
+        params = {}
+        if params_json and params_json != '{}':
+             try: params = json.loads(params_json)
+             except: pass
+
+        utils.append_scan_log(session, f">>> Rozpoczynanie Fazy 3 (Szukanie sygnałów H3). Params: {params}")
         utils.update_system_control(session, 'worker_status', 'RUNNING')
         
         candidates_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
@@ -78,7 +78,7 @@ def run_phase_3_cycle(session):
             return
 
         utils.update_system_control(session, 'current_phase', 'PHASE_3_H3_LIVE')
-        phase3_sniper.run_h3_live_scan(session, candidates, api_client)
+        phase3_sniper.run_h3_live_scan(session, candidates, api_client, parameters=params)
         
         utils.append_scan_log(session, "Faza 3 zakończona.")
         
@@ -90,15 +90,9 @@ def run_phase_3_cycle(session):
         utils.update_system_control(session, 'current_phase', 'NONE')
 
 def run_full_analysis_cycle():
-    """Uruchamia pełny cykl (F1 -> F3)."""
     with get_db_session() as session:
         run_phase_1_cycle(session)
         run_phase_3_cycle(session)
-
-# ... (Tutaj wklej resztę funkcji handle_... bez zmian) ...
-# Skopiuj handle_backtest_request, handle_ai_optimizer_request, handle_h3_deep_dive_request z poprzedniej odpowiedzi.
-# Dla zwięzłości pomijam ich ponowne wklejanie, bo są poprawne. 
-# Jeśli potrzebujesz ich ponownie, daj znać.
 
 def handle_backtest_request(session, api_client) -> str:
     req = utils.get_system_control_value(session, 'backtest_request')
@@ -182,11 +176,14 @@ def main_loop():
                     continue
                 
                 schedule.run_pending()
-                utils.report_heartbeat(session)
+                utils.report_heartbeat(session) 
             except Exception as e:
                 logger.error(f"Loop error: {e}")
         
         time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
-    main_loop()
+    if engine:
+        main_loop()
+    else:
+        sys.exit(1)
