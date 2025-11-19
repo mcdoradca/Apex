@@ -9,6 +9,9 @@ export const ui = {
             loginButton: get('login-button'),
             loginStatusText: get('login-status-text'),
             mainContent: get('main-content'),
+            startBtn: get('start-btn'),
+            pauseBtn: get('pause-btn'),
+            resumeBtn: get('resume-btn'),
             apiStatus: get('api-status'),
             workerStatusText: get('worker-status-text'),
             dashboardLink: get('dashboard-link'),
@@ -18,6 +21,9 @@ export const ui = {
             heartbeatStatus: get('heartbeat-status'),
             alertContainer: get('system-alert-container'),
             phase1: { list: get('phase-1-list'), count: get('phase-1-count') },
+            // ZMIANA: phase2 i phase3 przywrócone, ale phase3 nazwane "Sygnały H3"
+            phase2: { list: get('phase-2-list'), count: get('phase-2-count') }, // (Martwe, ale selector zostaje by nie psuć kodu)
+            phase3: { list: get('phase-3-list'), count: get('phase-3-count') },
             buyModal: { 
                 backdrop: get('buy-modal'), tickerSpan: get('buy-modal-ticker'), 
                 quantityInput: get('buy-quantity'), priceInput: get('buy-price'),
@@ -51,10 +57,37 @@ export const renderers = {
 
     phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
     
-    // Usunięto dashboard-active-signals i discarded-signals
+    phase2List: (results) => "", // Puste
+    
+    // ZMIANA: Renderer dla sygnałów H3 (Wyświetlanie AQM Score)
+    phase3List: (signals) => signals.map(s => {
+        let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
+        let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
+        
+        // Wyciągnij AQM Score z notatek (format: "AQM H3 Live Setup. Score: 0.98. ...")
+        let scoreDisplay = "";
+        if (s.notes && s.notes.includes("Score:")) {
+            try {
+                const parts = s.notes.split("Score:");
+                if (parts.length > 1) {
+                    const scorePart = parts[1].trim().split(" ")[0].replace(",", "").replace(".", "."); // Bierzemy pierwszą liczbę
+                    scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${parseFloat(scorePart).toFixed(2)}</span>`;
+                }
+            } catch(e) {}
+        }
+
+        return `<div class="candidate-item flex items-center text-xs p-2 rounded-md cursor-default transition-colors ${statusClass}">
+                    <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
+                    <span class="font-bold">${s.ticker}</span>
+                    ${scoreDisplay}
+                    <span class="ml-auto text-gray-500">${s.status}</span>
+                </div>`;
+    }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
+
+    // ZMIANA: Przywrócono kartę sygnałów na Dashboardzie
     dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                             
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
@@ -63,9 +96,17 @@ export const renderers = {
                             </div>
                             
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanera (Faza 1)</h3>
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanera (F1)</h3>
                                 <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
                                 <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
+                            </div>
+                            
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="target" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały H3</h3>
+                                <div class="mt-2">
+                                    <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
+                                    <p class="text-sm text-gray-500 mt-1">Aktywne / Oczekujące</p>
+                                </div>
                             </div>
                             
                         </div>
