@@ -8,8 +8,8 @@ export const REPORT_PAGE_SIZE = 200;
 
 export const state = {
     phase1: [],
-    phase2: [], // Pozostawione dla kompatybilności, puste
-    phase3: [], // TO JEST WAŻNE: musi być zainicjowane jako []
+    phase2: [], 
+    phase3: [], 
     portfolio: [],
     transactions: [],
     liveQuotes: {},
