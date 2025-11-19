@@ -7,7 +7,9 @@ export const PROFIT_ALERT_THRESHOLD = 1.02;
 export const REPORT_PAGE_SIZE = 200;
 
 export const state = {
-    phase1: [], // Zostawiamy tylko F1
+    phase1: [],
+    phase2: [], // Pozostawione dla kompatybilności, puste
+    phase3: [], // TO JEST WAŻNE: musi być zainicjowane jako []
     portfolio: [],
     transactions: [],
     liveQuotes: {},
