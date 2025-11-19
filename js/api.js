@@ -42,9 +42,13 @@ const apiRequest = async (endpoint, options = {}) => {
 
 export const api = {
     getWorkerStatus: () => apiRequest('api/v1/worker/status'),
-    // Ta funkcja jest kluczowa dla przycisków Start Fazy 1 / Fazy 3
-    sendWorkerControl: (action) => apiRequest(`api/v1/worker/control/${action}`, { method: 'POST' }),
-    
+    // === TA FUNKCJA BYŁA BRAKUJĄCA ===
+    sendWorkerControl: (action, params = null) => apiRequest(`api/v1/worker/control/${action}`, { 
+        method: 'POST',
+        headers: params ? { 'Content-Type': 'application/json' } : {},
+        body: params ? JSON.stringify(params) : null
+    }),
+    // =================================
     getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
