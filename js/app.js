@@ -52,7 +52,6 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (nextBtn && !nextBtn.disabled) Logic.loadAgentReportPage(state.currentReportPage + 1);
     });
 
-    // --- ZMIANA: Obsługa przycisków F1/F3 ---
     if (UI.btnPhase1) {
         UI.btnPhase1.addEventListener('click', async () => {
             UI.btnPhase1.disabled = true;
@@ -65,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    // --- ZMIANA: Obsługa modala H3 Live ---
     if (UI.h3LiveModal.cancelBtn) {
         UI.h3LiveModal.cancelBtn.addEventListener('click', Logic.hideH3LiveParamsModal);
     }
