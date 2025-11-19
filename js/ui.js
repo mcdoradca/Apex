@@ -1,4 +1,4 @@
-import { logger } from './state.js';
+import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
 export const ui = {
     init: () => {
