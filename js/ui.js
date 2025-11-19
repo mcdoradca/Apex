@@ -9,9 +9,6 @@ export const ui = {
             loginButton: get('login-button'),
             loginStatusText: get('login-status-text'),
             mainContent: get('main-content'),
-            startBtn: get('start-btn'),
-            pauseBtn: get('pause-btn'),
-            resumeBtn: get('resume-btn'),
             apiStatus: get('api-status'),
             workerStatusText: get('worker-status-text'),
             dashboardLink: get('dashboard-link'),
@@ -21,8 +18,6 @@ export const ui = {
             heartbeatStatus: get('heartbeat-status'),
             alertContainer: get('system-alert-container'),
             phase1: { list: get('phase-1-list'), count: get('phase-1-count') },
-            phase2: { list: get('phase-2-list'), count: get('phase-2-count') },
-            phase3: { list: get('phase-3-list'), count: get('phase-3-count') },
             buyModal: { 
                 backdrop: get('buy-modal'), tickerSpan: get('buy-modal-ticker'), 
                 quantityInput: get('buy-quantity'), priceInput: get('buy-price'),
@@ -56,19 +51,10 @@ export const renderers = {
 
     phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
     
-    phase2List: (results) => results.map(r => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-2-text"><span class="font-bold">${r.ticker}</span><span>Score: ${r.total_score}/10</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
-    
-    phase3List: (signals) => signals.map(s => {
-        let statusClass, statusText, icon;
-        if (s.status === 'ACTIVE') { statusClass = 'text-green-400'; statusText = 'AKTYWNY'; icon = 'zap';}
-        else if (s.status === 'PENDING') { statusClass = 'text-yellow-400'; statusText = 'OCZEKUJĄCY'; icon = 'hourglass'; }
-        else { statusClass = 'text-gray-500'; statusText = s.status.toUpperCase(); icon = 'help-circle'; }
-        return `<div class="candidate-item flex items-center text-xs p-2 rounded-md cursor-default transition-colors ${statusClass}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-auto text-gray-500">${statusText}</span></div>`;
-    }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
-
+    // Usunięto dashboard-active-signals i discarded-signals
     dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                             
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
@@ -77,27 +63,12 @@ export const renderers = {
                             </div>
                             
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanera (Faza 1)</h3>
                                 <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
                                 <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
                             </div>
                             
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center">
-                                    <i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały (Aktywne / Wyrzucone)
-                                </h3>
-                                <div class="flex items-baseline gap-x-4 gap-y-2 mt-2">
-                                    <div>
-                                        <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
-                                        <p class="text-sm text-gray-500 mt-1">Sygnały Aktywne</p>
-                                    </div>
-                                    <div class="border-l border-gray-700 pl-4">
-                                        <p id="dashboard-discarded-signals" class="text-4xl font-extrabold text-gray-500">0</p>
-                                        <p class="text-sm text-gray-500 mt-1">Wyrzucone (24h)</p>
-                                    </div>
-                                </div>
-                            </div>
-                            </div>
+                        </div>
                         <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
                         <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
                             <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
