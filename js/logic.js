@@ -19,6 +19,62 @@ export function getNYTime() {
     } catch (e) { return new Date(); }
 }
 
+export function formatCountdown(ms) {
+    if (ms < 0) ms = 0;
+    const totalSeconds = Math.floor(ms / 1000);
+    const totalMinutes = Math.floor(totalSeconds / 60);
+    const totalHours = Math.floor(totalMinutes / 60);
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
+    const minutes = totalMinutes % 60;
+    const seconds = totalSeconds % 60;
+    let str = '';
+    if (days > 0) str += `${days}d `;
+    str += `${String(hours).padStart(2, '0')}g ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+    return str;
+}
+
+export function getMarketCountdown() {
+    const now = getNYTime();
+    const dayOfWeek = now.getDay();
+    const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+    const preMarketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 4, 0, 0);
+    const marketOpen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 30, 0);
+    const marketClose = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 16, 0, 0);
+    let message = '', targetTime = null;
+
+    if (isWeekend) {
+        let daysToAdd = (dayOfWeek === 6) ? 2 : 1;
+        targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+        message = 'Do otwarcia Pre-Market: ';
+    } else {
+        if (now < preMarketOpen) { targetTime = preMarketOpen; message = 'Do otwarcia Pre-Market: '; }
+        else if (now >= preMarketOpen && now < marketOpen) { targetTime = marketOpen; message = 'Do otwarcia Rynku: '; }
+        else if (now >= marketOpen && now < marketClose) { targetTime = marketClose; message = 'Do zamknięcia Rynku: '; }
+        else {
+            let daysToAdd = (dayOfWeek === 5) ? 3 : 1;
+            targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+            message = 'Do otwarcia Pre-Market: ';
+        }
+    }
+    const diff = targetTime.getTime() - now.getTime();
+    return message + formatCountdown(diff);
+}
+
+export function updateCountdownTimer() {
+    const timerElement = document.getElementById('market-countdown-timer');
+    if (timerElement) timerElement.textContent = getMarketCountdown();
+}
+
+export function startMarketCountdown() {
+    stopMarketCountdown();
+    updateCountdownTimer();
+    state.activeCountdownPolling = setInterval(updateCountdownTimer, 1000);
+}
+export function stopMarketCountdown() {
+    if (state.activeCountdownPolling) { clearInterval(state.activeCountdownPolling); state.activeCountdownPolling = null; }
+}
+
 export function setActiveSidebar(linkElement) {
     document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('sidebar-item-active'));
     if (linkElement) linkElement.classList.add('sidebar-item-active');
@@ -28,6 +84,7 @@ export function stopAllPolling() {
     if (state.activePortfolioPolling) { clearTimeout(state.activePortfolioPolling); state.activePortfolioPolling = null; }
     if (state.activeAIOptimizerPolling) { clearTimeout(state.activeAIOptimizerPolling); state.activeAIOptimizerPolling = null; }
     if (state.activeH3DeepDivePolling) { clearTimeout(state.activeH3DeepDivePolling); state.activeH3DeepDivePolling = null; }
+    stopMarketCountdown();
 }
 
 export function updateDashboardUI(statusData) {
@@ -38,7 +95,6 @@ export function updateDashboardUI(statusData) {
     const elProgBar = document.getElementById('progress-bar');
     const elLog = document.getElementById('scan-log');
     
-    // Dashboard signals counter
     const elSignals = document.getElementById('dashboard-active-signals');
     if (elSignals) elSignals.textContent = state.phase3.length;
     
@@ -56,6 +112,11 @@ export function updateDashboardUI(statusData) {
         const logContainer = document.getElementById('scan-log-container');
         if(logContainer) logContainer.scrollTop = 0; 
     }
+}
+
+export function updateDashboardCounters() {
+    const activeEl = document.getElementById('dashboard-active-signals');
+    if (activeEl) activeEl.textContent = state.phase3.length;
 }
 
 export function displaySystemAlert(message) {
@@ -131,6 +192,10 @@ export async function pollWorkerStatus() {
             ui.heartbeatStatus.className = `text-xs ${diffSeconds > 30 ? 'text-red-500' : 'text-green-500'}`;
             ui.heartbeatStatus.textContent = diffSeconds > 30 ? 'PRZERWANY' : new Date(statusData.last_heartbeat_utc).toLocaleTimeString();
         }
+        
+        const isBusy = statusData.status !== 'IDLE' && statusData.status !== 'ERROR';
+        if (ui.btnPhase1) ui.btnPhase1.disabled = isBusy;
+        if (ui.btnPhase3) ui.btnPhase3.disabled = isBusy;
 
         updateDashboardUI(statusData);
     } catch (e) {}
@@ -139,21 +204,19 @@ export async function pollWorkerStatus() {
 
 export async function refreshSidebarData() {
     try {
-        // ZMIANA: Przywrócono getPhase3Signals
         const [phase1, phase3] = await Promise.all([
             api.getPhase1Candidates(),
             api.getPhase3Signals()
         ]);
         state.phase1 = phase1 || [];
-        state.phase3 = phase3 || []; // Zapisujemy sygnały H3
+        state.phase3 = phase3 || [];
 
         if(ui.phase1.list) ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
         if(ui.phase1.count) ui.phase1.count.textContent = state.phase1.length;
-        
-        // Renderujemy listę H3
         if(ui.phase3.list) ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
         if(ui.phase3.count) ui.phase3.count.textContent = state.phase3.length;
         
+        updateDashboardCounters();
         lucide.createIcons();
     } catch (e) {}
     setTimeout(refreshSidebarData, 15000);
@@ -164,7 +227,9 @@ export async function showDashboard() {
     setActiveSidebar(ui.dashboardLink);
     ui.mainContent.innerHTML = renderers.dashboard();
     updateDashboardUI(state.workerStatus);
+    updateDashboardCounters();
     lucide.createIcons();
+    startMarketCountdown();
 }
 
 function checkPortfolioProfitAlerts() {
@@ -189,7 +254,6 @@ function checkPortfolioProfitAlerts() {
 async function pollPortfolioQuotes() {
     const portfolioTickers = state.portfolio.map(h => h.ticker);
     if (portfolioTickers.length === 0) { state.activePortfolioPolling = null; return; }
-    
     let quotesUpdated = false;
     try {
         const quoteResults = await Promise.all(portfolioTickers.map(ticker => api.getLiveQuote(ticker)));
@@ -266,7 +330,6 @@ export async function showAgentReport() {
     await loadAgentReportPage(1);
 }
 
-// Modal Handlers
 export function showBuyModal(ticker) {
     ui.buyModal.tickerSpan.textContent = ticker;
     ui.buyModal.quantityInput.value = '';
@@ -514,6 +577,6 @@ export async function handleViewH3DeepDiveReport() {
         const reportData = await api.getH3DeepDiveReport();
         if (reportData.status === 'DONE') ui.h3DeepDiveModal.content.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
         else if (reportData.status === 'PROCESSING') pollH3DeepDiveReport();
-        else ui.h3DeepDiveModal.content.innerHTML = '<p class="text-gray-400">Brak raportu.</p>';
+        else ui.h3DeepDiveModal.content.innerHTML = '<p class="text-gray-500">Brak raportu.</p>';
     } catch (e) { ui.h3DeepDiveModal.content.innerHTML = `<p class="text-red-400">${e.message}</p>`; }
 }
