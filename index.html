@@ -40,7 +40,7 @@
         .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
         .modal-content-lg { max-width: 800px; } 
         .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
-        .modal-input[type=number]::-webkit-inner-spin-button,
+        .modal-input[type=number]::-webkit-inner-spin-button, 
         .modal-input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         .modal-input[type=number] { -moz-appearance: textfield; }
         .modal-button { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 600; transition: background-color 0.2s; }
@@ -162,6 +162,43 @@
     <div id="ai-report-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Raport Mega Agenta AI</h3><button id="ai-report-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div id="ai-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[70vh] overflow-y-auto"></div></div></div>
     <div id="h3-deep-dive-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Analiza H3 Deep Dive</h3><button id="h3-deep-dive-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p><div class="flex items-start gap-3"><input type="number" id="h3-deep-dive-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="2100"><button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok</button></div><div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div></div><div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto"><p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p></div></div></div>
 
+    <div id="h3-live-modal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <h3 class="text-xl font-bold mb-4 text-white flex items-center">
+                <i data-lucide="settings" class="w-5 h-5 mr-2 text-purple-400"></i>
+                Konfiguracja H3 (Live)
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Ustaw parametry dla skanera sygnałów H3.</p>
+            
+            <div class="grid grid-cols-1 gap-3">
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Percentyl AQM</label>
+                    <input type="number" id="h3-live-percentile" class="modal-input" placeholder="0.95" step="0.01" min="0.80" max="0.99" value="0.95">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Próg Masy m²</label>
+                    <input type="number" id="h3-live-mass" class="modal-input" placeholder="-0.5" step="0.1" max="0" value="-0.5">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik TP</label>
+                        <input type="number" id="h3-live-tp" class="modal-input" placeholder="5.0" step="0.5" value="5.0">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik SL</label>
+                        <input type="number" id="h3-live-sl" class="modal-input" placeholder="2.0" step="0.5" value="2.0">
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-3 mt-6">
+                <button id="h3-live-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
+                <button id="h3-live-start-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700">
+                    <i data-lucide="play" class="w-4 h-4 mr-2 inline"></i>Start Skanowania
+                </button>
+            </div>
+        </div>
+    </div>
     <script type="module" src="js/app.js"></script>
 </body>
 </html>
