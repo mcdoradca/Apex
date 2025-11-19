@@ -36,12 +36,11 @@
             gap: 0.5rem;
         }
         .alert-bar { max-width: 400px; width: 100%; }
-        .progress-circle { transform: rotate(-90deg); }
         .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
         .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
         .modal-content-lg { max-width: 800px; } 
         .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
-        .modal-input[type=number]::-webkit-inner-spin-button,
+        .modal-input[type=number]::-webkit-inner-spin-button, 
         .modal-input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         .modal-input[type=number] { -moz-appearance: textfield; }
         .modal-button { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 600; transition: background-color 0.2s; }
@@ -91,25 +90,40 @@
                     <a href="#portfolio-view" id="portfolio-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="briefcase" class="mr-3 w-5 h-5"></i><span>Portfel</span></a>
                     <a href="#transactions-view" id="transactions-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="history" class="mr-3 w-5 h-5"></i><span>Transakcje</span></a>
                     <a href="#agent-report-view" id="agent-report-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="clipboard-check" class="mr-3 w-5 h-5"></i><span>Wydajność Agenta</span></a>
-                <a href="#agent-report-view" id="agent-report-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="clipboard-check" class="mr-3 w-5 h-5"></i><span>Wydajność Agenta</span></a>
-        </nav>
-    </div>
+                </nav>
+            </div>
 
-    <div class="pt-4">
-        <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
-        <div class="pl-2 mt-2 border-l border-gray-700 space-y-2">
-            <button id="btn-phase-1" class="w-full text-left flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                <i data-lucide="radar" class="mr-2 h-4 w-4"></i>
-                Skanuj F1 (Kandydaci)
-            </button>
-            <button id="btn-phase-3" class="w-full text-left flex items-center bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                <i data-lucide="crosshair" class="mr-2 h-4 w-4"></i>
-                Szukaj H3 (Sygnały)
-            </button>
-        </div>
-    </div>
-    <div id="phases-container" class="flex-grow overflow-y-auto space-y-4 py-4 mt-4 border-t border-gray-800">
-    
+            <div class="pt-4">
+                <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sterowanie</h2>
+                <div class="pl-2 mt-2 border-l border-gray-700 space-y-2">
+                    <button id="btn-phase-1" class="w-full text-left flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i data-lucide="radar" class="mr-2 h-4 w-4"></i>
+                        Skanuj F1 (Kandydaci)
+                    </button>
+                    <button id="btn-phase-3" class="w-full text-left flex items-center bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i data-lucide="crosshair" class="mr-2 h-4 w-4"></i>
+                        Szukaj H3 (Sygnały)
+                    </button>
+                </div>
+            </div>
+
+            <div id="phases-container" class="flex-grow overflow-y-auto space-y-4 py-4 mt-4 border-t border-gray-800">
+                <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Skanowania</h2>
+                <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
+                        <p class="text-sm font-semibold text-gray-300">Faza 1: Kandydaci (<span id="phase-1-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-1-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
+                </div>
+                <div class="px-2">
+                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
+                        <p class="text-sm font-semibold text-green-400">Sygnały H3 (Live) (<span id="phase-3-count">0</span>)</p>
+                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
+                    </button>
+                    <div id="phase-3-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
+                </div>
+            </div>
 
             <div class="mt-auto shrink-0 border-t border-gray-800 pt-4">
                 <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Status Systemu</h3>
@@ -191,20 +205,15 @@
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
-            
             <div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4>
                 <p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p>
                 <div class="flex items-start gap-3">
                     <input type="number" id="h3-deep-dive-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="2100">
-                    <button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
-                        <i data-lucide="search-check" class="w-4 h-4 mr-2"></i>
-                        Analizuj Rok
-                    </button>
+                    <button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok</button>
                 </div>
                 <div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div>
             </div>
-            
             <div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto">
                 <p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p>
             </div>
@@ -214,4 +223,3 @@
     <script type="module" src="js/app.js"></script>
 </body>
 </html>
-
