@@ -1,13 +1,13 @@
 import logging
 import sys
 import json
-from fastapi import FastAPI, Depends, HTTPException, Response, Query
+from fastapi import FastAPI, Depends, HTTPException, Response, Query, Body
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
 from . import crud, models, schemas
 from .database import get_db, engine, SessionLocal
@@ -58,7 +58,8 @@ async def startup_event():
             'ai_optimizer_request': 'NONE',
             'ai_optimizer_report': 'NONE',
             'h3_deep_dive_request': 'NONE',
-            'h3_deep_dive_report': 'NONE'
+            'h3_deep_dive_report': 'NONE',
+            'h3_live_parameters': '{}'
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -191,8 +192,7 @@ def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
                 notes = 'Ręcznie dodany do obserwowanych (ponownie)'
             RETURNING *;
         """)
-        params = [{'ticker': ticker.strip().upper()}]
-        result_proxy = db.execute(stmt, params)
+        result_proxy = db.execute(stmt, [{'ticker': ticker.strip().upper()}])
         result = result_proxy.fetchone()
         db.commit()
 
@@ -226,9 +226,8 @@ def get_live_quote(ticker: str):
         raise HTTPException(status_code=503, detail="Błąd AV.")
 
 # --- ENDPOINTY KONTROLI ---
-
 @app.post("/api/v1/worker/control/{action}", status_code=202)
-def control_worker(action: str, db: Session = Depends(get_db)):
+def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db: Session = Depends(get_db)):
     allowed_actions = {
         "start": "START_REQUESTED", 
         "pause": "PAUSE_REQUESTED", 
@@ -240,6 +239,11 @@ def control_worker(action: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid action.")
     
     try:
+        if params:
+            crud.set_system_control_value(db, "h3_live_parameters", json.dumps(params))
+        else:
+            crud.set_system_control_value(db, "h3_live_parameters", "{}")
+
         crud.set_system_control_value(db, "worker_command", allowed_actions[action])
         logger.info(f"Command '{action}' sent to worker.")
         return {"message": f"Command '{action}' sent."}
