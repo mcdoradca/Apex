@@ -175,17 +175,33 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         logger.error(f"[Backtest] Błąd walidacji: {e}")
         return
 
-    log_msg = f"BACKTEST HISTORYCZNY (H3 ONLY): Rok {year} [Params: {parameters}]"
+    # === KLUCZOWA ZMIANA: IDENTYFIKACJA DOKŁADNEJ NAZWY SETUPU ===
+    # Musimy wiedzieć, jaki dokładnie setup (suffix) zostanie użyty,
+    # aby usunąć TYLKO jego stare wyniki, a nie wszystkie wyniki "AQM_V3" z tego roku.
+    
+    setup_name_suffix = 'AQM_V3_H3_DYNAMIC' # Domyślna nazwa (musi pasować do tej w aqm_v3_h3_simulator.py)
+    if parameters and parameters.get('setup_name'):
+        s_name = str(parameters.get('setup_name')).strip()
+        if s_name:
+             setup_name_suffix = s_name
+    
+    target_setup_type = f"BACKTEST_{year}_{setup_name_suffix}"
+    
+    log_msg = f"BACKTEST HISTORYCZNY (H3 ONLY): Rok {year} [Setup: {target_setup_type}]"
     logger.info(log_msg)
     append_scan_log(session, log_msg)
 
-    # Czyszczenie tylko wyników H3 dla tego roku (bezpieczne)
+    # === CHIRURGICZNE CZYSZCZENIE ===
     try:
-        # Usuwamy tylko stare wyniki dla tego konkretnego roku i setupu (wzroca)
-        # Aby uniknąć duplikatów przy ponownym uruchomieniu
-        session.execute(text(f"DELETE FROM virtual_trades WHERE setup_type LIKE 'BACKTEST_{year}_AQM_V3_%'"))
+        # Usuwamy dokładnie ten jeden setup_type, pozwalając innym (np. TEST_V1 vs TEST_V2) współistnieć.
+        delete_stmt = text("DELETE FROM virtual_trades WHERE setup_type = :target_type")
+        result = session.execute(delete_stmt, {"target_type": target_setup_type})
         session.commit()
-    except Exception: session.rollback()
+        if result.rowcount > 0:
+            logger.info(f"Usunięto {result.rowcount} starych wpisów dla '{target_setup_type}'.")
+    except Exception as e:
+        logger.error(f"Błąd czyszczenia starych wyników: {e}")
+        session.rollback()
 
     try:
         initial_tickers_to_test = sorted([r[0] for r in session.execute(text("SELECT DISTINCT ticker FROM phase1_candidates")).fetchall()])
@@ -207,7 +223,6 @@ def run_historical_backtest(session: Session, api_client: AlphaVantageClient, ye
         spy_df.index = pd.to_datetime(spy_df.index)
         _backtest_cache["spy_data"] = spy_df
         
-        # Pomijamy ładowanie sektorów ETF, jeśli H3 ich nie używa bezpośrednio w logice
         update_scan_progress(session, 0, len(initial_tickers_to_test)) 
     except Exception as e:
         logger.error(f"Błąd Cache LITE: {e}")
