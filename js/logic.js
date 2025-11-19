@@ -95,8 +95,9 @@ export function updateDashboardUI(statusData) {
     const elProgBar = document.getElementById('progress-bar');
     const elLog = document.getElementById('scan-log');
     
+    // ZMIANA: Zabezpieczenie przed 'undefined'
     const elSignals = document.getElementById('dashboard-active-signals');
-    if (elSignals) elSignals.textContent = state.phase3.length;
+    if (elSignals) elSignals.textContent = (state.phase3 || []).length;
     
     if (!elStatus || !elLog) return;
     
@@ -116,7 +117,8 @@ export function updateDashboardUI(statusData) {
 
 export function updateDashboardCounters() {
     const activeEl = document.getElementById('dashboard-active-signals');
-    if (activeEl) activeEl.textContent = state.phase3.length;
+    // ZMIANA: Zabezpieczenie przed 'undefined'
+    if (activeEl) activeEl.textContent = (state.phase3 || []).length;
 }
 
 export function displaySystemAlert(message) {
@@ -208,6 +210,7 @@ export async function refreshSidebarData() {
             api.getPhase1Candidates(),
             api.getPhase3Signals()
         ]);
+        // ZMIANA: Upewniamy się, że phase3 jest tablicą, nawet jeśli API zwróci null
         state.phase1 = phase1 || [];
         state.phase3 = phase3 || [];
 
