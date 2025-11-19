@@ -61,8 +61,6 @@ def _simulate_trades_h3(
         return 0
 
     # === OBLICZENIA METRYK H3 ===
-    # H3 wylicza własne metryki na podstawie surowych kolumn (J, nabla_sq, m_sq)
-    # przygotowanych przez backtest_engine.
     
     j_mean = daily_df['J'].rolling(window=percentile_window).mean()
     j_norm = (daily_df['J'] - j_mean) / daily_df['J'].rolling(window=percentile_window).std(ddof=1)
@@ -94,8 +92,16 @@ def _simulate_trades_h3(
         if pd.isna(current_aqm_score) or pd.isna(current_threshold):
             continue
         
-        # Warunek Wejścia H3
-        if (current_aqm_score > current_threshold) and (current_m_norm < param_m_sq_threshold):
+        # ============================================================
+        # === WARUNEK WEJŚCIA H3 + HARD FLOOR ===
+        # ============================================================
+        # Dodano warunek: (current_aqm_score > 0)
+        # Oznacza to, że siła pola musi być dodatnia (wzrostowa) BEZWZGLĘDNIE,
+        # a nie tylko relatywnie do ostatnich 100 dni.
+        
+        if (current_aqm_score > current_threshold) and \
+           (current_m_norm < param_m_sq_threshold) and \
+           (current_aqm_score > 0):  # <--- NOWOŚĆ: HARD FLOOR
             
             try:
                 candle_D_plus_1 = daily_df.iloc[i + 1]
@@ -123,8 +129,7 @@ def _simulate_trades_h3(
                     "metric_nabla_sq_norm": float(nabla_norm.iloc[i]),
                     "metric_m_sq_norm": float(current_m_norm),
                     
-                    # Logowanie Komponentów Składowych (dla AI/Deep Dive)
-                    # Te wartości są kluczowe dla analizy, mimo że H1/H2/H4 są wyłączone
+                    # Logowanie Komponentów Składowych
                     "metric_J": float(candle_D['J']),
                     "metric_inst_sync": float(candle_D['institutional_sync']),
                     "metric_retail_herding": float(candle_D['retail_herding']),
