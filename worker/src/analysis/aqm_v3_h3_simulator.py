@@ -36,6 +36,7 @@ def _simulate_trades_h3(
     DEFAULT_SL_MULT = 2.0
     DEFAULT_MAX_HOLD = 5
     DEFAULT_SETUP_NAME = 'AQM_V3_H3_DYNAMIC'
+    DEFAULT_MIN_SCORE = 0.0 # <-- NOWY DOMYŚLNY PARAMETR
 
     try:
         param_percentile = float(params.get('h3_percentile')) if params.get('h3_percentile') is not None else DEFAULT_PERCENTILE
@@ -45,6 +46,10 @@ def _simulate_trades_h3(
         param_max_hold = int(params.get('h3_max_hold')) if params.get('h3_max_hold') is not None else DEFAULT_MAX_HOLD
         param_name = str(params.get('setup_name')) if params.get('setup_name') and str(params.get('setup_name')).strip() else DEFAULT_SETUP_NAME
         setup_name_suffix = param_name
+        
+        # === NOWY PARAMETR: MIN AQM SCORE ===
+        param_min_score = float(params.get('h3_min_score')) if params.get('h3_min_score') is not None else DEFAULT_MIN_SCORE
+
     except (ValueError, TypeError) as e:
         logger.error(f"Błąd parsowania parametrów H3 dla {ticker}: {e}. Używam domyślnych.")
         param_percentile = DEFAULT_PERCENTILE
@@ -52,6 +57,7 @@ def _simulate_trades_h3(
         param_tp_mult = DEFAULT_TP_MULT
         param_sl_mult = DEFAULT_SL_MULT
         param_max_hold = DEFAULT_MAX_HOLD
+        param_min_score = DEFAULT_MIN_SCORE
         setup_name_suffix = 'AQM_V3_H3_PARSING_ERROR'
 
     history_buffer = 201 
@@ -93,15 +99,13 @@ def _simulate_trades_h3(
             continue
         
         # ============================================================
-        # === WARUNEK WEJŚCIA H3 + HARD FLOOR ===
+        # === WARUNEK WEJŚCIA H3 + HARD FLOOR (DYNAMICZNY) ===
         # ============================================================
-        # Dodano warunek: (current_aqm_score > 0)
-        # Oznacza to, że siła pola musi być dodatnia (wzrostowa) BEZWZGLĘDNIE,
-        # a nie tylko relatywnie do ostatnich 100 dni.
+        # Zmieniono sztywne > 0 na dynamiczny parametr param_min_score
         
         if (current_aqm_score > current_threshold) and \
            (current_m_norm < param_m_sq_threshold) and \
-           (current_aqm_score > 0):  # <--- NOWOŚĆ: HARD FLOOR
+           (current_aqm_score > param_min_score):  # <--- UŻYCIE PARAMETRU
             
             try:
                 candle_D_plus_1 = daily_df.iloc[i + 1]
