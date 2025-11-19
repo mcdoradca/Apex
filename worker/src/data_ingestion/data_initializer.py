@@ -11,39 +11,29 @@ logger = logging.getLogger(__name__)
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 
 # ==================================================================
-# === NOWA FUNKCJA: Selektywne czyszczenie strategii H1, H2, H4 ===
+# === NOWA FUNKCJA: Całkowite czyszczenie historii zamkniętych transakcji ===
 # ==================================================================
-def _clean_legacy_strategies(session: Session):
+def _wipe_all_closed_trades(session: Session):
     """
-    Usuwa z bazy danych wyniki strategii H1, H2 i H4, pozostawiając H3.
-    Uruchamiana przy starcie systemu.
+    Usuwa WSZYSTKIE zamknięte transakcje z bazy danych (status != 'OPEN').
+    Czyści to tabelę "Historia Zamkniętych Transakcji (z Metrykami)" w UI.
+    Pozostawia otwarte pozycje (status 'OPEN') nienaruszone.
     """
-    logger.info("🧹 CLEANUP: Rozpoczynanie selektywnego usuwania strategii H1, H2, H4...")
+    logger.info("🧹 HARD CLEANUP: Rozpoczynanie całkowitego czyszczenia historii zamkniętych transakcji...")
     
-    strategies_to_remove = [
-        '%AQM_V3_H1_GRAVITY_MEAN_REVERSION%',      # H1
-        '%AQM_V3_H2_CONTRARIAN_ENTANGLEMENT%',     # H2
-        '%AQM_V3_H4_INFO_THERMO%'                  # H4
-    ]
-    
-    total_deleted = 0
     try:
-        for pattern in strategies_to_remove:
-            # Używamy LIKE, aby dopasować format "BACKTEST_2023_AQM_..."
-            stmt = text("DELETE FROM virtual_trades WHERE setup_type LIKE :pattern")
-            result = session.execute(stmt, {'pattern': pattern})
-            if result.rowcount > 0:
-                logger.info(f"   > Usunięto {result.rowcount} wierszy dla wzorca: {pattern}")
-                total_deleted += result.rowcount
+        # Usuwamy wszystko co jest CLOSED_TP, CLOSED_SL, CLOSED_EXPIRED, itp.
+        stmt = text("DELETE FROM virtual_trades WHERE status != 'OPEN'")
+        result = session.execute(stmt)
         
-        if total_deleted > 0:
+        if result.rowcount > 0:
             session.commit()
-            logger.info(f"🧹 CLEANUP: Pomyślnie usunięto łącznie {total_deleted} starych transakcji.")
+            logger.info(f"🧹 HARD CLEANUP: Sukces. Usunięto {result.rowcount} wpisów z historii.")
         else:
-            logger.info("🧹 CLEANUP: Nie znaleziono danych H1/H2/H4 do usunięcia.")
+            logger.info("🧹 HARD CLEANUP: Historia jest już czysta (brak zamkniętych transakcji).")
             
     except Exception as e:
-        logger.error(f"Błąd podczas czyszczenia strategii: {e}")
+        logger.error(f"Błąd podczas czyszczenia historii transakcji: {e}")
         session.rollback()
 # ==================================================================
 
@@ -162,10 +152,10 @@ def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
     
     # ==================================================================
-    # === NOWOŚĆ: Selektywne czyszczenie H1, H2, H4 ===
-    # Uruchamiane zawsze przy starcie workera.
+    # === CLEANUP: Całkowite czyszczenie historii przy starcie ===
+    # (Zastępuje poprzednie selektywne czyszczenie)
     # ==================================================================
-    _clean_legacy_strategies(session)
+    _wipe_all_closed_trades(session)
     # ==================================================================
 
     # 2. Teraz, w nowej transakcji, sprawdź i uzupełnij dane
