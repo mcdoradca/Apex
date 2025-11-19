@@ -1,33 +1,27 @@
 import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import text, Row
+from sqlalchemy import text
 from datetime import datetime, timezone, timedelta 
 import pytz
 import pandas as pd
 import numpy as np
 from pandas import Series as pd_Series
-from typing import Optional, Tuple, Dict, Any 
+from typing import Optional, Dict, Any 
 
-# Importy dla Telegrama
 import os
 import requests
 from urllib.parse import quote_plus
 import hashlib 
 import json
 
-# Importujemy modele
 from .. import models
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 
-
 logger = logging.getLogger(__name__)
 
-# ==================================================================
-# Konfiguracja (Bez zmian)
-# ==================================================================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CACHE_EXPIRY_DAYS = 7
+CACHE_EXPIRY_DAYS = 7 
 
 if not TELEGRAM_BOT_TOKEN:
     logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram alerts are DISABLED.")
@@ -35,25 +29,52 @@ if not TELEGRAM_CHAT_ID:
     logger.warning("TELEGRAM_CHAT_ID not found. Telegram alerts are DISABLED.")
 
 # ==================================================================
-# Funkcje Cache i API (Bez zmian)
+# ZMIANA: Dodano parametr `expiry_hours` (domyślnie None = użyj CACHE_EXPIRY_DAYS)
 # ==================================================================
-def get_raw_data_with_cache(session: Session, api_client: AlphaVantageClient, ticker: str, data_type: str, api_func: str, **kwargs) -> Dict[str, Any]:
+def get_raw_data_with_cache(
+    session: Session, 
+    api_client: AlphaVantageClient, 
+    ticker: str, 
+    data_type: str, 
+    api_func: str, 
+    expiry_hours: Optional[int] = None, # <-- NOWY PARAMETR
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Pobiera dane z API z uwzględnieniem cache.
+    Dla Live Tradingu można ustawić krótki expiry_hours.
+    """
+    
+    # 1. PRÓBA ODCZYTU Z CACHE
     try:
         cache_entry = session.query(models.AlphaVantageCache).filter(
             models.AlphaVantageCache.ticker == ticker,
             models.AlphaVantageCache.data_type == data_type
         ).first()
+
         now = datetime.now(timezone.utc)
+        
         if cache_entry:
-            is_fresh = (now - cache_entry.last_fetched) < timedelta(days=CACHE_EXPIRY_DAYS)
+            # Obliczamy czas ważności
+            if expiry_hours is not None:
+                is_fresh = (now - cache_entry.last_fetched) < timedelta(hours=expiry_hours)
+                log_expiry_msg = f"{expiry_hours}h"
+            else:
+                is_fresh = (now - cache_entry.last_fetched) < timedelta(days=CACHE_EXPIRY_DAYS)
+                log_expiry_msg = f"{CACHE_EXPIRY_DAYS}d"
+
             if is_fresh and cache_entry.raw_data_json:
                 return cache_entry.raw_data_json 
-            logger.warning(f"[Cache UTILS] Dane {data_type} dla {ticker} są nieaktualne. Pobieranie z API.")
+                
+            logger.info(f"[Cache UTILS] Dane {data_type} dla {ticker} są starsze niż {log_expiry_msg}. Odświeżanie z API.")
+
     except Exception as e:
         logger.error(f"[Cache UTILS] Błąd odczytu z cache dla {ticker} ({data_type}): {e}", exc_info=True)
 
+    # 2. POBIERANIE Z API
     client_method = getattr(api_client, api_func, None)
     if not client_method:
+        logger.error(f"[Cache UTILS] Nieznana funkcja API: {api_func}")
         return {}
     
     if api_func == 'get_news_sentiment': kwargs['ticker'] = ticker
@@ -63,14 +84,18 @@ def get_raw_data_with_cache(session: Session, api_client: AlphaVantageClient, ti
     try:
         raw_data = client_method(**kwargs)
     except TypeError as e:
-        logger.error(f"[Cache UTILS] Błąd wywołania funkcji {api_func}: {e}", exc_info=True)
+        logger.error(f"[Cache UTILS] Błąd wywołania funkcji {api_func} w kliencie AV: {e}", exc_info=True)
         raw_data = {}
     
     if not raw_data or raw_data.get("Error Message") or raw_data.get("Information"):
+        logger.warning(f"[Cache UTILS] API zwróciło błąd/puste dla {ticker} ({data_type}).")
+        # Awaryjny powrót do "starego" cache, jeśli API zawiedzie
         if 'cache_entry' in locals() and cache_entry and cache_entry.raw_data_json:
+             logger.warning(f"[Cache UTILS] Używam starego cache jako fallback.")
              return cache_entry.raw_data_json
         return {}
 
+    # 3. ZAPIS DO CACHE
     try:
         upsert_stmt = text("""
             INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
@@ -78,16 +103,19 @@ def get_raw_data_with_cache(session: Session, api_client: AlphaVantageClient, ti
             ON CONFLICT (ticker, data_type) DO UPDATE
             SET raw_data_json = :raw_data, last_fetched = NOW();
         """)
-        session.execute(upsert_stmt, {'ticker': ticker, 'data_type': data_type, 'raw_data': json.dumps(raw_data)})
+        session.execute(upsert_stmt, {
+            'ticker': ticker,
+            'data_type': data_type,
+            'raw_data': json.dumps(raw_data)
+        })
         session.commit()
     except Exception as e:
         logger.error(f"[Cache UTILS] Błąd zapisu do cache: {e}", exc_info=True)
         session.rollback()
+        
     return raw_data
 
-# ==================================================================
-# Funkcje Telegrama i Systemowe (Bez zmian)
-# ==================================================================
+
 _sent_alert_hashes = set()
 
 def clear_alert_memory_cache():
@@ -172,9 +200,6 @@ def safe_float(value) -> float | None:
     try: return float(str(value).replace(',', '').replace('%', ''))
     except: return None
 
-# ==================================================================
-# Kalkulatory Finansowe (Bez zmian)
-# ==================================================================
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     mapping = {'1. open':'open', '2. high':'high', '3. low':'low', '4. close':'close', '5. vwap':'vwap', '5. volume':'volume', '6. volume':'volume', '7. adjusted close':'adjusted close'}
@@ -219,85 +244,3 @@ def calculate_ad(df: pd.DataFrame) -> pd_Series:
     if not all(c in df.columns for c in ['high','low','close','volume']): return pd.Series(dtype=float)
     mfm = np.where(df['high']==df['low'], 0.0, ((df['close']-df['low']) - (df['high']-df['close'])) / (df['high']-df['low']))
     return (mfm * df['volume']).cumsum()
-
-# ==================================================================
-# === NOWE FUNKCJE TRANSAKCYJNE (Przeniesione z H1 Simulator) ===
-# ==================================================================
-
-def _safe_float_convert(value: Any) -> float | None:
-    """Konwertuje dowolną wartość na float dla bazy danych."""
-    if value is None: return None
-    try: return float(value)
-    except: return None
-
-def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
-    """
-    Uniwersalna funkcja do symulacji wyniku transakcji ("spoglądanie w przyszłość").
-    Obsługuje logikę SL/TP oraz wyjście czasowe.
-    """
-    try:
-        entry_price = setup['entry_price']
-        stop_loss = setup['stop_loss']
-        take_profit = setup['take_profit']
-        
-        close_price = entry_price
-        status = 'CLOSED_EXPIRED'
-        
-        # Pętla sprawdzająca kolejne dni
-        for i in range(0, max_hold_days): 
-            curr_idx = entry_index + i
-            if curr_idx >= len(historical_data):
-                # Koniec danych
-                close_price = historical_data.iloc[-1]['close']
-                break
-            
-            candle = historical_data.iloc[curr_idx]
-            if direction == 'LONG':
-                if candle['low'] <= stop_loss:
-                    close_price = stop_loss
-                    status = 'CLOSED_SL'
-                    break
-                if candle['high'] >= take_profit:
-                    close_price = take_profit
-                    status = 'CLOSED_TP'
-                    break
-        else:
-            # Wyjście czasowe po X dniach
-            final_idx = min(entry_index + max_hold_days - 1, len(historical_data) - 1)
-            close_price = historical_data.iloc[final_idx]['close']
-            status = 'CLOSED_EXPIRED'
-
-        p_l_percent = 0.0 if entry_price == 0 else ((close_price - entry_price) / entry_price) * 100
-        
-        return models.VirtualTrade(
-            ticker=setup['ticker'],
-            status=status,
-            setup_type=f"BACKTEST_{year}_{setup['setup_type']}",
-            entry_price=float(entry_price),
-            stop_loss=float(stop_loss),
-            take_profit=float(take_profit),
-            open_date=historical_data.index[entry_index].to_pydatetime(),
-            close_date=historical_data.iloc[min(entry_index + max_hold_days - 1, len(historical_data) - 1)].name.to_pydatetime(), # Przybliżona data zamknięcia dla EXPIRED
-            close_price=float(close_price),
-            final_profit_loss_percent=float(p_l_percent),
-            
-            # Metryki (z mapowania)
-            metric_atr_14=_safe_float_convert(setup.get('metric_atr_14')),
-            metric_time_dilation=_safe_float_convert(setup.get('metric_time_dilation')),
-            metric_price_gravity=_safe_float_convert(setup.get('metric_price_gravity')),
-            metric_td_percentile_90=_safe_float_convert(setup.get('metric_td_percentile_90')),
-            metric_pg_percentile_90=_safe_float_convert(setup.get('metric_pg_percentile_90')),
-            metric_inst_sync=_safe_float_convert(setup.get('metric_inst_sync')),
-            metric_retail_herding=_safe_float_convert(setup.get('metric_retail_herding')),
-            metric_aqm_score_h3=_safe_float_convert(setup.get('metric_aqm_score_h3')),
-            metric_aqm_percentile_95=_safe_float_convert(setup.get('metric_aqm_percentile_95')),
-            metric_J_norm=_safe_float_convert(setup.get('metric_J_norm')),
-            metric_nabla_sq_norm=_safe_float_convert(setup.get('metric_nabla_sq_norm')),
-            metric_m_sq_norm=_safe_float_convert(setup.get('metric_m_sq_norm')),
-            metric_J=_safe_float_convert(setup.get('metric_J')),
-            metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma'))
-        )
-
-    except Exception as e:
-        logger.error(f"[Backtest Utils] Błąd rozwiązywania transakcji dla {setup.get('ticker')}: {e}", exc_info=True)
-        return None
