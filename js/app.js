@@ -66,12 +66,6 @@ document.addEventListener('DOMContentLoaded', () => {
     UI.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showTransactions(); });
     UI.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showAgentReport(); });
 
-    ['start', 'pause', 'resume'].forEach(action => {
-        document.getElementById(`${action}-btn`).addEventListener('click', async () => {
-            try { await api.sendWorkerControl(action); await Logic.pollWorkerStatus(); } catch(e) {}
-        });
-    });
-
     if(UI.buyModal.cancelBtn) UI.buyModal.cancelBtn.addEventListener('click', Logic.hideBuyModal);
     if(UI.buyModal.confirmBtn) UI.buyModal.confirmBtn.addEventListener('click', Logic.handleBuyConfirm);
     if(UI.sellModal.cancelBtn) UI.sellModal.cancelBtn.addEventListener('click', Logic.hideSellModal);
