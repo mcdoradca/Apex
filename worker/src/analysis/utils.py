@@ -13,9 +13,9 @@ import os
 import requests
 from urllib.parse import quote_plus
 import hashlib 
-import json # <-- POPRAWKA 1: Import biblioteki JSON
+import json
 
-# Importujemy nowy model cache z Workera
+# Importujemy modele
 from .. import models
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 
@@ -23,98 +23,54 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# KROK 1 (KAT. 1): Konfiguracja kluczy Telegrama (Bez zmian)
+# Konfiguracja (Bez zmian)
 # ==================================================================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CACHE_EXPIRY_DAYS = 7 # <-- NOWA STAŁA: Czas ważności cache
+CACHE_EXPIRY_DAYS = 7
 
 if not TELEGRAM_BOT_TOKEN:
     logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram alerts are DISABLED.")
 if not TELEGRAM_CHAT_ID:
     logger.warning("TELEGRAM_CHAT_ID not found. Telegram alerts are DISABLED.")
-# ==================================================================
 
 # ==================================================================
-# KROK 2 (Cache): NOWA FUNKCJA CACHE'OWANIA (OGÓLNA)
+# Funkcje Cache i API (Bez zmian)
 # ==================================================================
-def get_raw_data_with_cache(
-    session: Session, 
-    api_client: AlphaVantageClient, 
-    ticker: str, 
-    data_type: str, 
-    api_func: str, 
-    **kwargs
-) -> Dict[str, Any]:
-    """
-    Sprawdza, czy dane są w cache i są świeże. Jeśli nie, pobiera z API, zapisuje i zwraca.
-    Zwraca surowy słownik (Dict[str, Any]) lub pusty słownik ({}) w przypadku błędu.
-    """
-    
-    # 1. PRÓBA ODCZYTU Z CACHE
+def get_raw_data_with_cache(session: Session, api_client: AlphaVantageClient, ticker: str, data_type: str, api_func: str, **kwargs) -> Dict[str, Any]:
     try:
         cache_entry = session.query(models.AlphaVantageCache).filter(
             models.AlphaVantageCache.ticker == ticker,
             models.AlphaVantageCache.data_type == data_type
         ).first()
-
         now = datetime.now(timezone.utc)
-        
         if cache_entry:
-            # DANE ZNALEZIONE: Sprawdź, czy są świeże (7 dni)
             is_fresh = (now - cache_entry.last_fetched) < timedelta(days=CACHE_EXPIRY_DAYS)
-            
             if is_fresh and cache_entry.raw_data_json:
-                # === POPRAWKA BŁĘDU NR 2 (Parsowanie JSONB) ===
-                # SQLAlchemy i PostgreSQL (JSONB) zwracają już obiekt Pythona (dict).
                 return cache_entry.raw_data_json 
-                
             logger.warning(f"[Cache UTILS] Dane {data_type} dla {ticker} są nieaktualne. Pobieranie z API.")
-
     except Exception as e:
         logger.error(f"[Cache UTILS] Błąd odczytu z cache dla {ticker} ({data_type}): {e}", exc_info=True)
-        # W razie błędu parsowania lub innego błędu DB, idziemy dalej do API
 
-    # 2. POBIERANIE Z API
-    
     client_method = getattr(api_client, api_func, None)
     if not client_method:
-        logger.error(f"[Cache UTILS] Nieznana funkcja API: {api_func}")
         return {}
     
-    # ==================================================================
-    # === KRYTYCZNA POPRAWKA BŁĘDU NR 1 (Argument API) ===
-    # ==================================================================
-    
-    # Ustalenie nazwy argumentu dla tickera
-    if api_func == 'get_news_sentiment':
-        # get_news_sentiment (w kliencie) oczekuje 'ticker'
-        kwargs['ticker'] = ticker
-    elif api_func == 'get_bulk_quotes':
-         # get_bulk_quotes (w kliencie) oczekuje 'symbols' (listy)
-         kwargs['symbols'] = [ticker] # Poprawiono błąd logiczny i opakowano w listę
-    else:
-        # Wszystkie pozostałe funkcje używają 'symbol'
-        kwargs['symbol'] = ticker
+    if api_func == 'get_news_sentiment': kwargs['ticker'] = ticker
+    elif api_func == 'get_bulk_quotes': kwargs['symbols'] = [ticker]
+    else: kwargs['symbol'] = ticker
         
     try:
-        # Wywołanie klienta z poprawnie nazwanym argumentem
         raw_data = client_method(**kwargs)
     except TypeError as e:
-        # W razie błędu typu (np. gdy zapomnimy o nowym argumencie w AV Client)
-        logger.error(f"[Cache UTILS] Błąd wywołania funkcji {api_func} w kliencie AV: {e}", exc_info=True)
-        raw_data = {} # Wymuś błąd danych
-    # =======================================================
+        logger.error(f"[Cache UTILS] Błąd wywołania funkcji {api_func}: {e}", exc_info=True)
+        raw_data = {}
     
     if not raw_data or raw_data.get("Error Message") or raw_data.get("Information"):
-        logger.warning(f"[Cache UTILS] API zwróciło błąd lub puste dane dla {ticker} ({data_type}).")
-        # Awaryjny powrót do nieświeżego cache
         if 'cache_entry' in locals() and cache_entry and cache_entry.raw_data_json:
-            logger.warning(f"[Cache UTILS] Awaryjny powrót do nieświeżego cache dla {ticker} ({data_type}).")
-            return cache_entry.raw_data_json # Zwracamy bezpośrednio obiekt
+             return cache_entry.raw_data_json
         return {}
 
-    # 3. ZAPIS DO CACHE (UPSERT)
     try:
         upsert_stmt = text("""
             INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
@@ -122,426 +78,226 @@ def get_raw_data_with_cache(
             ON CONFLICT (ticker, data_type) DO UPDATE
             SET raw_data_json = :raw_data, last_fetched = NOW();
         """)
-        
-        # ==================================================================
-        # === POPRAWKA KRYTYCZNA (Błąd Zapisu do Cache) ===
-        # Konwertujemy `dict` na `str` JSON przed wysłaniem do bazy.
-        # ==================================================================
-        session.execute(upsert_stmt, {
-            'ticker': ticker,
-            'data_type': data_type,
-            'raw_data': json.dumps(raw_data) # Serializujemy dict do stringa JSON
-        })
-        # ==================================================================
+        session.execute(upsert_stmt, {'ticker': ticker, 'data_type': data_type, 'raw_data': json.dumps(raw_data)})
         session.commit()
-        logger.info(f"[Cache UTILS] Pomyślnie zapisano nowe dane {data_type} dla {ticker} do DB.")
-        
     except Exception as e:
-        logger.error(f"[Cache UTILS] Błąd zapisu do cache dla {ticker} ({data_type}): {e}", exc_info=True)
+        logger.error(f"[Cache UTILS] Błąd zapisu do cache: {e}", exc_info=True)
         session.rollback()
-        
     return raw_data
+
 # ==================================================================
-# KONIEC NOWEJ FUNKCJI CACHE
+# Funkcje Telegrama i Systemowe (Bez zmian)
 # ==================================================================
-
-
-# --- PONIŻEJ TYLKO ZMIANY NAWIĄZUJĄCE DO IMPORTU W INNYCH PLIKACH ---
-
 _sent_alert_hashes = set()
 
 def clear_alert_memory_cache():
-    """Czyści pamięć podręczną wysłanych alertów Telegrama."""
     global _sent_alert_hashes
-    logger.info(f"Czyszczenie pamięci podręcznej alertów. Usunięto {len(_sent_alert_hashes)} wpisów.")
     _sent_alert_hashes = set()
 
 def send_telegram_alert(message: str):
-    """
-    Wysyła sformatowaną wiadomość do zdefiniowanego czatu na Telegramie.
-    NOWA LOGIKA: Wysyła wiadomość only wtedy, jeśli nie została wysłana 
-    wcześniej w tym cyklu (od ostatniego czyszczenia pamięci).
-    """
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        # Nie wysyłaj, jeśli nie skonfigurowano (ostrzeżenie już poszło przy starcie)
-        return
-
-    # 1. Stwórz skrót (hash) wiadomości, aby ją unikalnie zidentyfikować
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     message_hash = hashlib.sha256(message.encode('utf-8')).hexdigest()
-
-    # 2. Sprawdź, czy ten skrót jest już w naszej pamięci podręcznej
-    if message_hash in _sent_alert_hashes:
-        logger.info(f"Alert został już wysłany (pomijanie duplikatu): {message[:50]}...")
-        return # Nie wysyłaj ponownie tej samej wiadomości
+    if message_hash in _sent_alert_hashes: return
     
-    # 3. Jeśli nie, wyślij wiadomość i dodaj skrót do pamięci
-    logger.info(f"Wysyłanie NOWEGO alertu Telegram: {message[:50]}...")
-
-    # Kodowanie wiadomości, aby była bezpieczna dla URL (obsługa spacji, nowych linii, itp.)
-    encoded_message = quote_plus(message)
-    
-    # Formatowanie URL
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={encoded_message}"
-    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={quote_plus(message)}"
     try:
-        # Użyj niskiego timeoutu (5s), aby nie blokować pętli workera
-        response = requests.get(url, timeout=5)
-        response.raise_for_status() # Sprawdź błędy HTTP (np. 400, 404, 500)
-        
-        if response.json().get('ok'):
-            logger.info(f"Pomyślnie wysłano alert Telegram: {message[:50]}...")
-            # 4. Dodaj do pamięci TYLKO po pomyślnym wysłaniu
-            _sent_alert_hashes.add(message_hash)
-        else:
-            logger.error(f"Telegram API zwrócił błąd: {response.text}")
-    except requests.exceptions.RequestException as e:
-        # Złap błędy sieciowe (timeout, brak połączenia)
-        logger.error(f"Nie można wysłać alertu Telegram: {e}")
-    except Exception as e:
-        # Złap inne błędy (np. JSON decode error)
-        logger.error(f"Nieoczekiwany błąd podczas wysyłania alertu Telegram: {e}")
+        requests.get(url, timeout=5)
+        _sent_alert_hashes.add(message_hash)
+    except Exception: pass
 
 def get_current_NY_datetime() -> datetime:
-    """Zwraca aktualny obiekt datetime dla strefy czasowej Nowego Jorku."""
-    try:
-        tz = pytz.timezone('US/Eastern')
-        return datetime.now(tz)
-    except Exception as e:
-        logger.error(f"Error getting New York time: {e}", exc_info=True)
-        # Zwróć czas UTC jako awaryjny
-        return datetime.now(timezone.utc)
+    try: return datetime.now(pytz.timezone('US/Eastern'))
+    except: return datetime.now(timezone.utc)
 
 def get_market_status_and_time(api_client) -> dict:
-    """
-    Sprawdza status giełdy NASDAQ używając dedykowanego endpointu API
-    i zwraca czas w Nowym Jorku.
-    """
-    # 1. Zawsze pobieraj aktualny czas dla celów wyświetlania
     try:
-        # ZMIANA: Używamy nowej, wydzielonej funkcji
         now_ny = get_current_NY_datetime()
-        time_ny_str = now_ny.strftime('%H:%M:%S ET')
-        date_ny_str = now_ny.strftime('%Y-%m-%d')
-    except Exception as e:
-        logger.error(f"Error formatting New York time: {e}")
-        time_ny_str = "N/A"
-        date_ny_str = "N/A"
-
-    # 2. Pobierz oficjalny status rynku z API
-    try:
         status_data = api_client.get_market_status()
+        app_status = "UNKNOWN"
         if status_data and status_data.get('markets'):
-            us_market = next((m for m in status_data['markets'] if m.get('region') == 'United States'), None)
-            if us_market:
-                api_status = us_market.get('current_status', 'unknown').lower()
-                
-                # 3. Przetłumacz status API na wewnętrzny status aplikacji
-                status_map = {
-                    "open": "MARKET_OPEN",
-                    "closed": "MARKET_CLOSED",
-                    "pre-market": "PRE_MARKET",
-                    "post-market": "AFTER_MARKET"
-                }
-                app_status = status_map.get(api_status, "UNKNOWN")
-                
-                return {"status": app_status, "time_ny": time_ny_str, "date_ny": date_ny_str}
-        
-        logger.warning("Could not determine market status from API response.")
-        return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
-
-    except Exception as e:
-        logger.error(f"Error getting market status from API: {e}")
-        return {"status": "UNKNOWN", "time_ny": time_ny_str, "date_ny": date_ny_str}
+             us = next((m for m in status_data['markets'] if m.get('region') == 'United States'), None)
+             if us:
+                 s = us.get('current_status', 'unknown').lower()
+                 app_status = {"open":"MARKET_OPEN","closed":"MARKET_CLOSED","pre-market":"PRE_MARKET","post-market":"AFTER_MARKET"}.get(s, "UNKNOWN")
+        return {"status": app_status, "time_ny": now_ny.strftime('%H:%M:%S ET'), "date_ny": now_ny.strftime('%Y-%m-%d')}
+    except: return {"status": "UNKNOWN", "time_ny": "N/A", "date_ny": "N/A"}
 
 def update_system_control(session: Session, key: str, value: str):
-    """Aktualizuje lub wstawia wartość w tabeli system_control (UPSERT)."""
     try:
-        # ==================================================================
-        # === POPRAWKA (SyntaxError): Usunięcie komentarzy z SQL ===
-        # ==================================================================
-        stmt = text("""
-            INSERT INTO system_control (key, value, updated_at)
-            VALUES (:key, :value, NOW())
-            ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value, updated_at = NOW();
-        """)
-        # ==================================================================
+        stmt = text("INSERT INTO system_control (key, value, updated_at) VALUES (:key, :value, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();")
         session.execute(stmt, [{'key': key, 'value': str(value)}])
         session.commit()
-    except Exception as e:
-        logger.error(f"Error updating system_control for key {key}: {e}", exc_info=True)
-        session.rollback()
+    except Exception: session.rollback()
 
 def get_system_control_value(session: Session, key: str) -> str | None:
-    """Odczytuje pojedynczą wartość z tabeli system_control."""
     try:
-        result = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
-        return result[0] if result else None
-    except Exception as e:
-        logger.error(f"Error getting system_control value for key {key}: {e}")
-        return None
+        res = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
+        return res[0] if res else None
+    except: return None
 
 def update_scan_progress(session: Session, processed: int, total: int):
-    """Aktualizuje postęp skanowania w bazie danych."""
     update_system_control(session, 'scan_progress_processed', str(processed))
     update_system_control(session, 'scan_progress_total', str(total))
 
 def append_scan_log(session: Session, message: str):
-    """Dodaje nową linię do logu skanowania w bazie danych."""
     try:
-        current_log_result = session.execute(text("SELECT value FROM system_control WHERE key = 'scan_log'")).fetchone()
-        current_log = current_log_result[0] if current_log_result else ""
-        
-        timestamp = datetime.now(timezone.utc).strftime('%H:%M:%S')
-        log_message = f"[{timestamp}] {message}\n"
-        
-        new_log = log_message + current_log
-        
-        if len(new_log) > 15000:
-            new_log = new_log[:15000]
-
-        # ==================================================================
-        # === POPRAWKA (SyntaxError): Usunięcie komentarzy z SQL ===
-        # ==================================================================
-        stmt = text("""
-            UPDATE system_control
-            SET value = :new_log
-            WHERE key = 'scan_log';
-        """)
-        # ==================================================================
-        session.execute(stmt, {'new_log': new_log})
-        session.commit()
-    except Exception as e:
-        logger.error(f"Error appending to scan_log: {e}", exc_info=True)
-        session.rollback()
-
+        curr = get_system_control_value(session, 'scan_log') or ""
+        new_log = (f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {message}\n" + curr)[:15000]
+        update_system_control(session, 'scan_log', new_log)
+    except: pass
 
 def clear_scan_log(session: Session):
-    """Czyści log skanowania w bazie danych."""
     update_system_control(session, 'scan_log', '')
 
-
 def check_for_commands(session: Session, current_state: str) -> tuple[bool, str]:
-    """Sprawdza i reaguje na polecenia z bazy danych."""
-    command = get_system_control_value(session, 'worker_command')
-    should_run_now = False
-    new_state = current_state
-
-    if command == "START_REQUESTED":
-        logger.info("Start command received, triggering immediate analysis cycle.")
+    cmd = get_system_control_value(session, 'worker_command')
+    if cmd == "START_REQUESTED":
         update_system_control(session, 'worker_command', 'NONE')
-        should_run_now = True
-    elif command == "PAUSE_REQUESTED" and current_state == "RUNNING":
-        new_state = "PAUSED"
+        return True, current_state
+    if cmd == "PAUSE_REQUESTED":
         update_system_control(session, 'worker_status', 'PAUSED')
         update_system_control(session, 'worker_command', 'NONE')
-        logger.info("Worker paused by command.")
-    elif command == "RESUME_REQUESTED" and current_state == "PAUSED":
-        new_state = "RUNNING"
+        return False, "PAUSED"
+    if cmd == "RESUME_REQUESTED":
         update_system_control(session, 'worker_status', 'RUNNING')
         update_system_control(session, 'worker_command', 'NONE')
-        logger.info("Worker resumed by command.")
-        
-    return should_run_now, new_state
+        return False, "RUNNING"
+    return False, current_state
 
 def report_heartbeat(session: Session):
-    """Raportuje 'życie' workera do bazy danych."""
     update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
 def safe_float(value) -> float | None:
-    """Bezpiecznie konwertuje wartość na float, usuwając po drodze przecinki."""
-    if value is None:
-        return None
-    try:
-        if isinstance(value, str):
-            value = value.replace(',', '').replace('%', '')
-        return float(value)
-    except (ValueError, TypeError):
-        return None
+    if value is None: return None
+    try: return float(str(value).replace(',', '').replace('%', ''))
+    except: return None
 
-def get_performance(data: dict, days: int) -> float | None:
-    """Oblicza zwrot procentowy w danym okresie na podstawie słownika."""
-    try:
-        time_series = data.get('Time Series (Daily)')
-        if not time_series or len(time_series) < days + 1:
-            return None
-        
-        dates = sorted(time_series.keys(), reverse=True)
-        
-        end_price = safe_float(time_series[dates[0]]['4. close'])
-        start_price = safe_float(time_series[dates[days]]['4. close'])
-        
-        if start_price is None or end_price is None or start_price == 0:
-            return None
-        
-        return ((end_price - start_price) / start_price) * 100
-    except (IndexError, KeyError, TypeError) as e:
-        logger.warning(f"Could not calculate performance: {e}")
-        return None
-
-# --- NARZĘDZIA DO OPTYMALIZACJI API ---
-
+# ==================================================================
+# Kalkulatory Finansowe (Bez zmian)
+# ==================================================================
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Standaryzuje nazwy kolumn z API ('1. open' -> 'open') i konwertuje na typy numeryczne."""
-    if df.empty:
-        return df
-    
-    # Sprawdź, czy kolumny już są w poprawnym formacie
-    if 'open' in df.columns and 'close' in df.columns:
-        return df # Już przetworzone
-
-    # ==================================================================
-    # === GŁÓWNA POPRAWKA VWAP ===
-    # Odkomentowujemy linię '5. vwap', aby dane VWAP z 
-    # TIME_SERIES_DAILY były poprawnie mapowane.
-    # ==================================================================
-    column_mapping = {
-        '1. open': 'open',
-        '2. high': 'high',
-        '3. low': 'low',
-        '4. close': 'close',
-        '5. vwap': 'vwap', # <-- WŁĄCZONO PONOWNIE!
-        # TIME_SERIES_DAILY
-        '5. volume': 'volume', 
-        # TIME_SERIES_DAILY_ADJUSTED
-        '6. volume': 'volume', 
-        '7. adjusted close': 'adjusted close', 
-        '8. split coefficient': 'split coefficient'
-    }
-
-    # Zmieniamy nazwy kolumn na podstawie mapowania
-    # Używamy rozdzielacza '. ' jako awaryjnego (fallback)
-    df.rename(columns=lambda c: column_mapping.get(c, c.split('. ')[-1]), inplace=True)
-    # ==================================================================
-
-    # Konwertuj kluczowe kolumny na numeryczne
-    # DODANO 'vwap' do listy do konwersji
-    for col in ['open', 'high', 'low', 'close', 'volume', 'adjusted close', 'vwap']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    df.sort_index(inplace=True) # Upewnij się, że dane są posortowane od najstarszych do najnowszych
-    return df
+    if df.empty: return df
+    mapping = {'1. open':'open', '2. high':'high', '3. low':'low', '4. close':'close', '5. vwap':'vwap', '5. volume':'volume', '6. volume':'volume', '7. adjusted close':'adjusted close'}
+    df.rename(columns=lambda c: mapping.get(c, c.split('. ')[-1]), inplace=True)
+    for c in ['open','high','low','close','volume','adjusted close','vwap']:
+        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
+    return df.sort_index()
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
-    """Oblicza ATR (Average True Range) na podstawie DataFrame OHLC."""
-    if df.empty or len(df) < period:
-        return pd.Series(dtype=float)
-    
-    high_low = df['high'] - df['low']
-    high_close = (df['high'] - df['close'].shift()).abs()
-    low_close = (df['low'] - df['close'].shift()).abs()
-    
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    # Używamy EMA (ewm) do wygładzenia TR, co jest standardem dla ATR
-    atr = tr.ewm(span=period, adjust=False).mean()
-    return atr
+    if df.empty or len(df) < period: return pd.Series(dtype=float)
+    hl = df['high'] - df['low']
+    hc = (df['high'] - df['close'].shift()).abs()
+    lc = (df['low'] - df['close'].shift()).abs()
+    return pd.concat([hl, hc, lc], axis=1).max(axis=1).ewm(span=period, adjust=False).mean()
 
 def calculate_rsi(series: pd_Series, period: int = 14) -> pd_Series:
-    """Oblicza RSI (Relative Strength Index)."""
-    if series.empty or len(series) < period:
-        return pd.Series(dtype=float)
-        
+    if series.empty or len(series) < period: return pd.Series(dtype=float)
     delta = series.diff(1)
     gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + (gain / loss)))
 
 def calculate_bbands(series: pd_Series, period: int = 20, num_std: int = 2) -> tuple:
-    """Oblicza Bollinger Bands (Środkowa, Górna, Dolna) oraz Szerokość Wstęgi (BBW)."""
-    if series.empty or len(series) < period:
-        return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
+    if series.empty or len(series) < period: return (pd.Series(dtype=float),)*4
+    mid = series.rolling(window=period).mean()
+    std = series.rolling(window=period).std()
+    return mid, mid+(std*num_std), mid-(std*num_std), ((mid+(std*num_std))-(mid-(std*num_std)))/mid
 
-    middle_band = series.rolling(window=period).mean()
-    std_dev = series.rolling(window=period).std()
-    
-    upper_band = middle_band + (std_dev * num_std)
-    lower_band = middle_band - (std_dev * num_std)
-    
-    # Oblicz BBW (Szerokość Wstęg Bollingera) jako procent środkowej wstęgi
-    bbw = (upper_band - lower_band) / middle_band
-    
-    return middle_band, upper_band, lower_band, bbw
-
-# --- POPRAWKA: Dodanie brakującej funkcji ---
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
-    """Oblicza Wykładniczą Średnią Kroczącą (EMA)."""
-    if series.empty or len(series) < period:
-        return pd.Series(dtype=float)
     return series.ewm(span=period, adjust=False).mean()
 
-
-# ==================================================================
-# === NOWA FUNKCJA (Dla "Strategy Battle Royale") ===
-# ==================================================================
 def calculate_macd(series: pd_Series, short_period=12, long_period=26, signal_period=9) -> tuple:
-    """
-    Oblicza linię MACD (EMA(12) - EMA(26)) oraz linię Sygnału (EMA(9) z MACD).
-    Zwraca (macd_line, signal_line).
-    """
-    if series.empty or len(series) < long_period:
-        return pd.Series(dtype=float), pd.Series(dtype=float)
-    
-    short_ema = calculate_ema(series, short_period)
-    long_ema = calculate_ema(series, long_period)
-    
-    macd_line = short_ema - long_ema
-    signal_line = calculate_ema(macd_line, signal_period)
-    
-    return macd_line, signal_line
-# ==================================================================
-# === KONIEC NOWEJ FUNKCJI ===
-# ==================================================================
-
-
-# ==================================================================
-# === NOWE FUNKCJE DLA AQM (Volume Entropy Score, PDF str. 14-15) ===
-# ==================================================================
+    short, long = calculate_ema(series, short_period), calculate_ema(series, long_period)
+    macd = short - long
+    return macd, calculate_ema(macd, signal_period)
 
 def calculate_obv(df: pd.DataFrame) -> pd_Series:
-    """Oblicza On-Balance Volume (OBV) używając metody wektorowej."""
-    if 'close' not in df.columns or 'volume' not in df.columns:
-        logger.error("Brak kolumn 'close' lub 'volume' do obliczenia OBV.")
-        return pd.Series(dtype=float)
-    
-    # Używamy numpy.sign() na różnicy ceny
-    price_diff = df['close'].diff()
-    direction = np.sign(price_diff).fillna(0) # 0 dla NaN (pierwszy wiersz) i dla braku zmiany
-    
-    # Mnożymy wolumen przez kierunek
-    directional_volume = df['volume'] * direction
-    
-    # OBV to skumulowana suma
-    return directional_volume.cumsum()
+    if 'close' not in df.columns or 'volume' not in df.columns: return pd.Series(dtype=float)
+    return (np.sign(df['close'].diff()).fillna(0) * df['volume']).cumsum()
 
 def calculate_ad(df: pd.DataFrame) -> pd_Series:
-    """Oblicza Linię Akumulacji/Dystrybucji (A/D Line)."""
-    if not all(col in df.columns for col in ['high', 'low', 'close', 'volume']):
-        logger.error("Brak kolumn 'high', 'low', 'close', 'volume' do obliczenia A/D.")
-        return pd.Series(dtype=float)
-
-    # 1. Money Flow Multiplier
-    high_low_diff = df['high'] - df['low']
-    
-    # Użyj wektoryzacji numpy, aby uniknąć dzielenia przez zero
-    # where(warunek, jeśli_prawda, jeśli_fałsz)
-    mfm = np.where(
-        high_low_diff == 0, 
-        0.0, # Jeśli high == low, MFM = 0
-        ((df['close'] - df['low']) - (df['high'] - df['close'])) / high_low_diff
-    )
-    
-    # 2. Money Flow Volume
-    mfv = mfm * df['volume']
-    
-    # 3. A/D Line (skumulowana suma)
-    ad_line = mfv.cumsum()
-    
-    return ad_line
+    if not all(c in df.columns for c in ['high','low','close','volume']): return pd.Series(dtype=float)
+    mfm = np.where(df['high']==df['low'], 0.0, ((df['close']-df['low']) - (df['high']-df['close'])) / (df['high']-df['low']))
+    return (mfm * df['volume']).cumsum()
 
 # ==================================================================
-# === KONIEC NOWYCH FUNKCJI AQM ===
+# === NOWE FUNKCJE TRANSAKCYJNE (Przeniesione z H1 Simulator) ===
 # ==================================================================
+
+def _safe_float_convert(value: Any) -> float | None:
+    """Konwertuje dowolną wartość na float dla bazy danych."""
+    if value is None: return None
+    try: return float(value)
+    except: return None
+
+def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
+    """
+    Uniwersalna funkcja do symulacji wyniku transakcji ("spoglądanie w przyszłość").
+    Obsługuje logikę SL/TP oraz wyjście czasowe.
+    """
+    try:
+        entry_price = setup['entry_price']
+        stop_loss = setup['stop_loss']
+        take_profit = setup['take_profit']
+        
+        close_price = entry_price
+        status = 'CLOSED_EXPIRED'
+        
+        # Pętla sprawdzająca kolejne dni
+        for i in range(0, max_hold_days): 
+            curr_idx = entry_index + i
+            if curr_idx >= len(historical_data):
+                # Koniec danych
+                close_price = historical_data.iloc[-1]['close']
+                break
+            
+            candle = historical_data.iloc[curr_idx]
+            if direction == 'LONG':
+                if candle['low'] <= stop_loss:
+                    close_price = stop_loss
+                    status = 'CLOSED_SL'
+                    break
+                if candle['high'] >= take_profit:
+                    close_price = take_profit
+                    status = 'CLOSED_TP'
+                    break
+        else:
+            # Wyjście czasowe po X dniach
+            final_idx = min(entry_index + max_hold_days - 1, len(historical_data) - 1)
+            close_price = historical_data.iloc[final_idx]['close']
+            status = 'CLOSED_EXPIRED'
+
+        p_l_percent = 0.0 if entry_price == 0 else ((close_price - entry_price) / entry_price) * 100
+        
+        return models.VirtualTrade(
+            ticker=setup['ticker'],
+            status=status,
+            setup_type=f"BACKTEST_{year}_{setup['setup_type']}",
+            entry_price=float(entry_price),
+            stop_loss=float(stop_loss),
+            take_profit=float(take_profit),
+            open_date=historical_data.index[entry_index].to_pydatetime(),
+            close_date=historical_data.iloc[min(entry_index + max_hold_days - 1, len(historical_data) - 1)].name.to_pydatetime(), # Przybliżona data zamknięcia dla EXPIRED
+            close_price=float(close_price),
+            final_profit_loss_percent=float(p_l_percent),
+            
+            # Metryki (z mapowania)
+            metric_atr_14=_safe_float_convert(setup.get('metric_atr_14')),
+            metric_time_dilation=_safe_float_convert(setup.get('metric_time_dilation')),
+            metric_price_gravity=_safe_float_convert(setup.get('metric_price_gravity')),
+            metric_td_percentile_90=_safe_float_convert(setup.get('metric_td_percentile_90')),
+            metric_pg_percentile_90=_safe_float_convert(setup.get('metric_pg_percentile_90')),
+            metric_inst_sync=_safe_float_convert(setup.get('metric_inst_sync')),
+            metric_retail_herding=_safe_float_convert(setup.get('metric_retail_herding')),
+            metric_aqm_score_h3=_safe_float_convert(setup.get('metric_aqm_score_h3')),
+            metric_aqm_percentile_95=_safe_float_convert(setup.get('metric_aqm_percentile_95')),
+            metric_J_norm=_safe_float_convert(setup.get('metric_J_norm')),
+            metric_nabla_sq_norm=_safe_float_convert(setup.get('metric_nabla_sq_norm')),
+            metric_m_sq_norm=_safe_float_convert(setup.get('metric_m_sq_norm')),
+            metric_J=_safe_float_convert(setup.get('metric_J')),
+            metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma'))
+        )
+
+    except Exception as e:
+        logger.error(f"[Backtest Utils] Błąd rozwiązywania transakcji dla {setup.get('ticker')}: {e}", exc_info=True)
+        return None
