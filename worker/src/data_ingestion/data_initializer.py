@@ -10,6 +10,44 @@ logger = logging.getLogger(__name__)
 # URL do oficjalnego pliku z listą instrumentów notowanych na NASDAQ
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 
+# ==================================================================
+# === NOWA FUNKCJA: Selektywne czyszczenie strategii H1, H2, H4 ===
+# ==================================================================
+def _clean_legacy_strategies(session: Session):
+    """
+    Usuwa z bazy danych wyniki strategii H1, H2 i H4, pozostawiając H3.
+    Uruchamiana przy starcie systemu.
+    """
+    logger.info("🧹 CLEANUP: Rozpoczynanie selektywnego usuwania strategii H1, H2, H4...")
+    
+    strategies_to_remove = [
+        '%AQM_V3_H1_GRAVITY_MEAN_REVERSION%',      # H1
+        '%AQM_V3_H2_CONTRARIAN_ENTANGLEMENT%',     # H2
+        '%AQM_V3_H4_INFO_THERMO%'                  # H4
+    ]
+    
+    total_deleted = 0
+    try:
+        for pattern in strategies_to_remove:
+            # Używamy LIKE, aby dopasować format "BACKTEST_2023_AQM_..."
+            stmt = text("DELETE FROM virtual_trades WHERE setup_type LIKE :pattern")
+            result = session.execute(stmt, {'pattern': pattern})
+            if result.rowcount > 0:
+                logger.info(f"   > Usunięto {result.rowcount} wierszy dla wzorca: {pattern}")
+                total_deleted += result.rowcount
+        
+        if total_deleted > 0:
+            session.commit()
+            logger.info(f"🧹 CLEANUP: Pomyślnie usunięto łącznie {total_deleted} starych transakcji.")
+        else:
+            logger.info("🧹 CLEANUP: Nie znaleziono danych H1/H2/H4 do usunięcia.")
+            
+    except Exception as e:
+        logger.error(f"Błąd podczas czyszczenia strategii: {e}")
+        session.rollback()
+# ==================================================================
+
+
 def _run_schema_and_index_migration(session: Session):
     """
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
@@ -122,6 +160,13 @@ def initialize_database_if_empty(session: Session, api_client):
     """
     # 1. ZAWSZE URUCHAMIAJ MIGRACJĘ PRZY STARCIE W OSOBNEJ TRANSAKCJI
     _run_schema_and_index_migration(session)
+    
+    # ==================================================================
+    # === NOWOŚĆ: Selektywne czyszczenie H1, H2, H4 ===
+    # Uruchamiane zawsze przy starcie workera.
+    # ==================================================================
+    _clean_legacy_strategies(session)
+    # ==================================================================
 
     # 2. Teraz, w nowej transakcji, sprawdź i uzupełnij dane
     try:
