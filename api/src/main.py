@@ -1,17 +1,13 @@
-import os
-import time
 import logging
 import sys
 import json
 from fastapi import FastAPI, Depends, HTTPException, Response, Query
 from fastapi.responses import StreamingResponse
-import io
-import csv
-from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from datetime import datetime, timezone
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Dict
 
 from . import crud, models, schemas
 from .database import get_db, engine, SessionLocal
@@ -186,24 +182,41 @@ def get_h3_deep_dive_report_endpoint(db: Session = Depends(get_db)):
 
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
 def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
-    # ... (skrót, logika bez zmian) ...
-    # (Aby zaoszczędzić miejsce, zakładam że logika add_to_watchlist pozostaje identyczna jak w poprzednich wersjach)
     try:
         stmt = text("""
             INSERT INTO trading_signals (ticker, generation_date, status, notes)
-            VALUES (:ticker, NOW(), 'PENDING', 'Ręcznie dodany')
-            ON CONFLICT (ticker) WHERE status IN ('ACTIVE', 'PENDING') DO UPDATE SET notes = 'Ponownie dodany' RETURNING *;
+            VALUES (:ticker, NOW(), 'PENDING', 'Ręcznie dodany do obserwowanych')
+            ON CONFLICT (ticker) WHERE status IN ('ACTIVE', 'PENDING')
+            DO UPDATE SET
+                notes = 'Ręcznie dodany do obserwowanych (ponownie)'
+            RETURNING *;
         """)
-        result = db.execute(stmt, [{'ticker': ticker.strip().upper()}]).fetchone()
+        params = [{'ticker': ticker.strip().upper()}]
+        result_proxy = db.execute(stmt, params)
+        result = result_proxy.fetchone()
         db.commit()
+
         if not result:
-            result = db.query(models.TradingSignal).filter(models.TradingSignal.ticker == ticker.strip().upper(), models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])).first()
-        res_dict = dict(result._mapping) if result else {}
-        res_dict['generation_date'] = res_dict['generation_date'].isoformat()
-        return res_dict
+            existing = db.query(models.TradingSignal).filter(
+                models.TradingSignal.ticker == ticker.strip().upper(),
+                models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
+            ).first()
+            if not existing:
+                 raise HTTPException(status_code=500, detail="Nie można było utworzyć ani pobrać sygnału po konflikcie.")
+            result_dict = {c.name: getattr(existing, c.name) for c in existing.__table__.columns}
+        else:
+            result_dict = dict(result._mapping)
+
+        result_dict['generation_date'] = result_dict['generation_date'].isoformat()
+        if result_dict.get('signal_candle_timestamp'):
+            result_dict['signal_candle_timestamp'] = result_dict['signal_candle_timestamp'].isoformat()
+        return result_dict
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Błąd podczas dodawania do watchlist ({ticker}): {e}", exc_info=True)
+        if "foreign key constraint" in str(e):
+             raise HTTPException(status_code=400, detail=f"Ticker {ticker} nie istnieje w bazie danych 'companies'.")
+        raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
 
 @app.get("/api/v1/quote/{ticker}")
 def get_live_quote(ticker: str):
@@ -214,15 +227,14 @@ def get_live_quote(ticker: str):
 
 # --- ENDPOINTY KONTROLI ---
 
-# ZMIANA: Dodano 'start_phase1' i 'start_phase3' do dozwolonych akcji
 @app.post("/api/v1/worker/control/{action}", status_code=202)
 def control_worker(action: str, db: Session = Depends(get_db)):
     allowed_actions = {
         "start": "START_REQUESTED", 
         "pause": "PAUSE_REQUESTED", 
         "resume": "RESUME_REQUESTED",
-        "start_phase1": "START_PHASE_1_REQUESTED", # Nowa akcja
-        "start_phase3": "START_PHASE_3_REQUESTED"  # Nowa akcja
+        "start_phase1": "START_PHASE_1_REQUESTED", 
+        "start_phase3": "START_PHASE_3_REQUESTED" 
     }
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
