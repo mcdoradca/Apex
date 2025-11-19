@@ -38,6 +38,10 @@ export function updateDashboardUI(statusData) {
     const elProgBar = document.getElementById('progress-bar');
     const elLog = document.getElementById('scan-log');
     
+    // Dashboard signals counter
+    const elSignals = document.getElementById('dashboard-active-signals');
+    if (elSignals) elSignals.textContent = state.phase3.length;
+    
     if (!elStatus || !elLog) return;
     
     elStatus.textContent = statusData.status;
@@ -135,10 +139,21 @@ export async function pollWorkerStatus() {
 
 export async function refreshSidebarData() {
     try {
-        const [phase1] = await Promise.all([api.getPhase1Candidates()]);
+        // ZMIANA: Przywrócono getPhase3Signals
+        const [phase1, phase3] = await Promise.all([
+            api.getPhase1Candidates(),
+            api.getPhase3Signals()
+        ]);
         state.phase1 = phase1 || [];
+        state.phase3 = phase3 || []; // Zapisujemy sygnały H3
+
         if(ui.phase1.list) ui.phase1.list.innerHTML = renderers.phase1List(state.phase1);
         if(ui.phase1.count) ui.phase1.count.textContent = state.phase1.length;
+        
+        // Renderujemy listę H3
+        if(ui.phase3.list) ui.phase3.list.innerHTML = renderers.phase3List(state.phase3);
+        if(ui.phase3.count) ui.phase3.count.textContent = state.phase3.length;
+        
         lucide.createIcons();
     } catch (e) {}
     setTimeout(refreshSidebarData, 15000);
@@ -499,6 +514,6 @@ export async function handleViewH3DeepDiveReport() {
         const reportData = await api.getH3DeepDiveReport();
         if (reportData.status === 'DONE') ui.h3DeepDiveModal.content.innerHTML = `<pre class="text-xs whitespace-pre-wrap font-mono">${reportData.report_text}</pre>`;
         else if (reportData.status === 'PROCESSING') pollH3DeepDiveReport();
-        else ui.h3DeepDiveModal.content.innerHTML = '<p class="text-gray-500">Brak raportu.</p>';
+        else ui.h3DeepDiveModal.content.innerHTML = '<p class="text-gray-400">Brak raportu.</p>';
     } catch (e) { ui.h3DeepDiveModal.content.innerHTML = `<p class="text-red-400">${e.message}</p>`; }
 }
