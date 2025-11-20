@@ -46,12 +46,12 @@ export const ui = {
                 
                 sector: get('sd-sector'),
                 industry: get('sd-industry'),
-                description: get('sd-description'), // Nowe pole
+                description: get('sd-description'), // Nowe pole dla opisu
                 generationDate: get('sd-generation-date'),
                 
                 validityMessage: get('sd-validity-message'),
                 closeBtn: get('sd-close-btn'),
-                buyBtn: get('sd-buy-btn') // Nowy przycisk
+                buyBtn: get('sd-buy-btn') // Nowy przycisk Kup
             },
             // ==================================================
 
