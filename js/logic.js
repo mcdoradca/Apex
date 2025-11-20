@@ -50,15 +50,15 @@ export function getMarketCountdown() {
     if (isWeekend) {
         let daysToAdd = (dayOfWeek === 6) ? 2 : 1;
         targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
-        message = 'Do otwarcia Pre-Market: ';
+        message = 'Pre-Market: ';
     } else {
-        if (now < preMarketOpen) { targetTime = preMarketOpen; message = 'Do otwarcia Pre-Market: '; }
-        else if (now >= preMarketOpen && now < marketOpen) { targetTime = marketOpen; message = 'Do otwarcia Rynku: '; }
-        else if (now >= marketOpen && now < marketClose) { targetTime = marketClose; message = 'Do zamknięcia Rynku: '; }
+        if (now < preMarketOpen) { targetTime = preMarketOpen; message = 'Pre-Market: '; }
+        else if (now >= preMarketOpen && now < marketOpen) { targetTime = marketOpen; message = 'Otwarcie: '; }
+        else if (now >= marketOpen && now < marketClose) { targetTime = marketClose; message = 'Zamknięcie: '; }
         else {
             let daysToAdd = (dayOfWeek === 5) ? 3 : 1;
             targetTime = new Date(preMarketOpen.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
-            message = 'Do otwarcia Pre-Market: ';
+            message = 'Pre-Market: ';
         }
     }
     const diff = targetTime.getTime() - now.getTime();
@@ -89,7 +89,121 @@ export function stopAllPolling() {
     if (state.activeAIOptimizerPolling) clearTimeout(state.activeAIOptimizerPolling);
     if (state.activeH3DeepDivePolling) clearTimeout(state.activeH3DeepDivePolling);
     stopMarketCountdown();
+    // Zatrzymaj też polling modala jeśli był aktywny
+    hideSignalDetails();
 }
+
+// ==================================================================
+// === LOGIKA DETALI SYGNAŁU (H3 LIVE) ===
+// ==================================================================
+
+let signalModalInterval = null;
+let signalCountdownInterval = null;
+
+export async function showSignalDetails(ticker) {
+    if (!ui || !ui.signalDetails) return;
+
+    // 1. Otwórz Modal
+    ui.signalDetails.backdrop.classList.remove('hidden');
+
+    // 2. Reset UI (Placeholder)
+    ui.signalDetails.ticker.textContent = ticker;
+    ui.signalDetails.companyName.textContent = "Ładowanie...";
+    
+    ui.signalDetails.currentPrice.textContent = "---";
+    ui.signalDetails.changePercent.textContent = "---";
+    ui.signalDetails.changePercent.className = "font-mono text-sm font-bold text-gray-500";
+    
+    ui.signalDetails.validityBadge.className = "text-xs px-2 py-1 rounded bg-gray-700 text-gray-400";
+    ui.signalDetails.validityBadge.textContent = "Analiza...";
+    
+    ui.signalDetails.validityMessage.classList.add('hidden');
+    
+    // Reset parametrów
+    ui.signalDetails.entry.textContent = "---";
+    ui.signalDetails.tp.textContent = "---";
+    ui.signalDetails.sl.textContent = "---";
+    
+    // 3. Pobierz dane (Pierwszy strzał)
+    await fetchAndDisplaySignal(ticker);
+
+    // 4. Uruchom Polling (Odświeżanie danych co 5 sekund)
+    if (signalModalInterval) clearInterval(signalModalInterval);
+    signalModalInterval = setInterval(() => fetchAndDisplaySignal(ticker), 5000);
+
+    // 5. Uruchom Lokalny Zegar (Co 1 sekundę)
+    if (signalCountdownInterval) clearInterval(signalCountdownInterval);
+    updateSignalModalCountdown(); // init
+    signalCountdownInterval = setInterval(updateSignalModalCountdown, 1000);
+}
+
+export function hideSignalDetails() {
+    if (!ui || !ui.signalDetails) return;
+    ui.signalDetails.backdrop.classList.add('hidden');
+    if (signalModalInterval) clearInterval(signalModalInterval);
+    if (signalCountdownInterval) clearInterval(signalCountdownInterval);
+}
+
+function updateSignalModalCountdown() {
+    if (ui && ui.signalDetails && ui.signalDetails.countdown) {
+        ui.signalDetails.countdown.textContent = getMarketCountdown();
+        const nyTime = getNYTime();
+        ui.signalDetails.nyTime.textContent = nyTime.toLocaleTimeString('en-US', {hour12: false});
+    }
+}
+
+async function fetchAndDisplaySignal(ticker) {
+    try {
+        // UWAGA: Zakładamy, że api.getSignalDetails zostanie dodane w js/api.js
+        // Jeśli jeszcze nie ma, to rzuci błąd (to normalne w procesie "plik po pliku")
+        const data = await api.getSignalDetails(ticker);
+        
+        if (!data || !ui.signalDetails) return;
+
+        // A. Dane Firmy
+        ui.signalDetails.companyName.textContent = data.company.name;
+        ui.signalDetails.sector.textContent = data.company.sector;
+        ui.signalDetails.industry.textContent = data.company.industry;
+        ui.signalDetails.generationDate.textContent = new Date(data.setup.generation_date).toLocaleString('pl-PL');
+
+        // B. Dane Rynkowe (Live)
+        const price = parseFloat(data.market_data.current_price);
+        ui.signalDetails.currentPrice.textContent = price.toFixed(2);
+        
+        ui.signalDetails.changePercent.textContent = data.market_data.change_percent;
+        if (data.market_data.change_percent.includes('-')) {
+            ui.signalDetails.changePercent.className = "font-mono text-sm font-bold text-red-500";
+        } else {
+            ui.signalDetails.changePercent.className = "font-mono text-sm font-bold text-green-500";
+        }
+        
+        ui.signalDetails.marketStatus.textContent = data.market_data.market_status;
+
+        // C. Setup
+        ui.signalDetails.entry.textContent = data.setup.entry_price?.toFixed(2);
+        ui.signalDetails.tp.textContent = data.setup.take_profit?.toFixed(2);
+        ui.signalDetails.sl.textContent = data.setup.stop_loss?.toFixed(2);
+        ui.signalDetails.rr.textContent = data.setup.risk_reward?.toFixed(2);
+
+        // D. LOGIKA WAŻNOŚCI (Strażnik Wizualny)
+        if (data.validity.is_valid) {
+            ui.signalDetails.validityBadge.className = "text-xs px-2 py-1 rounded bg-green-900 text-green-300 font-bold border border-green-700";
+            ui.signalDetails.validityBadge.textContent = "AKTYWNY";
+            ui.signalDetails.validityMessage.classList.add('hidden');
+        } else {
+            ui.signalDetails.validityBadge.className = "text-xs px-2 py-1 rounded bg-red-900 text-red-300 font-bold border border-red-700 animate-pulse";
+            ui.signalDetails.validityBadge.textContent = "SPALONY";
+            
+            ui.signalDetails.validityMessage.textContent = data.validity.message;
+            ui.signalDetails.validityMessage.classList.remove('hidden');
+        }
+
+    } catch (e) {
+        console.error("Signal Details Fetch Error:", e);
+    }
+}
+
+// ==================================================================
 
 export function updateDashboardUI(statusData) {
     if (!document.getElementById('dashboard-view')) return;
@@ -125,12 +239,7 @@ export function updateDashboardCounters() {
 
 export function displaySystemAlert(message) {
     if (!message || message === 'NONE') return;
-
-    // Sprawdź, czy ui jest dostępne
-    if (!ui || !ui.alertContainer) {
-        console.warn("UI not ready for alerts yet.");
-        return;
-    }
+    if (!ui || !ui.alertContainer) return;
 
     let alertKey = 'GENERAL';
     try {
@@ -238,20 +347,9 @@ export async function refreshSidebarData() {
 
 export async function showDashboard() {
     stopAllPolling();
-    // Zabezpieczenie: upewnij się, że ui jest zainicjowane
-    if (!ui) {
-        console.error("showDashboard: UI is null!");
-        return;
-    }
+    if (!ui) return;
     setActiveSidebar(ui.dashboardLink);
-    
-    // === TU BYŁ BŁĄD ===
-    // Używamy ui.mainContent bezpiecznie
-    if (ui.mainContent) {
-        ui.mainContent.innerHTML = renderers.dashboard();
-    }
-    // ===================
-
+    if (ui.mainContent) { ui.mainContent.innerHTML = renderers.dashboard(); }
     updateDashboardUI(state.workerStatus);
     updateDashboardCounters();
     try { lucide.createIcons(); } catch(e) {}
@@ -290,7 +388,6 @@ async function pollPortfolioQuotes() {
         });
         state.liveQuotes = newQuotes; 
         if (quotesUpdated && document.getElementById('portfolio-view')) {
-            // Sprawdź czy ui istnieje
             if (ui && ui.mainContent) {
                  ui.mainContent.innerHTML = renderers.portfolio(state.portfolio, state.liveQuotes);
                  lucide.createIcons();
@@ -625,13 +722,9 @@ export function showH3LiveParamsModal() {
         ui.h3LiveModal.backdrop.classList.remove('hidden');
         ui.h3LiveModal.percentile.value = "0.95";
         ui.h3LiveModal.mass.value = "-0.5";
-        
-        // === NAPRAWA: Bezpieczne odwołanie do minScore ===
         if (ui.h3LiveModal.minScore) {
              ui.h3LiveModal.minScore.value = "0.0";
         }
-        // ================================================
-        
         ui.h3LiveModal.tp.value = "5.0";
         ui.h3LiveModal.sl.value = "2.0";
     }
