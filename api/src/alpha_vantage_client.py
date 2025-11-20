@@ -2,6 +2,8 @@ import time
 import requests
 import logging
 import json
+import csv
+from io import StringIO
 from collections import deque
 import os
 from dotenv import load_dotenv
@@ -87,7 +89,39 @@ class AlphaVantageClient:
                     time.sleep(self.backoff_factor * (2 ** attempt))
         return None
 
-    # === METODY DANYCH RYNKOWYCH (ZGODNE Z TWOIMI PLIKAMI TXT) ===
+    # === NARZĘDZIA POMOCNICZE (PARSOWANIE CSV) ===
+
+    @staticmethod
+    def _safe_float(value) -> float | None:
+        if value is None: return None
+        try:
+            if isinstance(value, str):
+                value = value.replace(',', '').replace('%', '')
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+    
+    def _parse_bulk_quotes_csv(self, csv_text: str, ticker: str) -> dict | None:
+        """Przetwarza odpowiedź CSV z BULK_QUOTES i zwraca dane dla JEDNEGO tickera."""
+        if not csv_text or "symbol" not in csv_text:
+            logger.warning("[DIAGNOSTYKA] Otrzymane dane CSV są puste lub nie zawierają nagłówka 'symbol'.")
+            return None
+        
+        try:
+            csv_file = StringIO(csv_text)
+            reader = csv.DictReader(csv_file)
+            
+            for row in reader:
+                if row.get('symbol') == ticker:
+                    return row
+            
+            logger.warning(f"Nie znaleziono tickera {ticker} w odpowiedzi bulk quote.")
+            return None
+        except Exception as e:
+            logger.error(f"Błąd parsowania CSV Bulk Quotes: {e}")
+            return None
+
+    # === METODY DANYCH RYNKOWYCH ===
 
     def get_market_status(self):
         params = {"function": "MARKET_STATUS"}
@@ -100,12 +134,56 @@ class AlphaVantageClient:
 
     def get_global_quote(self, symbol: str):
         """
-        Pobiera najnowsze dane cenowe używając sprawdzonego endpointu GLOBAL_QUOTE.
-        Naprawia błąd braku ceny w modalu.
+        Pobiera najnowsze dane cenowe.
+        ZMIANA (v3): Używa endpointu REALTIME_BULK_QUOTES (Premium) zamiast GLOBAL_QUOTE.
+        Pozwala to na pobranie danych 'Extended Hours' (Pre-Market/After-Market).
         """
-        params = {"function": "GLOBAL_QUOTE", "symbol": symbol}
-        data = self._make_request(params)
-        return data.get('Global Quote') if data else None
+        # 1. Pobieramy dane z Bulk Quotes (CSV), który obsługuje realtime i extended hours
+        bulk_csv = self.get_bulk_quotes([symbol])
+        if not bulk_csv:
+            logger.error(f"Nie udało się pobrać danych REALTIME dla {symbol}.")
+            return None
+            
+        # 2. Parsujemy CSV
+        quote_data = self._parse_bulk_quotes_csv(bulk_csv, symbol)
+        if not quote_data:
+            return None
+
+        # 3. Mapujemy na format GLOBAL_QUOTE (aby zachować kompatybilność z resztą systemu)
+        try:
+            # Standardowa cena (CLOSE lub LATEST TRADE podczas sesji regularnej)
+            formatted_quote = {
+                "01. symbol": quote_data.get("symbol"),
+                "02. open": quote_data.get("open"),
+                "03. high": quote_data.get("high"),
+                "04. low": quote_data.get("low"),
+                "05. price": quote_data.get("close"), # W Bulk 'close' to cena bieżąca
+                "06. volume": quote_data.get("volume"),
+                "07. latest trading day": None,
+                "08. previous close": quote_data.get("previous_close"),
+                "09. change": quote_data.get("change"),
+                "10. change percent": f'{quote_data.get("change_percent")}%'
+            }
+            
+            # 4. Obsługa EXTENDED HOURS (Pre/Post Market)
+            # Zgodnie z zaleceniem Supportu: Jeśli mamy dane extended, używamy ich jako "Ceny Aktualnej"
+            ext_price_str = quote_data.get("extended_hours_quote")
+            ext_price = self._safe_float(ext_price_str)
+            
+            if ext_price and ext_price > 0:
+                logger.info(f"Wykryto cenę Extended Hours dla {symbol}: {ext_price}. Nadpisywanie...")
+                formatted_quote["05. price"] = ext_price_str
+                # Aktualizujemy też zmianę procentową, jeśli jest dostępna dla extended hours
+                if quote_data.get("extended_hours_change"):
+                    formatted_quote["09. change"] = quote_data.get("extended_hours_change")
+                if quote_data.get("extended_hours_change_percent"):
+                    formatted_quote["10. change percent"] = f'{quote_data.get("extended_hours_change_percent")}%'
+
+            return formatted_quote
+            
+        except Exception as e:
+            logger.error(f"Błąd mapowania danych Bulk dla {symbol}: {e}", exc_info=True)
+            return None
 
     def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
@@ -158,19 +236,18 @@ class AlphaVantageClient:
 
     def get_bulk_quotes(self, symbols: list[str]):
         """
-        Zachowana funkcja pomocnicza dla list (np. portfel), 
-        ale dla pojedynczego sygnału używamy get_global_quote.
+        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
+        To jest endpoint PREMIUM, który zwraca ceny extended hours.
         """
         params = {
             "function": "REALTIME_BULK_QUOTES",
             "symbol": ",".join(symbols),
             "datatype": "csv"
         }
-        # Tutaj musimy użyć raw requests lub obsłużyć CSV w _make_request, 
-        # ale dla bezpieczeństwa używamy dedykowanej obsługi CSV tutaj.
         self._rate_limiter()
         params['apikey'] = self.api_key
         try:
+            # Używamy sesji dla wydajności
             response = self.session.get(self.BASE_URL, params=params, timeout=30)
             response.raise_for_status()
             return response.text
