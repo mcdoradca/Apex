@@ -36,9 +36,10 @@
             gap: 0.5rem;
         }
         .alert-bar { max-width: 400px; width: 100%; }
-        .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
+        .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(2px); }
         .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
-        .modal-content-lg { max-width: 800px; width: 95%; } 
+        /* ZMIANA: Zwiększono max-width dla content-lg do 5xl (ok 1024px) dla lepszej czytelności */
+        .modal-content-lg { max-width: 64rem; width: 95%; } 
         .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
         .modal-input[type=number]::-webkit-inner-spin-button, 
         .modal-input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -209,119 +210,152 @@
         </div>
     </div>
 
-    <!-- === NOWY MODAL: Signal Details (Detale Sygnału) === -->
+    <!-- === ZMODYFIKOWANY MODAL: Signal Details (Detale Sygnału) === -->
     <div id="signal-details-modal" class="modal-backdrop hidden">
-        <div class="modal-content modal-content-lg">
-            <!-- Nagłówek -->
-            <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
+        <div class="modal-content modal-content-lg bg-[#161B22] border border-gray-700 shadow-2xl">
+            <!-- Nagłówek z przyciskiem Kup -->
+            <div class="flex justify-between items-start mb-6 border-b border-gray-700 pb-4">
                 <div>
-                    <h3 class="text-2xl font-bold text-white flex items-center gap-2">
+                    <h3 class="text-3xl font-bold text-white flex items-center gap-3">
                         <span id="sd-ticker" class="text-sky-400">TICKER</span>
-                        <span id="sd-validity-badge" class="text-xs px-2 py-1 rounded bg-gray-700 text-gray-400">Checking...</span>
+                        <span id="sd-validity-badge" class="text-sm px-2 py-1 rounded bg-gray-700 text-gray-400 font-mono">Checking...</span>
                     </h3>
-                    <p id="sd-company-name" class="text-sm text-gray-400">Company Name</p>
+                    <p id="sd-company-name" class="text-base text-gray-400 mt-1">Company Name</p>
                 </div>
-                <button id="sd-close-btn" class="p-1 text-gray-500 hover:text-white">
-                    <i data-lucide="x" class="w-6 h-6"></i>
-                </button>
+                <div class="flex items-center gap-3">
+                    <!-- NOWY PRZYCISK KUP -->
+                    <button id="sd-buy-btn" class="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors shadow-lg shadow-green-900/20">
+                        <i data-lucide="shopping-cart" class="w-4 h-4"></i>
+                        Inwestuj (Kup)
+                    </button>
+                    <button id="sd-close-btn" class="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors">
+                        <i data-lucide="x" class="w-6 h-6"></i>
+                    </button>
+                </div>
             </div>
 
             <!-- Główny Grid -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 
                 <!-- Lewa kolumna: Dane Rynkowe Live -->
-                <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
-                    <h4 class="text-xs font-bold text-gray-500 uppercase mb-3 flex items-center">
-                        <i data-lucide="activity" class="w-3 h-3 mr-1 text-sky-400"></i> Dane Rynkowe (Live)
-                    </h4>
-                    
-                    <div class="flex justify-between items-end mb-2">
-                        <span class="text-gray-400 text-sm">Cena Aktualna</span>
-                        <span id="sd-current-price" class="text-3xl font-mono font-bold text-white">---</span>
-                    </div>
-                    <div class="flex justify-between items-center mb-4">
-                        <span class="text-gray-400 text-sm">Zmiana 24h</span>
-                        <span id="sd-change-percent" class="font-mono text-sm font-bold">---</span>
+                <div class="space-y-6">
+                    <div class="bg-[#0D1117] p-5 rounded-lg border border-gray-700 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 p-2 opacity-10 pointer-events-none">
+                            <i data-lucide="activity" class="w-24 h-24 text-sky-400"></i>
+                        </div>
+                        <h4 class="text-xs font-bold text-sky-500 uppercase mb-4 flex items-center tracking-wider">
+                            <i data-lucide="zap" class="w-3 h-3 mr-2"></i> Dane Rynkowe (Live)
+                        </h4>
+                        
+                        <div class="flex justify-between items-baseline mb-2">
+                            <span class="text-gray-400 text-sm">Cena Aktualna</span>
+                            <span id="sd-current-price" class="text-4xl font-mono font-bold text-white tracking-tight">---</span>
+                        </div>
+                        <div class="flex justify-between items-center mb-4">
+                            <span class="text-gray-500 text-xs uppercase">Zmiana 24h</span>
+                            <span id="sd-change-percent" class="font-mono text-lg font-bold">---</span>
+                        </div>
+
+                        <div class="border-t border-gray-800 pt-4 space-y-3">
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-500">Status Rynku</span>
+                                <span id="sd-market-status" class="text-gray-300 font-mono bg-gray-800 px-2 py-0.5 rounded text-xs">---</span>
+                            </div>
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-500">Czas (NY)</span>
+                                <span id="sd-ny-time" class="text-gray-300 font-mono">---</span>
+                            </div>
+                             <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-500">Do Otwarcia</span>
+                                <span id="sd-countdown" class="text-sky-400 font-mono font-bold">---</span>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="border-t border-gray-800 pt-3 space-y-2">
-                        <div class="flex justify-between text-xs">
-                            <span class="text-gray-500">Status Rynku</span>
-                            <span id="sd-market-status" class="text-gray-300 font-mono">---</span>
-                        </div>
-                        <div class="flex justify-between text-xs">
-                            <span class="text-gray-500">Czas w Nowym Jorku</span>
-                            <span id="sd-ny-time" class="text-gray-300 font-mono">---</span>
-                        </div>
-                         <div class="flex justify-between text-xs">
-                            <span class="text-gray-500">Odliczanie do Otwarcia</span>
-                            <span id="sd-countdown" class="text-sky-400 font-mono">---</span>
+                    <!-- Metadane Sektor/Branża -->
+                    <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
+                         <h4 class="text-xs font-bold text-gray-500 uppercase mb-3 tracking-wider">Profil Spółki</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">Sektor:</span>
+                                <span id="sd-sector" class="text-gray-300 font-medium text-right">---</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">Branża:</span>
+                                <span id="sd-industry" class="text-gray-300 font-medium text-right">---</span>
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- Prawa kolumna: Parametry Setupu H3 -->
-                <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
-                    <h4 class="text-xs font-bold text-gray-500 uppercase mb-3 flex items-center">
-                        <i data-lucide="crosshair" class="w-3 h-3 mr-1 text-purple-400"></i> Parametry Setupu H3
-                    </h4>
-                    
-                    <div class="space-y-3">
-                        <div class="flex justify-between items-center p-2 bg-gray-800/30 rounded">
-                            <span class="text-sm text-purple-300 font-semibold">Cena Wejścia (Entry)</span>
-                            <span id="sd-entry-price" class="font-mono text-white font-bold">---</span>
+                <div class="space-y-6">
+                    <div class="bg-[#0D1117] p-5 rounded-lg border border-gray-700 relative">
+                         <h4 class="text-xs font-bold text-purple-500 uppercase mb-4 flex items-center tracking-wider">
+                            <i data-lucide="crosshair" class="w-3 h-3 mr-2"></i> Setup H3 (Quantum)
+                        </h4>
+                        
+                        <div class="space-y-4">
+                            <div class="flex justify-between items-center p-3 bg-gray-800/40 rounded border border-gray-700/50">
+                                <span class="text-sm text-purple-300 font-semibold">Wejście (Entry)</span>
+                                <span id="sd-entry-price" class="font-mono text-xl text-white font-bold">---</span>
+                            </div>
+                            <div class="flex justify-between items-center p-3 bg-green-900/10 border border-green-500/20 rounded">
+                                <span class="text-sm text-green-400 font-semibold">Take Profit (TP)</span>
+                                <span id="sd-take-profit" class="font-mono text-xl text-green-400 font-bold">---</span>
+                            </div>
+                            <div class="flex justify-between items-center p-3 bg-red-900/10 border border-red-500/20 rounded">
+                                <span class="text-sm text-red-400 font-semibold">Stop Loss (SL)</span>
+                                <span id="sd-stop-loss" class="font-mono text-xl text-red-400 font-bold">---</span>
+                            </div>
+                             <div class="flex justify-between items-center pt-2 mt-2 border-t border-gray-800">
+                                <span class="text-xs text-gray-500 uppercase font-bold">R:R Ratio</span>
+                                <span id="sd-risk-reward" class="font-mono text-yellow-400 font-bold text-lg">---</span>
+                            </div>
                         </div>
-                        <div class="flex justify-between items-center p-2 bg-green-900/10 border border-green-900/30 rounded">
-                            <span class="text-sm text-green-400 font-semibold">Take Profit (TP)</span>
-                            <span id="sd-take-profit" class="font-mono text-green-400 font-bold">---</span>
-                        </div>
-                        <div class="flex justify-between items-center p-2 bg-red-900/10 border border-red-900/30 rounded">
-                            <span class="text-sm text-red-400 font-semibold">Stop Loss (SL)</span>
-                            <span id="sd-stop-loss" class="font-mono text-red-400 font-bold">---</span>
-                        </div>
-                         <div class="flex justify-between items-center pt-2 mt-2 border-t border-gray-800">
-                            <span class="text-xs text-gray-500">Stosunek Zysk/Ryzyko (R:R)</span>
-                            <span id="sd-risk-reward" class="font-mono text-yellow-400 font-bold">---</span>
-                        </div>
+                    </div>
+
+                    <!-- Sekcja Opisu Firmy (NOWOŚĆ) -->
+                    <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
+                        <h4 class="text-xs font-bold text-gray-500 uppercase mb-2 tracking-wider">O Firmie</h4>
+                        <p id="sd-description" class="text-sm text-gray-400 leading-relaxed text-justify max-h-32 overflow-y-auto pr-2 custom-scrollbar">
+                            Brak opisu.
+                        </p>
                     </div>
                 </div>
             </div>
 
-            <!-- Sekcja Newsów AI (Nowość - wstawiona tutaj) -->
-            <div id="sd-news-container" class="mt-6 p-4 bg-gray-800/50 rounded-lg border border-gray-700 hidden">
+            <!-- Sekcja Newsów AI -->
+            <div id="sd-news-container" class="mt-6 p-4 bg-gray-800/30 rounded-lg border border-gray-700 hidden">
                 <h4 class="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center">
-                    <i data-lucide="bot" class="w-3 h-3 mr-1 text-pink-400"></i> Ostatni Sentyment Newsowy (AI)
+                    <i data-lucide="bot" class="w-3 h-3 mr-1 text-pink-400"></i> Analiza Newsów (AI)
                 </h4>
-                <div class="flex justify-between items-start gap-4">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
                         <div class="flex items-center gap-2 mb-1">
                             <span id="sd-news-sentiment" class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300 font-bold">NEUTRAL</span>
-                            <span id="sd-news-time" class="text-xs text-gray-500">---</span>
+                            <span id="sd-news-time" class="text-xs text-gray-500 font-mono">---</span>
                         </div>
                         <p id="sd-news-headline" class="text-sm text-white font-medium leading-snug">---</p>
                     </div>
-                    <a id="sd-news-link" href="#" target="_blank" class="text-xs text-sky-400 hover:underline whitespace-nowrap flex-shrink-0">
-                        Zobacz źródło &rarr;
+                    <a id="sd-news-link" href="#" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 hover:underline whitespace-nowrap flex-shrink-0 flex items-center">
+                        Źródło <i data-lucide="external-link" class="w-3 h-3 ml-1"></i>
                     </a>
                 </div>
             </div>
 
-            <!-- Stopka z Metadanymi -->
-            <div class="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center text-xs text-gray-500">
-                <div class="space-y-1">
-                    <p>Sektor: <span id="sd-sector" class="text-gray-300">---</span></p>
-                    <p>Branża: <span id="sd-industry" class="text-gray-300">---</span></p>
+            <!-- Stopka -->
+            <div class="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center text-xs text-gray-600">
+                <div>
+                    APEX Quantum Model V3
                 </div>
-                <div class="text-right">
-                    <p>Data wygenerowania sygnału:</p>
-                    <p id="sd-generation-date" class="text-gray-300 font-mono">---</p>
+                <div class="text-right font-mono">
+                    Gen: <span id="sd-generation-date">---</span>
                 </div>
             </div>
             
-            <!-- Dynamiczny komunikat o błędzie/ważności -->
-            <div id="sd-validity-message" class="mt-4 p-3 rounded bg-red-900/20 border border-red-500/30 text-center text-sm text-red-300 hidden animate-pulse">
-                <!-- Treść wstrzykiwana przez JS -->
-            </div>
+            <!-- Komunikat błedu -->
+            <div id="sd-validity-message" class="mt-4 p-3 rounded bg-red-900/20 border border-red-500/30 text-center text-sm text-red-300 hidden animate-pulse font-bold"></div>
         </div>
     </div>
     <!-- ========================================== -->
