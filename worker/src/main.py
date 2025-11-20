@@ -12,7 +12,8 @@ from .models import Base
 from .database import get_db_session, engine
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
-    phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent
+    phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
+    signal_monitor # <--- NOWY IMPORT
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -146,9 +147,19 @@ def main_loop():
         Base.metadata.create_all(bind=engine)
         initialize_database_if_empty(session, api_client)
     
+    # Główne skanowanie raz dziennie
     schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
+    
+    # Agent Newsowy co 2 minuty
     schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
+    
+    # Monitor Wirtualnego Agenta (stary, dobowy)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(lambda: virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client))
+
+    # === NOWOŚĆ: STRAŻNIK SYGNAŁÓW (H3 LIVE) ===
+    # Uruchamiamy co 1 minutę, aby monitorować Entry/TP/SL w tle
+    schedule.every(1).minutes.do(lambda: signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client))
+    # ============================================
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
