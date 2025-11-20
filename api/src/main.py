@@ -138,7 +138,7 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     # 2. Pobierz dane firmy
     company = db.query(models.Company).filter(models.Company.ticker == ticker).first()
     
-    # 3. Pobierz LIVE Quote z Alpha Vantage
+    # 3. Pobierz LIVE Quote z Alpha Vantage (Teraz zwraca też _price_source)
     live_quote = api_av_client.get_global_quote(ticker)
     
     # 4. Pobierz Status Rynku
@@ -163,12 +163,15 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     prev_close = 0.0
     change_percent = "0%"
     market_state = "UNKNOWN"
+    price_source = "unknown" # Nowe pole
     
     if live_quote:
         try:
             current_price = float(live_quote.get("05. price", 0))
             prev_close = float(live_quote.get("08. previous close", 0))
             change_percent = live_quote.get("10. change percent", "0%")
+            # Pobieramy źródło ceny (extended_hours, close, previous_close)
+            price_source = live_quote.get("_price_source", "unknown")
         except: pass
         
     if market_status_raw:
@@ -225,6 +228,7 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "prev_close": prev_close,
             "change_percent": change_percent,
             "market_status": market_state,
+            "price_source": price_source, # PRZEKAZUJEMY ŹRÓDŁO DO UI
             "server_check_time": datetime.now(timezone.utc).isoformat()
         },
         "setup": {
@@ -235,7 +239,7 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "notes": signal.notes,
             "generation_date": signal.generation_date.isoformat()
         },
-        "news_context": news_context, # Nowe pole w odpowiedzi
+        "news_context": news_context,
         "validity": {
             "is_valid": is_valid,
             "message": validation_msg
