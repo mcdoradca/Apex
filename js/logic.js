@@ -454,6 +454,14 @@ export const showSignalDetails = async (ticker) => {
     UI.signalDetails.ticker.textContent = ticker;
     UI.signalDetails.companyName.textContent = "Ładowanie...";
     UI.signalDetails.currentPrice.textContent = "---";
+    
+    // Reset etykiety ceny
+    const priceLabel = UI.signalDetails.currentPrice.previousElementSibling;
+    if (priceLabel) {
+        priceLabel.textContent = "Cena Aktualna";
+        priceLabel.className = "text-gray-400 text-sm";
+    }
+
     UI.signalDetails.validityBadge.textContent = "Checking...";
     UI.signalDetails.validityBadge.className = "text-sm px-2 py-1 rounded bg-gray-700 text-gray-400 font-mono";
     UI.signalDetails.validityMessage.classList.add('hidden');
@@ -506,12 +514,35 @@ export const showSignalDetails = async (ticker) => {
             if (data.market_data) {
                 const price = parseFloat(data.market_data.current_price);
                 UI.signalDetails.currentPrice.textContent = price > 0 ? price.toFixed(2) : "---";
+                
+                // === NOWOŚĆ: Obsługa Źródła Ceny (Label) ===
+                const priceLabel = UI.signalDetails.currentPrice.previousElementSibling;
+                const source = data.market_data.price_source;
+                let statusText = data.market_data.market_status;
+
+                if (priceLabel) {
+                    if (source === 'extended_hours') {
+                        priceLabel.textContent = "Cena (Pre/Post Market)";
+                        priceLabel.className = "text-purple-400 text-sm font-bold animate-pulse";
+                        // Jeśli mamy extended hours, a status to Closed, naprawiamy status wizualnie
+                        if (statusText.toLowerCase() === 'closed') statusText = "Extended Hours";
+                    } else if (source === 'previous_close') {
+                        priceLabel.textContent = "Cena Zamknięcia (Wczoraj)";
+                        priceLabel.className = "text-yellow-500 text-sm font-semibold";
+                    } else {
+                         // Close lub Unknown - decydujemy na podstawie statusu rynku
+                         const isClosed = statusText.toLowerCase().includes('closed');
+                         priceLabel.textContent = isClosed ? "Cena Zamknięcia" : "Cena Aktualna";
+                         priceLabel.className = "text-gray-400 text-sm";
+                    }
+                }
+
                 UI.signalDetails.changePercent.textContent = data.market_data.change_percent;
                 
                 const changeVal = parseFloat(data.market_data.change_percent.replace('%', ''));
                 UI.signalDetails.changePercent.className = `font-mono text-lg font-bold ${changeVal >= 0 ? 'text-green-400' : 'text-red-400'}`;
                 
-                UI.signalDetails.marketStatus.textContent = data.market_data.market_status;
+                UI.signalDetails.marketStatus.textContent = statusText;
             }
             
             // Setup
