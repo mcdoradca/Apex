@@ -6,8 +6,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
+from decimal import Decimal
 
 from . import crud, models, schemas
 from .database import get_db, engine, SessionLocal
@@ -23,7 +24,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.4.0")
+app = FastAPI(title="APEX Predator API", version="2.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,6 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Klient API używany przez endpointy
 api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
@@ -59,7 +61,8 @@ async def startup_event():
             'ai_optimizer_report': 'NONE',
             'h3_deep_dive_request': 'NONE',
             'h3_deep_dive_report': 'NONE',
-            'h3_live_parameters': '{}'
+            'h3_live_parameters': '{}',
+            'macro_sentiment': 'UNKNOWN' # Dodano dla Fazy 0
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -111,6 +114,138 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 @app.get("/api/v1/signals/phase3", response_model=List[schemas.TradingSignal])
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     return crud.get_active_and_pending_signals(db)
+
+# ==================================================================
+# === NOWY ENDPOINT: SZCZEGÓŁY SYGNAŁU + WALIDACJA LIVE ===
+# ==================================================================
+@app.get("/api/v1/signal/{ticker}/details")
+def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
+    """
+    Pobiera pełne informacje o sygnale, firmie i RYNKU (Live).
+    Wykonuje walidację 'Just-in-Time' setupu.
+    """
+    ticker = ticker.upper().strip()
+    
+    # 1. Pobierz sygnał z bazy
+    signal = db.query(models.TradingSignal).filter(
+        models.TradingSignal.ticker == ticker,
+        models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
+    ).first()
+
+    if not signal:
+        raise HTTPException(status_code=404, detail="Sygnał nieaktywny lub nie istnieje.")
+
+    # 2. Pobierz dane firmy (Sektor, Branża)
+    company = db.query(models.Company).filter(models.Company.ticker == ticker).first()
+    
+    # 3. Pobierz LIVE Quote z Alpha Vantage
+    live_quote = api_av_client.get_global_quote(ticker)
+    
+    # 4. Pobierz Status Rynku (Opcjonalnie, dla precyzji)
+    market_status_raw = api_av_client.get_market_status()
+    
+    # Przetwarzanie danych Live
+    current_price = 0.0
+    prev_close = 0.0
+    change_percent = "0%"
+    market_state = "UNKNOWN"
+    ny_time = "UNKNOWN"
+    
+    if live_quote:
+        try:
+            current_price = float(live_quote.get("05. price", 0))
+            prev_close = float(live_quote.get("08. previous close", 0))
+            change_percent = live_quote.get("10. change percent", "0%")
+        except: pass
+        
+    if market_status_raw:
+        # Logika parsowania statusu rynku (uproszczona)
+        # AV zwraca listę rynków, szukamy "United States"
+        for m in market_status_raw.get("markets", []):
+             if m.get("region") == "United States":
+                 market_state = m.get("current_status", "Closed")
+                 break
+
+    # --- WALIDACJA LIVE (STRAŻNIK) ---
+    validation_msg = "Setup Aktywny"
+    is_valid = True
+    
+    if current_price > 0 and signal.stop_loss and signal.take_profit:
+        sl = float(signal.stop_loss)
+        tp = float(signal.take_profit)
+        entry = float(signal.entry_price) if signal.entry_price else 0.0
+        
+        # Zasada 1: Czy przebiliśmy SL?
+        if current_price <= sl:
+            is_valid = False
+            validation_msg = f"SPALONY (Live): Cena {current_price} przebiła SL {sl}."
+            
+        # Zasada 2: Czy osiągnęliśmy TP?
+        elif current_price >= tp:
+            is_valid = False
+            validation_msg = f"ZREALIZOWANY (Live): Cena {current_price} osiągnęła TP {tp}."
+            
+        # Zasada 3: Czy Risk/Reward nadal ma sens? (Jeśli cena uciekła za daleko od wejścia)
+        elif entry > 0:
+             # Ile zysku zostało do zgarnięcia
+             potential_profit = tp - current_price
+             # Ile ryzykujemy (od obecnej ceny do SL)
+             potential_risk = current_price - sl
+             
+             if potential_risk > 0:
+                 live_rr = potential_profit / potential_risk
+                 if live_rr < 1.2: # Jeśli RR spadł poniżej 1.2, to już nie warto wchodzić
+                     is_valid = False
+                     validation_msg = f"NIEOPŁACALNY: Cena uciekła. RR spadł do {live_rr:.2f}."
+
+    # Jeśli setup okazał się nieważny podczas tego sprawdzenia -> Aktualizuj Bazę!
+    if not is_valid:
+        signal.status = 'INVALIDATED'
+        signal.notes = (signal.notes or "") + f" [AUTO-REMOVED by API Live Check: {validation_msg}]"
+        signal.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        # Informujemy frontend, że sygnał właśnie padł
+        return {
+            "status": "INVALIDATED",
+            "reason": validation_msg,
+            "ticker": ticker
+        }
+
+    # Przygotowanie pełnej odpowiedzi JSON
+    response_data = {
+        "status": "VALID",
+        "ticker": ticker,
+        "company": {
+            "name": company.company_name if company else "N/A",
+            "sector": company.sector if company else "N/A",
+            "industry": company.industry if company else "N/A"
+        },
+        "market_data": {
+            "current_price": current_price,
+            "prev_close": prev_close,
+            "change_percent": change_percent,
+            "market_status": market_state,
+            # Czas serwera (UTC) przekonwertowany na NY (dla uproszczenia tutaj string)
+            "server_check_time": datetime.now(timezone.utc).isoformat()
+        },
+        "setup": {
+            "entry_price": float(signal.entry_price) if signal.entry_price else None,
+            "stop_loss": float(signal.stop_loss) if signal.stop_loss else None,
+            "take_profit": float(signal.take_profit) if signal.take_profit else None,
+            "risk_reward": float(signal.risk_reward_ratio) if signal.risk_reward_ratio else None,
+            "notes": signal.notes,
+            "generation_date": signal.generation_date.isoformat()
+        },
+        "validity": {
+            "is_valid": is_valid,
+            "message": validation_msg
+        }
+    }
+    
+    return response_data
+
+# ==================================================================
+
 
 @app.get("/api/v1/signals/discarded-count-24h", response_model=Dict[str, int])
 def get_discarded_signals_count(db: Session = Depends(get_db)):
