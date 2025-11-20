@@ -3,6 +3,9 @@ import { state, logger, PORTFOLIO_QUOTE_POLL_INTERVAL, ALERT_POLL_INTERVAL, REPO
 import { renderers } from './ui.js';
 
 let UI = null;
+// Zmienna do przechowywania interwału odświeżania szczegółów sygnału (Live Data)
+let signalDetailsInterval = null;
+let signalDetailsClockInterval = null;
 
 export const setUI = (uiInstance) => {
     UI = uiInstance;
@@ -19,20 +22,57 @@ const showLoading = () => {
     if (UI && UI.mainContent) UI.mainContent.innerHTML = renderers.loading("Ładowanie danych...");
 };
 
+// Funkcja formatująca czas NY i odliczanie
+const updateMarketTimeDisplay = () => {
+    if (!UI || !UI.signalDetails.nyTime) return;
+
+    const now = new Date();
+    // Czas w Nowym Jorku (America/New_York)
+    const nyTimeOptions = { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+    const nyTimeStr = now.toLocaleTimeString('en-US', nyTimeOptions);
+    UI.signalDetails.nyTime.textContent = nyTimeStr;
+
+    // Odliczanie do otwarcia (9:30 NY time)
+    // Upraszczamy: Zakładamy, że otwarcie to 15:30 czasu lokalnego (CET/CEST) w dni robocze
+    // Dla precyzji "produkcyjnej" należałoby używać biblioteki moment-timezone, ale tu zrobimy aproksymację
+    const openHour = 15;
+    const openMinute = 30;
+    
+    const target = new Date(now);
+    target.setHours(openHour, openMinute, 0, 0);
+    
+    if (now > target) {
+        // Jeśli już po 15:30, sprawdzamy czy przed zamknięciem (22:00)
+        const closeTime = new Date(now);
+        closeTime.setHours(22, 0, 0, 0);
+        if (now < closeTime) {
+            UI.signalDetails.countdown.textContent = "RYNEK OTWARTY";
+            UI.signalDetails.countdown.className = "text-green-400 font-mono font-bold";
+        } else {
+             UI.signalDetails.countdown.textContent = "RYNEK ZAMKNIĘTY";
+             UI.signalDetails.countdown.className = "text-gray-500 font-mono";
+        }
+    } else {
+        const diff = target - now;
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+        UI.signalDetails.countdown.textContent = `Otwarcie za: ${hours}h ${minutes}m ${seconds}s`;
+        UI.signalDetails.countdown.className = "text-sky-400 font-mono font-bold";
+    }
+};
+
+
 // === Główne Widoki ===
 
 export const showDashboard = async () => {
     if (!UI) return;
     UI.mainContent.innerHTML = renderers.dashboard();
-    
-    // Odśwież liczniki na dashboardzie
     try {
         const countData = await api.getDiscardedCount();
-        // Tutaj można dodać logikę wyświetlania odrzuconych sygnałów, jeśli UI to przewiduje
     } catch (e) {
         logger.error("Błąd dashboardu:", e);
     }
-    
     refreshSidebarData();
 };
 
@@ -41,14 +81,10 @@ export const showPortfolio = async () => {
     try {
         const holdings = await api.getPortfolio();
         state.portfolio = holdings;
-        
-        // Pobierz aktualne ceny dla wszystkich tickerów w portfelu
         const tickers = holdings.map(h => h.ticker);
         const quotes = {};
         
         if (tickers.length > 0) {
-            // Tutaj w przyszłości można zoptymalizować na jedno zapytanie bulk,
-            // na razie pobieramy pojedynczo lub korzystamy z cache w state
             for (const t of tickers) {
                 try {
                     const q = await api.getLiveQuote(t);
@@ -56,7 +92,6 @@ export const showPortfolio = async () => {
                 } catch(e) {}
             }
         }
-        
         UI.mainContent.innerHTML = renderers.portfolio(holdings, quotes);
     } catch (error) {
         UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania portfela: ${error.message}</p>`;
@@ -88,17 +123,15 @@ export const loadAgentReportPage = async (page) => {
     }
 };
 
-// === Obsługa Sidebar (Fazy) ===
+// === Obsługa Sidebar ===
 
 export const refreshSidebarData = async () => {
     try {
-        // Faza 1
         const phase1Data = await api.getPhase1Candidates();
         state.phase1 = phase1Data || [];
         updateElement(UI.phase1.count, state.phase1.length);
         updateElement(UI.phase1.list, renderers.phase1List(state.phase1), true);
 
-        // Faza 3 (Sygnały)
         const phase3Data = await api.getPhase3Signals();
         state.phase3 = phase3Data || [];
         updateElement(UI.phase3.count, state.phase3.length);
@@ -117,7 +150,6 @@ export const pollWorkerStatus = () => {
             const status = await api.getWorkerStatus();
             state.workerStatus = status;
             
-            // Aktualizacja tekstu statusu
             if (UI.workerStatusText) {
                 UI.workerStatusText.textContent = status.status;
                 UI.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${
@@ -125,13 +157,11 @@ export const pollWorkerStatus = () => {
                 }`;
             }
 
-            // Aktualizacja Heartbeat
             if (UI.heartbeatStatus) {
                 const hb = new Date(status.last_heartbeat_utc);
                 UI.heartbeatStatus.textContent = hb.toLocaleTimeString();
             }
             
-            // Aktualizacja Progress Baru na Dashboardzie
             const progressBar = document.getElementById('progress-bar');
             const progressText = document.getElementById('progress-text');
             const scanLog = document.getElementById('scan-log');
@@ -143,10 +173,8 @@ export const pollWorkerStatus = () => {
                 progressText.textContent = `${status.progress.processed} / ${status.progress.total}`;
             }
             
-            if (scanLog) {
-                // Proste unikanie nadpisywania jeśli log jest ten sam, aby nie skakało
-                if (scanLog.textContent !== status.log) scanLog.textContent = status.log;
-                // Auto-scroll na dół
+            if (scanLog && scanLog.textContent !== status.log) {
+                scanLog.textContent = status.log;
                 const container = document.getElementById('scan-log-container');
                 if (container) container.scrollTop = container.scrollHeight;
             }
@@ -155,22 +183,17 @@ export const pollWorkerStatus = () => {
                 currentPhaseTxt.textContent = `Faza: ${status.phase}`;
             }
             
-            // Aktywne sygnały na dashboardzie
             const dashboardSignals = document.getElementById('dashboard-active-signals');
-            if (dashboardSignals) {
-                dashboardSignals.textContent = state.phase3.length;
-            }
+            if (dashboardSignals) dashboardSignals.textContent = state.phase3.length;
 
-        } catch (e) {
-            // logger.error("Błąd pollera:", e);
-        }
+        } catch (e) {}
     };
     
-    check(); // Pierwsze wywołanie natychmiast
-    setInterval(check, 2000); // Co 2 sekundy
+    check();
+    setInterval(check, 2000);
 };
 
-// === Obsługa Alertów Systemowych ===
+// === Obsługa Alertów ===
 export const pollSystemAlerts = () => {
     setInterval(async () => {
         try {
@@ -194,9 +217,21 @@ const showSystemAlert = (msg) => {
 
 // === Obsługa Modali Transakcyjnych ===
 
-// -- KUPNO --
-export const showBuyModal = (ticker) => { /* Logika wywoływana z poziomu UI (jeśli dodamy przyciski kupna na liście) */ };
-// (Obecnie brak przycisków kupna na liście, ale struktura jest gotowa)
+// -- KUPNO (Zaktualizowane) --
+export const showBuyModal = (ticker) => {
+    UI.buyModal.tickerSpan.textContent = ticker;
+    UI.buyModal.quantityInput.value = "";
+    UI.buyModal.priceInput.value = "";
+    
+    // Próba pobrania ceny live dla wygody użytkownika
+    api.getLiveQuote(ticker).then(q => {
+        if (q && q['05. price']) {
+            UI.buyModal.priceInput.value = parseFloat(q['05. price']).toFixed(2);
+        }
+    });
+
+    UI.buyModal.backdrop.classList.remove('hidden');
+};
 
 export const hideBuyModal = () => {
     UI.buyModal.backdrop.classList.add('hidden');
@@ -214,11 +249,10 @@ export const handleBuyConfirm = async () => {
     try {
         UI.buyModal.confirmBtn.disabled = true;
         UI.buyModal.confirmBtn.textContent = "Przetwarzanie...";
-        
         await api.buyStock({ ticker, quantity: qty, price_per_share: price });
         
         hideBuyModal();
-        showPortfolio(); // Odśwież widok
+        showPortfolio();
         showSystemAlert(`Kupiono ${qty} akcji ${ticker}.`);
     } catch (e) {
         alert(e.message);
@@ -232,11 +266,10 @@ export const handleBuyConfirm = async () => {
 export const showSellModal = (ticker, maxQty) => {
     UI.sellModal.tickerSpan.textContent = ticker;
     UI.sellModal.maxQuantitySpan.textContent = maxQty;
-    UI.sellModal.quantityInput.value = maxQty; // Domyślnie max
+    UI.sellModal.quantityInput.value = maxQty; 
     UI.sellModal.quantityInput.max = maxQty;
     UI.sellModal.priceInput.value = "";
     
-    // Pobierz aktualną cenę dla wygody
     api.getLiveQuote(ticker).then(q => {
         if (q && q['05. price']) UI.sellModal.priceInput.value = parseFloat(q['05. price']).toFixed(2);
     });
@@ -270,14 +303,12 @@ export const handleSellConfirm = async () => {
     }
 };
 
-// === Obsługa Backtestu i AI ===
-
+// === Obsługa Backtestu, AI, H3 Live ===
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
     if (!input || !input.value) return;
     
-    // Pobieranie parametrów H3 z UI
     const params = {
         h3_percentile: document.getElementById('h3-param-percentile')?.value || 0.95,
         h3_m_sq_threshold: document.getElementById('h3-param-mass')?.value || -0.5,
@@ -316,7 +347,6 @@ export const showH3DeepDiveModal = () => {
     UI.h3DeepDiveModal.backdrop.classList.remove('hidden');
     UI.h3DeepDiveModal.statusMsg.textContent = "";
     UI.h3DeepDiveModal.content.innerHTML = '<p class="text-gray-500">Oczekiwanie na dane...</p>';
-    // Spróbuj pobrać ostatni raport
     api.getH3DeepDiveReport().then(r => {
         if (r.report_text) UI.h3DeepDiveModal.content.innerHTML = `<pre class="whitespace-pre-wrap text-xs font-mono text-green-300">${r.report_text}</pre>`;
     });
@@ -337,7 +367,6 @@ export const handleRunH3DeepDive = async () => {
         await api.requestH3DeepDive(parseInt(year));
         UI.h3DeepDiveModal.statusMsg.textContent = "Przetwarzanie... Proszę czekać.";
         
-        // Polluj o wynik
         state.activeH3DeepDivePolling = setInterval(async () => {
             const rep = await api.getH3DeepDiveReport();
             if (rep.status === 'DONE') {
@@ -377,7 +406,6 @@ export const handleViewAIOptimizerReport = async () => {
     try {
         const report = await api.getAIOptimizerReport();
         if (report.status === 'DONE') {
-            // Renderowanie Markdown jako prosty tekst (można dodać parser MD później)
             UI.aiReportModal.content.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-xs text-green-300">${report.report_text}</pre>`;
         } else if (report.status === 'PROCESSING') {
             UI.aiReportModal.content.innerHTML = "<p class='text-yellow-400'>Raport jest w trakcie generowania...</p>";
@@ -393,17 +421,11 @@ export const hideAIReportModal = () => {
     UI.aiReportModal.backdrop.classList.add('hidden');
 };
 
-// === H3 Live Params Modal ===
-export const showH3LiveParamsModal = () => {
-    UI.h3LiveModal.backdrop.classList.remove('hidden');
-};
-
-export const hideH3LiveParamsModal = () => {
-    UI.h3LiveModal.backdrop.classList.add('hidden');
-};
+// === H3 Live Params ===
+export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.remove('hidden'); };
+export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
 export const handleRunH3LiveScan = async () => {
-    // Pobierz parametry
     const params = {
         h3_percentile: UI.h3LiveModal.percentile.value,
         h3_m_sq_threshold: UI.h3LiveModal.mass.value,
@@ -411,7 +433,6 @@ export const handleRunH3LiveScan = async () => {
         h3_tp_multiplier: UI.h3LiveModal.tp.value,
         h3_sl_multiplier: UI.h3LiveModal.sl.value
     };
-    
     try {
         UI.h3LiveModal.startBtn.disabled = true;
         await api.sendWorkerControl('start_phase3', params);
@@ -424,114 +445,144 @@ export const handleRunH3LiveScan = async () => {
     }
 };
 
-// === Signal Details Modal ===
+// === ZMODYFIKOWANA Funkcja: Signal Details (Detale Sygnału) ===
 
 export const showSignalDetails = async (ticker) => {
     UI.signalDetails.backdrop.classList.remove('hidden');
+    
     // Reset widoku
     UI.signalDetails.ticker.textContent = ticker;
     UI.signalDetails.companyName.textContent = "Ładowanie...";
     UI.signalDetails.currentPrice.textContent = "---";
     UI.signalDetails.validityBadge.textContent = "Checking...";
-    UI.signalDetails.validityBadge.className = "text-xs px-2 py-1 rounded bg-gray-700 text-gray-400";
+    UI.signalDetails.validityBadge.className = "text-sm px-2 py-1 rounded bg-gray-700 text-gray-400 font-mono";
     UI.signalDetails.validityMessage.classList.add('hidden');
     
-    // Ukryj sekcję newsów na starcie
+    UI.signalDetails.sector.textContent = "---";
+    UI.signalDetails.industry.textContent = "---";
+    UI.signalDetails.description.textContent = "Ładowanie opisu...";
+    
     const newsContainer = document.getElementById('sd-news-container');
     if (newsContainer) newsContainer.classList.add('hidden');
 
-    try {
-        const data = await api.getSignalDetails(ticker);
-        
-        if (data.status === 'INVALIDATED' && !data.company) {
-             // Sygnał usunięty/nieważny
-             UI.signalDetails.validityBadge.textContent = "INVALID";
-             UI.signalDetails.validityBadge.className = "text-xs px-2 py-1 rounded bg-red-900 text-red-200";
-             UI.signalDetails.validityMessage.textContent = data.reason;
-             UI.signalDetails.validityMessage.classList.remove('hidden');
-             return;
-        }
-        
-        // Wypełnij dane firmy
-        if (data.company) {
-            UI.signalDetails.companyName.textContent = data.company.name;
-            UI.signalDetails.sector.textContent = data.company.sector;
-            UI.signalDetails.industry.textContent = data.company.industry;
-        }
-        
-        // Wypełnij dane rynkowe
-        if (data.market_data) {
-            const price = parseFloat(data.market_data.current_price);
-            UI.signalDetails.currentPrice.textContent = price > 0 ? price.toFixed(2) : "---";
-            UI.signalDetails.changePercent.textContent = data.market_data.change_percent;
-            
-            // Kolor zmiany
-            const changeVal = parseFloat(data.market_data.change_percent.replace('%', ''));
-            UI.signalDetails.changePercent.className = `font-mono text-sm font-bold ${changeVal >= 0 ? 'text-green-400' : 'text-red-400'}`;
-            
-            UI.signalDetails.marketStatus.textContent = data.market_data.market_status;
-        }
-        
-        // Wypełnij setup
-        if (data.setup) {
-            UI.signalDetails.entry.textContent = data.setup.entry_price ? data.setup.entry_price.toFixed(2) : "---";
-            UI.signalDetails.tp.textContent = data.setup.take_profit ? data.setup.take_profit.toFixed(2) : "---";
-            UI.signalDetails.sl.textContent = data.setup.stop_loss ? data.setup.stop_loss.toFixed(2) : "---";
-            UI.signalDetails.rr.textContent = data.setup.risk_reward ? data.setup.risk_reward.toFixed(2) : "---";
-            UI.signalDetails.generationDate.textContent = new Date(data.setup.generation_date).toLocaleString('pl-PL');
-        }
-
-        // Wypełnij status walidacji
-        if (data.validity) {
-             const isValid = data.validity.is_valid;
-             UI.signalDetails.validityBadge.textContent = isValid ? "VALID" : "INVALID";
-             UI.signalDetails.validityBadge.className = `text-xs px-2 py-1 rounded ${isValid ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`;
-             
-             if (!isValid) {
-                 UI.signalDetails.validityMessage.textContent = data.validity.message;
-                 UI.signalDetails.validityMessage.classList.remove('hidden');
-             }
-        }
-
-        // === NOWOŚĆ: Obsługa News Sentiment Context ===
-        if (data.news_context && newsContainer) {
-            newsContainer.classList.remove('hidden');
-            
-            const sentimentEl = document.getElementById('sd-news-sentiment');
-            const headlineEl = document.getElementById('sd-news-headline');
-            const timeEl = document.getElementById('sd-news-time');
-            const linkEl = document.getElementById('sd-news-link');
-
-            if (sentimentEl) {
-                sentimentEl.textContent = data.news_context.sentiment;
-                // Kolorowanie badge'a sentymentu
-                let bgClass = 'bg-gray-700 text-gray-300';
-                if (data.news_context.sentiment === 'CRITICAL_POSITIVE') bgClass = 'bg-green-600 text-white';
-                if (data.news_context.sentiment === 'CRITICAL_NEGATIVE') bgClass = 'bg-red-600 text-white';
-                sentimentEl.className = `text-xs px-2 py-0.5 rounded font-bold ${bgClass}`;
-            }
-            
-            if (headlineEl) headlineEl.textContent = data.news_context.headline;
-            
-            if (timeEl) {
-                const newsDate = new Date(data.news_context.processed_at);
-                timeEl.textContent = newsDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            }
-            
-            if (linkEl && data.news_context.url) {
-                linkEl.href = data.news_context.url;
-                linkEl.classList.remove('hidden');
-            } else if (linkEl) {
-                linkEl.classList.add('hidden');
-            }
-        }
-        
-    } catch (e) {
-        UI.signalDetails.companyName.textContent = "Błąd pobierania danych";
-        console.error(e);
+    // PODPIĘCIE PRZYCISKU KUP
+    if (UI.signalDetails.buyBtn) {
+        UI.signalDetails.buyBtn.onclick = () => {
+            // Możemy zamknąć detale i otworzyć kupno, lub otworzyć kupno na wierzchu
+            // Decyzja: Zamykamy detale dla przejrzystości
+            hideSignalDetails();
+            showBuyModal(ticker);
+        };
     }
+
+    // Rozpoczęcie zegara
+    updateMarketTimeDisplay();
+    if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
+    signalDetailsClockInterval = setInterval(updateMarketTimeDisplay, 1000);
+
+    // Funkcja pobierająca i aktualizująca dane (możemy ją wywoływać cyklicznie)
+    const fetchData = async () => {
+        try {
+            const data = await api.getSignalDetails(ticker);
+            
+            if (data.status === 'INVALIDATED' && !data.company) {
+                 UI.signalDetails.validityBadge.textContent = "INVALID";
+                 UI.signalDetails.validityBadge.className = "text-sm px-2 py-1 rounded bg-red-900 text-red-200 font-mono";
+                 UI.signalDetails.validityMessage.textContent = data.reason;
+                 UI.signalDetails.validityMessage.classList.remove('hidden');
+                 return; // Jeśli sygnał nie istnieje, przerywamy
+            }
+            
+            // Dane firmy
+            if (data.company) {
+                UI.signalDetails.companyName.textContent = data.company.name;
+                UI.signalDetails.sector.textContent = data.company.sector || "N/A";
+                UI.signalDetails.industry.textContent = data.company.industry || "N/A";
+                // Opis - zakładamy, że API może go w przyszłości zwracać, na razie placeholder lub z API jeśli jest
+                UI.signalDetails.description.textContent = data.company.description || "Brak opisu spółki w bazie danych.";
+            }
+            
+            // Dane rynkowe
+            if (data.market_data) {
+                const price = parseFloat(data.market_data.current_price);
+                UI.signalDetails.currentPrice.textContent = price > 0 ? price.toFixed(2) : "---";
+                UI.signalDetails.changePercent.textContent = data.market_data.change_percent;
+                
+                const changeVal = parseFloat(data.market_data.change_percent.replace('%', ''));
+                UI.signalDetails.changePercent.className = `font-mono text-lg font-bold ${changeVal >= 0 ? 'text-green-400' : 'text-red-400'}`;
+                
+                UI.signalDetails.marketStatus.textContent = data.market_data.market_status;
+            }
+            
+            // Setup
+            if (data.setup) {
+                UI.signalDetails.entry.textContent = data.setup.entry_price ? data.setup.entry_price.toFixed(2) : "---";
+                UI.signalDetails.tp.textContent = data.setup.take_profit ? data.setup.take_profit.toFixed(2) : "---";
+                UI.signalDetails.sl.textContent = data.setup.stop_loss ? data.setup.stop_loss.toFixed(2) : "---";
+                UI.signalDetails.rr.textContent = data.setup.risk_reward ? data.setup.risk_reward.toFixed(2) : "---";
+                UI.signalDetails.generationDate.textContent = new Date(data.setup.generation_date).toLocaleString('pl-PL');
+            }
+
+            // Walidacja
+            if (data.validity) {
+                 const isValid = data.validity.is_valid;
+                 UI.signalDetails.validityBadge.textContent = isValid ? "VALID" : "INVALID";
+                 UI.signalDetails.validityBadge.className = `text-sm px-2 py-1 rounded font-mono ${isValid ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`;
+                 
+                 if (!isValid) {
+                     UI.signalDetails.validityMessage.textContent = data.validity.message;
+                     UI.signalDetails.validityMessage.classList.remove('hidden');
+                 } else {
+                     UI.signalDetails.validityMessage.classList.add('hidden');
+                 }
+            }
+
+            // Newsy
+            if (data.news_context && newsContainer) {
+                newsContainer.classList.remove('hidden');
+                
+                const sentimentEl = document.getElementById('sd-news-sentiment');
+                const headlineEl = document.getElementById('sd-news-headline');
+                const timeEl = document.getElementById('sd-news-time');
+                const linkEl = document.getElementById('sd-news-link');
+
+                if (sentimentEl) {
+                    sentimentEl.textContent = data.news_context.sentiment;
+                    let bgClass = 'bg-gray-700 text-gray-300';
+                    if (data.news_context.sentiment === 'CRITICAL_POSITIVE') bgClass = 'bg-green-600 text-white';
+                    if (data.news_context.sentiment === 'CRITICAL_NEGATIVE') bgClass = 'bg-red-600 text-white';
+                    sentimentEl.className = `text-xs px-2 py-0.5 rounded font-bold ${bgClass}`;
+                }
+                if (headlineEl) headlineEl.textContent = data.news_context.headline;
+                if (timeEl) {
+                    const newsDate = new Date(data.news_context.processed_at);
+                    timeEl.textContent = newsDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                }
+                if (linkEl && data.news_context.url) {
+                    linkEl.href = data.news_context.url;
+                    linkEl.classList.remove('hidden');
+                }
+            }
+            
+        } catch (e) {
+            console.error("Błąd pobierania danych sygnału:", e);
+            UI.signalDetails.companyName.textContent = "Błąd połączenia...";
+        }
+    };
+
+    // Pierwsze pobranie
+    fetchData();
+
+    // Uruchomienie cyklicznego odświeżania (Live Data - co 3 sekundy)
+    if (signalDetailsInterval) clearInterval(signalDetailsInterval);
+    signalDetailsInterval = setInterval(fetchData, 3000);
 };
 
 export const hideSignalDetails = () => {
     UI.signalDetails.backdrop.classList.add('hidden');
+    // Zatrzymaj polling i zegar po zamknięciu
+    if (signalDetailsInterval) clearInterval(signalDetailsInterval);
+    if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
+    signalDetailsInterval = null;
+    signalDetailsClockInterval = null;
 };
