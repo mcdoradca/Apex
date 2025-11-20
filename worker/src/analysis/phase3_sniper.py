@@ -77,7 +77,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     Główna pętla Fazy 3 (Live Sniper).
     Analizuje listę kandydatów pod kątem setupów H3, używając danych w czasie rzeczywistym.
     """
-    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Zlogiką Ważności)...")
+    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Z logiką Ważności)...")
     append_scan_log(session, "Faza 3 (H3): Rozpoczynanie analizy kwantowej...")
     
     # Konfiguracja parametrów
@@ -227,6 +227,8 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
 
                 if not validation_status:
                     logger.info(f"H3 Setup dla {ticker} odrzucony przez Strażnika: {validation_reason}")
+                    # Dodajemy do logów, aby użytkownik wiedział, dlaczego odrzucono
+                    append_scan_log(session, f"Odrzucono {ticker}: {validation_reason} (AQM: {current_aqm:.2f})")
                     continue # Pomiń ten ticker, nie zapisuj sygnału
                 
                 # 10. Zapis do Bazy (Jeśli setup jest ważny)
