@@ -24,7 +24,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.5.0")
+app = FastAPI(title="APEX Predator API", version="2.6.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,7 +62,7 @@ async def startup_event():
             'h3_deep_dive_request': 'NONE',
             'h3_deep_dive_report': 'NONE',
             'h3_live_parameters': '{}',
-            'macro_sentiment': 'UNKNOWN' # Dodano dla Fazy 0
+            'macro_sentiment': 'UNKNOWN'
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -116,12 +116,12 @@ def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     return crud.get_active_and_pending_signals(db)
 
 # ==================================================================
-# === NOWY ENDPOINT: SZCZEGÓŁY SYGNAŁU + WALIDACJA LIVE ===
+# === NOWY ENDPOINT: SZCZEGÓŁY SYGNAŁU + WALIDACJA LIVE + NEWSY ===
 # ==================================================================
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     """
-    Pobiera pełne informacje o sygnale, firmie i RYNKU (Live).
+    Pobiera pełne informacje o sygnale, firmie, RYNKU (Live) oraz NEWS SENTIMENT.
     Wykonuje walidację 'Just-in-Time' setupu.
     """
     ticker = ticker.upper().strip()
@@ -135,21 +135,34 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     if not signal:
         raise HTTPException(status_code=404, detail="Sygnał nieaktywny lub nie istnieje.")
 
-    # 2. Pobierz dane firmy (Sektor, Branża)
+    # 2. Pobierz dane firmy
     company = db.query(models.Company).filter(models.Company.ticker == ticker).first()
     
     # 3. Pobierz LIVE Quote z Alpha Vantage
     live_quote = api_av_client.get_global_quote(ticker)
     
-    # 4. Pobierz Status Rynku (Opcjonalnie, dla precyzji)
+    # 4. Pobierz Status Rynku
     market_status_raw = api_av_client.get_market_status()
     
+    # 5. NOWOŚĆ: Pobierz najnowszy News Sentiment z bazy (Kontekst Fundamentalny)
+    latest_news = db.query(models.ProcessedNews).filter(
+        models.ProcessedNews.ticker == ticker
+    ).order_by(models.ProcessedNews.processed_at.desc()).first()
+    
+    news_context = None
+    if latest_news:
+        news_context = {
+            "sentiment": latest_news.sentiment,
+            "headline": latest_news.headline,
+            "url": latest_news.source_url,
+            "processed_at": latest_news.processed_at.isoformat()
+        }
+
     # Przetwarzanie danych Live
     current_price = 0.0
     prev_close = 0.0
     change_percent = "0%"
     market_state = "UNKNOWN"
-    ny_time = "UNKNOWN"
     
     if live_quote:
         try:
@@ -159,8 +172,6 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
         except: pass
         
     if market_status_raw:
-        # Logika parsowania statusu rynku (uproszczona)
-        # AV zwraca listę rynków, szukamy "United States"
         for m in market_status_raw.get("markets", []):
              if m.get("region") == "United States":
                  market_state = m.get("current_status", "Closed")
@@ -175,43 +186,32 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
         tp = float(signal.take_profit)
         entry = float(signal.entry_price) if signal.entry_price else 0.0
         
-        # Zasada 1: Czy przebiliśmy SL?
         if current_price <= sl:
             is_valid = False
             validation_msg = f"SPALONY (Live): Cena {current_price} przebiła SL {sl}."
-            
-        # Zasada 2: Czy osiągnęliśmy TP?
         elif current_price >= tp:
             is_valid = False
             validation_msg = f"ZREALIZOWANY (Live): Cena {current_price} osiągnęła TP {tp}."
-            
-        # Zasada 3: Czy Risk/Reward nadal ma sens? (Jeśli cena uciekła za daleko od wejścia)
         elif entry > 0:
-             # Ile zysku zostało do zgarnięcia
              potential_profit = tp - current_price
-             # Ile ryzykujemy (od obecnej ceny do SL)
              potential_risk = current_price - sl
-             
              if potential_risk > 0:
                  live_rr = potential_profit / potential_risk
-                 if live_rr < 1.2: # Jeśli RR spadł poniżej 1.2, to już nie warto wchodzić
+                 if live_rr < 1.2:
                      is_valid = False
                      validation_msg = f"NIEOPŁACALNY: Cena uciekła. RR spadł do {live_rr:.2f}."
 
-    # Jeśli setup okazał się nieważny podczas tego sprawdzenia -> Aktualizuj Bazę!
     if not is_valid:
         signal.status = 'INVALIDATED'
         signal.notes = (signal.notes or "") + f" [AUTO-REMOVED by API Live Check: {validation_msg}]"
         signal.updated_at = datetime.now(timezone.utc)
         db.commit()
-        # Informujemy frontend, że sygnał właśnie padł
         return {
             "status": "INVALIDATED",
             "reason": validation_msg,
             "ticker": ticker
         }
 
-    # Przygotowanie pełnej odpowiedzi JSON
     response_data = {
         "status": "VALID",
         "ticker": ticker,
@@ -225,7 +225,6 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "prev_close": prev_close,
             "change_percent": change_percent,
             "market_status": market_state,
-            # Czas serwera (UTC) przekonwertowany na NY (dla uproszczenia tutaj string)
             "server_check_time": datetime.now(timezone.utc).isoformat()
         },
         "setup": {
@@ -236,6 +235,7 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "notes": signal.notes,
             "generation_date": signal.generation_date.isoformat()
         },
+        "news_context": news_context, # Nowe pole w odpowiedzi
         "validity": {
             "is_valid": is_valid,
             "message": validation_msg
