@@ -135,10 +135,12 @@ class AlphaVantageClient:
     def get_global_quote(self, symbol: str):
         """
         Pobiera najnowsze dane cenowe.
-        ZMIANA (v3): Używa endpointu REALTIME_BULK_QUOTES (Premium) zamiast GLOBAL_QUOTE.
-        Pozwala to na pobranie danych 'Extended Hours' (Pre-Market/After-Market).
+        ZMIANA (v3): Używa REALTIME_BULK_QUOTES (Premium) z logiką fallback.
+        1. Extended Hours (Pre/Post)
+        2. Regular Close (Latest Trade)
+        3. Previous Close (Fallback gdy brak handlu)
         """
-        # 1. Pobieramy dane z Bulk Quotes (CSV), który obsługuje realtime i extended hours
+        # 1. Pobieramy dane z Bulk Quotes (CSV)
         bulk_csv = self.get_bulk_quotes([symbol])
         if not bulk_csv:
             logger.error(f"Nie udało się pobrać danych REALTIME dla {symbol}.")
@@ -149,31 +151,57 @@ class AlphaVantageClient:
         if not quote_data:
             return None
 
-        # 3. Mapujemy na format GLOBAL_QUOTE (aby zachować kompatybilność z resztą systemu)
         try:
-            # Standardowa cena (CLOSE lub LATEST TRADE podczas sesji regularnej)
+            # Helper do bezpiecznego pobierania float
+            def get_float(key):
+                return self._safe_float(quote_data.get(key))
+
+            # Pobieramy kandydatów na cenę
+            current_price = get_float("close")           # Latest Trade Price
+            prev_close = get_float("previous_close")     # Yesterday's Close
+            ext_price = get_float("extended_hours_quote") # Extended Hours Price
+
+            final_price = None
+            price_source = "unknown"
+
+            # === LOGIKA WYBORU CENY ===
+            
+            # 1. Extended Hours - najwyższy priorytet (dane na żywo Pre/Post)
+            if ext_price and ext_price > 0:
+                final_price = ext_price
+                price_source = "extended_hours"
+                logger.info(f"Użyto ceny Extended Hours dla {symbol}: {final_price}")
+
+            # 2. Regular Close / Latest Trade - jeśli brak ext, bierzemy ostatni trade
+            elif current_price and current_price > 0:
+                final_price = current_price
+                price_source = "close"
+            
+            # 3. Fallback: Previous Close - jeśli dzisiaj nie było handlu (np. wczesny pre-market bez wolumenu)
+            elif prev_close and prev_close > 0:
+                final_price = prev_close
+                price_source = "previous_close"
+                logger.info(f"Użyto ceny Fallback (Previous Close) dla {symbol}: {final_price}")
+
+            # Budujemy odpowiedź w formacie GLOBAL_QUOTE
             formatted_quote = {
                 "01. symbol": quote_data.get("symbol"),
                 "02. open": quote_data.get("open"),
                 "03. high": quote_data.get("high"),
                 "04. low": quote_data.get("low"),
-                "05. price": quote_data.get("close"), # W Bulk 'close' to cena bieżąca
+                "05. price": str(final_price) if final_price else None,
                 "06. volume": quote_data.get("volume"),
-                "07. latest trading day": None,
+                "07. latest trading day": quote_data.get("last_trade_time"), # Może być puste w CSV
                 "08. previous close": quote_data.get("previous_close"),
                 "09. change": quote_data.get("change"),
-                "10. change percent": f'{quote_data.get("change_percent")}%'
+                "10. change percent": f'{quote_data.get("change_percent")}%',
+                
+                # Dodatkowe metadane dla UI (do wykorzystania w main.py/frontendzie)
+                "_price_source": price_source 
             }
             
-            # 4. Obsługa EXTENDED HOURS (Pre/Post Market)
-            # Zgodnie z zaleceniem Supportu: Jeśli mamy dane extended, używamy ich jako "Ceny Aktualnej"
-            ext_price_str = quote_data.get("extended_hours_quote")
-            ext_price = self._safe_float(ext_price_str)
-            
-            if ext_price and ext_price > 0:
-                logger.info(f"Wykryto cenę Extended Hours dla {symbol}: {ext_price}. Nadpisywanie...")
-                formatted_quote["05. price"] = ext_price_str
-                # Aktualizujemy też zmianę procentową, jeśli jest dostępna dla extended hours
+            # Nadpisujemy zmianę procentową, jeśli używamy ceny extended
+            if price_source == "extended_hours":
                 if quote_data.get("extended_hours_change"):
                     formatted_quote["09. change"] = quote_data.get("extended_hours_change")
                 if quote_data.get("extended_hours_change_percent"):
