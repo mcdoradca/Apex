@@ -24,6 +24,32 @@ export const ui = {
                 startBtn: get('h3-live-start-btn')
             },
 
+            // === NOWOŚĆ: Elementy Modala Szczegółów Sygnału ===
+            signalDetails: {
+                backdrop: get('signal-details-modal'),
+                ticker: get('sd-ticker'),
+                companyName: get('sd-company-name'),
+                validityBadge: get('sd-validity-badge'),
+                currentPrice: get('sd-current-price'),
+                changePercent: get('sd-change-percent'),
+                marketStatus: get('sd-market-status'),
+                nyTime: get('sd-ny-time'),
+                countdown: get('sd-countdown'),
+                
+                entry: get('sd-entry-price'),
+                tp: get('sd-take-profit'),
+                sl: get('sd-stop-loss'),
+                rr: get('sd-risk-reward'),
+                
+                sector: get('sd-sector'),
+                industry: get('sd-industry'),
+                generationDate: get('sd-generation-date'),
+                
+                validityMessage: get('sd-validity-message'),
+                closeBtn: get('sd-close-btn')
+            },
+            // ==================================================
+
             startBtn: get('start-btn'),
             pauseBtn: get('pause-btn'),
             resumeBtn: get('resume-btn'),
@@ -88,7 +114,9 @@ export const renderers = {
             } catch(e) {}
         }
 
-        return `<div class="candidate-item flex items-center text-xs p-2 rounded-md cursor-default transition-colors ${statusClass}">
+        // ZMIANA: Dodano klasę 'phase3-item', 'cursor-pointer' i atrybut 'data-ticker'
+        // Umożliwia to obsługę kliknięcia w logic.js
+        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
                     <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
                     <span class="font-bold">${s.ticker}</span>
                     ${scoreDisplay}
@@ -340,12 +368,10 @@ export const renderers = {
                             <input type="number" id="h3-param-mass" class="modal-input text-xs !py-1 !h-8" placeholder="-0.5" step="0.1" value="-0.5">
                         </div>
 
-                        <!-- NOWE POLE: MIN SCORE -->
                         <div>
                             <label class="text-[10px] text-gray-400 uppercase font-bold">Min. AQM Score (Hard Floor)</label>
                             <input type="number" id="h3-param-min-score" class="modal-input text-xs !py-1 !h-8" placeholder="0.0" step="0.1" value="0.0">
                         </div>
-                        <!-- ==================== -->
 
                         <div>
                             <label class="text-[10px] text-gray-400 uppercase font-bold">Mnożnik TP (ATR) (Domyślny: 5.0)</label>
