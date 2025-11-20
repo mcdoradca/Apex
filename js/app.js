@@ -52,6 +52,27 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (nextBtn && !nextBtn.disabled) Logic.loadAgentReportPage(state.currentReportPage + 1);
     });
 
+    // === Obsługa kliknięć w Sidebarze (Sygnały H3) ===
+    UI.sidebarPhasesContainer.addEventListener('click', (e) => {
+        const toggle = e.target.closest('.accordion-toggle');
+        // NOWOŚĆ: Obsługa kliknięcia w sygnał H3
+        const signalItem = e.target.closest('.phase3-item');
+
+        if (toggle) {
+            const content = toggle.nextElementSibling;
+            const icon = toggle.querySelector('.accordion-icon');
+            if (content) { content.classList.toggle('hidden'); icon.classList.toggle('rotate-180'); }
+        }
+        else if (signalItem) {
+            const ticker = signalItem.dataset.ticker;
+            if (ticker) {
+                logger.info(`Kliknięto sygnał H3: ${ticker}`);
+                Logic.showSignalDetails(ticker);
+            }
+        }
+    });
+    // ==================================================
+
     if (UI.btnPhase1) {
         UI.btnPhase1.addEventListener('click', async () => {
             UI.btnPhase1.disabled = true;
@@ -71,14 +92,16 @@ document.addEventListener('DOMContentLoaded', () => {
         UI.h3LiveModal.startBtn.addEventListener('click', Logic.handleRunH3LiveScan);
     }
 
-    UI.sidebarPhasesContainer.addEventListener('click', (e) => {
-        const toggle = e.target.closest('.accordion-toggle');
-        if (toggle) {
-            const content = toggle.nextElementSibling;
-            const icon = toggle.querySelector('.accordion-icon');
-            if (content) { content.classList.toggle('hidden'); icon.classList.toggle('rotate-180'); }
-        }
-    });
+    // === Obsługa Modala Szczegółów Sygnału ===
+    if (UI.signalDetails.closeBtn) {
+        UI.signalDetails.closeBtn.addEventListener('click', Logic.hideSignalDetails);
+    }
+    if (UI.signalDetails.backdrop) {
+        UI.signalDetails.backdrop.addEventListener('click', (e) => {
+            if (e.target === UI.signalDetails.backdrop) Logic.hideSignalDetails();
+        });
+    }
+    // =========================================
 
     UI.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showDashboard(); });
     UI.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showPortfolio(); });
