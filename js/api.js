@@ -50,6 +50,11 @@ export const api = {
     getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
+    
+    // === NOWOŚĆ: Pobieranie szczegółów sygnału (z walidacją Live) ===
+    getSignalDetails: (ticker) => apiRequest(`api/v1/signal/${ticker}/details`),
+    // ================================================================
+
     getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
     getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
     addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
