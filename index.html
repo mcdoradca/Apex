@@ -38,7 +38,7 @@
         .alert-bar { max-width: 400px; width: 100%; }
         .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
         .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
-        .modal-content-lg { max-width: 800px; } 
+        .modal-content-lg { max-width: 800px; width: 95%; } 
         .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
         .modal-input[type=number]::-webkit-inner-spin-button, 
         .modal-input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -140,6 +140,10 @@
                         <span class="text-gray-400">Heartbeat:</span>
                         <span id="heartbeat-status" class="text-gray-500 text-xs">--</span>
                     </div>
+                    <div class="flex justify-between items-center">
+                         <span class="text-gray-400">Odliczanie:</span>
+                         <span id="market-countdown-timer" class="font-mono text-sky-400 text-xs">---</span>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -162,7 +166,7 @@
     <div id="ai-report-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Raport Mega Agenta AI</h3><button id="ai-report-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div id="ai-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[70vh] overflow-y-auto"></div></div></div>
     <div id="h3-deep-dive-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Analiza H3 Deep Dive</h3><button id="h3-deep-dive-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p><div class="flex items-start gap-3"><input type="number" id="h3-deep-dive-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="2100"><button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok</button></div><div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div></div><div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto"><p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p></div></div></div>
 
-    <!-- === NOWY MODAL: Konfiguracja H3 Live === -->
+    <!-- Konfiguracja H3 Live -->
     <div id="h3-live-modal" class="modal-backdrop hidden">
         <div class="modal-content">
             <h3 class="text-xl font-bold mb-4 text-white flex items-center">
@@ -180,12 +184,10 @@
                     <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Próg Masy m²</label>
                     <input type="number" id="h3-live-mass" class="modal-input" placeholder="-0.5" step="0.1" value="-0.5">
                 </div>
-                <!-- === TUTAJ JEST KLUCZOWA ZMIANA === -->
                 <div>
                     <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Min. AQM Score (Hard Floor)</label>
                     <input type="number" id="h3-live-min-score" class="modal-input" placeholder="0.0" step="0.1" value="0.0">
                 </div>
-                <!-- =================================== -->
                 <div class="grid grid-cols-2 gap-2">
                     <div>
                         <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik TP (ATR)</label>
@@ -203,6 +205,103 @@
                 <button id="h3-live-start-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700">
                     <i data-lucide="play" class="w-4 h-4 mr-2 inline"></i>Start Skanowania
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- === NOWY MODAL: Signal Details (Detale Sygnału) === -->
+    <div id="signal-details-modal" class="modal-backdrop hidden">
+        <div class="modal-content modal-content-lg">
+            <!-- Nagłówek -->
+            <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
+                <div>
+                    <h3 class="text-2xl font-bold text-white flex items-center gap-2">
+                        <span id="sd-ticker" class="text-sky-400">TICKER</span>
+                        <span id="sd-validity-badge" class="text-xs px-2 py-1 rounded bg-gray-700 text-gray-400">Checking...</span>
+                    </h3>
+                    <p id="sd-company-name" class="text-sm text-gray-400">Company Name</p>
+                </div>
+                <button id="sd-close-btn" class="p-1 text-gray-500 hover:text-white">
+                    <i data-lucide="x" class="w-6 h-6"></i>
+                </button>
+            </div>
+
+            <!-- Główny Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                <!-- Lewa kolumna: Dane Rynkowe Live -->
+                <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
+                    <h4 class="text-xs font-bold text-gray-500 uppercase mb-3 flex items-center">
+                        <i data-lucide="activity" class="w-3 h-3 mr-1 text-sky-400"></i> Dane Rynkowe (Live)
+                    </h4>
+                    
+                    <div class="flex justify-between items-end mb-2">
+                        <span class="text-gray-400 text-sm">Cena Aktualna</span>
+                        <span id="sd-current-price" class="text-3xl font-mono font-bold text-white">---</span>
+                    </div>
+                    <div class="flex justify-between items-center mb-4">
+                        <span class="text-gray-400 text-sm">Zmiana 24h</span>
+                        <span id="sd-change-percent" class="font-mono text-sm font-bold">---</span>
+                    </div>
+
+                    <div class="border-t border-gray-800 pt-3 space-y-2">
+                        <div class="flex justify-between text-xs">
+                            <span class="text-gray-500">Status Rynku</span>
+                            <span id="sd-market-status" class="text-gray-300 font-mono">---</span>
+                        </div>
+                        <div class="flex justify-between text-xs">
+                            <span class="text-gray-500">Czas w Nowym Jorku</span>
+                            <span id="sd-ny-time" class="text-gray-300 font-mono">---</span>
+                        </div>
+                         <div class="flex justify-between text-xs">
+                            <span class="text-gray-500">Odliczanie do Otwarcia</span>
+                            <span id="sd-countdown" class="text-sky-400 font-mono">---</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Prawa kolumna: Parametry Setupu H3 -->
+                <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
+                    <h4 class="text-xs font-bold text-gray-500 uppercase mb-3 flex items-center">
+                        <i data-lucide="crosshair" class="w-3 h-3 mr-1 text-purple-400"></i> Parametry Setupu H3
+                    </h4>
+                    
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center p-2 bg-gray-800/30 rounded">
+                            <span class="text-sm text-purple-300 font-semibold">Cena Wejścia (Entry)</span>
+                            <span id="sd-entry-price" class="font-mono text-white font-bold">---</span>
+                        </div>
+                        <div class="flex justify-between items-center p-2 bg-green-900/10 border border-green-900/30 rounded">
+                            <span class="text-sm text-green-400 font-semibold">Take Profit (TP)</span>
+                            <span id="sd-take-profit" class="font-mono text-green-400 font-bold">---</span>
+                        </div>
+                        <div class="flex justify-between items-center p-2 bg-red-900/10 border border-red-900/30 rounded">
+                            <span class="text-sm text-red-400 font-semibold">Stop Loss (SL)</span>
+                            <span id="sd-stop-loss" class="font-mono text-red-400 font-bold">---</span>
+                        </div>
+                         <div class="flex justify-between items-center pt-2 mt-2 border-t border-gray-800">
+                            <span class="text-xs text-gray-500">Stosunek Zysk/Ryzyko (R:R)</span>
+                            <span id="sd-risk-reward" class="font-mono text-yellow-400 font-bold">---</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stopka z Metadanymi -->
+            <div class="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center text-xs text-gray-500">
+                <div class="space-y-1">
+                    <p>Sektor: <span id="sd-sector" class="text-gray-300">---</span></p>
+                    <p>Branża: <span id="sd-industry" class="text-gray-300">---</span></p>
+                </div>
+                <div class="text-right">
+                    <p>Data wygenerowania sygnału:</p>
+                    <p id="sd-generation-date" class="text-gray-300 font-mono">---</p>
+                </div>
+            </div>
+            
+            <!-- Dynamiczny komunikat o błędzie/ważności -->
+            <div id="sd-validity-message" class="mt-4 p-3 rounded bg-red-900/20 border border-red-500/30 text-center text-sm text-red-300 hidden animate-pulse">
+                <!-- Treść wstrzykiwana przez JS -->
             </div>
         </div>
     </div>
