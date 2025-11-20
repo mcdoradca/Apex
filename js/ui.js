@@ -1,4 +1,7 @@
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
+// Importujemy funkcje z logic.js dynamicznie wewnątrz event listenerów lub poprzez globalny obiekt, 
+// aby uniknąć cyklicznych zależności, lub zakładamy, że są dostępne globalnie.
+// W tym przypadku, przyciski będą miały ID, które obsłuży app.js/logic.js.
 
 export const ui = {
     init: () => {
@@ -24,7 +27,7 @@ export const ui = {
                 startBtn: get('h3-live-start-btn')
             },
 
-            // === NOWOŚĆ: Elementy Modala Szczegółów Sygnału ===
+            // === Elementy Modala Szczegółów Sygnału ===
             signalDetails: {
                 backdrop: get('signal-details-modal'),
                 ticker: get('sd-ticker'),
@@ -43,10 +46,12 @@ export const ui = {
                 
                 sector: get('sd-sector'),
                 industry: get('sd-industry'),
+                description: get('sd-description'), // Nowe pole
                 generationDate: get('sd-generation-date'),
                 
                 validityMessage: get('sd-validity-message'),
-                closeBtn: get('sd-close-btn')
+                closeBtn: get('sd-close-btn'),
+                buyBtn: get('sd-buy-btn') // Nowy przycisk
             },
             // ==================================================
 
@@ -114,8 +119,6 @@ export const renderers = {
             } catch(e) {}
         }
 
-        // ZMIANA: Dodano klasę 'phase3-item', 'cursor-pointer' i atrybut 'data-ticker'
-        // Umożliwia to obsługę kliknięcia w logic.js
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
                     <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
                     <span class="font-bold">${s.ticker}</span>
