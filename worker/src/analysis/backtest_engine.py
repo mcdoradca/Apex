@@ -12,7 +12,6 @@ from .utils import (
     calculate_atr, 
     append_scan_log, 
     update_system_control,
-    # DODANO: Import funkcji do aktualizacji paska postępu
     update_scan_progress
 )
 
@@ -24,58 +23,68 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 
 logger = logging.getLogger(__name__)
 
-# Funkcja pomocnicza do obliczania Time Dilation (lokalnie w silniku)
 def _calculate_time_dilation_series(ticker_df: pd.DataFrame, spy_df: pd.DataFrame, window: int = 20) -> pd.Series:
     """Oblicza serię Time Dilation (Zmienność Tickera / Zmienność SPY)."""
     try:
-        # Upewniamy się, że indeksy są datetime
-        if not isinstance(ticker_df.index, pd.DatetimeIndex):
-            ticker_df.index = pd.to_datetime(ticker_df.index)
-        if not isinstance(spy_df.index, pd.DatetimeIndex):
-            spy_df.index = pd.to_datetime(spy_df.index)
+        if not isinstance(ticker_df.index, pd.DatetimeIndex): ticker_df.index = pd.to_datetime(ticker_df.index)
+        if not isinstance(spy_df.index, pd.DatetimeIndex): spy_df.index = pd.to_datetime(spy_df.index)
 
-        # Oblicz zwroty
         ticker_returns = ticker_df['close'].pct_change()
         spy_returns = spy_df['close'].pct_change()
-        
-        # Dopasuj SPY do dat tickera (reindex)
         spy_returns = spy_returns.reindex(ticker_returns.index).ffill().fillna(0)
 
-        # Oblicz zmienność kroczącą
         ticker_std = ticker_returns.rolling(window=window).std()
         spy_std = spy_returns.rolling(window=window).std()
         
-        # Unikaj dzielenia przez zero
         time_dilation = ticker_std / spy_std.replace(0, np.nan)
         return time_dilation.fillna(0)
-    except Exception as e:
-        logger.warning(f"Błąd obliczania Time Dilation: {e}")
+    except Exception:
         return pd.Series(0, index=ticker_df.index)
 
 def run_historical_backtest(session: Session, api_client, year: str, parameters: dict = None):
     """
     Uruchamia pełny backtest historyczny (z zapisem do bazy).
+    OPTYMALIZACJA: Skanuje TYLKO spółki z Fazy 1 i Portfela, a nie cały rynek.
     """
     logger.info(f"[Backtest] Rozpoczynanie analizy historycznej dla roku {year}...")
     append_scan_log(session, f"BACKTEST: Uruchamianie symulacji dla roku {year}...")
     
     try:
-        tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
-        tickers = [r[0] for r in tickers_rows]
+        # === OPTYMALIZACJA SELEKCJI SPÓŁEK ===
+        # Zamiast "SELECT * FROM companies", bierzemy tylko te, które przeszły sito Fazy 1
+        # oraz te, które mamy w portfelu. To zmniejsza pulę z 3000+ do np. 50-100 istotnych.
+        
+        # 1. Pobierz kandydatów z Fazy 1
+        phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
+        phase1_tickers = [r[0] for r in phase1_rows]
+        
+        # 2. Pobierz spółki z portfela (zawsze warto je testować)
+        portfolio_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
+        portfolio_tickers = [r[0] for r in portfolio_rows]
+        
+        # 3. Połącz i usuń duplikaty
+        tickers = list(set(phase1_tickers + portfolio_tickers))
+        
+        if not tickers:
+            msg = "BACKTEST: Brak kandydatów w Fazie 1 i Portfelu. Pobieram Top 50 z bazy (tryb awaryjny)."
+            logger.warning(msg)
+            append_scan_log(session, msg)
+            # Fallback: Pobierz 50 losowych spółek, żeby backtest w ogóle ruszył
+            fallback_rows = session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
+            tickers = [r[0] for r in fallback_rows]
+        
+        logger.info(f"[Backtest] Wybrano {len(tickers)} tickerów do analizy (Faza 1 + Portfel).")
+        append_scan_log(session, f"BACKTEST: Wybrano {len(tickers)} tickerów do analizy.")
         
         # === KROK PRE-A: Pobierz dane SPY (Benchmark) raz dla całej pętli ===
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+        spy_df = pd.DataFrame()
         if spy_raw:
             spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
             spy_df.index = pd.to_datetime(spy_df.index)
-        else:
-            logger.warning("Nie udało się pobrać danych SPY. Time Dilation będzie wynosić 0.")
-            spy_df = pd.DataFrame()
 
         total_tickers = len(tickers)
-        # === NOWOŚĆ: Reset paska postępu na starcie ===
         update_scan_progress(session, 0, total_tickers)
-        # ==============================================
 
         processed_count = 0
         trades_generated = 0
@@ -85,7 +94,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
         
         for ticker in tickers:
             try:
-                # === KROK A: Pobieranie Danych Historycznych ===
+                # === KROK A: Pobieranie Danych Historycznych (Cache + API) ===
                 daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
                 daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
                 
@@ -99,7 +108,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 
                 if len(daily_adj) < 201: continue
 
-                if 'high' in daily_ohlcv.columns and 'low' in daily_ohlcv.columns and 'close' in daily_ohlcv.columns:
+                if 'high' in daily_ohlcv.columns:
                     daily_ohlcv['vwap_proxy'] = (daily_ohlcv['high'] + daily_ohlcv['low'] + daily_ohlcv['close']) / 3.0
                 else: continue
 
@@ -110,7 +119,6 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
                 df['atr_14'] = calculate_atr(df, period=14).ffill().fillna(0)
                 
-                # === NAPRAWA: Obliczanie Time Dilation ===
                 if not spy_df.empty:
                     df['time_dilation'] = _calculate_time_dilation_series(df, spy_df)
                 else:
@@ -127,6 +135,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['daily_returns'] = df['close'].pct_change()
                 df['market_temperature'] = df['daily_returns'].rolling(window=MARKET_TEMP_WINDOW).std()
                 
+                # Metryki H3
                 if not news_df.empty:
                     news_counts = news_df.groupby(news_df.index.date).size()
                     news_counts.index = pd.to_datetime(news_counts.index)
@@ -144,7 +153,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
                 df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
-                # === KROK C: Konstrukcja Pola H3 ===
+                # H3 Score Components
                 df['m_sq'] = df['normalized_volume'] + df['normalized_news']
                 df['nabla_sq'] = df['price_gravity']
                 
@@ -170,35 +179,29 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['aqm_score_h3'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
                 df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(window=Z_SCORE_WINDOW).quantile(0.95)
 
+                # Symulacja Transakcji
                 sim_data = { "daily": df }
                 trades = _simulate_trades_h3(session, ticker, sim_data, year, parameters)
                 trades_generated += trades
                 
                 processed_count += 1
                 
-                # === NOWOŚĆ: Logowanie Sukcesów i Postępu ===
-                
-                # 1. Jeśli znaleziono transakcje dla tej spółki, logujemy to OD RAZU
+                # Logowanie Sukcesów
                 if trades > 0:
                     append_scan_log(session, f"✨ BACKTEST: {ticker} -> Znaleziono {trades} wirtualnych setupów.")
 
-                # 2. Aktualizuj pasek postępu częściej (co 5 tickerów)
                 if processed_count % 5 == 0:
                     update_scan_progress(session, processed_count, total_tickers)
                     logger.info(f"[Backtest] {processed_count}/{total_tickers} ({ticker}). Transakcji: {trades_generated}")
                 
-                # 3. Loguj postęp do UI częściej (co 20 tickerów, a nie 50)
-                # Dzięki temu okno logów będzie "żyło"
                 if processed_count % 20 == 0:
                     msg = f"Backtest: Przetworzono {processed_count}/{total_tickers} ({ticker})... Łącznie znaleziono: {trades_generated}"
                     append_scan_log(session, msg)
-                # ========================================
 
             except Exception as e:
                 logger.error(f"Błąd backtestu dla {ticker}: {e}")
                 continue
 
-        # Finalizacja
         update_scan_progress(session, total_tickers, total_tickers)
         append_scan_log(session, f"BACKTEST: Zakończono dla roku {year}. Wygenerowano {trades_generated} wirtualnych transakcji.")
         logger.info(f"[Backtest] Koniec. Łącznie transakcji: {trades_generated}")
@@ -212,8 +215,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 def run_optimization_simulation(session: Session, year: str, params: dict) -> dict:
     """
     Tryb 'Lightweight' dla QuantumOptimizer.
-    Obsługuje dynamiczne parametry dat (simulation_start_date, simulation_end_date)
-    dla potrzeb Multi-Period Validation.
+    Używa tej samej puli tickerów co główny backtest (Faza 1 + Portfel).
     """
     api_client = AlphaVantageClient()
     
@@ -221,8 +223,19 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
     trades_results = [] 
     
     try:
-        tickers_rows = session.execute(text("SELECT ticker FROM companies ORDER BY ticker")).fetchall()
-        tickers = [r[0] for r in tickers_rows]
+        # === OPTYMALIZACJA: Używamy tej samej logiki co w Backteście ===
+        phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
+        phase1_tickers = [r[0] for r in phase1_rows]
+        
+        portfolio_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
+        portfolio_tickers = [r[0] for r in portfolio_rows]
+        
+        tickers = list(set(phase1_tickers + portfolio_tickers))
+        
+        if not tickers:
+            # Fallback dla Optymalizacji: jeśli nie ma F1, weź próbkę 50 spółek z bazy
+            fallback_rows = session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
+            tickers = [r[0] for r in fallback_rows]
         
         # === KROK PRE-A: Pobierz dane SPY (Benchmark) ===
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
@@ -240,15 +253,11 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
         h3_sl_mult = params.get('h3_sl_multiplier', 2.0)
         h3_max_hold = int(params.get('h3_max_hold', 5))
         
-        # === KLUCZOWE DLA MULTI-PERIOD: Daty Symulacji ===
-        # Jeśli nie podano dokładnych dat, używamy całego roku
         sim_start_str = params.get('simulation_start_date', f"{year}-01-01")
         sim_end_str = params.get('simulation_end_date', f"{year}-12-31")
-        
         sim_start_ts = pd.Timestamp(sim_start_str)
         sim_end_ts = pd.Timestamp(sim_end_str)
         
-        # Uwaga: History Buffer i Z-Score Window muszą być przed sim_start
         Z_SCORE_WINDOW = 100
         HISTORY_BUFFER = 201
 
@@ -267,7 +276,6 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 daily_ohlcv.index = pd.to_datetime(daily_ohlcv.index)
                 daily_adj.index = pd.to_datetime(daily_adj.index)
                 
-                # Jeśli dane kończą się przed początkiem naszej symulacji, pomiń
                 if daily_adj.index[-1] < sim_start_ts: continue
                 
                 if 'high' in daily_ohlcv.columns:
@@ -277,19 +285,15 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 df = daily_adj.join(daily_ohlcv[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
                 close_col = 'close_ohlcv' if 'close_ohlcv' in df.columns else 'close'
                 
-                # 2. Obliczanie podstawowych metryk
                 df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
                 df['atr_14'] = calculate_atr(df).ffill().fillna(0)
                 
-                # === NAPRAWA: Obliczanie Time Dilation w symulacji ===
                 if not spy_df.empty:
                     df['time_dilation'] = _calculate_time_dilation_series(df, spy_df)
                 else:
                     df['time_dilation'] = 0.0
 
-                # Ładowanie H2 (Insider/News)
                 h2_data = load_h2_data_into_cache(ticker, api_client, session)
-                
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
                 
@@ -341,13 +345,10 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 aqm_score_series = j_norm - nabla_norm - m_norm
                 threshold_series = aqm_score_series.rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile)
 
-                # 3. Pętla symulacyjna (In-Memory)
-                
-                # Znajdź indeksy startu i końca symulacji w oparciu o daty z Optuny
+                # Pętla symulacyjna
                 start_idx = df.index.searchsorted(sim_start_ts)
                 end_idx = df.index.searchsorted(sim_end_ts)
                 
-                # Upewnij się, że mamy bufor historii PRZED startem
                 start_idx = max(HISTORY_BUFFER, start_idx)
                 
                 if start_idx >= len(df) or start_idx >= end_idx: continue
@@ -375,18 +376,15 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                             sl = entry_price - (h3_sl_mult * atr)
                             
                             pnl_percent = 0.0
-                            exit_price = entry_price 
                             
                             for day_offset in range(h3_max_hold):
                                 if i + 1 + day_offset >= len(df): break
                                 
                                 day_candle = df.iloc[i + 1 + day_offset]
                                 if day_candle['low'] <= sl:
-                                    exit_price = sl
                                     pnl_percent = ((sl - entry_price) / entry_price) * 100
                                     break
                                 if day_candle['high'] >= tp:
-                                    exit_price = tp
                                     pnl_percent = ((tp - entry_price) / entry_price) * 100
                                     break
                                 
