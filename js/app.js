@@ -1,7 +1,40 @@
 import { ui, renderers } from './ui.js';
 import { api } from './api.js';
 import { logger, state } from './state.js';
-import * as Logic from './logic.js';
+// ZMIANA: Używamy importów nazwanych, aby uniknąć błędów "is not a function"
+import { 
+    setUI, 
+    showDashboard, showPortfolio, showTransactions, showAgentReport,
+    pollWorkerStatus, refreshSidebarData, pollSystemAlerts,
+    loadAgentReportPage,
+    showBuyModal, hideBuyModal, handleBuyConfirm,
+    showSellModal, hideSellModal, handleSellConfirm,
+    handleYearBacktestRequest, handleCsvExport,
+    showH3DeepDiveModal, hideH3DeepDiveModal, handleRunH3DeepDive,
+    handleRunAIOptimizer, handleViewAIOptimizerReport, hideAIReportModal,
+    showH3LiveParamsModal, hideH3LiveParamsModal, handleRunH3LiveScan,
+    showSignalDetails, hideSignalDetails,
+    // Quantum Lab
+    showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
+    showOptimizationResults, hideOptimizationResults
+} from './logic.js';
+
+// Tworzymy lokalny obiekt Logic dla kompatybilności z resztą kodu
+const Logic = {
+    setUI, 
+    showDashboard, showPortfolio, showTransactions, showAgentReport,
+    pollWorkerStatus, refreshSidebarData, pollSystemAlerts,
+    loadAgentReportPage,
+    showBuyModal, hideBuyModal, handleBuyConfirm,
+    showSellModal, hideSellModal, handleSellConfirm,
+    handleYearBacktestRequest, handleCsvExport,
+    showH3DeepDiveModal, hideH3DeepDiveModal, handleRunH3DeepDive,
+    handleRunAIOptimizer, handleViewAIOptimizerReport, hideAIReportModal,
+    showH3LiveParamsModal, hideH3LiveParamsModal, handleRunH3LiveScan,
+    showSignalDetails, hideSignalDetails,
+    showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
+    showOptimizationResults, hideOptimizationResults
+};
 
 document.addEventListener('DOMContentLoaded', () => {
     try {
@@ -47,10 +80,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (target.closest('#run-csv-export-btn')) Logic.handleCsvExport();
                 else if (target.closest('#run-ai-optimizer-btn')) Logic.handleRunAIOptimizer();
                 else if (target.closest('#view-ai-report-btn')) Logic.handleViewAIOptimizerReport();
-                // === NOWOŚĆ: Obsługa przycisków Quantum Lab ===
+                // Quantum Lab
                 else if (target.closest('#open-quantum-modal-btn')) Logic.showQuantumModal();
                 else if (target.closest('#view-optimization-results-btn')) Logic.showOptimizationResults();
-                // ==============================================
+                
                 else if (target.closest('#toggle-h3-params')) {
                      const container = document.getElementById('h3-params-container');
                      const icon = document.getElementById('h3-params-icon');
@@ -114,11 +147,10 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
-        // === NOWOŚĆ: Obsługa modali Quantum Lab ===
+        // Quantum Lab Listeners
         if (UI.quantumModal.cancelBtn) UI.quantumModal.cancelBtn.addEventListener('click', Logic.hideQuantumModal);
         if (UI.quantumModal.startBtn) UI.quantumModal.startBtn.addEventListener('click', Logic.handleStartQuantumOptimization);
         if (UI.optimizationResultsModal.closeBtn) UI.optimizationResultsModal.closeBtn.addEventListener('click', Logic.hideOptimizationResults);
-        // ==========================================
     
         if (UI.dashboardLink) UI.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showDashboard(); });
         if (UI.portfolioLink) UI.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showPortfolio(); });
