@@ -13,6 +13,7 @@ export const ui = {
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
             
+            // Modal H3 Live (Phase 3) - referencje do inputów
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
                 percentile: get('h3-live-percentile'),
@@ -20,6 +21,7 @@ export const ui = {
                 minScore: get('h3-live-min-score'),
                 tp: get('h3-live-tp'),
                 sl: get('h3-live-sl'),
+                maxHold: get('h3-live-hold'), // NOWE V4
                 cancelBtn: get('h3-live-cancel-btn'),
                 startBtn: get('h3-live-start-btn')
             },
@@ -50,7 +52,7 @@ export const ui = {
                 buyBtn: get('sd-buy-btn') 
             },
 
-            // === NOWOŚĆ: Modale dla Quantum Optimization ===
+            // Modale Quantum Lab
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 yearInput: get('qo-year-input'),
@@ -64,7 +66,6 @@ export const ui = {
                 content: get('optimization-results-content'),
                 closeBtn: get('optimization-results-close-btn')
             },
-            // ===============================================
 
             startBtn: get('start-btn'),
             pauseBtn: get('pause-btn'),
@@ -78,7 +79,6 @@ export const ui = {
             heartbeatStatus: get('heartbeat-status'),
             alertContainer: get('system-alert-container'),
             phase1: { list: get('phase-1-list'), count: get('phase-1-count') },
-            phase2: { list: get('phase-2-list'), count: get('phase-2-count') },
             phase3: { list: get('phase-3-list'), count: get('phase-3-count') },
             buyModal: { 
                 backdrop: get('buy-modal'), tickerSpan: get('buy-modal-ticker'), 
@@ -113,8 +113,6 @@ export const renderers = {
     
     phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
     
-    phase2List: (results) => "", 
-    
     phase3List: (signals) => signals.map(s => {
         let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
@@ -141,19 +139,16 @@ export const renderers = {
     dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
                                 <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
                                 <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
                             </div>
-                            
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanera (F1)</h3>
                                 <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
                                 <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
                             </div>
-                            
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="target" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały H3</h3>
                                 <div class="mt-2">
@@ -161,7 +156,6 @@ export const renderers = {
                                     <p class="text-sm text-gray-500 mt-1">Aktywne / Oczekujące</p>
                                 </div>
                             </div>
-                            
                         </div>
                         <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
                         <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
@@ -190,7 +184,6 @@ export const renderers = {
                 } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
-            
             const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
             
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
@@ -350,22 +343,71 @@ export const renderers = {
                 </table>
              </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
         
+        // =========================================================================
+        // PRZYWRÓCONY I ROZSZERZONY MODUŁ BACKTESTU (V3 + V4 Params)
+        // =========================================================================
         const backtestSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
                 <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p>
                 <div class="flex items-start gap-3 mb-4">
                     <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}">
-                    <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
+                    <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700">
                         <i data-lucide="play" class="w-4 h-4 mr-2"></i>
                         Uruchom Test
                     </button>
                 </div>
+
+                <button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]">
+                    <span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span>
+                    <i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i>
+                </button>
+
+                <div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label>
+                        <input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95">
+                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label>
+                        <input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5">
+                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label>
+                        <input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0">
+                        <p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label>
+                        <input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0">
+                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label>
+                        <input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0">
+                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label>
+                        <input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5">
+                        <p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p>
+                    </div>
+
+                    <div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1">
+                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label>
+                        <input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1">
+                        <p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p>
+                    </div>
+                </div>
+
                 <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
             </div>
         `;
+        // =========================================================================
         
-        // === NOWA SEKCJA: QUANTUM LAB (APEX V4) ===
         const quantumLabSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden">
                 <div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none">
@@ -389,7 +431,6 @@ export const renderers = {
                 <div id="quantum-lab-status" class="text-sm mt-3 h-4"></div>
             </div>
         `;
-        // ===========================================
 
         const aiOptimizerSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
@@ -474,8 +515,8 @@ export const renderers = {
                     
                     <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
-                        ${quantumLabSection}
                         ${backtestSection}
+                        ${quantumLabSection}
                         ${aiOptimizerSection}
                         ${h3DeepDiveSection}
                         ${exportSection}
@@ -524,7 +565,7 @@ export const renderers = {
                     </div>
                     <div class="text-right">
                         <div class="text-2xl font-bold ${job.best_score >= 2.0 ? 'text-green-400' : 'text-yellow-400'}">
-                            Best PF: ${job.best_score ? job.best_score.toFixed(2) : '---'}
+                            Best Score: ${job.best_score ? job.best_score.toFixed(4) : '---'}
                         </div>
                         <div class="text-xs text-gray-500">Status: ${job.status}</div>
                     </div>
