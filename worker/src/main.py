@@ -8,12 +8,12 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from sqlalchemy import text, select, func
 
-from .models import Base
+from .models import Base, OptimizationJob # Dodano OptimizationJob
 from .database import get_db_session, engine
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
-    signal_monitor # <--- NOWY IMPORT
+    signal_monitor, apex_optimizer # <--- Dodano apex_optimizer
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -140,6 +140,44 @@ def handle_h3_deep_dive_request(session) -> str:
     elif req == 'PROCESSING': return 'BUSY'
     return 'IDLE'
 
+# === NOWA FUNKCJA: OBSŁUGA QUANTUM OPTIMIZER ===
+def handle_optimization_request(session) -> str:
+    """Obsługuje zlecenia optymalizacji Apex V4 (Optuna)."""
+    # W polu 'optimization_request' przechowujemy UUID zadania (Job ID)
+    job_id = utils.get_system_control_value(session, 'optimization_request')
+    
+    if job_id and job_id not in ['NONE', 'PROCESSING']:
+        logger.info(f"Otrzymano zlecenie optymalizacji: {job_id}")
+        utils.update_system_control(session, 'worker_status', 'BUSY_OPTIMIZING')
+        utils.update_system_control(session, 'optimization_request', 'PROCESSING')
+        
+        try:
+            # Pobierz szczegóły zadania z bazy
+            job = session.query(OptimizationJob).filter(OptimizationJob.id == job_id).first()
+            if not job:
+                logger.error(f"Optimization Job {job_id} not found in DB.")
+                return 'IDLE'
+            
+            # Uruchom Quantum Optimizer
+            optimizer = apex_optimizer.QuantumOptimizer(session, job_id, job.target_year)
+            optimizer.run(n_trials=job.total_trials)
+            
+            utils.append_scan_log(session, f"Optymalizacja V4 zakończona. Wynik: {job.best_score}")
+
+        except Exception as e:
+            logger.error(f"Critical Optimization Error: {e}", exc_info=True)
+            utils.append_scan_log(session, f"BŁĄD OPTYMALIZACJI: {e}")
+        finally:
+            utils.update_system_control(session, 'worker_status', 'IDLE')
+            utils.update_system_control(session, 'optimization_request', 'NONE')
+            return 'IDLE'
+            
+    elif job_id == 'PROCESSING': 
+        return 'BUSY'
+        
+    return 'IDLE'
+# ===============================================
+
 def main_loop():
     global current_state, api_client
     logger.info("Worker started.")
@@ -156,7 +194,7 @@ def main_loop():
     # Monitor Wirtualnego Agenta (stary, dobowy)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(lambda: virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client))
 
-    # === NOWOŚĆ: STRAŻNIK SYGNAŁÓW (H3 LIVE) ===
+    # === STRAŻNIK SYGNAŁÓW (H3 LIVE) ===
     # Uruchamiamy co 1 minutę, aby monitorować Entry/TP/SL w tle
     schedule.every(1).minutes.do(lambda: signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client))
     # ============================================
@@ -176,9 +214,12 @@ def main_loop():
                 elif run_action == "PHASE_1_RUN": run_phase_1_cycle(session)
                 elif run_action == "PHASE_3_RUN": run_phase_3_cycle(session)
                 
-                if handle_backtest_request(session, api_client) == 'BUSY': pass
-                elif handle_ai_optimizer_request(session) == 'BUSY': pass
-                elif handle_h3_deep_dive_request(session) == 'BUSY': pass
+                # Sprawdzanie wszystkich typów zadań
+                status = handle_backtest_request(session, api_client)
+                if status == 'IDLE': status = handle_ai_optimizer_request(session)
+                if status == 'IDLE': status = handle_h3_deep_dive_request(session)
+                # === NOWOŚĆ: Obsługa zadania optymalizacji ===
+                if status == 'IDLE': status = handle_optimization_request(session)
                 
                 worker_status = utils.get_system_control_value(session, 'worker_status')
                 if worker_status.startswith('BUSY_'):
