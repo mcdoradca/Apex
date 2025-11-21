@@ -1,113 +1,72 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from tabulate import tabulate
 
-# Konfiguracja
-CSV_PATH = 'apex_virtual_trades_export_20251121_0621.csv'
+class ApexAudit:
+    """
+    Moduł diagnostyczny dla APEX AQM V3.
+    Analizuje wyniki backtestu pod kątem korelacji kwantowych.
+    """
 
-def load_data(filepath):
-    """Ładuje i wstępnie przetwarza dane z backtestu."""
-    try:
-        df = pd.read_csv(filepath)
-        # Konwersja dat
-        df['open_date'] = pd.to_datetime(df['open_date'])
-        df['close_date'] = pd.to_datetime(df['close_date'])
+    @staticmethod
+    def analyze(trades_data):
+        """
+        Analizuje listę transakcji (słowniki) i zwraca rozszerzony raport.
+        """
+        if not trades_data:
+            return {"error": "Brak danych do audytu"}
+
+        df = pd.DataFrame(trades_data)
         
-        # Upewnienie się, że kolumny numeryczne są float
-        numeric_cols = [col for col in df.columns if col.startswith('metric_') or col in ['final_profit_loss_percent']]
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        # Upewnij się, że kolumny numeryczne są poprawne
+        cols_to_numeric = ['profit_loss', 'inst_sync', 'retail_herding', 'price_gravity', 'aqm_score']
+        for col in cols_to_numeric:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # 1. Podstawowe metryki
+        wins = df[df['profit_loss'] > 0]
+        losses = df[df['profit_loss'] <= 0]
+        
+        gross_profit = wins['profit_loss'].sum()
+        gross_loss = abs(losses['profit_loss'].sum())
+        
+        pf = gross_profit / gross_loss if gross_loss != 0 else 999.0
+        win_rate = (len(wins) / len(df)) * 100 if len(df) > 0 else 0
+
+        # 2. Analiza Korelacji (Co działa?)
+        correlations = {}
+        if len(df) > 5: # Wymaga minimum danych
+            for metric in ['inst_sync', 'retail_herding', 'aqm_score']:
+                if metric in df.columns:
+                    correlations[metric] = df[metric].corr(df['profit_loss'])
+
+        # 3. Segmentacja Instytucjonalna (Inst Sync > 0 vs < 0)
+        inst_analysis = {}
+        if 'inst_sync' in df.columns:
+            positive_inst = df[df['inst_sync'] > 0]
+            negative_inst = df[df['inst_sync'] <= 0]
             
-        return df
-    except Exception as e:
-        print(f"Błąd ładowania danych: {e}")
-        return None
+            inst_analysis = {
+                "positive_sync_pf": ApexAudit._calculate_pf(positive_inst),
+                "positive_sync_count": len(positive_inst),
+                "negative_sync_pf": ApexAudit._calculate_pf(negative_inst),
+                "negative_sync_count": len(negative_inst)
+            }
 
-def calculate_metrics(df):
-    """Oblicza kluczowe metryki tradingowe."""
-    if df.empty:
-        return {}
-    
-    wins = df[df['final_profit_loss_percent'] > 0]
-    losses = df[df['final_profit_loss_percent'] <= 0]
-    
-    gross_profit = wins['final_profit_loss_percent'].sum()
-    gross_loss = abs(losses['final_profit_loss_percent'].sum())
-    
-    pf = gross_profit / gross_loss if gross_loss != 0 else 0
-    win_rate = len(wins) / len(df) * 100
-    avg_win = wins['final_profit_loss_percent'].mean()
-    avg_loss = losses['final_profit_loss_percent'].mean()
-    
-    # Expectancy (Oczekiwana wartość na transakcję)
-    expectancy = (avg_win * (win_rate/100)) - (abs(avg_loss) * (1 - win_rate/100))
-    
-    return {
-        "Total Trades": len(df),
-        "Profit Factor": pf,
-        "Win Rate": win_rate,
-        "Avg Win %": avg_win,
-        "Avg Loss %": avg_loss,
-        "Expectancy": expectancy,
-        "Net Result %": df['final_profit_loss_percent'].sum()
-    }
+        return {
+            "summary": {
+                "profit_factor": round(pf, 2),
+                "win_rate": round(win_rate, 1),
+                "total_trades": len(df),
+                "net_profit": round(df['profit_loss'].sum(), 2)
+            },
+            "correlations": {k: round(v, 2) for k, v in correlations.items() if not np.isnan(v)},
+            "institutional_analysis": inst_analysis
+        }
 
-def analyze_correlations(df):
-    """Analizuje, które metryki korelują z zyskiem."""
-    target = 'final_profit_loss_percent'
-    metrics = [col for col in df.columns if col.startswith('metric_')]
-    
-    correlations = []
-    for metric in metrics:
-        if metric in df.columns:
-            corr = df[metric].corr(df[target])
-            correlations.append((metric, corr))
-            
-    return sorted(correlations, key=lambda x: abs(x[1]), reverse=True)
-
-def main():
-    print("=== APEX QUANTUM AUDIT - ROZPOCZĘCIE ===")
-    df = load_data(CSV_PATH)
-    
-    if df is None:
-        return
-
-    # 1. Globalne Wyniki
-    metrics = calculate_metrics(df)
-    print("\n--- WYNIKI BAZOWE (OBECNA STRATEGIA) ---")
-    print(tabulate(metrics.items(), headers=["Metryka", "Wartość"], tablefmt="grid"))
-
-    # 2. Analiza wg Typu Setupu
-    print("\n--- WYNIKI WG TYPU SETUPU ---")
-    setup_groups = df.groupby('setup_type').apply(calculate_metrics)
-    # Przekształcenie do czytelnej tabeli
-    setup_table = []
-    for setup, stats in setup_groups.items():
-        row = [setup, stats.get('Total Trades'), f"{stats.get('Profit Factor', 0):.2f}", f"{stats.get('Win Rate', 0):.1f}%"]
-        setup_table.append(row)
-    print(tabulate(setup_table, headers=["Setup", "Liczba", "PF", "WR"], tablefmt="simple"))
-
-    # 3. Analiza Korelacji (Co wpływa na wynik?)
-    print("\n--- ANALIZA CZYNNIKÓW WPŁYWU (KORELACJE Z PnL) ---")
-    corrs = analyze_correlations(df)
-    print(tabulate(corrs[:5], headers=["Metryka AQM", "Korelacja Pearsona"], tablefmt="simple"))
-    
-    # 4. Segmentacja - Inst Sync
-    print("\n--- HIPOTEZA: FILTR INSTYTUCJONALNY ---")
-    # Sprawdźmy transakcje, gdzie inst_sync było dodatnie vs ujemne
-    if 'metric_inst_sync' in df.columns:
-        df_inst_pos = df[df['metric_inst_sync'] > 0]
-        df_inst_neg = df[df['metric_inst_sync'] <= 0]
-        
-        pf_pos = calculate_metrics(df_inst_pos).get('Profit Factor', 0)
-        pf_neg = calculate_metrics(df_inst_neg).get('Profit Factor', 0)
-        
-        print(f"PF gdy Instytucje Zgodne (>0): {pf_pos:.2f} (Liczba transakcji: {len(df_inst_pos)})")
-        print(f"PF gdy Instytucje Przeciwne (<=0): {pf_neg:.2f} (Liczba transakcji: {len(df_inst_neg)})")
-    
-    print("\n=== KONIEC AUDYTU ===")
-
-if __name__ == "__main__":
-    main()
+    @staticmethod
+    def _calculate_pf(sub_df):
+        if sub_df.empty: return 0.0
+        wins = sub_df[sub_df['profit_loss'] > 0]['profit_loss'].sum()
+        losses = abs(sub_df[sub_df['profit_loss'] <= 0]['profit_loss'].sum())
+        return round(wins / losses, 2) if losses != 0 else 999.0
