@@ -418,7 +418,7 @@ export const renderers = {
                 </h4>
                 <p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p>
                 
-                <div class="flex items-start gap-3">
+                <div class="flex flex-wrap gap-3">
                     <button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0">
                         <i data-lucide="cpu" class="w-4 h-4 mr-2"></i>
                         Konfiguruj Optymalizację
