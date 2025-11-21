@@ -24,7 +24,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.6.0")
+app = FastAPI(title="APEX Predator API", version="2.7.0") # Bump version
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,7 +62,9 @@ async def startup_event():
             'h3_deep_dive_request': 'NONE',
             'h3_deep_dive_report': 'NONE',
             'h3_live_parameters': '{}',
-            'macro_sentiment': 'UNKNOWN'
+            'macro_sentiment': 'UNKNOWN',
+            # === NOWE KLUCZE DLA OPTYMALIZACJI ===
+            'optimization_request': 'NONE' # Przechowuje ID zadania lub status
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -115,18 +117,9 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     return crud.get_active_and_pending_signals(db)
 
-# ==================================================================
-# === NOWY ENDPOINT: SZCZEGÓŁY SYGNAŁU + WALIDACJA LIVE + NEWSY ===
-# ==================================================================
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
-    """
-    Pobiera pełne informacje o sygnale, firmie, RYNKU (Live) oraz NEWS SENTIMENT.
-    Wykonuje walidację 'Just-in-Time' setupu.
-    """
     ticker = ticker.upper().strip()
-    
-    # 1. Pobierz sygnał z bazy
     signal = db.query(models.TradingSignal).filter(
         models.TradingSignal.ticker == ticker,
         models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
@@ -135,16 +128,10 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     if not signal:
         raise HTTPException(status_code=404, detail="Sygnał nieaktywny lub nie istnieje.")
 
-    # 2. Pobierz dane firmy
     company = db.query(models.Company).filter(models.Company.ticker == ticker).first()
-    
-    # 3. Pobierz LIVE Quote z Alpha Vantage (Teraz zwraca też _price_source)
     live_quote = api_av_client.get_global_quote(ticker)
-    
-    # 4. Pobierz Status Rynku
     market_status_raw = api_av_client.get_market_status()
     
-    # 5. NOWOŚĆ: Pobierz najnowszy News Sentiment z bazy (Kontekst Fundamentalny)
     latest_news = db.query(models.ProcessedNews).filter(
         models.ProcessedNews.ticker == ticker
     ).order_by(models.ProcessedNews.processed_at.desc()).first()
@@ -158,19 +145,17 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "processed_at": latest_news.processed_at.isoformat()
         }
 
-    # Przetwarzanie danych Live
     current_price = 0.0
     prev_close = 0.0
     change_percent = "0%"
     market_state = "UNKNOWN"
-    price_source = "unknown" # Nowe pole
+    price_source = "unknown"
     
     if live_quote:
         try:
             current_price = float(live_quote.get("05. price", 0))
             prev_close = float(live_quote.get("08. previous close", 0))
             change_percent = live_quote.get("10. change percent", "0%")
-            # Pobieramy źródło ceny (extended_hours, close, previous_close)
             price_source = live_quote.get("_price_source", "unknown")
         except: pass
         
@@ -180,7 +165,6 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
                  market_state = m.get("current_status", "Closed")
                  break
 
-    # --- WALIDACJA LIVE (STRAŻNIK) ---
     validation_msg = "Setup Aktywny"
     is_valid = True
     
@@ -228,7 +212,7 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "prev_close": prev_close,
             "change_percent": change_percent,
             "market_status": market_state,
-            "price_source": price_source, # PRZEKAZUJEMY ŹRÓDŁO DO UI
+            "price_source": price_source,
             "server_check_time": datetime.now(timezone.utc).isoformat()
         },
         "setup": {
@@ -247,9 +231,6 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     }
     
     return response_data
-
-# ==================================================================
-
 
 @app.get("/api/v1/signals/discarded-count-24h", response_model=Dict[str, int])
 def get_discarded_signals_count(db: Session = Depends(get_db)):
@@ -363,6 +344,54 @@ def get_live_quote(ticker: str):
         return api_av_client.get_global_quote(ticker.strip().upper())
     except Exception:
         raise HTTPException(status_code=503, detail="Błąd AV.")
+
+# === NOWE ENDPOINTY DLA APEX V4 (QUANTUM OPTIMIZATION) ===
+
+@app.post("/api/v1/optimization/start", status_code=202, response_model=schemas.OptimizationJob)
+def start_optimization(request: schemas.OptimizationRequest, db: Session = Depends(get_db)):
+    """
+    Uruchamia nowy proces optymalizacji bayesowskiej (QuantumOptimizer).
+    """
+    worker_status = crud.get_system_control_value(db, "worker_status")
+    if worker_status.startswith('BUSY') or worker_status == 'RUNNING':
+        # Sprawdź, czy to nie stare zadanie optymalizacji (można dodać logikę czyszczenia)
+        raise HTTPException(status_code=409, detail="Worker jest obecnie zajęty.")
+
+    try:
+        # 1. Utwórz zadanie w bazie
+        new_job = crud.create_optimization_job(db, request)
+        
+        # 2. Przekaż ID zadania do Workera przez system_control
+        crud.set_system_control_value(db, "optimization_request", new_job.id)
+        
+        return new_job
+    except Exception as e:
+        logger.error(f"Błąd podczas startu optymalizacji: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Błąd serwera: {e}")
+
+@app.get("/api/v1/optimization/results", response_model=Optional[schemas.OptimizationJobDetail])
+def get_latest_optimization_results(db: Session = Depends(get_db)):
+    """
+    Pobiera szczegóły najnowszego zadania optymalizacji (wraz z próbami).
+    """
+    try:
+        job = crud.get_latest_optimization_job(db)
+        if not job:
+            return None
+            
+        # Pobierz próby
+        trials = crud.get_optimization_trials(db, job.id)
+        
+        # Konwersja do schematu (Pydantic handles mapping)
+        job_detail = schemas.OptimizationJobDetail.model_validate(job)
+        job_detail.trials = [schemas.OptimizationTrial.model_validate(t) for t in trials]
+        
+        return job_detail
+    except Exception as e:
+        logger.error(f"Błąd pobierania wyników optymalizacji: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Błąd serwera.")
+
+# =========================================================
 
 # --- ENDPOINTY KONTROLI ---
 @app.post("/api/v1/worker/control/{action}", status_code=202)
