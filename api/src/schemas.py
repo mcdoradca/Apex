@@ -183,3 +183,42 @@ class H3DeepDiveReport(BaseModel):
     status: str 
     report_text: Optional[str] = None
     last_updated: Optional[datetime] = None
+
+# ==========================================================
+# === NOWOŚĆ: SCHEMATY DLA APEX V4 (Quantum Optimization) ===
+# ==========================================================
+
+class OptimizationRequest(BaseModel):
+    target_year: int = Field(..., description="Rok, na którym ma być przeprowadzona optymalizacja (np. 2023)", ge=2000, le=2100)
+    n_trials: int = Field(default=50, description="Liczba prób algorytmu Optuna", ge=10, le=500)
+    # Opcjonalnie można nadpisać domyślną przestrzeń poszukiwań
+    parameter_space: Optional[Dict[str, Any]] = None
+
+class OptimizationTrial(BaseModel):
+    id: int
+    trial_number: int
+    params: Dict[str, Any]
+    profit_factor: Optional[float] = None
+    total_trades: Optional[int] = None
+    win_rate: Optional[float] = None
+    net_profit: Optional[float] = None
+    state: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class OptimizationJob(BaseModel):
+    id: str
+    status: str
+    target_year: int
+    total_trials: int
+    best_score: Optional[float] = None
+    created_at: datetime
+    # Lista prób może być długa, więc często pobieramy ją osobno lub w detalu
+    # trials: List[OptimizationTrial] = [] 
+
+    model_config = ConfigDict(from_attributes=True)
+
+class OptimizationJobDetail(OptimizationJob):
+    """Pełny widok zadania wraz z listą wszystkich prób"""
+    trials: List[OptimizationTrial] = []
