@@ -24,7 +24,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.7.0") # Bump version
+app = FastAPI(title="APEX Predator API", version="2.8.0") # Version bump for Quantum V4
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,7 +39,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API is running"}
+    return {"status": "APEX Predator API is running (V4 Quantum Ready)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -63,8 +63,8 @@ async def startup_event():
             'h3_deep_dive_report': 'NONE',
             'h3_live_parameters': '{}',
             'macro_sentiment': 'UNKNOWN',
-            # === NOWE KLUCZE DLA OPTYMALIZACJI ===
-            'optimization_request': 'NONE' # Przechowuje ID zadania lub status
+            # === NOWE KLUCZE DLA OPTYMALIZACJI (APEX V4) ===
+            'optimization_request': 'NONE' 
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -373,6 +373,7 @@ def start_optimization(request: schemas.OptimizationRequest, db: Session = Depen
 def get_latest_optimization_results(db: Session = Depends(get_db)):
     """
     Pobiera szczegóły najnowszego zadania optymalizacji (wraz z próbami).
+    Teraz zwraca również 'configuration' zawierające 'sensitivity_analysis'.
     """
     try:
         job = crud.get_latest_optimization_job(db)
