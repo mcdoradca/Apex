@@ -16,57 +16,97 @@ from .utils import (
     append_scan_log,
     update_scan_progress,
     send_telegram_alert,
-    safe_float
+    safe_float,
+    get_system_control_value # Dodano do odczytu sentymentu Fazy 0
 )
-# Korzystamy z centralnych metryk, aby zachować spójność z Backtestem
+# Korzystamy z centralnych metryk
 from . import aqm_v3_metrics
 from . import aqm_v3_h2_loader
 from .aqm_v3_h3_loader import _parse_bbands
 
+# === NOWOŚĆ: Import Adaptive Executor ===
+from .apex_optimizer import AdaptiveExecutor
+
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# === STAŁE KONFIGURACYJNE H3 (LIVE) ===
+# === STAŁE DOMYŚLNE (FALLBACK) ===
 # ============================================================================
-DEFAULT_PERCENTILE = 0.95
-DEFAULT_M_SQ_THRESHOLD = -0.5
-DEFAULT_MIN_SCORE = 0.0
-DEFAULT_TP_MULT = 5.0
-DEFAULT_SL_MULT = 2.0
-# Musimy mieć wystarczająco dużo historii, aby obliczyć percentyle i Z-Score
+DEFAULT_PARAMS = {
+    'h3_percentile': 0.95,
+    'h3_m_sq_threshold': -0.5,
+    'h3_min_score': 0.0,
+    'h3_tp_multiplier': 5.0,
+    'h3_sl_multiplier': 2.0
+}
+
 H3_CALC_WINDOW = 100 
 REQUIRED_HISTORY_SIZE = 201 
 
+def _get_market_conditions(session: Session, api_client: AlphaVantageClient) -> Dict[str, Any]:
+    """
+    Oblicza metryki rynkowe (VIX Proxy, Trend) dla AdaptiveExecutor.
+    """
+    conditions = {'vix': 20.0, 'trend': 'NEUTRAL'} # Wartości bezpieczne/domyślne
+    
+    try:
+        # 1. Sprawdź sentyment Makro z Fazy 0 (baza danych)
+        macro_sentiment = get_system_control_value(session, 'macro_sentiment') or "UNKNOWN"
+        
+        # 2. Pobierz dane SPY (Benchmark) do obliczenia VIX Proxy i Trendu
+        spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=24, outputsize='full')
+        
+        if spy_raw:
+            spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
+            spy_df.index = pd.to_datetime(spy_df.index)
+            spy_df.sort_index(inplace=True)
+            
+            if len(spy_df) > 200:
+                # A. VIX Proxy: Roczna zmienność z ostatnich 30 dni
+                # Wzór: StdDev(Returns_30d) * sqrt(252) * 100
+                recent_returns = spy_df['close'].pct_change().tail(30)
+                vix_proxy = recent_returns.std() * (252 ** 0.5) * 100
+                
+                # B. Trend: Cena vs SMA 200
+                current_price = spy_df['close'].iloc[-1]
+                sma_200 = spy_df['close'].rolling(window=200).mean().iloc[-1]
+                trend = 'BULL' if current_price > sma_200 else 'BEAR'
+                
+                conditions['vix'] = float(vix_proxy) if not pd.isna(vix_proxy) else 20.0
+                conditions['trend'] = trend
+        
+        # Logika hybrydowa: Jeśli Faza 0 krzyczy RISK_OFF, wymuś tryb wysokiej zmienności
+        if "RISK_OFF" in macro_sentiment:
+            logger.warning("Faza 0 zgłasza RISK_OFF. Wymuszam tryb HIGH_VOLATILITY dla parametrów.")
+            conditions['vix'] = max(conditions['vix'], 30.0) # Wymuś > 25
+            
+        logger.info(f"Warunki Rynkowe wykryte: VIX={conditions['vix']:.2f}, Trend={conditions['trend']}, Makro={macro_sentiment}")
+        return conditions
+
+    except Exception as e:
+        logger.warning(f"Błąd podczas badania warunków rynkowych: {e}. Używam domyślnych.")
+        return conditions
+
 def _is_setup_still_valid(entry: float, sl: float, tp: float, current_price: float) -> tuple[bool, str]:
     """
-    Krytyczna logika "Strażnika Ważności".
-    Sprawdza, czy setup nie jest już 'spalony' przez aktualną cenę rynkową.
-    Zwraca (True/False, Powód).
+    Strażnik Ważności Setupu.
     """
     if current_price is None or entry == 0:
         return False, "Brak aktualnej ceny lub błędna cena wejścia"
 
-    # 1. Sprawdź czy nie uderzyliśmy już w Stop Loss (Scenariusz Gap Down / Krach)
-    # Zakładamy kierunek LONG
     if current_price <= sl:
         return False, f"SPALONY: Cena ({current_price:.2f}) przebiła już Stop Loss ({sl:.2f})."
 
-    # 2. Sprawdź czy nie uderzyliśmy już w Take Profit (Ruch się odbył beze mnie)
     if current_price >= tp:
         return False, f"ZA PÓŹNO: Cena ({current_price:.2f}) osiągnęła już Take Profit ({tp:.2f})."
-
-    # 3. Sprawdź czy Risk/Reward jest nadal opłacalny (Nie goń ceny)
-    # Jeśli cena jest znacznie wyżej niż wejście, potencjalny zysk maleje, a ryzyko rośnie.
-    # Akceptujemy lekkie odchylenie, ale bez przesady.
     
     potential_profit = tp - current_price
     potential_loss = current_price - sl
     
-    if potential_loss == 0: return False, "Błąd matematyczny (SL na cenie)."
+    if potential_loss <= 0: return False, "Błąd matematyczny (Cena poniżej SL)."
     
     current_rr = potential_profit / potential_loss
     
-    # Wymagamy, aby w momencie wejścia RR był nadal przynajmniej 1.5 (nawet jeśli oryginalnie był 2.5)
     if current_rr < 1.5:
         return False, f"NIEOPŁACALNY: Cena uciekła ({current_price:.2f}). Aktualny R:R to tylko {current_rr:.2f}."
 
@@ -74,89 +114,101 @@ def _is_setup_still_valid(entry: float, sl: float, tp: float, current_price: flo
 
 def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaVantageClient, parameters: Dict[str, Any] = None):
     """
-    Główna pętla Fazy 3 (Live Sniper).
-    Analizuje listę kandydatów pod kątem setupów H3, używając danych w czasie rzeczywistym.
+    Główna pętla Fazy 3 (H3 LIVE SNIPER).
+    Analizuje rynek w czasie rzeczywistym, ADAPTUJE parametry i szuka sygnałów.
     """
-    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Z logiką Ważności)...")
-    append_scan_log(session, "Faza 3 (H3): Rozpoczynanie analizy kwantowej...")
+    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive)...")
     
-    # Konfiguracja parametrów
-    params = parameters or {}
-    h3_percentile = float(params.get('h3_percentile', DEFAULT_PERCENTILE))
-    h3_m_sq_threshold = float(params.get('h3_m_sq_threshold', DEFAULT_M_SQ_THRESHOLD))
-    h3_min_score = float(params.get('h3_min_score', DEFAULT_MIN_SCORE))
-    h3_tp_mult = float(params.get('h3_tp_multiplier', DEFAULT_TP_MULT))
-    h3_sl_mult = float(params.get('h3_sl_multiplier', DEFAULT_SL_MULT))
+    # 1. Pobierz i scal parametry (Użytkownik > Domyślne)
+    base_params = DEFAULT_PARAMS.copy()
+    if parameters:
+        for k, v in parameters.items():
+            if v is not None: base_params[k] = float(v)
+
+    # 2. === ADAPTACJA (Apex V4 Brain) ===
+    append_scan_log(session, "Faza 3: Analiza warunków rynkowych i adaptacja parametrów...")
+    
+    market_conditions = _get_market_conditions(session, api_client)
+    executor = AdaptiveExecutor(base_params)
+    adapted_params = executor.get_adapted_params(market_conditions)
+    
+    # Logowanie zmian adaptacyjnych
+    changes_log = []
+    for k, v in adapted_params.items():
+        orig = base_params.get(k)
+        if orig != v:
+            changes_log.append(f"{k}: {orig} -> {v:.3f}")
+    
+    if changes_log:
+        log_msg = f"ADAPTACJA AKTYWNA (VIX: {market_conditions['vix']:.1f}): " + ", ".join(changes_log)
+        logger.info(log_msg)
+        append_scan_log(session, log_msg)
+    else:
+        append_scan_log(session, "Faza 3: Warunki neutralne. Parametry bez zmian.")
+
+    # Rozpakowanie finalnych parametrów do zmiennych dla pętli
+    h3_percentile = float(adapted_params['h3_percentile'])
+    h3_m_sq_threshold = float(adapted_params['h3_m_sq_threshold'])
+    h3_min_score = float(adapted_params['h3_min_score'])
+    h3_tp_mult = float(adapted_params['h3_tp_multiplier'])
+    h3_sl_mult = float(adapted_params['h3_sl_multiplier'])
     
     signals_generated = 0
     total_candidates = len(candidates)
 
+    # 3. Główna Pętla Skanowania
     for i, ticker in enumerate(candidates):
         if i % 5 == 0: update_scan_progress(session, i, total_candidates)
         
         try:
-            # 1. Pobieranie Danych (Dimension 1, 3, 7)
-            # Używamy outputsize='full', aby mieć historię do Z-Score'ów
+            # A. Pobieranie Danych (Cache + API)
             daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', expiry_hours=12, outputsize='full')
             daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=12, outputsize='full')
             
-            if not daily_raw or not daily_adj_raw:
-                continue
+            if not daily_raw or not daily_adj_raw: continue
             
-            # 2. Pobieranie Danych (Dimension 3 - BBANDS) - NAPRAWIONE
             bbands_raw = get_raw_data_with_cache(session, api_client, ticker, 'BBANDS', 'get_bollinger_bands', expiry_hours=24, interval='daily', time_period=20)
-            bbands_df = _parse_bbands(bbands_raw) # Teraz faktycznie to parsujemy i używamy
+            bbands_df = _parse_bbands(bbands_raw)
 
-            # 3. Pobieranie Danych (Dimension 2 - H2 News/Insider)
             h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, session)
             insider_df = h2_data.get('insider_df')
             news_df = h2_data.get('news_df')
 
-            # 4. Przetwarzanie DataFrame
+            # B. Przetwarzanie
             daily_ohlcv = standardize_df_columns(pd.DataFrame.from_dict(daily_raw.get('Time Series (Daily)', {}), orient='index'))
             daily_ohlcv.index = pd.to_datetime(daily_ohlcv.index)
             
             daily_adj = standardize_df_columns(pd.DataFrame.from_dict(daily_adj_raw.get('Time Series (Daily)', {}), orient='index'))
             daily_adj.index = pd.to_datetime(daily_adj.index)
 
-            # Sprawdzenie długości historii
-            if len(daily_adj) < REQUIRED_HISTORY_SIZE:
-                continue
+            if len(daily_adj) < REQUIRED_HISTORY_SIZE: continue
 
-            # Łączenie danych (Price Gravity wymaga VWAP Proxy z OHLCV)
             daily_ohlcv['vwap_proxy'] = (daily_ohlcv['high'] + daily_ohlcv['low'] + daily_ohlcv['close']) / 3.0
             df = daily_adj.join(daily_ohlcv[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
             
             close_col = 'close_ohlcv' if 'close_ohlcv' in df.columns else 'close'
-            # Wymiar 1.2: Price Gravity
             df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
             df['atr_14'] = calculate_atr(df, period=14).ffill().fillna(0)
-            df['close'] = df[close_col] # Ujednolicenie
+            df['close'] = df[close_col]
 
-            # 5. Obliczenia Metryk (Wykorzystujemy logikę z aqm_v3_metrics.py ale zwektoryzowaną dla szybkości)
-            # Tutaj musimy odtworzyć logikę "pre_calculate", ale poprawnie
-            # Aby zachować spójność z Backtestem, używamy tej samej logiki co w backtest_engine._pre_calculate_metrics
-            
-            # a) Metryki H2 (J components)
+            # C. Metryki (Vectorized)
             df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
             df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
             
-            # b) Metryki H3/H4 (Market Temp, Nabla)
             df['daily_returns'] = df['close'].pct_change()
             df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
             df['nabla_sq'] = df['price_gravity']
 
-            # c) Metryki m^2 (Attention Density)
             df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
             df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
             df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
             df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
 
             if not news_df.empty:
-                news_counts_daily = news_df.groupby(news_df.index.date).size()
-                news_counts_daily.index = pd.to_datetime(news_counts_daily.index)
-                news_counts_daily = news_counts_daily.reindex(df.index, fill_value=0)
-                df['information_entropy'] = news_counts_daily.rolling(window=10).sum()
+                news_counts = news_df.groupby(news_df.index.date).size()
+                news_counts.index = pd.to_datetime(news_counts.index)
+                news_counts = news_counts.reindex(df.index, fill_value=0)
+                df['information_entropy'] = news_counts.rolling(window=10).sum()
                 df['news_mean_200d'] = df['information_entropy'].rolling(window=200).mean()
                 df['news_std_200d'] = df['information_entropy'].rolling(window=200).std()
                 df['normalized_news'] = ((df['information_entropy'] - df['news_mean_200d']) / df['news_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
@@ -166,7 +218,6 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             
             df['m_sq'] = df['normalized_volume'] + df['normalized_news']
 
-            # d) Obliczenie J (Siła Napędowa)
             S = df['information_entropy']
             Q = df['retail_herding']
             T = df['market_temperature']
@@ -174,7 +225,6 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             J = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
             df['J'] = J.fillna(S + (mu * 1.0))
 
-            # 6. Normalizacja i AQM Score (Tożsame z Backtestem)
             j_mean = df['J'].rolling(window=H3_CALC_WINDOW).mean()
             j_std = df['J'].rolling(window=H3_CALC_WINDOW).std(ddof=1)
             j_norm = ((df['J'] - j_mean) / j_std).fillna(0)
@@ -187,54 +237,41 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             m_std = df['m_sq'].rolling(window=H3_CALC_WINDOW).std(ddof=1)
             m_norm = ((df['m_sq'] - m_mean) / m_std).fillna(0)
             
-            # Formuła Pola Kwantowego
             aqm_score_series = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
-            
-            # Dynamiczny próg percentylowy
             threshold_series = aqm_score_series.rolling(window=H3_CALC_WINDOW).quantile(h3_percentile)
 
-            # 7. Analiza Ostatniej Świecy (Czy mamy sygnał?)
-            # Bierzemy ostatni ZAMKNIĘTY dzień (iloc[-1])
+            # D. Analiza Ostatniej Świecy
             last_candle = df.iloc[-1]
             current_aqm = aqm_score_series.iloc[-1]
             current_thresh = threshold_series.iloc[-1]
             current_m = m_norm.iloc[-1]
 
-            # WARUNEK WEJŚCIA
             if (current_aqm > current_thresh) and \
                (current_m < h3_m_sq_threshold) and \
                (current_aqm > h3_min_score):
                
-                # 8. Konstrukcja Setupu (Ceny)
                 atr = last_candle['atr_14']
-                ref_price = last_candle['close'] # Cena zamknięcia dnia sygnałowego
+                ref_price = last_candle['close']
                 
-                # Setup teoretyczny
                 take_profit = ref_price + (h3_tp_mult * atr)
                 stop_loss = ref_price - (h3_sl_mult * atr)
-                entry_price = ref_price # Wstępnie zakładamy wejście po cenie sygnału (lub Open następnego dnia, tu upraszczamy do ref)
+                entry_price = ref_price
 
-                # 9. WALIDACJA LIVE (Strażnik Ważności)
-                # Pobieramy AKTUALNĄ cenę live (REALTIME), aby sprawdzić czy setup nie jest spalony
+                # E. WALIDACJA LIVE (Realtime Price Check)
                 current_live_quote = api_client.get_global_quote(ticker)
                 current_live_price = safe_float(current_live_quote.get('05. price')) if current_live_quote else None
                 
                 validation_status = True
-                validation_reason = "Setup świeży (Post-Market/Pre-Market)"
+                validation_reason = "Setup świeży (Post/Pre-Market)"
                 
                 if current_live_price:
                     validation_status, validation_reason = _is_setup_still_valid(entry_price, stop_loss, take_profit, current_live_price)
 
                 if not validation_status:
-                    logger.info(f"H3 Setup dla {ticker} odrzucony przez Strażnika: {validation_reason}")
-                    # Dodajemy do logów, aby użytkownik wiedział, dlaczego odrzucono
                     append_scan_log(session, f"Odrzucono {ticker}: {validation_reason} (AQM: {current_aqm:.2f})")
-                    continue # Pomiń ten ticker, nie zapisuj sygnału
+                    continue
                 
-                # 10. Zapis do Bazy (Jeśli setup jest ważny)
-                logger.info(f"H3 SIGNAL FOUND: {ticker} (AQM: {current_aqm:.2f}). Status: {validation_reason}")
-                
-                # Sprawdź czy już nie mamy aktywnego sygnału dla tego tickera
+                # F. Zapis Sygnału
                 existing = session.query(models.TradingSignal).filter(
                     models.TradingSignal.ticker == ticker,
                     models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
@@ -245,30 +282,24 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                         ticker=ticker,
                         status='PENDING',
                         generation_date=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc), # Kluczowe do śledzenia ważności
-                        signal_candle_timestamp=last_candle.name, # Data świecy dziennej, która dała sygnał
-                        
+                        updated_at=datetime.now(timezone.utc),
+                        signal_candle_timestamp=last_candle.name,
                         entry_price=float(entry_price),
                         stop_loss=float(stop_loss),
                         take_profit=float(take_profit),
-                        
-                        # Obliczamy strefę wejścia (np. +/- 0.5 ATR od ceny sygnału)
                         entry_zone_top=float(ref_price + (0.5 * atr)),
                         entry_zone_bottom=float(ref_price - (0.5 * atr)),
-                        
                         risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
-                        
-                        notes=f"AQM H3 Live. Score:{current_aqm:.2f}. LivePrice:{current_live_price if current_live_price else 'N/A'}. J:{last_candle['J']:.2f}, N:{last_candle['nabla_sq']:.2f}, M:{last_candle['m_sq']:.2f}"
+                        notes=f"AQM H3 Live (Adapted). Score:{current_aqm:.2f}. J:{last_candle['J']:.2f}. VIX:{market_conditions['vix']:.1f}"
                     )
                     session.add(new_signal)
                     session.commit()
                     signals_generated += 1
                     
-                    # 11. Alert na Telegram
-                    msg = (f"⚛️ H3 QUANTUM SIGNAL: {ticker}\n"
-                           f"Cena: {ref_price:.2f} (Live: {current_live_price if current_live_price else '---'})\n"
+                    msg = (f"⚛️ H3 QUANTUM SIGNAL (ADAPTIVE): {ticker}\n"
+                           f"Cena: {ref_price:.2f} | Live: {current_live_price if current_live_price else '---'}\n"
                            f"TP: {take_profit:.2f} | SL: {stop_loss:.2f}\n"
-                           f"Status: {validation_reason}")
+                           f"VIX Ref: {market_conditions['vix']:.1f}")
                     send_telegram_alert(msg)
 
         except Exception as e:
@@ -276,5 +307,6 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             session.rollback()
             continue
 
-    append_scan_log(session, f"Faza 3 (H3 Live) zakończona. Wygenerowano {signals_generated} ważnych sygnałów.")
+    update_scan_progress(session, total_candidates, total_candidates)
+    append_scan_log(session, f"Faza 3 (H3 Live Adaptive) zakończona. Wygenerowano {signals_generated} sygnałów.")
     logger.info(f"Faza 3 zakończona. Sygnałów: {signals_generated}")
