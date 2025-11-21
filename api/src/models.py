@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, String, VARCHAR, TIMESTAMP, NUMERIC, BIGINT, DATE,
-    Boolean, INTEGER, TEXT, ForeignKey, Index, func, UniqueConstraint # Dodano UniqueConstraint
+    Boolean, INTEGER, TEXT, ForeignKey, Index, func, UniqueConstraint
 )
 # ZMIANA: Import PG_TIMESTAMP bezpośrednio
 from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP, JSONB
@@ -41,12 +41,6 @@ class TradingSignal(Base):
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
     
-    # ==================================================================
-    # KROK 4a (Licznik): Dodanie kolumny updated_at
-    # Ta kolumna jest niezbędna, aby filtrować sygnały, które 
-    # zostały unieważnione (INVALIDATED) lub zakończone (COMPLETED) 
-    # w ciągu ostatnich 24 godzin.
-    # ==================================================================
     updated_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
     
     status = Column(VARCHAR(50), default='PENDING')
@@ -81,8 +75,6 @@ class AIAnalysisResult(Base):
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
-# === NOWY MODEL DLA AGENCJI PRASOWEJ (CATALYST MONITOR) ===
-
 class ProcessedNews(Base):
     """
     Przechowuje "pamięć" Agencji Prasowej, aby nie wysyłać
@@ -101,11 +93,6 @@ class ProcessedNews(Base):
     __table_args__ = (
         UniqueConstraint('ticker', 'news_hash', name='uq_ticker_news_hash'),
     )
-
-# === KONIEC NOWEGO MODELU ===
-
-
-# === DODANE NOWE MODELE DLA PORTFELA I HISTORII TRANSAKCJI ===
 
 class PortfolioHolding(Base):
     """
@@ -137,11 +124,6 @@ class TransactionHistory(Base):
     # Pole na zysk/stratę dla transakcji sprzedaży - obliczane przy zapisie
     profit_loss_usd = Column(NUMERIC(14, 2), nullable=True, comment="Zrealizowany zysk/strata w USD dla transakcji sprzedaży")
 
-# === KONIEC DODANYCH MODELI ===
-
-# ==================================================================
-# === NOWY MODEL (KROK 1): Wirtualny Agent (Backtesting) ===
-# ==================================================================
 class VirtualTrade(Base):
     """
     Przechowuje wyniki Wirtualnego Agenta (Paper Tradingu).
@@ -157,10 +139,6 @@ class VirtualTrade(Base):
     ticker = Column(VARCHAR(50), nullable=False, index=True)
     
     # Status wirtualnej transakcji
-    # OPEN = W toku
-    # CLOSED_TP = Zamknięta na Take Profit
-    # CLOSED_SL = Zamknięta na Stop Loss
-    # CLOSED_EXPIRED = Zamknięta po 7 dniach (manualnie przez agenta)
     status = Column(VARCHAR(50), nullable=False, default='OPEN', index=True)
     
     # Informacje o setupie (skopiowane dla łatwiejszej analizy)
@@ -177,11 +155,6 @@ class VirtualTrade(Base):
     close_price = Column(NUMERIC(12, 2), nullable=True, comment="Cena, po której pozycja została zamknięta")
     final_profit_loss_percent = Column(NUMERIC(8, 2), nullable=True, comment="Ostateczny zysk/strata w %")
 
-    # ==================================================================
-    # === AKTUALIZACJA (GŁĘBOKIE LOGOWANIE METRYK) ===
-    # Kopiujemy DOKŁADNIE ten sam blok, co w worker/src/models.py
-    # ==================================================================
-    
     # Metryki Dnia D (wspólne dla wszystkich)
     metric_atr_14 = Column(NUMERIC(10, 4), nullable=True)
     
@@ -205,8 +178,63 @@ class VirtualTrade(Base):
     # Metryki dla H4 (Termodynamika)
     metric_J = Column(NUMERIC(10, 4), nullable=True)
     metric_J_threshold_2sigma = Column(NUMERIC(10, 4), nullable=True)
+
+class AlphaVantageCache(Base):
+    """
+    Przechowuje surowe dane (JSONB) z Alpha Vantage dla backtestingu.
+    """
+    __tablename__ = 'alpha_vantage_cache'
+    ticker = Column(VARCHAR(50), primary_key=True, nullable=False, index=True)
+    data_type = Column(VARCHAR(50), primary_key=True, nullable=False)
+    raw_data_json = Column(JSONB, nullable=False)
+    last_fetched = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
     
-    # ==================================================================
+    __table_args__ = (
+        UniqueConstraint('ticker', 'data_type', name='uq_av_cache_entry'),
+    )
 
+# === NOWE MODELE DLA APEX V4 (Quantum Optimization) ===
 
-# === KONIEC NOWEGO MODELU ===
+class OptimizationJob(Base):
+    """
+    Reprezentuje pojedynczą sesję optymalizacyjną (np. 'Optymalizacja H3 na 2023').
+    Przechowuje konfigurację i status całego zadania.
+    """
+    __tablename__ = 'optimization_jobs'
+
+    id = Column(String(36), primary_key=True, comment="UUID zadania")
+    created_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+    status = Column(String(20), default='PENDING', comment="'PENDING', 'RUNNING', 'COMPLETED', 'FAILED'")
+    target_year = Column(INTEGER, nullable=False, comment="Rok, na którym przeprowadzono optymalizację")
+    total_trials = Column(INTEGER, nullable=False, comment="Liczba zaplanowanych prób Optuny")
+    best_trial_id = Column(INTEGER, nullable=True, comment="ID najlepszej próby (po zakończeniu)")
+    best_score = Column(NUMERIC(10, 4), nullable=True, comment="Najlepszy wynik (np. Profit Factor)")
+    
+    # Przechowujemy parametry study (np. zakresy) jako JSON
+    configuration = Column(JSONB, nullable=True) 
+
+class OptimizationTrial(Base):
+    """
+    Pojedyncza próba (Trial) w ramach zadania optymalizacyjnego.
+    Odpowiada jednemu 'runowi' backtestu z konkretnym zestawem parametrów.
+    """
+    __tablename__ = 'optimization_trials'
+
+    id = Column(INTEGER, primary_key=True, autoincrement=True)
+    job_id = Column(String(36), ForeignKey('optimization_jobs.id', ondelete='CASCADE'), nullable=False, index=True)
+    trial_number = Column(INTEGER, nullable=False)
+    
+    # Parametry użyte w tej próbie (np. h3_percentile=0.98)
+    params = Column(JSONB, nullable=False)
+    
+    # Wyniki
+    profit_factor = Column(NUMERIC(10, 4), nullable=True)
+    total_trades = Column(INTEGER, nullable=True)
+    win_rate = Column(NUMERIC(10, 4), nullable=True)
+    net_profit = Column(NUMERIC(14, 2), nullable=True)
+    
+    # Status próby
+    state = Column(String(20), default='COMPLETE', comment="'COMPLETE', 'PRUNED', 'FAIL'")
+    created_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+
+# === KONIEC NOWYCH MODELI ===
