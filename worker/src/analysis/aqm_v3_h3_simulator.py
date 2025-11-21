@@ -6,7 +6,6 @@ from typing import Dict, Any
 
 # Importujemy modele i funkcje pomocnicze
 from .. import models
-# ZMIANA: Importujemy _resolve_trade z utils.py, nie z H1 simulator
 from .utils import calculate_atr, _resolve_trade
 
 logger = logging.getLogger(__name__)
@@ -36,7 +35,7 @@ def _simulate_trades_h3(
     DEFAULT_SL_MULT = 2.0
     DEFAULT_MAX_HOLD = 5
     DEFAULT_SETUP_NAME = 'AQM_V3_H3_DYNAMIC'
-    DEFAULT_MIN_SCORE = 0.0 # <-- NOWY DOMYŚLNY PARAMETR
+    DEFAULT_MIN_SCORE = 0.0 
 
     try:
         param_percentile = float(params.get('h3_percentile')) if params.get('h3_percentile') is not None else DEFAULT_PERCENTILE
@@ -47,7 +46,6 @@ def _simulate_trades_h3(
         param_name = str(params.get('setup_name')) if params.get('setup_name') and str(params.get('setup_name')).strip() else DEFAULT_SETUP_NAME
         setup_name_suffix = param_name
         
-        # === NOWY PARAMETR: MIN AQM SCORE ===
         param_min_score = float(params.get('h3_min_score')) if params.get('h3_min_score') is not None else DEFAULT_MIN_SCORE
 
     except (ValueError, TypeError) as e:
@@ -98,14 +96,9 @@ def _simulate_trades_h3(
         if pd.isna(current_aqm_score) or pd.isna(current_threshold):
             continue
         
-        # ============================================================
-        # === WARUNEK WEJŚCIA H3 + HARD FLOOR (DYNAMICZNY) ===
-        # ============================================================
-        # Zmieniono sztywne > 0 na dynamiczny parametr param_min_score
-        
         if (current_aqm_score > current_threshold) and \
            (current_m_norm < param_m_sq_threshold) and \
-           (current_aqm_score > param_min_score):  # <--- UŻYCIE PARAMETRU
+           (current_aqm_score > param_min_score):  
             
             try:
                 candle_D_plus_1 = daily_df.iloc[i + 1]
@@ -117,6 +110,15 @@ def _simulate_trades_h3(
                 
                 take_profit = entry_price + (param_tp_mult * atr_value)
                 stop_loss = entry_price - (param_sl_mult * atr_value)
+                
+                # === ZABEZPIECZENIE PRZED KEYERROR: Time Dilation ===
+                time_dilation = 0.0
+                if 'time_dilation' in candle_D:
+                    time_dilation = float(candle_D['time_dilation'])
+                elif 'time_dilation' in daily_df.columns:
+                     # Próba odczytu z dataframe, jeśli w serii jest błąd
+                     time_dilation = float(daily_df.iloc[i]['time_dilation'])
+                # ===================================================
                 
                 setup_h3 = {
                     "ticker": ticker,
@@ -137,7 +139,7 @@ def _simulate_trades_h3(
                     "metric_J": float(candle_D['J']),
                     "metric_inst_sync": float(candle_D['institutional_sync']),
                     "metric_retail_herding": float(candle_D['retail_herding']),
-                    "metric_time_dilation": float(candle_D['time_dilation']),
+                    "metric_time_dilation": time_dilation, # Używamy bezpiecznej zmiennej
                     "metric_price_gravity": float(candle_D['price_gravity']),
                 }
 
