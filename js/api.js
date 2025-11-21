@@ -51,9 +51,8 @@ export const api = {
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
     
-    // === NOWOŚĆ: Pobieranie szczegółów sygnału (z walidacją Live) ===
+    // Pobieranie szczegółów sygnału (z walidacją Live)
     getSignalDetails: (ticker) => apiRequest(`api/v1/signal/${ticker}/details`),
-    // ================================================================
 
     getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
     getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
@@ -64,6 +63,7 @@ export const api = {
     sellStock: (data) => apiRequest('api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
     getTransactionHistory: () => apiRequest('api/v1/transactions'),
     getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
+    
     requestBacktest: (year, params = null) => apiRequest('api/v1/backtest/request', { 
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year, parameters: params })
     }),
@@ -76,5 +76,15 @@ export const api = {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year })
     }),
     getH3DeepDiveReport: () => apiRequest('api/v1/analysis/h3-deep-dive-report'),
-    getExportCsvUrl: () => `${API_BASE_URL}/api/v1/export/trades.csv`
+    getExportCsvUrl: () => `${API_BASE_URL}/api/v1/export/trades.csv`,
+
+    // === NOWE METODY DLA APEX V4 (Quantum Optimization) ===
+    startOptimization: (requestData) => apiRequest('api/v1/optimization/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData)
+    }),
+    
+    getOptimizationResults: () => apiRequest('api/v1/optimization/results')
+    // =======================================================
 };
