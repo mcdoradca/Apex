@@ -176,15 +176,21 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 
                 processed_count += 1
                 
-                # === NOWOŚĆ: Logowanie postępu do Bazy ===
-                # Aktualizuj pasek co 10 tickerów
-                if processed_count % 10 == 0:
+                # === NOWOŚĆ: Logowanie Sukcesów i Postępu ===
+                
+                # 1. Jeśli znaleziono transakcje dla tej spółki, logujemy to OD RAZU
+                if trades > 0:
+                    append_scan_log(session, f"✨ BACKTEST: {ticker} -> Znaleziono {trades} wirtualnych setupów.")
+
+                # 2. Aktualizuj pasek postępu częściej (co 5 tickerów)
+                if processed_count % 5 == 0:
                     update_scan_progress(session, processed_count, total_tickers)
                     logger.info(f"[Backtest] {processed_count}/{total_tickers} ({ticker}). Transakcji: {trades_generated}")
                 
-                # Dodaj wpis do logu UI co 50 tickerów (żeby nie spamować)
-                if processed_count % 50 == 0:
-                    msg = f"Backtest: Przetworzono {processed_count}/{total_tickers} ({ticker}). Znaleziono: {trades_generated}"
+                # 3. Loguj postęp do UI częściej (co 20 tickerów, a nie 50)
+                # Dzięki temu okno logów będzie "żyło"
+                if processed_count % 20 == 0:
+                    msg = f"Backtest: Przetworzono {processed_count}/{total_tickers} ({ticker})... Łącznie znaleziono: {trades_generated}"
                     append_scan_log(session, msg)
                 # ========================================
 
