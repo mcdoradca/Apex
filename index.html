@@ -358,6 +358,60 @@
             <div id="sd-validity-message" class="mt-4 p-3 rounded bg-red-900/20 border border-red-500/30 text-center text-sm text-red-300 hidden animate-pulse font-bold"></div>
         </div>
     </div>
+    
+    <!-- ========================================== -->
+    <!-- === NOWE MODALE DLA QUANTUM LAB (V4) === -->
+    
+    <!-- 1. Modal Konfiguracyjny -->
+    <div id="quantum-optimization-modal" class="modal-backdrop hidden">
+        <div class="modal-content">
+            <h3 class="text-xl font-bold mb-4 text-white flex items-center">
+                <i data-lucide="cpu" class="w-5 h-5 mr-2 text-purple-400"></i>
+                Quantum Optimizer
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (TPE) dla wybranego okresu.</p>
+            
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Rok Analizy</label>
+                    <input type="number" id="qo-year-input" class="modal-input" placeholder="np. 2023" min="2000" max="2100" value="${new Date().getFullYear() - 1}">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Liczba Prób (Trials)</label>
+                    <input type="number" id="qo-trials-input" class="modal-input" placeholder="50" min="10" max="200" value="30">
+                    <p class="text-xs text-gray-500 mt-1">Więcej prób = lepszy wynik, ale dłuższy czas.</p>
+                </div>
+            </div>
+
+            <div id="qo-status-message" class="text-sm mt-3 h-4 text-center"></div>
+
+            <div class="flex justify-end gap-3 mt-6">
+                <button id="qo-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
+                <button id="qo-start-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700">
+                    <i data-lucide="play" class="w-4 h-4 mr-2 inline"></i>Start
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. Modal Wyników -->
+    <div id="optimization-results-modal" class="modal-backdrop hidden">
+        <div class="modal-content modal-content-lg bg-[#161B22] border border-gray-700 shadow-2xl">
+            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                <h3 class="text-2xl font-bold text-white flex items-center">
+                    <i data-lucide="list" class="w-6 h-6 mr-2 text-green-400"></i>
+                    Wyniki Optymalizacji
+                </h3>
+                <button id="optimization-results-close-btn" class="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors">
+                    <i data-lucide="x" class="w-6 h-6"></i>
+                </button>
+            </div>
+            
+            <div id="optimization-results-content" class="text-gray-300">
+                <p class="text-center py-10 text-gray-500">Ładowanie wyników...</p>
+            </div>
+        </div>
+    </div>
     <!-- ========================================== -->
 
     <!-- UWAGA: Wczytujemy TYLKO app.js, który sam importuje pozostałe moduły. -->
