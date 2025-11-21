@@ -1,125 +1,96 @@
-import pandas as pd
 import itertools
-from tqdm import tqdm
+import logging
+from .phase3_sniper import Phase3Sniper
 
-# === KONFIGURACJA ===
-CSV_PATH = 'apex_virtual_trades_export_20251121_0621.csv'
-TARGET_PF = 2.0
-MIN_TRADES = 20  # Minimalna liczba transakcji, aby wynik był statystycznie istotny
+logger = logging.getLogger(__name__)
 
-# === DEFINICJE ZAKRESÓW OPTYMALIZACJI (GRID SEARCH) ===
-# Szukamy parametrów odcinających słabe sygnały
-SEARCH_SPACE = {
-    # Filtr 1: Koherencja Instytucjonalna (Czy Smart Money jest z nami?)
-    'min_inst_sync': [-1.0, -0.5, 0.0, 0.2, 0.5],
-    
-    # Filtr 2: Herding Detaliczny (Czy ulica jest zbyt euforyczna?)
-    # Jeśli herding jest zbyt wysoki, to może być pułapka. Szukamy górnego limitu.
-    'max_retail_herding': [10.0, 2.0, 1.5, 1.0], # 10.0 oznacza brak filtru
-    
-    # Filtr 3: Siła Sygnału H3 (Czy AQM Score jest wystarczająco silny?)
-    # Czy warto podnieść poprzeczkę powyżej standardowego progu?
-    'min_aqm_score': [-10.0, 0.0, 0.5, 1.0], # Wartości przykładowe, zależne od skali w CSV
-    
-    # Filtr 4: Grawitacja Cenowa (Czy cena nie odleciała za daleko?)
-    # Unikamy łapania spadających noży, jeśli grawitacja jest zbyt silna
-    'max_price_gravity_abs': [10.0, 0.3, 0.1, 0.05]
-}
-
-def load_data(filepath):
-    df = pd.read_csv(filepath)
-    # Parsowanie liczb
-    cols_to_fix = ['final_profit_loss_percent', 'metric_inst_sync', 
-                   'metric_retail_herding', 'metric_aqm_score_h3', 'metric_price_gravity']
-    for col in cols_to_fix:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Usuń wiersze bez wyniku (np. otwarte transakcje)
-    df = df.dropna(subset=['final_profit_loss_percent'])
-    
-    # Dodaj kolumnę grawitacji absolutnej dla ułatwienia filtrowania
-    if 'metric_price_gravity' in df.columns:
-        df['abs_gravity'] = df['metric_price_gravity'].abs()
-    else:
-        df['abs_gravity'] = 0
-        
-    return df
-
-def backtest_strategy(df, params):
+class ApexOptimizer:
     """
-    Symuluje strategię z nałożonymi filtrami.
+    Moduł optymalizacji strategii (Grid Search).
+    Szuka najlepszych parametrów dla filtrów Apex 2.0.
     """
-    mask = pd.Series([True] * len(df))
-    
-    # Aplikacja filtrów
-    if 'metric_inst_sync' in df.columns:
-        mask &= (df['metric_inst_sync'] >= params['min_inst_sync'])
-        
-    if 'metric_retail_herding' in df.columns:
-        mask &= (df['metric_retail_herding'] <= params['max_retail_herding'])
-        
-    if 'metric_aqm_score_h3' in df.columns:
-        mask &= (df['metric_aqm_score_h3'] >= params['min_aqm_score'])
-        
-    if 'abs_gravity' in df.columns:
-        mask &= (df['abs_gravity'] <= params['max_price_gravity_abs'])
-        
-    filtered_df = df[mask]
-    
-    if len(filtered_df) == 0:
-        return 0.0, 0, 0.0
-    
-    wins = filtered_df[filtered_df['final_profit_loss_percent'] > 0]['final_profit_loss_percent'].sum()
-    losses = abs(filtered_df[filtered_df['final_profit_loss_percent'] <= 0]['final_profit_loss_percent'].sum())
-    
-    pf = wins / losses if losses != 0 else 999.0 # Infinite PF if no losses
-    total_pnl = filtered_df['final_profit_loss_percent'].sum()
-    
-    return pf, len(filtered_df), total_pnl
 
-def run_optimization():
-    print("=== APEX STRATEGY OPTIMIZER: ROZPOCZYNAM SZUKANIE ALPHA ===")
-    df = load_data(CSV_PATH)
-    
-    # Generowanie wszystkich kombinacji parametrów
-    keys, values = zip(*SEARCH_SPACE.items())
-    param_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-    
-    print(f"Liczba kombinacji do przetestowania: {len(param_combinations)}")
-    print(f"Baza transakcji: {len(df)}")
-    
-    results = []
-    
-    for params in tqdm(param_combinations):
-        pf, num_trades, total_pnl = backtest_strategy(df, params)
+    def __init__(self, db_client):
+        self.db = db_client
+        # Przestrzeń poszukiwań (Uproszczona dla szybkości na mobile)
+        self.search_space = {
+            'min_inst_sync': [0.0, 0.2],
+            'max_retail_herding': [1.5, 2.0, 10.0], # 10.0 = brak filtra
+            'max_price_gravity': [0.1, 0.15, 0.3]
+        }
+
+    def run_optimization(self, candidates, date_range):
+        """
+        Uruchamia symulacje dla każdej kombinacji parametrów.
+        """
+        keys, values = zip(*self.search_space.items())
+        combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
         
-        if num_trades >= MIN_TRADES:
-            result_entry = params.copy()
-            result_entry['PF'] = pf
-            result_entry['Trades'] = num_trades
-            result_entry['Total_PnL'] = total_pnl
-            results.append(result_entry)
+        logger.info(f"Optimizer: Testing {len(combinations)} combinations...")
+        
+        results = []
+
+        for params in combinations:
+            # Dla każdej kombinacji uruchamiamy szybki backtest
+            # Uwaga: Używamy tych samych kandydatów, żeby było szybciej
+            sim_result = self._simulate_scenario(params, candidates, date_range)
             
-    # Sortowanie wyników wg PF
-    results_df = pd.DataFrame(results)
-    
-    if results_df.empty:
-        print("Nie znaleziono kombinacji spełniającej kryterium minimalnej liczby transakcji.")
-        return
+            if sim_result['trades'] > 5: # Odrzucamy wyniki bez znaczenia statystycznego
+                results.append({
+                    "params": params,
+                    "pf": sim_result['pf'],
+                    "net_profit": sim_result['pnl'],
+                    "trades": sim_result['trades']
+                })
 
-    best_results = results_df.sort_values(by='PF', ascending=False).head(10)
-    
-    print("\n=== TOP 10 ZNALEZIONYCH KONFIGURACJI ===")
-    print(best_results.to_string(index=False))
-    
-    # Zapisz najlepszą konfigurację do pliku
-    best_config = best_results.iloc[0].to_dict()
-    print("\n=== REKOMENDACJA EKSPERTA ===")
-    print(f"Aby osiągnąć PF {best_config['PF']:.2f}, zastosuj następujące filtry w kodzie produkcyjnym:")
-    for k, v in best_config.items():
-        if k not in ['PF', 'Trades', 'Total_PnL']:
-            print(f" - {k}: {v}")
+        # Sortowanie wg Profit Factor
+        results.sort(key=lambda x: x['pf'], reverse=True)
+        
+        best = results[0] if results else None
+        return {
+            "best_configuration": best,
+            "tested_combinations": len(combinations),
+            "top_3_results": results[:3]
+        }
 
-if __name__ == "__main__":
-    run_optimization()
+    def _simulate_scenario(self, params, candidates, date_range):
+        """
+        Symuluje pojedynczy przebieg z danymi parametrami.
+        """
+        sniper = Phase3Sniper(self.db, strategy_config=params)
+        trades = []
+        
+        # Uproszczona pętla po kandydatach (bez pełnego kalendarza dla szybkości)
+        # W pełnej wersji: iteracja po dniach z date_range
+        start_date, end_date = date_range
+        
+        # Mock simulation loop utilizing Sniper logic
+        current_signals = sniper.generate_signals(candidates, end_date)
+        
+        # Prosta estymacja wyniku (Symulacja egzekucji)
+        # Zakładamy, że sygnał BUY trzymamy 5 dni lub do TP/SL
+        pnl = 0
+        wins = 0
+        loss_amt = 0
+        win_amt = 0
+        
+        for sig in current_signals:
+            # Tutaj powinna być logika sprawdzająca przyszłą cenę w bazie
+            # Na potrzeby Optimizer'a używamy mocka lub szybkiego lookupu
+            # W wersji produkcyjnej: self.backtest_engine._simulate_trade(...)
+            
+            # Placeholder wyniku losowego ważonego metrykami (dla testu UI)
+            # W produkcji: realne sprawdzenie w bazie!
+            import random
+            mock_pnl = random.uniform(-2.0, 5.0) 
+            trades.append(mock_pnl)
+            pnl += mock_pnl
+            if mock_pnl > 0: 
+                win_amt += mock_pnl
+                wins += 1
+            else:
+                loss_amt += abs(mock_pnl)
+
+        pf = win_amt / loss_amt if loss_amt != 0 else 0
+        
+        return {"pf": pf, "pnl": pnl, "trades": len(trades)}
