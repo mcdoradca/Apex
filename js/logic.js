@@ -3,7 +3,6 @@ import { state, logger, PORTFOLIO_QUOTE_POLL_INTERVAL, ALERT_POLL_INTERVAL, REPO
 import { renderers } from './ui.js';
 
 let UI = null;
-// Zmienna do przechowywania interwału odświeżania szczegółów sygnału (Live Data)
 let signalDetailsInterval = null;
 let signalDetailsClockInterval = null;
 
@@ -11,7 +10,6 @@ export const setUI = (uiInstance) => {
     UI = uiInstance;
 };
 
-// === Funkcje Pomocnicze ===
 const updateElement = (el, content, isHtml = false) => {
     if (!el) return;
     if (isHtml) el.innerHTML = content;
@@ -22,19 +20,14 @@ const showLoading = () => {
     if (UI && UI.mainContent) UI.mainContent.innerHTML = renderers.loading("Ładowanie danych...");
 };
 
-// Funkcja formatująca czas NY i odliczanie
 const updateMarketTimeDisplay = () => {
     if (!UI || !UI.signalDetails.nyTime) return;
 
     const now = new Date();
-    // Czas w Nowym Jorku (America/New_York)
     const nyTimeOptions = { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
     const nyTimeStr = now.toLocaleTimeString('en-US', nyTimeOptions);
     UI.signalDetails.nyTime.textContent = nyTimeStr;
 
-    // Odliczanie do otwarcia (9:30 NY time)
-    // Upraszczamy: Zakładamy, że otwarcie to 15:30 czasu lokalnego (CET/CEST) w dni robocze
-    // Dla precyzji "produkcyjnej" należałoby używać biblioteki moment-timezone, ale tu zrobimy aproksymację
     const openHour = 15;
     const openMinute = 30;
     
@@ -42,7 +35,6 @@ const updateMarketTimeDisplay = () => {
     target.setHours(openHour, openMinute, 0, 0);
     
     if (now > target) {
-        // Jeśli już po 15:30, sprawdzamy czy przed zamknięciem (22:00)
         const closeTime = new Date(now);
         closeTime.setHours(22, 0, 0, 0);
         if (now < closeTime) {
@@ -61,9 +53,6 @@ const updateMarketTimeDisplay = () => {
         UI.signalDetails.countdown.className = "text-sky-400 font-mono font-bold";
     }
 };
-
-
-// === Główne Widoki ===
 
 export const showDashboard = async () => {
     if (!UI) return;
@@ -123,8 +112,6 @@ export const loadAgentReportPage = async (page) => {
     }
 };
 
-// === Obsługa Sidebar ===
-
 export const refreshSidebarData = async () => {
     try {
         const phase1Data = await api.getPhase1Candidates();
@@ -141,8 +128,6 @@ export const refreshSidebarData = async () => {
         logger.error("Błąd odświeżania sidebaru:", e);
     }
 };
-
-// === Polling Statusu Workera ===
 
 export const pollWorkerStatus = () => {
     const check = async () => {
@@ -193,7 +178,6 @@ export const pollWorkerStatus = () => {
     setInterval(check, 2000);
 };
 
-// === Obsługa Alertów ===
 export const pollSystemAlerts = () => {
     setInterval(async () => {
         try {
@@ -214,22 +198,15 @@ const showSystemAlert = (msg) => {
     setTimeout(() => div.remove(), 10000);
 };
 
-
-// === Obsługa Modali Transakcyjnych ===
-
-// -- KUPNO (Zaktualizowane) --
 export const showBuyModal = (ticker) => {
     UI.buyModal.tickerSpan.textContent = ticker;
     UI.buyModal.quantityInput.value = "";
     UI.buyModal.priceInput.value = "";
-    
-    // Próba pobrania ceny live dla wygody użytkownika
     api.getLiveQuote(ticker).then(q => {
         if (q && q['05. price']) {
             UI.buyModal.priceInput.value = parseFloat(q['05. price']).toFixed(2);
         }
     });
-
     UI.buyModal.backdrop.classList.remove('hidden');
 };
 
@@ -241,16 +218,13 @@ export const handleBuyConfirm = async () => {
     const ticker = UI.buyModal.tickerSpan.textContent;
     const qty = parseInt(UI.buyModal.quantityInput.value);
     const price = parseFloat(UI.buyModal.priceInput.value);
-    
     if (!qty || qty <= 0 || !price || price <= 0) {
         alert("Podaj poprawną ilość i cenę."); return;
     }
-    
     try {
         UI.buyModal.confirmBtn.disabled = true;
         UI.buyModal.confirmBtn.textContent = "Przetwarzanie...";
         await api.buyStock({ ticker, quantity: qty, price_per_share: price });
-        
         hideBuyModal();
         showPortfolio();
         showSystemAlert(`Kupiono ${qty} akcji ${ticker}.`);
@@ -262,18 +236,15 @@ export const handleBuyConfirm = async () => {
     }
 };
 
-// -- SPRZEDAŻ --
 export const showSellModal = (ticker, maxQty) => {
     UI.sellModal.tickerSpan.textContent = ticker;
     UI.sellModal.maxQuantitySpan.textContent = maxQty;
     UI.sellModal.quantityInput.value = maxQty; 
     UI.sellModal.quantityInput.max = maxQty;
     UI.sellModal.priceInput.value = "";
-    
     api.getLiveQuote(ticker).then(q => {
         if (q && q['05. price']) UI.sellModal.priceInput.value = parseFloat(q['05. price']).toFixed(2);
     });
-
     UI.sellModal.backdrop.classList.remove('hidden');
 };
 
@@ -285,11 +256,9 @@ export const handleSellConfirm = async () => {
     const ticker = UI.sellModal.tickerSpan.textContent;
     const qty = parseInt(UI.sellModal.quantityInput.value);
     const price = parseFloat(UI.sellModal.priceInput.value);
-    
     if (!qty || qty <= 0 || !price || price <= 0) {
         alert("Błędne dane."); return;
     }
-    
     try {
         UI.sellModal.confirmBtn.disabled = true;
         await api.sellStock({ ticker, quantity: qty, price_per_share: price });
@@ -303,12 +272,10 @@ export const handleSellConfirm = async () => {
     }
 };
 
-// === Obsługa Backtestu, AI, H3 Live ===
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
     if (!input || !input.value) return;
-    
     const params = {
         h3_percentile: document.getElementById('h3-param-percentile')?.value || 0.95,
         h3_m_sq_threshold: document.getElementById('h3-param-mass')?.value || -0.5,
@@ -318,7 +285,6 @@ export const handleYearBacktestRequest = async () => {
         h3_max_hold: document.getElementById('h3-param-hold')?.value || 5,
         setup_name: document.getElementById('h3-param-name')?.value || ""
     };
-
     try {
         status.textContent = "Wysyłanie zlecenia...";
         status.className = "text-yellow-400 text-sm mt-3 h-4";
@@ -342,7 +308,6 @@ export const handleCsvExport = async () => {
     }
 };
 
-// === H3 Deep Dive Modal ===
 export const showH3DeepDiveModal = () => {
     UI.h3DeepDiveModal.backdrop.classList.remove('hidden');
     UI.h3DeepDiveModal.statusMsg.textContent = "";
@@ -360,13 +325,11 @@ export const hideH3DeepDiveModal = () => {
 export const handleRunH3DeepDive = async () => {
     const year = UI.h3DeepDiveModal.yearInput.value;
     if (!year) return;
-    
     try {
         UI.h3DeepDiveModal.runBtn.disabled = true;
         UI.h3DeepDiveModal.statusMsg.textContent = "Wysyłanie...";
         await api.requestH3DeepDive(parseInt(year));
         UI.h3DeepDiveModal.statusMsg.textContent = "Przetwarzanie... Proszę czekać.";
-        
         state.activeH3DeepDivePolling = setInterval(async () => {
             const rep = await api.getH3DeepDiveReport();
             if (rep.status === 'DONE') {
@@ -380,14 +343,12 @@ export const handleRunH3DeepDive = async () => {
                 clearInterval(state.activeH3DeepDivePolling);
             }
         }, H3_DEEP_DIVE_POLL_INTERVAL);
-
     } catch (e) {
         UI.h3DeepDiveModal.statusMsg.textContent = "Błąd API: " + e.message;
         UI.h3DeepDiveModal.runBtn.disabled = false;
     }
 };
 
-// === AI Optimizer ===
 export const handleRunAIOptimizer = async () => {
     const status = document.getElementById('ai-optimizer-status-message');
     try {
@@ -402,7 +363,6 @@ export const handleRunAIOptimizer = async () => {
 export const handleViewAIOptimizerReport = async () => {
     UI.aiReportModal.backdrop.classList.remove('hidden');
     UI.aiReportModal.content.innerHTML = "Ładowanie raportu...";
-    
     try {
         const report = await api.getAIOptimizerReport();
         if (report.status === 'DONE') {
@@ -421,7 +381,6 @@ export const hideAIReportModal = () => {
     UI.aiReportModal.backdrop.classList.add('hidden');
 };
 
-// === H3 Live Params ===
 export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.remove('hidden'); };
 export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
@@ -445,17 +404,12 @@ export const handleRunH3LiveScan = async () => {
     }
 };
 
-// === ZMODYFIKOWANA Funkcja: Signal Details (Detale Sygnału) ===
-
 export const showSignalDetails = async (ticker) => {
     UI.signalDetails.backdrop.classList.remove('hidden');
-    
-    // Reset widoku
     UI.signalDetails.ticker.textContent = ticker;
     UI.signalDetails.companyName.textContent = "Ładowanie...";
     UI.signalDetails.currentPrice.textContent = "---";
     
-    // Reset etykiety ceny
     const priceLabel = UI.signalDetails.currentPrice.previousElementSibling;
     if (priceLabel) {
         priceLabel.textContent = "Cena Aktualna";
@@ -465,7 +419,6 @@ export const showSignalDetails = async (ticker) => {
     UI.signalDetails.validityBadge.textContent = "Checking...";
     UI.signalDetails.validityBadge.className = "text-sm px-2 py-1 rounded bg-gray-700 text-gray-400 font-mono";
     UI.signalDetails.validityMessage.classList.add('hidden');
-    
     UI.signalDetails.sector.textContent = "---";
     UI.signalDetails.industry.textContent = "---";
     UI.signalDetails.description.textContent = "Ładowanie opisu...";
@@ -473,22 +426,17 @@ export const showSignalDetails = async (ticker) => {
     const newsContainer = document.getElementById('sd-news-container');
     if (newsContainer) newsContainer.classList.add('hidden');
 
-    // PODPIĘCIE PRZYCISKU KUP
     if (UI.signalDetails.buyBtn) {
         UI.signalDetails.buyBtn.onclick = () => {
-            // Możemy zamknąć detale i otworzyć kupno, lub otworzyć kupno na wierzchu
-            // Decyzja: Zamykamy detale dla przejrzystości
             hideSignalDetails();
             showBuyModal(ticker);
         };
     }
 
-    // Rozpoczęcie zegara
     updateMarketTimeDisplay();
     if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
     signalDetailsClockInterval = setInterval(updateMarketTimeDisplay, 1000);
 
-    // Funkcja pobierająca i aktualizująca dane (możemy ją wywoływać cyklicznie)
     const fetchData = async () => {
         try {
             const data = await api.getSignalDetails(ticker);
@@ -498,24 +446,20 @@ export const showSignalDetails = async (ticker) => {
                  UI.signalDetails.validityBadge.className = "text-sm px-2 py-1 rounded bg-red-900 text-red-200 font-mono";
                  UI.signalDetails.validityMessage.textContent = data.reason;
                  UI.signalDetails.validityMessage.classList.remove('hidden');
-                 return; // Jeśli sygnał nie istnieje, przerywamy
+                 return;
             }
             
-            // Dane firmy
             if (data.company) {
                 UI.signalDetails.companyName.textContent = data.company.name;
                 UI.signalDetails.sector.textContent = data.company.sector || "N/A";
                 UI.signalDetails.industry.textContent = data.company.industry || "N/A";
-                // Opis - zakładamy, że API może go w przyszłości zwracać, na razie placeholder lub z API jeśli jest
                 UI.signalDetails.description.textContent = data.company.description || "Brak opisu spółki w bazie danych.";
             }
             
-            // Dane rynkowe
             if (data.market_data) {
                 const price = parseFloat(data.market_data.current_price);
                 UI.signalDetails.currentPrice.textContent = price > 0 ? price.toFixed(2) : "---";
                 
-                // === NOWOŚĆ: Obsługa Źródła Ceny (Label) ===
                 const priceLabel = UI.signalDetails.currentPrice.previousElementSibling;
                 const source = data.market_data.price_source;
                 let statusText = data.market_data.market_status;
@@ -524,13 +468,11 @@ export const showSignalDetails = async (ticker) => {
                     if (source === 'extended_hours') {
                         priceLabel.textContent = "Cena (Pre/Post Market)";
                         priceLabel.className = "text-purple-400 text-sm font-bold animate-pulse";
-                        // Jeśli mamy extended hours, a status to Closed, naprawiamy status wizualnie
                         if (statusText.toLowerCase() === 'closed') statusText = "Extended Hours";
                     } else if (source === 'previous_close') {
                         priceLabel.textContent = "Cena Zamknięcia (Wczoraj)";
                         priceLabel.className = "text-yellow-500 text-sm font-semibold";
                     } else {
-                         // Close lub Unknown - decydujemy na podstawie statusu rynku
                          const isClosed = statusText.toLowerCase().includes('closed');
                          priceLabel.textContent = isClosed ? "Cena Zamknięcia" : "Cena Aktualna";
                          priceLabel.className = "text-gray-400 text-sm";
@@ -538,14 +480,11 @@ export const showSignalDetails = async (ticker) => {
                 }
 
                 UI.signalDetails.changePercent.textContent = data.market_data.change_percent;
-                
                 const changeVal = parseFloat(data.market_data.change_percent.replace('%', ''));
                 UI.signalDetails.changePercent.className = `font-mono text-lg font-bold ${changeVal >= 0 ? 'text-green-400' : 'text-red-400'}`;
-                
                 UI.signalDetails.marketStatus.textContent = statusText;
             }
             
-            // Setup
             if (data.setup) {
                 UI.signalDetails.entry.textContent = data.setup.entry_price ? data.setup.entry_price.toFixed(2) : "---";
                 UI.signalDetails.tp.textContent = data.setup.take_profit ? data.setup.take_profit.toFixed(2) : "---";
@@ -554,7 +493,6 @@ export const showSignalDetails = async (ticker) => {
                 UI.signalDetails.generationDate.textContent = new Date(data.setup.generation_date).toLocaleString('pl-PL');
             }
 
-            // Walidacja
             if (data.validity) {
                  const isValid = data.validity.is_valid;
                  UI.signalDetails.validityBadge.textContent = isValid ? "VALID" : "INVALID";
@@ -568,7 +506,6 @@ export const showSignalDetails = async (ticker) => {
                  }
             }
 
-            // Newsy
             if (data.news_context && newsContainer) {
                 newsContainer.classList.remove('hidden');
                 
@@ -601,19 +538,74 @@ export const showSignalDetails = async (ticker) => {
         }
     };
 
-    // Pierwsze pobranie
     fetchData();
-
-    // Uruchomienie cyklicznego odświeżania (Live Data - co 3 sekundy)
     if (signalDetailsInterval) clearInterval(signalDetailsInterval);
     signalDetailsInterval = setInterval(fetchData, 3000);
 };
 
 export const hideSignalDetails = () => {
     UI.signalDetails.backdrop.classList.add('hidden');
-    // Zatrzymaj polling i zegar po zamknięciu
     if (signalDetailsInterval) clearInterval(signalDetailsInterval);
     if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
     signalDetailsInterval = null;
     signalDetailsClockInterval = null;
+};
+
+// === NOWOŚĆ: Logika Quantum Lab (V4) ===
+
+export const showQuantumModal = () => {
+    UI.quantumModal.backdrop.classList.remove('hidden');
+    UI.quantumModal.statusMessage.textContent = "";
+};
+
+export const hideQuantumModal = () => {
+    UI.quantumModal.backdrop.classList.add('hidden');
+};
+
+export const handleStartQuantumOptimization = async () => {
+    const year = parseInt(UI.quantumModal.yearInput.value);
+    const trials = parseInt(UI.quantumModal.trialsInput.value);
+    
+    if (!year || !trials || trials < 10) {
+        UI.quantumModal.statusMessage.textContent = "Podaj poprawny rok i min. 10 prób.";
+        UI.quantumModal.statusMessage.className = "text-red-400 text-sm mt-3 h-4 text-center";
+        return;
+    }
+
+    try {
+        UI.quantumModal.startBtn.disabled = true;
+        UI.quantumModal.statusMessage.textContent = "Uruchamianie silnika...";
+        UI.quantumModal.statusMessage.className = "text-yellow-400 text-sm mt-3 h-4 text-center";
+        
+        await api.startOptimization({ target_year: year, n_trials: trials });
+        
+        UI.quantumModal.statusMessage.textContent = "Zlecenie przyjęte! Sprawdź wyniki.";
+        UI.quantumModal.statusMessage.className = "text-green-400 text-sm mt-3 h-4 text-center";
+        
+        setTimeout(() => {
+            hideQuantumModal();
+            UI.quantumModal.startBtn.disabled = false;
+        }, 2000);
+        
+    } catch (e) {
+        UI.quantumModal.statusMessage.textContent = "Błąd: " + e.message;
+        UI.quantumModal.statusMessage.className = "text-red-400 text-sm mt-3 h-4 text-center";
+        UI.quantumModal.startBtn.disabled = false;
+    }
+};
+
+export const showOptimizationResults = async () => {
+    UI.optimizationResultsModal.backdrop.classList.remove('hidden');
+    UI.optimizationResultsModal.content.innerHTML = renderers.loading("Pobieranie wyników Optuny...");
+    
+    try {
+        const results = await api.getOptimizationResults();
+        UI.optimizationResultsModal.content.innerHTML = renderers.optimizationResults(results);
+    } catch (e) {
+        UI.optimizationResultsModal.content.innerHTML = `<p class="text-red-500 p-4">Błąd: ${e.message}</p>`;
+    }
+};
+
+export const hideOptimizationResults = () => {
+    UI.optimizationResultsModal.backdrop.classList.add('hidden');
 };
