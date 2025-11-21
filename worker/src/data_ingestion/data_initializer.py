@@ -83,14 +83,54 @@ def _run_schema_and_index_migration(session: Session):
         session.rollback()
         raise
 
+def force_reset_simulation_data(session: Session):
+    """
+    !!! UWAGA: FUNKCJA DESTRUKCYJNA !!!
+    Usuwa wszystkie wyniki symulacji, transakcji wirtualnych i optymalizacji.
+    Nie usuwa danych rynkowych (cache) ani listy firm.
+    Używana jednorazowo przed nowymi testami.
+    """
+    logger.warning("⚠️⚠️⚠️ ROZPOCZYNANIE RESETU DANYCH SYMULACYJNYCH ⚠️⚠️⚠️")
+    try:
+        # Kolejność usuwania jest ważna ze względu na klucze obce
+        tables_to_clear = [
+            "optimization_trials", # Wyniki prób Optuny
+            "optimization_jobs",   # Zadania Optuny
+            "virtual_trades",      # Wirtualne transakcje (Backtest/Live)
+            "trading_signals",     # Sygnały H3
+            "phase1_candidates",   # Wyniki skanera F1
+            "phase2_results",      # Wyniki starej fazy 2
+            # "portfolio_holdings", # Opcjonalnie: Portfel (zostawiamy czy czyścimy? Na razie zostawiam)
+            # "transaction_history" # Historia portfela (zostawiam)
+        ]
+        
+        for table in tables_to_clear:
+            logger.warning(f"Czyszczenie tabeli: {table}...")
+            session.execute(text(f"TRUNCATE TABLE {table} CASCADE;"))
+            
+        # Reset liczników w system_control
+        session.execute(text("UPDATE system_control SET value='0' WHERE key LIKE 'scan_progress_%'"))
+        session.execute(text("UPDATE system_control SET value='NONE' WHERE key IN ('worker_command', 'optimization_request', 'backtest_request')"))
+        session.execute(text("UPDATE system_control SET value='IDLE' WHERE key='worker_status'"))
+        
+        session.commit()
+        logger.warning("✅✅✅ RESET ZAKOŃCZONY SUKCESEM. BAZA GOTOWA DO TESTÓW. ✅✅✅")
+        
+    except Exception as e:
+        logger.error(f"Błąd podczas resetu bazy: {e}", exc_info=True)
+        session.rollback()
+
 def initialize_database_if_empty(session: Session, api_client):
     """
     Inicjalizuje bazę danych.
-    ZMIANA: Usunięto wszelkie funkcje czyszczące (DELETE).
-    Dane historyczne są teraz BEZPIECZNE i trwałe.
     """
     # 1. Migracja schematu (bezpieczna)
     _run_schema_and_index_migration(session)
+
+    # === JEDNORAZOWY RESET DLA UŻYTKOWNIKA ===
+    # Odkomentuj poniższą linię tylko raz, aby wyczyścić bazę
+    force_reset_simulation_data(session) 
+    # =========================================
 
     # 2. Sprawdzenie i seedowanie firm (bezpieczne - uruchamia się tylko raz na pustej bazie)
     try:
