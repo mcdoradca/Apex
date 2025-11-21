@@ -206,6 +206,8 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 def run_optimization_simulation(session: Session, year: str, params: dict) -> dict:
     """
     Tryb 'Lightweight' dla QuantumOptimizer.
+    Obsługuje dynamiczne parametry dat (simulation_start_date, simulation_end_date)
+    dla potrzeb Multi-Period Validation.
     """
     api_client = AlphaVantageClient()
     
@@ -232,9 +234,17 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
         h3_sl_mult = params.get('h3_sl_multiplier', 2.0)
         h3_max_hold = int(params.get('h3_max_hold', 5))
         
+        # === KLUCZOWE DLA MULTI-PERIOD: Daty Symulacji ===
+        # Jeśli nie podano dokładnych dat, używamy całego roku
+        sim_start_str = params.get('simulation_start_date', f"{year}-01-01")
+        sim_end_str = params.get('simulation_end_date', f"{year}-12-31")
+        
+        sim_start_ts = pd.Timestamp(sim_start_str)
+        sim_end_ts = pd.Timestamp(sim_end_str)
+        
+        # Uwaga: History Buffer i Z-Score Window muszą być przed sim_start
         Z_SCORE_WINDOW = 100
         HISTORY_BUFFER = 201
-        target_year_int = int(year)
 
         for ticker in tickers:
             try:
@@ -251,7 +261,8 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 daily_ohlcv.index = pd.to_datetime(daily_ohlcv.index)
                 daily_adj.index = pd.to_datetime(daily_adj.index)
                 
-                if daily_adj.index[-1].year < target_year_int: continue
+                # Jeśli dane kończą się przed początkiem naszej symulacji, pomiń
+                if daily_adj.index[-1] < sim_start_ts: continue
                 
                 if 'high' in daily_ohlcv.columns:
                     daily_ohlcv['vwap_proxy'] = (daily_ohlcv['high'] + daily_ohlcv['low'] + daily_ohlcv['close']) / 3.0
@@ -325,8 +336,13 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 threshold_series = aqm_score_series.rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile)
 
                 # 3. Pętla symulacyjna (In-Memory)
-                start_idx = max(HISTORY_BUFFER, df.index.searchsorted(pd.Timestamp(f"{target_year}-01-01")))
-                end_idx = df.index.searchsorted(pd.Timestamp(f"{target_year}-12-31"))
+                
+                # Znajdź indeksy startu i końca symulacji w oparciu o daty z Optuny
+                start_idx = df.index.searchsorted(sim_start_ts)
+                end_idx = df.index.searchsorted(sim_end_ts)
+                
+                # Upewnij się, że mamy bufor historii PRZED startem
+                start_idx = max(HISTORY_BUFFER, start_idx)
                 
                 if start_idx >= len(df) or start_idx >= end_idx: continue
 
