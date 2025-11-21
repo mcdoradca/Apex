@@ -395,7 +395,8 @@ export const handleRunH3LiveScan = async () => {
         h3_m_sq_threshold: UI.h3LiveModal.mass.value,
         h3_min_score: UI.h3LiveModal.minScore.value,
         h3_tp_multiplier: UI.h3LiveModal.tp.value,
-        h3_sl_multiplier: UI.h3LiveModal.sl.value
+        h3_sl_multiplier: UI.h3LiveModal.sl.value,
+        h3_max_hold: UI.h3LiveModal.maxHold.value // V4 Parameter
     };
     try {
         UI.h3LiveModal.startBtn.disabled = true;
