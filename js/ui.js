@@ -1,7 +1,4 @@
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
-// Importujemy funkcje z logic.js dynamicznie wewnątrz event listenerów lub poprzez globalny obiekt, 
-// aby uniknąć cyklicznych zależności, lub zakładamy, że są dostępne globalnie.
-// W tym przypadku, przyciski będą miały ID, które obsłuży app.js/logic.js.
 
 export const ui = {
     init: () => {
@@ -27,7 +24,6 @@ export const ui = {
                 startBtn: get('h3-live-start-btn')
             },
 
-            // === Elementy Modala Szczegółów Sygnału ===
             signalDetails: {
                 backdrop: get('signal-details-modal'),
                 ticker: get('sd-ticker'),
@@ -46,14 +42,29 @@ export const ui = {
                 
                 sector: get('sd-sector'),
                 industry: get('sd-industry'),
-                description: get('sd-description'), // Nowe pole dla opisu
+                description: get('sd-description'), 
                 generationDate: get('sd-generation-date'),
                 
                 validityMessage: get('sd-validity-message'),
                 closeBtn: get('sd-close-btn'),
-                buyBtn: get('sd-buy-btn') // Nowy przycisk Kup
+                buyBtn: get('sd-buy-btn') 
             },
-            // ==================================================
+
+            // === NOWOŚĆ: Modale dla Quantum Optimization ===
+            quantumModal: {
+                backdrop: get('quantum-optimization-modal'),
+                yearInput: get('qo-year-input'),
+                trialsInput: get('qo-trials-input'),
+                cancelBtn: get('qo-cancel-btn'),
+                startBtn: get('qo-start-btn'),
+                statusMessage: get('qo-status-message')
+            },
+            optimizationResultsModal: {
+                backdrop: get('optimization-results-modal'),
+                content: get('optimization-results-content'),
+                closeBtn: get('optimization-results-close-btn')
+            },
+            // ===============================================
 
             startBtn: get('start-btn'),
             pauseBtn: get('pause-btn'),
@@ -343,7 +354,6 @@ export const renderers = {
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
                 <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p>
-                
                 <div class="flex items-start gap-3 mb-4">
                     <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}">
                     <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
@@ -351,69 +361,48 @@ export const renderers = {
                         Uruchom Test
                     </button>
                 </div>
-
-                <div class="border-t border-gray-700 pt-3">
-                    <button id="toggle-h3-params" class="text-xs text-sky-400 flex items-center hover:text-sky-300 transition-colors mb-3">
-                        <i data-lucide="settings-2" class="w-3 h-3 mr-1"></i>
-                        Zaawansowana Konfiguracja H3 (Symulator)
-                        <i data-lucide="chevron-down" id="h3-params-icon" class="w-3 h-3 ml-1 transition-transform"></i>
-                    </button>
-                    
-                    <div id="h3-params-container" class="hidden grid grid-cols-1 md:grid-cols-3 gap-3 bg-gray-800/30 p-3 rounded-md border border-gray-700/50">
-                        
-                        <div>
-                            <label class="text-[10px] text-gray-400 uppercase font-bold">Percentyl AQM (Domyślny: 0.95)</label>
-                            <input type="number" id="h3-param-percentile" class="modal-input text-xs !py-1 !h-8" placeholder="0.95" step="0.01" value="0.95">
-                        </div>
-                        
-                        <div>
-                            <label class="text-[10px] text-gray-400 uppercase font-bold">Próg Masy m² (Domyślny: -0.5)</label>
-                            <input type="number" id="h3-param-mass" class="modal-input text-xs !py-1 !h-8" placeholder="-0.5" step="0.1" value="-0.5">
-                        </div>
-
-                        <div>
-                            <label class="text-[10px] text-gray-400 uppercase font-bold">Min. AQM Score (Hard Floor)</label>
-                            <input type="number" id="h3-param-min-score" class="modal-input text-xs !py-1 !h-8" placeholder="0.0" step="0.1" value="0.0">
-                        </div>
-
-                        <div>
-                            <label class="text-[10px] text-gray-400 uppercase font-bold">Mnożnik TP (ATR) (Domyślny: 5.0)</label>
-                            <input type="number" id="h3-param-tp" class="modal-input text-xs !py-1 !h-8" placeholder="5.0" step="0.5" value="5.0">
-                        </div>
-
-                        <div>
-                            <label class="text-[10px] text-gray-400 uppercase font-bold">Mnożnik SL (ATR) (Domyślny: 2.0)</label>
-                            <input type="number" id="h3-param-sl" class="modal-input text-xs !py-1 !h-8" placeholder="2.0" step="0.5" value="2.0">
-                        </div>
-
-                         <div>
-                            <label class="text-[10px] text-gray-400 uppercase font-bold">Max Hold (Dni) (Domyślny: 5)</label>
-                            <input type="number" id="h3-param-hold" class="modal-input text-xs !py-1 !h-8" placeholder="5" step="1" value="5">
-                        </div>
-
-                        <div class="md:col-span-3">
-                            <label class="text-[10px] text-gray-400 uppercase font-bold">Nazwa Setupu (Suffix)</label>
-                            <input type="text" id="h3-param-name" class="modal-input text-xs !py-1 !h-8" placeholder="CUSTOM_TEST_1">
-                        </div>
-                    </div>
-                </div>
-
                 <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
             </div>
         `;
         
+        // === NOWA SEKCJA: QUANTUM LAB (APEX V4) ===
+        const quantumLabSection = `
+            <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden">
+                <div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none">
+                    <i data-lucide="atom" class="w-32 h-32 text-purple-500"></i>
+                </div>
+                <h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center">
+                    <i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i> Quantum Lab (Apex V4)
+                </h4>
+                <p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p>
+                
+                <div class="flex items-start gap-3">
+                    <button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0">
+                        <i data-lucide="cpu" class="w-4 h-4 mr-2"></i>
+                        Konfiguruj Optymalizację
+                    </button>
+                    <button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0">
+                        <i data-lucide="list" class="w-4 h-4 mr-2"></i>
+                        Wyniki
+                    </button>
+                </div>
+                <div id="quantum-lab-status" class="text-sm mt-3 h-4"></div>
+            </div>
+        `;
+        // ===========================================
+
         const aiOptimizerSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4>
-                <p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane (powyżej) i zasugerował optymalizacje strategii.</p>
+                <p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane i zasugerował optymalizacje strategii.</p>
                 <div class="flex items-start gap-3">
                     <button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
                         <i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>
-                        Uruchom Analizę AI
+                        Analiza AI
                     </button>
                     <button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0">
                         <i data-lucide="eye" class="w-4 h-4 mr-2"></i>
-                        Pokaż Ostatni Raport
+                        Raport
                     </button>
                 </div>
                 <div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div>
@@ -423,11 +412,11 @@ export const renderers = {
         const exportSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4>
-                <p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje z bazy danych jako plik CSV do własnej analizy.</p>
+                <p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje jako CSV.</p>
                 <div class="flex items-start gap-3">
                     <button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
                         <i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>
-                        Eksportuj do CSV
+                        Eksport CSV
                     </button>
                 </div>
                 <div id="csv-export-status-message" class="text-sm mt-3 h-4"></div>
@@ -436,12 +425,12 @@ export const renderers = {
         
         const h3DeepDiveSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
-                <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3 (Deep Dive)</h4>
-                <p class="text-sm text-gray-500 mb-4">Uruchom analizę "słabego roku", aby dowiedzieć się, dlaczego transakcje H3 zawiodły w tym okresie.</p>
+                <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3</h4>
+                <p class="text-sm text-gray-500 mb-4">Analiza "słabego roku" (Deep Dive).</p>
                 <div class="flex items-start gap-3">
                     <button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
                         <i data-lucide="search-check" class="w-4 h-4 mr-2"></i>
-                        Uruchom Analizę Porażek
+                        Analiza Deep Dive
                     </button>
                 </div>
                 <div id="h3-deep-dive-main-status" class="text-sm mt-3 h-4"></div>
@@ -484,16 +473,81 @@ export const renderers = {
                     ${setupTable}
                     
                     <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6 mt-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
+                        ${quantumLabSection}
                         ${backtestSection}
                         ${aiOptimizerSection}
                         ${h3DeepDiveSection}
                         ${exportSection}
                     </div>
 
-                    <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji (z Metrykami)</h3>
+                    <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji</h3>
                     ${paginationControls}
                     ${tradeTable}
                     ${paginationControls} </div>`;
+    },
+
+    // === NOWOŚĆ: Renderowanie wyników optymalizacji ===
+    optimizationResults: (job) => {
+        if (!job) return `<p class="text-gray-500">Brak danych o optymalizacji.</p>`;
+        
+        const trials = job.trials || [];
+        // Sortowanie: Najlepsze wyniki na górze (Profit Factor)
+        trials.sort((a, b) => (b.profit_factor || 0) - (a.profit_factor || 0));
+        
+        const bestTrial = trials[0];
+        
+        const trialsRows = trials.map(t => {
+            const isBest = t.id === job.best_trial_id;
+            const rowClass = isBest ? "bg-green-900/20 border-l-4 border-green-500" : "border-b border-gray-800 hover:bg-[#1f2937]";
+            
+            // Formatowanie parametrów do czytelnego stringa
+            const paramsStr = Object.entries(t.params)
+                .map(([k, v]) => `<span class="text-gray-400">${k}:</span> <span class="text-sky-300">${typeof v === 'number' ? v.toFixed(2) : v}</span>`)
+                .join(', ');
+
+            return `<tr class="${rowClass}">
+                <td class="p-2 text-center font-mono text-gray-500">#${t.trial_number}</td>
+                <td class="p-2 text-right font-bold ${t.profit_factor >= 1.5 ? 'text-green-400' : 'text-gray-300'}">${t.profit_factor ? t.profit_factor.toFixed(2) : '0.00'}</td>
+                <td class="p-2 text-right">${t.win_rate ? t.win_rate.toFixed(1) : '0.0'}%</td>
+                <td class="p-2 text-right">${t.total_trades || 0}</td>
+                <td class="p-2 text-xs font-mono">${paramsStr}</td>
+            </tr>`;
+        }).join('');
+
+        return `
+            <div class="space-y-6">
+                <div class="flex justify-between items-center bg-[#0D1117] p-4 rounded border border-gray-700">
+                    <div>
+                        <h4 class="text-sm text-gray-400 uppercase font-bold">Zadanie: ${job.target_year}</h4>
+                        <p class="text-xs text-gray-500">ID: ${job.id}</p>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-2xl font-bold ${job.best_score >= 2.0 ? 'text-green-400' : 'text-yellow-400'}">
+                            Best PF: ${job.best_score ? job.best_score.toFixed(2) : '---'}
+                        </div>
+                        <div class="text-xs text-gray-500">Status: ${job.status}</div>
+                    </div>
+                </div>
+
+                <h4 class="text-sm text-gray-400 uppercase font-bold border-b border-gray-700 pb-1">Ranking Prób (Top Wyniki)</h4>
+                <div class="overflow-x-auto max-h-64 border border-gray-700 rounded">
+                    <table class="w-full text-sm text-left text-gray-300">
+                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0">
+                            <tr>
+                                <th class="p-2 text-center">#</th>
+                                <th class="p-2 text-right">PF</th>
+                                <th class="p-2 text-right">Win Rate</th>
+                                <th class="p-2 text-right">Trades</th>
+                                <th class="p-2">Parametry</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${trialsRows}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
     }
 };
