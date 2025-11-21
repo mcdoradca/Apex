@@ -127,10 +127,11 @@ def initialize_database_if_empty(session: Session, api_client):
     # 1. Migracja schematu (bezpieczna)
     _run_schema_and_index_migration(session)
 
-    # === JEDNORAZOWY RESET DLA UŻYTKOWNIKA ===
-    # Odkomentuj poniższą linię tylko raz, aby wyczyścić bazę
-    force_reset_simulation_data(session) 
-    # =========================================
+    # === JEDNORAZOWY RESET DLA UŻYTKOWNIKA (TERAZ WYŁĄCZONY) ===
+    # Odkomentuj poniższą linię tylko raz, aby wyczyścić bazę.
+    # Teraz jest zakomentowana, więc dane są bezpieczne.
+    # force_reset_simulation_data(session) 
+    # ===========================================================
 
     # 2. Sprawdzenie i seedowanie firm (bezpieczne - uruchamia się tylko raz na pustej bazie)
     try:
