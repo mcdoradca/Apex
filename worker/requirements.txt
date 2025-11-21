@@ -7,3 +7,6 @@ pytz
 pandas
 scipy
 statsmodels
+optuna
+scikit-learn
+numpy
