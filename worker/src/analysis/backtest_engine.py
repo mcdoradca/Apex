@@ -11,7 +11,9 @@ from .utils import (
     standardize_df_columns, 
     calculate_atr, 
     append_scan_log, 
-    update_system_control
+    update_system_control,
+    # DODANO: Import funkcji do aktualizacji paska postępu
+    update_scan_progress
 )
 
 # Importy z nowych modułów analitycznych (V3)
@@ -62,7 +64,6 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
         tickers = [r[0] for r in tickers_rows]
         
         # === KROK PRE-A: Pobierz dane SPY (Benchmark) raz dla całej pętli ===
-        # Time Dilation wymaga porównania z rynkiem.
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         if spy_raw:
             spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -72,6 +73,10 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
             spy_df = pd.DataFrame()
 
         total_tickers = len(tickers)
+        # === NOWOŚĆ: Reset paska postępu na starcie ===
+        update_scan_progress(session, 0, total_tickers)
+        # ==============================================
+
         processed_count = 0
         trades_generated = 0
         
@@ -170,13 +175,25 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 trades_generated += trades
                 
                 processed_count += 1
+                
+                # === NOWOŚĆ: Logowanie postępu do Bazy ===
+                # Aktualizuj pasek co 10 tickerów
                 if processed_count % 10 == 0:
-                    logger.info(f"[Backtest] Przetworzono {processed_count}/{total_tickers} spółek. Znaleziono {trades_generated} transakcji.")
+                    update_scan_progress(session, processed_count, total_tickers)
+                    logger.info(f"[Backtest] {processed_count}/{total_tickers} ({ticker}). Transakcji: {trades_generated}")
+                
+                # Dodaj wpis do logu UI co 50 tickerów (żeby nie spamować)
+                if processed_count % 50 == 0:
+                    msg = f"Backtest: Przetworzono {processed_count}/{total_tickers} ({ticker}). Znaleziono: {trades_generated}"
+                    append_scan_log(session, msg)
+                # ========================================
 
             except Exception as e:
                 logger.error(f"Błąd backtestu dla {ticker}: {e}")
                 continue
 
+        # Finalizacja
+        update_scan_progress(session, total_tickers, total_tickers)
         append_scan_log(session, f"BACKTEST: Zakończono dla roku {year}. Wygenerowano {trades_generated} wirtualnych transakcji.")
         logger.info(f"[Backtest] Koniec. Łącznie transakcji: {trades_generated}")
 
