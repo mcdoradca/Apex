@@ -214,8 +214,8 @@ class OptimizationJob(BaseModel):
     total_trials: int
     best_score: Optional[float] = None
     created_at: datetime
-    # Lista prób może być długa, więc często pobieramy ją osobno lub w detalu
-    # trials: List[OptimizationTrial] = [] 
+    # Dodano pole configuration, aby przekazać wyniki analizy wrażliwości do frontendu
+    configuration: Optional[Dict[str, Any]] = None 
 
     model_config = ConfigDict(from_attributes=True)
 
