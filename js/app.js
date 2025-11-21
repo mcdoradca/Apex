@@ -14,7 +14,7 @@ import {
     handleRunAIOptimizer, handleViewAIOptimizerReport, hideAIReportModal,
     showH3LiveParamsModal, hideH3LiveParamsModal, handleRunH3LiveScan,
     showSignalDetails, hideSignalDetails,
-    // Quantum Lab
+    // Quantum Lab (Apex V4)
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
     showOptimizationResults, hideOptimizationResults
 } from './logic.js';
@@ -75,20 +75,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 const prevBtn = target.closest('#report-prev-btn');
                 const nextBtn = target.closest('#report-next-btn');
                 
-                if (target.closest('#run-backtest-year-btn')) Logic.handleYearBacktestRequest();
-                else if (target.closest('#run-h3-deep-dive-modal-btn')) Logic.showH3DeepDiveModal();
-                else if (target.closest('#run-csv-export-btn')) Logic.handleCsvExport();
-                else if (target.closest('#run-ai-optimizer-btn')) Logic.handleRunAIOptimizer();
-                else if (target.closest('#view-ai-report-btn')) Logic.handleViewAIOptimizerReport();
-                // Quantum Lab
-                else if (target.closest('#open-quantum-modal-btn')) Logic.showQuantumModal();
-                else if (target.closest('#view-optimization-results-btn')) Logic.showOptimizationResults();
+                // === OBSŁUGA PRZYCISKÓW (Delegacja Zdarzeń) ===
                 
+                // 1. Backtest i Konfiguracja (Przywrócone)
+                if (target.closest('#run-backtest-year-btn')) Logic.handleYearBacktestRequest();
                 else if (target.closest('#toggle-h3-params')) {
+                     // Obsługa rozwijanego menu parametrów w Backteście
                      const container = document.getElementById('h3-params-container');
                      const icon = document.getElementById('h3-params-icon');
                      if (container) { container.classList.toggle('hidden'); icon.classList.toggle('rotate-180'); }
                 }
+
+                // 2. Quantum Lab (Apex V4)
+                else if (target.closest('#open-quantum-modal-btn')) Logic.showQuantumModal();
+                else if (target.closest('#view-optimization-results-btn')) Logic.showOptimizationResults();
+                
+                // 3. Inne narzędzia
+                else if (target.closest('#run-h3-deep-dive-modal-btn')) Logic.showH3DeepDiveModal();
+                else if (target.closest('#run-csv-export-btn')) Logic.handleCsvExport();
+                else if (target.closest('#run-ai-optimizer-btn')) Logic.handleRunAIOptimizer();
+                else if (target.closest('#view-ai-report-btn')) Logic.handleViewAIOptimizerReport();
+                
+                // 4. Akcje Portfelowe i Raporty
                 else if (sellBtn) {
                      const ticker = sellBtn.dataset.ticker;
                      const quantity = parseInt(sellBtn.dataset.quantity, 10);
@@ -99,6 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // Obsługa Sidebaru (Accordion)
         if (UI.sidebarPhasesContainer) {
             UI.sidebarPhasesContainer.addEventListener('click', (e) => {
                 const toggle = e.target.closest('.accordion-toggle');
@@ -119,6 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // Przyciski w Sidebarze (Sterowanie Workerem)
         if (UI.btnPhase1) {
             UI.btnPhase1.addEventListener('click', async () => {
                 UI.btnPhase1.disabled = true;
@@ -131,6 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
+        // Modal H3 Live (Konfiguracja)
         if (UI.h3LiveModal.cancelBtn) {
             UI.h3LiveModal.cancelBtn.addEventListener('click', Logic.hideH3LiveParamsModal);
         }
@@ -138,6 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.h3LiveModal.startBtn.addEventListener('click', Logic.handleRunH3LiveScan);
         }
     
+        // Detale Sygnału
         if (UI.signalDetails && UI.signalDetails.closeBtn) {
             UI.signalDetails.closeBtn.addEventListener('click', Logic.hideSignalDetails);
         }
@@ -147,31 +159,36 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
-        // Quantum Lab Listeners
+        // Quantum Lab Listeners (Modale)
         if (UI.quantumModal.cancelBtn) UI.quantumModal.cancelBtn.addEventListener('click', Logic.hideQuantumModal);
         if (UI.quantumModal.startBtn) UI.quantumModal.startBtn.addEventListener('click', Logic.handleStartQuantumOptimization);
         if (UI.optimizationResultsModal.closeBtn) UI.optimizationResultsModal.closeBtn.addEventListener('click', Logic.hideOptimizationResults);
     
+        // Nawigacja
         if (UI.dashboardLink) UI.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showDashboard(); });
         if (UI.portfolioLink) UI.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showPortfolio(); });
         if (UI.transactionsLink) UI.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showTransactions(); });
         if (UI.agentReportLink) UI.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showAgentReport(); });
     
+        // Modale Kupna/Sprzedaży
         if(UI.buyModal.cancelBtn) UI.buyModal.cancelBtn.addEventListener('click', Logic.hideBuyModal);
         if(UI.buyModal.confirmBtn) UI.buyModal.confirmBtn.addEventListener('click', Logic.handleBuyConfirm);
         
         if(UI.sellModal.cancelBtn) UI.sellModal.cancelBtn.addEventListener('click', Logic.hideSellModal);
         if(UI.sellModal.confirmBtn) UI.sellModal.confirmBtn.addEventListener('click', Logic.handleSellConfirm);
         
+        // Inne Modale
         if(UI.aiReportModal.closeBtn) UI.aiReportModal.closeBtn.addEventListener('click', Logic.hideAIReportModal);
         
         if(UI.h3DeepDiveModal.closeBtn) UI.h3DeepDiveModal.closeBtn.addEventListener('click', Logic.hideH3DeepDiveModal);
         if(UI.h3DeepDiveModal.runBtn) UI.h3DeepDiveModal.runBtn.addEventListener('click', Logic.handleRunH3DeepDive);
         
+        // Mobile Menu
         if(UI.mobileMenuBtn) UI.mobileMenuBtn.addEventListener('click', () => { UI.sidebar.classList.remove('-translate-x-full'); UI.sidebarBackdrop.classList.remove('hidden'); });
         if(UI.mobileSidebarCloseBtn) UI.mobileSidebarCloseBtn.addEventListener('click', () => { UI.sidebar.classList.add('-translate-x-full'); UI.sidebarBackdrop.classList.add('hidden'); });
         if(UI.sidebarBackdrop) UI.sidebarBackdrop.addEventListener('click', () => { UI.sidebar.classList.add('-translate-x-full'); UI.sidebarBackdrop.classList.add('hidden'); });
     
+        // Auto-Login Loop
         const intervalId = setInterval(async () => {
             try {
                 const status = await api.getApiRootStatus();
