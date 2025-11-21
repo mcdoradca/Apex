@@ -1,71 +1,85 @@
 import pandas as pd
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ApexAudit:
     """
     Moduł diagnostyczny dla APEX AQM V3.
-    Analizuje wyniki backtestu pod kątem korelacji kwantowych.
+    Analizuje wyniki backtestu pod kątem korelacji kwantowych i wycieków Alpha.
     """
 
     @staticmethod
     def analyze(trades_data):
         """
-        Analizuje listę transakcji (słowniki) i zwraca rozszerzony raport.
+        Przyjmuje listę słowników (transakcji) i zwraca zaawansowany raport analityczny.
         """
         if not trades_data:
             return {"error": "Brak danych do audytu"}
 
         df = pd.DataFrame(trades_data)
         
-        # Upewnij się, że kolumny numeryczne są poprawne
-        cols_to_numeric = ['profit_loss', 'inst_sync', 'retail_herding', 'price_gravity', 'aqm_score']
-        for col in cols_to_numeric:
+        # Konwersja typów danych dla bezpieczeństwa
+        numeric_cols = ['profit_loss', 'inst_sync', 'retail_herding', 'price_gravity', 'aqm_score']
+        for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # 1. Podstawowe metryki
-        wins = df[df['profit_loss'] > 0]
-        losses = df[df['profit_loss'] <= 0]
+        # 1. Podstawowe metryki (KPI)
+        # Filtrowanie transakcji zakończonych (z wynikiem innym niż 0 lub None)
+        finished_trades = df[df['profit_loss'].notnull()]
+        
+        if finished_trades.empty:
+            return {"warning": "Brak zakończonych transakcji do analizy."}
+
+        wins = finished_trades[finished_trades['profit_loss'] > 0]
+        losses = finished_trades[finished_trades['profit_loss'] <= 0]
         
         gross_profit = wins['profit_loss'].sum()
         gross_loss = abs(losses['profit_loss'].sum())
         
         pf = gross_profit / gross_loss if gross_loss != 0 else 999.0
-        win_rate = (len(wins) / len(df)) * 100 if len(df) > 0 else 0
+        win_rate = (len(wins) / len(finished_trades)) * 100 if len(finished_trades) > 0 else 0
 
-        # 2. Analiza Korelacji (Co działa?)
+        # 2. Analiza Korelacji (Co wpływa na wynik?)
+        # Sprawdzamy korelację Pearsona między metrykami a wynikiem PnL
         correlations = {}
-        if len(df) > 5: # Wymaga minimum danych
-            for metric in ['inst_sync', 'retail_herding', 'aqm_score']:
-                if metric in df.columns:
-                    correlations[metric] = df[metric].corr(df['profit_loss'])
+        if len(finished_trades) > 5: 
+            for metric in ['inst_sync', 'retail_herding', 'aqm_score', 'price_gravity']:
+                if metric in finished_trades.columns:
+                    corr = finished_trades[metric].corr(finished_trades['profit_loss'])
+                    correlations[metric] = round(corr, 4) if not np.isnan(corr) else 0
 
-        # 3. Segmentacja Instytucjonalna (Inst Sync > 0 vs < 0)
+        # 3. Analiza Segmentowa (Institutional Sync)
+        # Porównujemy wyniki, gdy Instytucje są z nami vs przeciwko nam
         inst_analysis = {}
-        if 'inst_sync' in df.columns:
-            positive_inst = df[df['inst_sync'] > 0]
-            negative_inst = df[df['inst_sync'] <= 0]
+        if 'inst_sync' in finished_trades.columns:
+            pos_sync = finished_trades[finished_trades['inst_sync'] > 0]
+            neg_sync = finished_trades[finished_trades['inst_sync'] <= 0]
             
             inst_analysis = {
-                "positive_sync_pf": ApexAudit._calculate_pf(positive_inst),
-                "positive_sync_count": len(positive_inst),
-                "negative_sync_pf": ApexAudit._calculate_pf(negative_inst),
-                "negative_sync_count": len(negative_inst)
+                "positive_sync_pf": ApexAudit._calc_pf(pos_sync),
+                "positive_sync_trades": len(pos_sync),
+                "negative_sync_pf": ApexAudit._calc_pf(neg_sync),
+                "negative_sync_trades": len(neg_sync)
             }
 
         return {
             "summary": {
                 "profit_factor": round(pf, 2),
                 "win_rate": round(win_rate, 1),
-                "total_trades": len(df),
-                "net_profit": round(df['profit_loss'].sum(), 2)
+                "total_trades": len(finished_trades),
+                "net_profit": round(finished_trades['profit_loss'].sum(), 2),
+                "avg_trade": round(finished_trades['profit_loss'].mean(), 2)
             },
-            "correlations": {k: round(v, 2) for k, v in correlations.items() if not np.isnan(v)},
+            "correlations": correlations,
             "institutional_analysis": inst_analysis
         }
 
     @staticmethod
-    def _calculate_pf(sub_df):
+    def _calc_pf(sub_df):
+        """Metoda pomocnicza do obliczania PF dla podzbioru danych."""
         if sub_df.empty: return 0.0
         wins = sub_df[sub_df['profit_loss'] > 0]['profit_loss'].sum()
         losses = abs(sub_df[sub_df['profit_loss'] <= 0]['profit_loss'].sum())
