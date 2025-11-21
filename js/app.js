@@ -3,18 +3,14 @@ import { api } from './api.js';
 import { logger, state } from './state.js';
 import * as Logic from './logic.js';
 
-// Główny listener - start aplikacji po załadowaniu DOM
 document.addEventListener('DOMContentLoaded', () => {
     try {
         logger.info("DOM loaded. Initializing APEX Predator...");
 
-        // 1. Inicjalizacja UI (pobranie uchwytów do elementów DOM)
         const UI = ui.init(); 
         
-        // 2. Przekazanie obiektu UI do warstwy Logiki
         Logic.setUI(UI);      
 
-        // Funkcja startowa (po kliknięciu "Zaloguj")
         function startApp() {
             logger.info("Starting App...");
             UI.loginScreen.classList.add('hidden');
@@ -29,11 +25,9 @@ document.addEventListener('DOMContentLoaded', () => {
             Logic.refreshSidebarData(); 
             Logic.pollSystemAlerts();   
             
-            // Inicjalizacja ikon Lucide (jeśli dostępne)
             try { if (window.lucide) window.lucide.createIcons(); } catch(e) { console.warn("Lucide icons not loaded"); }
         }
 
-        // Obsługa formularza logowania (symulowanego)
         if (document.getElementById('login-form')) {
             document.getElementById('login-form').addEventListener('submit', (e) => {
                 e.preventDefault();
@@ -41,7 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // Globalny Event Listener dla głównego kontenera (Delegacja Zdarzeń)
         if (UI.mainContent) {
             UI.mainContent.addEventListener('click', async e => {
                 const target = e.target;
@@ -54,6 +47,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (target.closest('#run-csv-export-btn')) Logic.handleCsvExport();
                 else if (target.closest('#run-ai-optimizer-btn')) Logic.handleRunAIOptimizer();
                 else if (target.closest('#view-ai-report-btn')) Logic.handleViewAIOptimizerReport();
+                // === NOWOŚĆ: Obsługa przycisków Quantum Lab ===
+                else if (target.closest('#open-quantum-modal-btn')) Logic.showQuantumModal();
+                else if (target.closest('#view-optimization-results-btn')) Logic.showOptimizationResults();
+                // ==============================================
                 else if (target.closest('#toggle-h3-params')) {
                      const container = document.getElementById('h3-params-container');
                      const icon = document.getElementById('h3-params-icon');
@@ -69,12 +66,9 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // === Obsługa Sidebar i Nawigacji ===
-        
         if (UI.sidebarPhasesContainer) {
             UI.sidebarPhasesContainer.addEventListener('click', (e) => {
                 const toggle = e.target.closest('.accordion-toggle');
-                // Obsługa kliknięcia w sygnał H3 (otwarcie modala)
                 const signalItem = e.target.closest('.phase3-item');
         
                 if (toggle) {
@@ -92,7 +86,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // Przyciski Sterowania Workerem
         if (UI.btnPhase1) {
             UI.btnPhase1.addEventListener('click', async () => {
                 UI.btnPhase1.disabled = true;
@@ -105,7 +98,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
-        // Modal H3 Live Configuration
         if (UI.h3LiveModal.cancelBtn) {
             UI.h3LiveModal.cancelBtn.addEventListener('click', Logic.hideH3LiveParamsModal);
         }
@@ -113,25 +105,26 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.h3LiveModal.startBtn.addEventListener('click', Logic.handleRunH3LiveScan);
         }
     
-        // === Obsługa Modala Szczegółów Sygnału (Signal Details) ===
         if (UI.signalDetails && UI.signalDetails.closeBtn) {
             UI.signalDetails.closeBtn.addEventListener('click', Logic.hideSignalDetails);
         }
-        // Zamknięcie po kliknięciu w tło (backdrop)
         if (UI.signalDetails && UI.signalDetails.backdrop) {
             UI.signalDetails.backdrop.addEventListener('click', (e) => {
                 if (e.target === UI.signalDetails.backdrop) Logic.hideSignalDetails();
             });
         }
-        // =========================================
+        
+        // === NOWOŚĆ: Obsługa modali Quantum Lab ===
+        if (UI.quantumModal.cancelBtn) UI.quantumModal.cancelBtn.addEventListener('click', Logic.hideQuantumModal);
+        if (UI.quantumModal.startBtn) UI.quantumModal.startBtn.addEventListener('click', Logic.handleStartQuantumOptimization);
+        if (UI.optimizationResultsModal.closeBtn) UI.optimizationResultsModal.closeBtn.addEventListener('click', Logic.hideOptimizationResults);
+        // ==========================================
     
-        // Linki w Sidebarze
         if (UI.dashboardLink) UI.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showDashboard(); });
         if (UI.portfolioLink) UI.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showPortfolio(); });
         if (UI.transactionsLink) UI.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showTransactions(); });
         if (UI.agentReportLink) UI.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showAgentReport(); });
     
-        // Modale Transakcyjne i Raportowe
         if(UI.buyModal.cancelBtn) UI.buyModal.cancelBtn.addEventListener('click', Logic.hideBuyModal);
         if(UI.buyModal.confirmBtn) UI.buyModal.confirmBtn.addEventListener('click', Logic.handleBuyConfirm);
         
@@ -143,12 +136,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if(UI.h3DeepDiveModal.closeBtn) UI.h3DeepDiveModal.closeBtn.addEventListener('click', Logic.hideH3DeepDiveModal);
         if(UI.h3DeepDiveModal.runBtn) UI.h3DeepDiveModal.runBtn.addEventListener('click', Logic.handleRunH3DeepDive);
         
-        // Obsługa Menu Mobilnego
         if(UI.mobileMenuBtn) UI.mobileMenuBtn.addEventListener('click', () => { UI.sidebar.classList.remove('-translate-x-full'); UI.sidebarBackdrop.classList.remove('hidden'); });
         if(UI.mobileSidebarCloseBtn) UI.mobileSidebarCloseBtn.addEventListener('click', () => { UI.sidebar.classList.add('-translate-x-full'); UI.sidebarBackdrop.classList.add('hidden'); });
         if(UI.sidebarBackdrop) UI.sidebarBackdrop.addEventListener('click', () => { UI.sidebar.classList.add('-translate-x-full'); UI.sidebarBackdrop.classList.add('hidden'); });
     
-        // Sprawdzenie statusu API (Heartbeat przy starcie)
         const intervalId = setInterval(async () => {
             try {
                 const status = await api.getApiRootStatus();
@@ -165,7 +156,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     } catch (error) {
         console.error("CRITICAL ERROR in app.js:", error);
-        // Jeśli coś pójdzie nie tak, spróbuj pokazać błąd na ekranie logowania
         const statusEl = document.getElementById('login-status-text');
         if (statusEl) statusEl.textContent = "Błąd inicjalizacji aplikacji. Sprawdź konsolę.";
     }
