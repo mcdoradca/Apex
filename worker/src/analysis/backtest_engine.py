@@ -67,9 +67,7 @@ def _calculate_time_dilation_series(ticker_df: pd.DataFrame, spy_df: pd.DataFram
 def run_historical_backtest(session: Session, api_client, year: str, parameters: dict = None):
     """
     Uruchamia pełny backtest historyczny (z zapisem do bazy).
-    
-    NAPRAWA: Rozwiązano problem niezgodności stref czasowych (UTC vs Naive).
-    OPTYMALIZACJA: Używa wektoryzacji dla metryk H2.
+    Korzysta z naprawionego _simulate_trades_h3 w aqm_v3_h3_simulator.py.
     """
     logger.info(f"[Backtest] Rozpoczynanie analizy historycznej dla roku {year}...")
     append_scan_log(session, f"BACKTEST: Uruchamianie symulacji dla roku {year}...")
@@ -225,7 +223,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['J'] = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
                 df['J'] = df['J'].fillna(0)
 
-                # D. Symulacja Transakcji
+                # D. Symulacja Transakcji (Wywolanie naprawionego symulatora)
                 sim_data = { "daily": df }
                 trades = _simulate_trades_h3(session, ticker, sim_data, year, parameters)
                 trades_generated += trades
@@ -379,16 +377,17 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
 
             j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
             j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
-            df['J_norm'] = ((df['J'] - j_mean) / j_std).fillna(0)
+            df['J_norm'] = ((df['J'] - j_mean) / j_std).replace([np.inf, -np.inf], 0).fillna(0)
             
             nabla_mean = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).mean()
             nabla_std = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
-            df['nabla_sq_norm'] = ((df['nabla_sq'] - nabla_mean) / nabla_std).fillna(0)
+            df['nabla_sq_norm'] = ((df['nabla_sq'] - nabla_mean) / nabla_std).replace([np.inf, -np.inf], 0).fillna(0)
             
             m_mean = df['m_sq'].rolling(window=Z_SCORE_WINDOW).mean()
             m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
-            df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).fillna(0)
+            df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
 
+            # Główna formuła
             df['aqm_score_static'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
 
             lean_df = df[[
@@ -408,13 +407,17 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
 def run_optimization_simulation_fast(preloaded_data: Dict[str, pd.DataFrame], params: Dict[str, Any]) -> Dict[str, float]:
     """
     [FAST LOOP] Szybka symulacja dla Optuny (V4).
+    NAPRAWA: Zsynchronizowana logika ze STRICT MODE z aqm_v3_h3_simulator.py.
     """
     stats = { 'profit_factor': 0.0, 'total_trades': 0, 'win_rate': 0.0, 'net_profit': 0.0 }
     trades_results = []
     
     h3_percentile = float(params.get('h3_percentile', 0.95))
     h3_m_sq_threshold = float(params.get('h3_m_sq_threshold', -0.5))
-    h3_min_score = float(params.get('h3_min_score', 0.0))
+    
+    # ZMIANA: Domyślna wartość podniesiona do 1.0, tak jak w naprawionym symulatorze
+    h3_min_score = float(params.get('h3_min_score', 1.0))
+    
     h3_tp_mult = float(params.get('h3_tp_multiplier', 5.0))
     h3_sl_mult = float(params.get('h3_sl_multiplier', 2.0))
     h3_max_hold = int(params.get('h3_max_hold', 5))
@@ -428,18 +431,19 @@ def run_optimization_simulation_fast(preloaded_data: Dict[str, pd.DataFrame], pa
     Z_SCORE_WINDOW = 100
     HISTORY_BUFFER = 201
 
+    # Debug Counters
+    total_bars_processed = 0
+    h3_signals_triggered = 0
+    
     for ticker, df in preloaded_data.items():
         if df.empty: continue
 
         try:
+            # Obliczamy próg dynamiczny (Percentyl)
             threshold_series = df['aqm_score_static'].rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile)
             
             start_idx = HISTORY_BUFFER
             if ts_start:
-                # FIX TZ for Timestamp comparison in searchsorted
-                # Ensure df index is naive before searching
-                # It should be naive due to preload fix, but let's be safe
-                # searchsorted requires same tz awareness
                 if df.index.tz is None and ts_start.tzinfo is not None:
                     ts_start = ts_start.tz_localize(None)
                 search_idx = df.index.searchsorted(ts_start)
@@ -465,9 +469,21 @@ def run_optimization_simulation_fast(preloaded_data: Dict[str, pd.DataFrame], pa
             
             i = start_idx
             while i < end_idx - 1:
-                if (scores[i] > threshs[i]) and \
-                   (ms[i] < h3_m_sq_threshold) and \
-                   (scores[i] > h3_min_score):
+                total_bars_processed += 1
+                
+                # === STRICT LOGIC IMPLEMENTATION (Matching Simulator) ===
+                current_score = scores[i]
+                current_thresh = threshs[i]
+                
+                # 1. Podstawowy warunek H3 (powyżej percentyla)
+                is_h3 = current_score > current_thresh
+                
+                # 2. Dodatkowe filtry (Masa + Hard Floor)
+                is_mass_ok = ms[i] < h3_m_sq_threshold
+                is_score_high = current_score > h3_min_score
+                
+                if is_h3 and is_mass_ok and is_score_high:
+                    h3_signals_triggered += 1
                     
                     entry_price = opens[i+1]
                     atr = atrs[i]
@@ -505,6 +521,11 @@ def run_optimization_simulation_fast(preloaded_data: Dict[str, pd.DataFrame], pa
 
         except Exception:
             continue
+
+    # Logowanie podsumowania dla Trialu (aby zrozumieć dlaczego wchodzimy)
+    if trades_results:
+        pass # Logger jest globalny, w fast loopie unikamy spowolnienia, ale print może pomóc w debugu w konsoli
+        # print(f"DEBUG FAST LOOP: Bars={total_bars_processed}, Signals={h3_signals_triggered}, Ratio={h3_signals_triggered/total_bars_processed:.4f}")
 
     if not trades_results:
         return stats
