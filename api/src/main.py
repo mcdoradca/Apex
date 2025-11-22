@@ -5,7 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, Response, Query, Body
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, desc
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from decimal import Decimal
@@ -24,7 +24,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.8.0") # Version bump for Quantum V4
+app = FastAPI(title="APEX Predator API", version="2.9.0") # Bump version
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +34,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Klient API używany przez endpointy
 api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
@@ -63,8 +62,8 @@ async def startup_event():
             'h3_deep_dive_report': 'NONE',
             'h3_live_parameters': '{}',
             'macro_sentiment': 'UNKNOWN',
-            # === NOWE KLUCZE DLA OPTYMALIZACJI (APEX V4) ===
-            'optimization_request': 'NONE' 
+            'optimization_request': 'NONE',
+            'optimization_progress': 'Oczekiwanie na start...' # Nowy klucz
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -75,7 +74,7 @@ async def startup_event():
     finally:
         db.close()
 
-# --- ENDPOINTY PORTFELA ---
+# --- ENDPOINTY PORTFELA (Bez zmian) ---
 @app.post("/api/v1/portfolio/buy", response_model=schemas.PortfolioHolding, status_code=201)
 def buy_stock(buy_request: schemas.BuyRequest, db: Session = Depends(get_db)):
     try:
@@ -104,7 +103,7 @@ def get_portfolio(db: Session = Depends(get_db)):
 def get_transactions(limit: int = Query(100), db: Session = Depends(get_db)):
     return crud.get_transaction_history(db, limit=limit)
 
-# --- ENDPOINTY ANALIZY ---
+# --- ENDPOINTY ANALIZY (Bez zmian) ---
 @app.get("/api/v1/candidates/phase1", response_model=List[schemas.Phase1Candidate])
 def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
     return crud.get_phase1_candidates(db)
@@ -119,6 +118,7 @@ def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
+    # (Kod bez zmian - długi, więc skracam w myśli, ale w pliku pozostaje pełny)
     ticker = ticker.upper().strip()
     signal = db.query(models.TradingSignal).filter(
         models.TradingSignal.ticker == ticker,
@@ -229,7 +229,6 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "message": validation_msg
         }
     }
-    
     return response_data
 
 @app.get("/api/v1/signals/discarded-count-24h", response_model=Dict[str, int])
@@ -258,7 +257,6 @@ def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get
     worker_status = crud.get_system_control_value(db, "worker_status")
     if worker_status.startswith('BUSY') or worker_status == 'RUNNING':
             raise HTTPException(status_code=409, detail="Worker zajęty.")
-    
     try:
         if request.parameters:
             crud.set_system_control_value(db, key="backtest_parameters", value=json.dumps(request.parameters))
@@ -303,6 +301,7 @@ def get_h3_deep_dive_report_endpoint(db: Session = Depends(get_db)):
 
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
 def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
+    # (Kod bez zmian)
     try:
         stmt = text("""
             INSERT INTO trading_signals (ticker, generation_date, status, notes)
@@ -345,7 +344,9 @@ def get_live_quote(ticker: str):
     except Exception:
         raise HTTPException(status_code=503, detail="Błąd AV.")
 
-# === NOWE ENDPOINTY DLA APEX V4 (QUANTUM OPTIMIZATION) ===
+# =========================================================
+# === OPTIMIZATION ENDPOINTS (APEX V4) - FIX ===
+# =========================================================
 
 @app.post("/api/v1/optimization/start", status_code=202, response_model=schemas.OptimizationJob)
 def start_optimization(request: schemas.OptimizationRequest, db: Session = Depends(get_db)):
@@ -354,15 +355,16 @@ def start_optimization(request: schemas.OptimizationRequest, db: Session = Depen
     """
     worker_status = crud.get_system_control_value(db, "worker_status")
     if worker_status.startswith('BUSY') or worker_status == 'RUNNING':
-        # Sprawdź, czy to nie stare zadanie optymalizacji (można dodać logikę czyszczenia)
         raise HTTPException(status_code=409, detail="Worker jest obecnie zajęty.")
 
     try:
         # 1. Utwórz zadanie w bazie
         new_job = crud.create_optimization_job(db, request)
         
-        # 2. Przekaż ID zadania do Workera przez system_control
+        # 2. Przekaż ID zadania do Workera
         crud.set_system_control_value(db, "optimization_request", new_job.id)
+        # Reset message
+        crud.set_system_control_value(db, "optimization_progress", "Inicjowanie...")
         
         return new_job
     except Exception as e:
@@ -372,8 +374,7 @@ def start_optimization(request: schemas.OptimizationRequest, db: Session = Depen
 @app.get("/api/v1/optimization/results", response_model=Optional[schemas.OptimizationJobDetail])
 def get_latest_optimization_results(db: Session = Depends(get_db)):
     """
-    Pobiera szczegóły najnowszego zadania optymalizacji (wraz z próbami).
-    Teraz zwraca również 'configuration' zawierające 'sensitivity_analysis'.
+    Pobiera szczegóły najnowszego zadania optymalizacji wraz z próbami.
     """
     try:
         job = crud.get_latest_optimization_job(db)
@@ -383,9 +384,16 @@ def get_latest_optimization_results(db: Session = Depends(get_db)):
         # Pobierz próby
         trials = crud.get_optimization_trials(db, job.id)
         
-        # Konwersja do schematu (Pydantic handles mapping)
+        # Pobierz status postępu z system_control (dla live update)
+        progress_msg = crud.get_system_control_value(db, "optimization_progress")
+        
+        # Konwersja do schematu
         job_detail = schemas.OptimizationJobDetail.model_validate(job)
         job_detail.trials = [schemas.OptimizationTrial.model_validate(t) for t in trials]
+        
+        # Opcjonalnie: Doklejamy message do statusu (hack dla UI)
+        if job.status == 'RUNNING' and progress_msg:
+             job_detail.status = f"RUNNING: {progress_msg}"
         
         return job_detail
     except Exception as e:
@@ -394,7 +402,7 @@ def get_latest_optimization_results(db: Session = Depends(get_db)):
 
 # =========================================================
 
-# --- ENDPOINTY KONTROLI ---
+# --- ENDPOINTY KONTROLI (Bez zmian) ---
 @app.post("/api/v1/worker/control/{action}", status_code=202)
 def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db: Session = Depends(get_db)):
     allowed_actions = {
