@@ -245,7 +245,6 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 
             except Exception as e:
                 logger.error(f"Błąd backtestu dla {ticker}: {e}")
-                # Nie przerywamy całej pętli, idziemy do następnego tickera
                 continue
 
         update_scan_progress(session, total_tickers, total_tickers)
