@@ -31,19 +31,21 @@ def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: 
     """
     (Wymiar 1.1) Oblicza 'time_dilation' na podstawie historycznych widoków DataFrame.
     
-    Wersja "czysta": Przyjmuje 20-dniowe widoki DF i oblicza metrykę.
-    
-    ZGODNIE Z MEMO SUPPORTU: Używamy 'adjusted close' do zwrotów (co 'standardize_df_columns'
-    mapuje na 'close' z endpointu 'TIME_SERIES_DAILY_ADJUSTED', więc jest OK).
+    ZGODNIE Z PDF (Sztywna Formuła):
+    Stosunek 20-dniowej zmienności spółki do 20-dniowej zmienności SPY.
     """
     try:
-        # 1. Oblicz zwroty (daily_df_view pochodzi z TIME_SERIES_DAILY_ADJUSTED, więc 'close' to 'adjusted close')
+        if daily_df_view.empty or spy_df_view.empty:
+            return None
+
+        # 1. Oblicz zwroty
         ticker_returns = daily_df_view['close'].pct_change()
         spy_returns = spy_df_view['close'].pct_change()
         
-        # 2. Oblicz 20-dniowe odchylenie standardowe (dla całego okna)
-        stddev_ticker_20 = ticker_returns.std()
-        stddev_spy_20 = spy_returns.std()
+        # 2. Oblicz 20-dniowe odchylenie standardowe (ściśle z ostatnich 20 dostępnych próbek)
+        # Poprawka: Wymuszamy okno 20 dni, nawet jeśli widok jest szerszy.
+        stddev_ticker_20 = ticker_returns.tail(20).std()
+        stddev_spy_20 = spy_returns.tail(20).std()
         
         # 3. Oblicz metrykę
         if stddev_spy_20 == 0 or pd.isna(stddev_spy_20) or pd.isna(stddev_ticker_20):
@@ -62,9 +64,12 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
     """
     (Wymiar 1.2) Oblicza 'price_gravity' na podstawie historycznych widoków DataFrame.
     
-    ZGODNIE Z MEMO SUPPORTU: Zastępujemy VWAP przez proxy (H+L+C)/3.
+    ZGODNIE Z PDF: Zastępujemy VWAP przez proxy (H+L+C)/3.
     """
     try:
+        if daily_df_view.empty:
+            return None
+
         # 1. Pobierz najnowsze wartości OHLC
         latest_candle = daily_df_view.iloc[-1]
         price = latest_candle['close']
@@ -96,34 +101,29 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
 
 def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
     """
-    (Wymiar 2.1) Oblicza 'institutional_sync' na podstawie historycznego widoku DataFrame
-    z transakcjami insiderów (za ostatnie 90 dni).
+    (Wymiar 2.1) Oblicza 'institutional_sync'.
+    Sztywna Formuła: Stosunek netto (Kupno-Sprzedaż) / (Kupno+Sprzedaż) z 90 dni.
     """
     try:
         # 1. Filtruj transakcje z ostatnich 90 dni (wg specyfikacji)
         ninety_days_ago = current_date - timedelta(days=90)
         
-        # Ta funkcja jest bezpieczna:
-        # 'current_date' (z daily_df) jest "naiwna" (naive).
-        # 'insider_df_view.index' (z _parse_insider_transactions) też jest "naiwny".
-        # Porównanie Naive vs Naive jest poprawne.
-        
-        # Używamy .loc do filtrowania po indeksie (który jest datą)
+        # Porównanie Naive vs Naive jest poprawne (zakładając spójność danych wejściowych)
         recent_transactions = insider_df_view.loc[insider_df_view.index >= ninety_days_ago]
         
         if recent_transactions.empty:
-            # ZGODNIE Z MEMO SUPPORTU: Fallback na 0.0 (zamiast NaN/None)
+            # ZGODNIE Z MEMO SUPPORTU: Fallback na 0.0
             return 0.0 
 
-        # 2. Oblicz sumy (zgodnie ze "Sztywną Formułą")
-        # === POPRAWKA: Używamy 'A' (Acquisition) i 'D' (Disposal) ===
+        # 2. Oblicz sumy
+        # 'A' (Acquisition) i 'D' (Disposal)
         total_buys = recent_transactions[recent_transactions['transaction_type'] == 'A']['transaction_shares'].sum()
         total_sells = recent_transactions[recent_transactions['transaction_type'] == 'D']['transaction_shares'].sum()
         
         # 3. Oblicz metrykę
         denominator = total_buys + total_sells
         if denominator == 0:
-            return 0.0 # Neutralny, jeśli brak zakupów lub sprzedaży (np. tylko opcje)
+            return 0.0 # Neutralny
             
         institutional_sync = (total_buys - total_sells) / denominator
         return institutional_sync
@@ -134,47 +134,30 @@ def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, curren
 
 def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
     """
-    (Wymiar 2.2) Oblicza 'retail_herding' na podstawie historycznego widoku DataFrame
-    z sentymentem newsów (za ostatnie 7 dni).
+    (Wymiar 2.2) Oblicza 'retail_herding'.
+    Sztywna Formuła: Średni sentyment z ostatnich 7 dni.
     """
     try:
         # 1. Filtruj artykuły z ostatnich 7 dni (wg specyfikacji)
-        
-        # ==================================================================
-        # === POPRAWKA BŁĘDU (TypeError: tz-naive vs tz-aware) ===
-        # ==================================================================
-        
-        # Krok A: 'current_date' jest NAIVE (z daily_df)
         seven_days_ago = current_date - timedelta(days=7)
         
-        # Krok B: 'news_df_view.index' jest AWARE (UTC) gdy ma dane,
-        # lub NAIVE (datetime64[ns]) gdy jest pusty.
-        # Musimy ujednolicić wszystko do NAIVE, aby pasowało do 'current_date'.
-        
+        # Obsługa stref czasowych
         if news_df_view.index.tz is not None:
-            # Jeśli indeks jest świadomy (Aware), konwertujemy go na naiwny (Naive)
             news_df_view_naive = news_df_view.tz_convert(None)
         else:
-            # Jeśli indeks jest już naiwny (np. pusty), używamy go bez zmian
             news_df_view_naive = news_df_view
 
-        # Krok C: Porównujemy Naive vs Naive (bezpieczne)
         recent_news = news_df_view_naive.loc[news_df_view_naive.index >= seven_days_ago]
         
-        # ==================================================================
-        # === KONIEC POPRAWKI ===
-        # ==================================================================
-        
         if recent_news.empty:
-            # ZGODNIE Z MEMO SUPPORTU: Fallback na 0.0 (zamiast NaN/None)
+            # ZGODNIE Z MEMO SUPPORTU: Fallback na 0.0
             return 0.0 
 
         # 2. Oblicz średnią
-        # Zakładamy, że DataFrame ma kolumnę 'overall_sentiment_score'
         scores = recent_news['overall_sentiment_score']
         
         if scores.empty:
-             return 0.0 # Neutralny
+             return 0.0
              
         retail_herding = scores.mean()
         return retail_herding
@@ -191,14 +174,16 @@ def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date:
 def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_view: pd.DataFrame) -> Optional[float]:
     """
     (Wymiar 3.1) Oblicza 'breakout_energy_required'.
+    Definicja: Odwrotność znormalizowanej szerokości wstęg Bollingera.
     """
     try:
+        if daily_df_view.empty or bbands_df_view.empty:
+            return None
+
         # 1. Pobierz najnowsze wartości
         price = daily_df_view['close'].iloc[-1]
         
-        # Znajdź najbliższe wstęgi (na wypadek brakujących dat)
-        # UWAGA: Używamy asof, aby pobrać NAJBLIŻSZĄ wartość BBANDS
-        # BBANDS DataFrame może nie mieć dokładnych dat zamknięcia rynku
+        # Znajdź najbliższe wstęgi
         upper_band = bbands_df_view['Real Upper Band'].asof(daily_df_view.index[-1])
         lower_band = bbands_df_view['Real Lower Band'].asof(daily_df_view.index[-1])
 
@@ -221,65 +206,41 @@ def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_v
 # === KLUCZOWA ZMIANA (ZGODNIE Z MEMO SUPPORTU 4.1) ===
 # ==================================================================
 def calculate_market_temperature_from_data(
-    intraday_5min_df_view: pd.DataFrame, # TEN ARGUMENT JEST IGNOROWANY
+    intraday_5min_df_view: pd.DataFrame, # IGNOROWANE - Zgodnie z PDF
     current_date: datetime,
-    daily_df_view: Optional[pd.DataFrame] = None # UŻYWAMY TEGO ARGUMENTU
+    daily_df_view: Optional[pd.DataFrame] = None
 ) -> Optional[float]:
     """
     (Wymiar 4.1) Oblicza 'market_temperature'.
     
-    ZGODNIE Z MEMO SUPPORTU: Używamy 30-dniowej zmienności dziennych zwrotów.
+    ZGODNIE Z PDF ("Master Plan"): 
+    Zastępujemy Intraday przez 30-dniową zmienność dziennych zwrotów.
     """
     try:
-        # 1. Sprawdź, czy mamy nowy argument
-        if daily_df_view is not None and not daily_df_view.empty:
-            # =============================================
-            # === NOWA LOGIKA (ZGODNIE Z MEMO SUPPORTU) ===
-            # =============================================
-            
-            # 1. Filtruj dane dzienne z ostatnich 30 dni
-            thirty_days_ago = current_date - timedelta(days=30)
-            
-            # Bezpieczny wycinek: bierzemy dane do 'current_date' i z nich ostatnie 30 wpisów
-            recent_daily_data = daily_df_view.loc[daily_df_view.index <= current_date].iloc[-30:]
+        if daily_df_view is None or daily_df_view.empty:
+            logger.warning("Brak 'daily_df_view' w calculate_market_temperature - nie można obliczyć wg specyfikacji V3.")
+            return None
 
-            if recent_daily_data.empty or len(recent_daily_data) < 2:
-                return None # Za mało danych do obliczenia zwrotów
-
-            # 2. Oblicz zwroty dzienne
-            returns_daily = recent_daily_data['close'].pct_change()
-            
-            # 3. Oblicz odchylenie standardowe (to jest nowa 'market_temperature')
-            market_temperature = returns_daily.std()
-            # =============================================
+        # 1. Filtruj dane dzienne z ostatnich 30 dni
+        thirty_days_ago = current_date - timedelta(days=30)
         
-        else:
-            # Fallback (powinien być martwy, ale dla bezpieczeństwa)
-            logger.warning("Brak 'daily_df_view' - używam starej logiki (Intraday).")
-            
-            # STARA LOGIKA (Intraday 5min)
-            # ==================================================================
-            # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
-            # Ta logika jest martwa, ale na wszelki wypadek ją też naprawimy
-            if current_date.tzinfo is None:
-                current_date_utc = current_date.replace(tzinfo=timezone.utc)
-            else:
-                current_date_utc = current_date
-            thirty_days_ago_utc = current_date_utc - timedelta(days=30)
+        # Bezpieczny wycinek: bierzemy dane do 'current_date' i z nich ostatnie 30 wpisów
+        # Zgodnie ze "Sztywną Formułą" z PDF: STDEV (returns_daily, period = 30)
+        recent_daily_data = daily_df_view.loc[daily_df_view.index <= current_date].iloc[-31:] # Bierzemy 31, aby mieć 30 zmian procentowych
 
-            if intraday_5min_df_view.index.tz is not None:
-                intraday_naive = intraday_5min_df_view.tz_convert(None)
-            else:
-                intraday_naive = intraday_5min_df_view
-            # ==================================================================
+        if recent_daily_data.empty or len(recent_daily_data) < 2:
+            return None # Za mało danych do obliczenia zwrotów
 
-            recent_intraday_data = intraday_naive.loc[intraday_naive.index >= (current_date - timedelta(days=30))]
-            
-            if recent_intraday_data.empty or len(recent_intraday_data) < 2:
-                return None
-            returns_5min = recent_intraday_data['close'].pct_change()
-            market_temperature = returns_5min.std()
-            
+        # 2. Oblicz zwroty dzienne
+        returns_daily = recent_daily_data['close'].pct_change().dropna()
+        
+        # 3. Oblicz odchylenie standardowe (to jest nowa 'market_temperature')
+        # Upewniamy się, że mamy wystarczającą ilość danych do statystyki
+        if len(returns_daily) < 20: 
+             return None
+
+        market_temperature = returns_daily.std()
+        
         if pd.isna(market_temperature):
             return None
             
@@ -289,21 +250,14 @@ def calculate_market_temperature_from_data(
         logger.error(f"Błąd w 'calculate_market_temperature_from_data': {e}", exc_info=True)
         return None
 # ==================================================================
-# === KONIEC KLUCZOWEJ ZMIANY ===
-# ==================================================================
 
 
 def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optional[float]:
     """
-    (Wymiar 4.2) Oblicza 'information_entropy' (Entropia Informacyjna) jako proxy (Liczba newsów).
+    (Wymiar 4.2) Oblicza 'information_entropy'.
+    Proxy: Liczba newsów z ostatnich 10 dni (S).
     """
     try:
-        # 1. Oblicz S - Liczba newsów z ostatnich 10 dni
-        
-        # ==================================================================
-        # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
-        # ==================================================================
-        
         # Krok A: Ujednolić do NAIVE
         if news_df_view.index.tz is not None:
             news_df_view_naive = news_df_view.tz_convert(None)
@@ -319,7 +273,6 @@ def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optio
         
         # Krok C: Porównanie Naive vs Naive
         recent_news = news_df_view_naive.loc[news_df_view_naive.index >= ten_days_ago_naive]
-        # ==================================================================
         
         # Zwróć liczbę newsów
         S = len(recent_news)
@@ -327,22 +280,16 @@ def calculate_information_entropy_from_data(news_df_view: pd.DataFrame) -> Optio
         return float(S)
 
     except Exception as e:
-        logger.error(f"Błąd w 'calculate_information_entropy_from_data' (Proxy Liczba Newsów): {e}", exc_info=True)
+        logger.error(f"Błąd w 'calculate_information_entropy_from_data': {e}", exc_info=True)
         return None
 
-# ==================================================================
-# === NAPRAWA BŁĘDU LOGICZNEGO (Spam w logach) ===
-# ==================================================================
 def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
     """
     (Wymiar 7.1) Oblicza 'attention_density'.
-    
-    POPRAWKA AWARYJNA: Naprawiona walidacja Z-Score dla 200 dni.
+    Definicja: Z_Score(Vol_10d, 200) + Z_Score(News_10d, 200).
     """
     try:
         # 1. Oblicz 10-dniową średnią kroczącą dla WOLUMENU (dla ostatnich 200 dni)
-        
-        # Obliczenia kroczącej średniej wolumenu
         historical_avg_volume_10d = daily_df_view['volume'].rolling(window=10).mean()
         
         # Bierzemy OSTATNIE 200 punktów, które nie są NaN
@@ -351,33 +298,21 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
         # Bieżący 10-dniowy średni wolumen (dla ostatniego dnia)
         avg_volume_10d = historical_avg_volume_10d.iloc[-1]
         
-        
         # 2. Oblicz 10-dniową kroczącą LICZBĘ NEWSÓW (dla ostatnich 200 dni)
-        
-        # ZGODNIE Z MEMO SUPPORTU: Obsługa braku newsów
         if news_df_view.empty:
-            # Poprawka: Fallback 0.0 bez spamowania logami
             normalized_news = 0.0 
         else:
-            
-            # ==================================================================
-            # === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
-            # ==================================================================
             # Krok A: Ujednolić do NAIVE
             if news_df_view.index.tz is not None:
                 news_df_view_naive = news_df_view.tz_convert(None)
             else:
                 news_df_view_naive = news_df_view
             
-            # a) Zlicz newsy dziennie (na danych naiwnych)
-            # Poprawka: Używamy indeksu jako daty, a nie resample
+            # a) Zlicz newsy dziennie
             news_counts_daily = news_df_view_naive.groupby(news_df_view_naive.index.date).size()
-            # Musimy ponownie przekonwertować indeks na datetime, aby .rolling działał
             news_counts_daily.index = pd.to_datetime(news_counts_daily.index)
             # Uzupełnij brakujące dni (weekendy) zerami
             news_counts_daily = news_counts_daily.reindex(pd.date_range(start=news_counts_daily.index.min(), end=news_counts_daily.index.max(), freq='D'), fill_value=0)
-            
-            # ==================================================================
             
             # b) Oblicz kroczącą sumę z 10-dniowego okna
             historical_news_count_10d = news_counts_daily.rolling(window=10).sum()
@@ -385,8 +320,7 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
             # Bierzemy OSTATNIE 200 punktów, które nie są NaN
             valid_news_history = historical_news_count_10d.iloc[-200:].dropna()
             
-            # Krok C: Porównanie Naive (asof) vs Naive (current_date)
-            # 'current_date' jest już naiwna
+            # Krok C: Pobierz wartość na 'current_date'
             news_count_10d = historical_news_count_10d.asof(current_date)
             
             if valid_news_history.empty or pd.isna(news_count_10d):
@@ -398,28 +332,18 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
                 if news_std == 0:
                     normalized_news = 0.0
                 else:
-                    # Używamy znormalizowanego Z-Score
                     normalized_news = (news_count_10d - news_mean) / news_std
         
-        # ==================================================================
-        # === KLUCZOWA POPRAWKA ===
-        # Warunek musi być, że mamy CO NAJMNIEJ 200 PUNKTÓW do obliczenia Z-Score.
-        # W przeciwnym razie nie można obliczyć stabilnego odchylenia standardowego.
-        # ==================================================================
+        # Warunek: Mamy CO NAJMNIEJ 200 PUNKTÓW do obliczenia Z-Score.
         if len(valid_volume_history) < 200 or pd.isna(avg_volume_10d):
-             # logger.warning(f"Brak wystarczającej historii wolumenu ({len(valid_volume_history)}) do obliczenia Z-Score.") # Usuwamy, by uniknąć spamowania
              return None
 
-
-        # 3. Oblicz Z-Score (dla ostatniego dnia)
-        
-        # Z-Score dla Wolumenu
+        # 3. Oblicz Z-Score dla Wolumenu
         vol_mean = valid_volume_history.mean()
         vol_std = valid_volume_history.std()
         if vol_std == 0:
             normalized_volume = 0.0
         else:
-            # Używamy znormalizowanego Z-Score: (wartość - średnia) / odchylenie
             normalized_volume = (avg_volume_10d - vol_mean) / vol_std
             
         # 4. Oblicz metrykę m² (attention_density)
@@ -433,24 +357,21 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
     except Exception as e:
         logger.error(f"Błąd w 'calculate_attention_density_from_data': {e}", exc_info=True)
         return None
-# ==================================================================
 
 
 # ==================================================================
-# === NOWA FUNKCJA (Brakujący Atrybut z H3/H4) ===
-# Ta funkcja łączy wszystkie metryki w komponenty H3
+# === Funkcja Agregująca dla Hipotezy H3 ===
 # ==================================================================
 def calculate_h3_components_for_day(
     current_date: datetime,
     daily_view: pd.DataFrame,        # Widok Dzienny do daty J
-    insider_df: pd.DataFrame,          # Pełna historia insider
-    news_df: pd.DataFrame,             # Pełna historia news
-    full_daily_df: pd.DataFrame,       # Pełny DF (dla BBANDS/History)
-    intraday_5min_df: pd.DataFrame     # (Pusty) DF
+    insider_df: pd.DataFrame,        # Pełna historia insider
+    news_df: pd.DataFrame,           # Pełna historia news
+    full_daily_df: pd.DataFrame,     # Pełny DF (dla BBANDS/History)
+    intraday_5min_df: pd.DataFrame   # Ignorowane
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     Oblicza trzy główne komponenty modelu H3 (J, Nabla^2, m^2) dla JEDNEGO DNIA.
-    Jest to funkcja, której brakowało (AttributeError).
     """
     try:
         # === 1. Oblicz J (entropy_change) ===
@@ -464,9 +385,9 @@ def calculate_h3_components_for_day(
         
         # T = market_temperature (Zmienność dzienna z 30 dni)
         T = calculate_market_temperature_from_data(
-            intraday_5min_df, # Ignorowane
+            intraday_5min_df, 
             current_date,
-            daily_view # Używamy widoku dziennego
+            daily_view 
         )
         
         # μ = institutional_sync (Stosunek insiderów z 90 dni)
@@ -478,7 +399,7 @@ def calculate_h3_components_for_day(
         J = None
         if S is not None and Q is not None and T is not None and mu is not None:
             if T == 0 or pd.isna(T):
-                J = S + (mu * delta_N) # Unikaj dzielenia przez zero lub błędu NaN
+                J = S + (mu * delta_N) # Unikaj dzielenia przez zero
             else:
                 J = S - (Q / T) + (mu * delta_N)
 
@@ -494,37 +415,35 @@ def calculate_h3_components_for_day(
     except Exception as e:
         logger.error(f"Błąd w 'calculate_h3_components_for_day' dla daty {current_date}: {e}", exc_info=True)
         return None, None, None
-# ==================================================================
-# === KONIEC NOWEJ FUNKCJI ===
-# ==================================================================
-
 
 # ==================================================================
-# === Funkcje "Na Żywo" (Oryginalna Logika - jeszcze nieużywane) ===
+# === Funkcje "Na Żywo" (Dla pojedynczego punktu danych) ===
 # ==================================================================
 
 def calculate_time_dilation_live(ticker: str, ticker_daily_df: pd.DataFrame, spy_daily_df: pd.DataFrame) -> Optional[float]:
-    """(Wymiar 1.1) Oblicza 'time_dilation' używając przekazanych DF."""
+    """(Wymiar 1.1) Oblicza 'time_dilation' używając przekazanych DF (wersja live)."""
     try:
+        if ticker_daily_df.empty or spy_daily_df.empty:
+            return None
+
         ticker_returns = ticker_daily_df['close'].pct_change()
         spy_returns = spy_daily_df['close'].pct_change()
         
-        stddev_ticker_20 = ticker_returns.rolling(window=20).std().iloc[-1]
-        stddev_spy_20 = spy_returns.rolling(window=20).std().iloc[-1]
+        # Wymuszamy ostatnie 20 dni
+        stddev_ticker_20 = ticker_returns.tail(20).std()
+        stddev_spy_20 = spy_returns.tail(20).std()
         
         if stddev_spy_20 == 0: return None
         return stddev_ticker_20 / stddev_spy_20
     except Exception as e:
-        logger.error(f"Błąd w 'calculate_time_dilation' dla {ticker}: {e}", exc_info=True)
+        logger.error(f"Błąd w 'calculate_time_dilation_live' dla {ticker}: {e}", exc_info=True)
         return None
 
 def calculate_price_gravity_live(ticker: str, ticker_daily_df: pd.DataFrame, api_client: AlphaVantageClient = None) -> Optional[float]:
-    """
-    (Wymiar 1.2) Oblicza 'price_gravity' (na żywo).
-    ZGODNIE Z MEMO SUPPORTU: Używamy proxy (H+L+C)/3.
-    """
+    """(Wymiar 1.2) Oblicza 'price_gravity' (na żywo, proxy HLC/3)."""
     try:
-        # Pobierz najnowsze wartości OHLC
+        if ticker_daily_df.empty: return None
+        
         latest_candle = ticker_daily_df.iloc[-1]
         price = latest_candle['close']
         high = latest_candle['high']
@@ -533,44 +452,37 @@ def calculate_price_gravity_live(ticker: str, ticker_daily_df: pd.DataFrame, api
         if pd.isna(price) or pd.isna(high) or pd.isna(low):
             return None
 
-        # Oblicz proxy "centrum masy"
         center_of_mass_proxy = (high + low + price) / 3.0
         
-        # Oblicz metrykę
         if price == 0: return None
         price_gravity = (center_of_mass_proxy - price) / price
         return price_gravity
     except Exception as e:
-        logger.error(f"Błąd w 'calculate_price_gravity' dla {ticker}: {e}", exc_info=True)
+        logger.error(f"Błąd w 'calculate_price_gravity_live' dla {ticker}: {e}", exc_info=True)
         return None
 
 def calculate_institutional_sync_live(ticker: str, api_client: AlphaVantageClient) -> Optional[float]:
     """(Wymiar 2.1) Oblicza 'institutional_sync' (wymaga 1 wywołania API)."""
     try:
         insider_data = api_client.get_insider_transactions(ticker)
-        # === POPRAWKA: Używamy klucza 'data' ===
         if not insider_data or 'data' not in insider_data or not insider_data['data']:
             logger.warning(f"Brak danych Insider Transactions (live) dla {ticker}")
-            return 0.0 # Neutralny, jeśli brak transakcji
+            return 0.0
 
-        # === POPRAWKA: Używamy klucza 'data' ===
         transactions = insider_data['data']
         total_buys = 0.0
         total_sells = 0.0
         
-        # Data graniczna (90 dni temu)
         ninety_days_ago = datetime.now() - timedelta(days=90)
         
         for tx in transactions:
             try:
-                # === POPRAWKA: Używamy poprawnych nazw pól ===
                 tx_date = datetime.strptime(tx['transaction_date'], '%Y-%m-%d')
                 if tx_date < ninety_days_ago:
-                    continue # Transakcja zbyt stara
+                    continue
                 
                 shares_str = tx.get('shares')
-                if not shares_str:
-                    continue
+                if not shares_str: continue
                 shares = float(shares_str)
                 tx_type = tx.get('acquisition_or_disposal')
                 
@@ -579,7 +491,7 @@ def calculate_institutional_sync_live(ticker: str, api_client: AlphaVantageClien
                 elif tx_type == 'D':
                     total_sells += shares
             except (ValueError, TypeError):
-                continue # Pomiń błędne rekordy
+                continue
 
         denominator = total_buys + total_sells
         if denominator == 0:
@@ -588,19 +500,18 @@ def calculate_institutional_sync_live(ticker: str, api_client: AlphaVantageClien
         return (total_buys - total_sells) / denominator
         
     except Exception as e:
-        logger.error(f"Błąd w 'calculate_institutional_sync' dla {ticker}: {e}", exc_info=True)
+        logger.error(f"Błąd w 'calculate_institutional_sync_live' dla {ticker}: {e}", exc_info=True)
         return None
 
 def calculate_retail_herding_live(ticker: str, api_client: AlphaVantageClient) -> Optional[float]:
     """(Wymiar 2.2) Oblicza 'retail_herding' (wymaga 1 wywołania API)."""
     try:
-        # Format daty dla AV: YYYYMMDDTHHMM
         seven_days_ago_str = (datetime.now() - timedelta(days=7)).strftime('%Y%m%dT%H%M')
         
         news_data = api_client.get_news_sentiment(ticker, limit=100, time_from=seven_days_ago_str)
         if not news_data or 'feed' not in news_data or not news_data['feed']:
             logger.warning(f"Brak danych News Sentiment (live) dla {ticker}")
-            return 0.0 # Neutralny, jeśli brak newsów
+            return 0.0
 
         feed = news_data['feed']
         scores = []
@@ -616,5 +527,5 @@ def calculate_retail_herding_live(ticker: str, api_client: AlphaVantageClient) -
         return sum(scores) / len(scores)
 
     except Exception as e:
-        logger.error(f"Błąd w 'calculate_retail_herding' dla {ticker}: {e}", exc_info=True)
+        logger.error(f"Błąd w 'calculate_retail_herding_live' dla {ticker}: {e}", exc_info=True)
         return None
