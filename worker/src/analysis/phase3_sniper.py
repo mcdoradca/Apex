@@ -17,7 +17,7 @@ from .utils import (
     update_scan_progress,
     send_telegram_alert,
     safe_float,
-    get_system_control_value # Dodano do odczytu sentymentu Fazy 0
+    get_system_control_value 
 )
 # Korzystamy z centralnych metryk
 from . import aqm_v3_metrics
@@ -43,6 +43,19 @@ DEFAULT_PARAMS = {
 H3_CALC_WINDOW = 100 
 REQUIRED_HISTORY_SIZE = 201 
 
+def _ensure_tz_naive(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pomocnicza funkcja usuwająca strefę czasową z indeksu DataFrame.
+    Zapewnia spójność z backtest_engine.py i zapobiega błędom łączenia danych.
+    """
+    if df is None or df.empty:
+        return df
+    
+    if isinstance(df.index, pd.DatetimeIndex):
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+    return df
+
 def _get_market_conditions(session: Session, api_client: AlphaVantageClient) -> Dict[str, Any]:
     """
     Oblicza metryki rynkowe (VIX Proxy, Trend) dla AdaptiveExecutor.
@@ -59,6 +72,7 @@ def _get_market_conditions(session: Session, api_client: AlphaVantageClient) -> 
         if spy_raw:
             spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
             spy_df.index = pd.to_datetime(spy_df.index)
+            spy_df = _ensure_tz_naive(spy_df) # FIX: TZ Naive
             spy_df.sort_index(inplace=True)
             
             if len(spy_df) > 200:
@@ -169,10 +183,15 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             
             bbands_raw = get_raw_data_with_cache(session, api_client, ticker, 'BBANDS', 'get_bollinger_bands', expiry_hours=24, interval='daily', time_period=20)
             bbands_df = _parse_bbands(bbands_raw)
+            # FIX: TZ Naive
+            bbands_df = _ensure_tz_naive(bbands_df)
 
             h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, session)
             insider_df = h2_data.get('insider_df')
             news_df = h2_data.get('news_df')
+            # FIX: TZ Naive dla danych H2
+            insider_df = _ensure_tz_naive(insider_df)
+            news_df = _ensure_tz_naive(news_df)
 
             # B. Przetwarzanie
             daily_ohlcv = standardize_df_columns(pd.DataFrame.from_dict(daily_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -180,6 +199,10 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             
             daily_adj = standardize_df_columns(pd.DataFrame.from_dict(daily_adj_raw.get('Time Series (Daily)', {}), orient='index'))
             daily_adj.index = pd.to_datetime(daily_adj.index)
+
+            # FIX: TZ Naive
+            daily_ohlcv = _ensure_tz_naive(daily_ohlcv)
+            daily_adj = _ensure_tz_naive(daily_adj)
 
             if len(daily_adj) < REQUIRED_HISTORY_SIZE: continue
 
@@ -192,6 +215,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             df['close'] = df[close_col]
 
             # C. Metryki (Vectorized)
+            # Uwaga: Funkcje 'metrics' muszą obsługiwać tz-naive index, co zostało naprawione powyżej poprzez _ensure_tz_naive
             df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
             df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
             
@@ -237,6 +261,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             m_std = df['m_sq'].rolling(window=H3_CALC_WINDOW).std(ddof=1)
             m_norm = ((df['m_sq'] - m_mean) / m_std).fillna(0)
             
+            # Formuła AQM Score (Napęd - Opory)
             aqm_score_series = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
             threshold_series = aqm_score_series.rolling(window=H3_CALC_WINDOW).quantile(h3_percentile)
 
