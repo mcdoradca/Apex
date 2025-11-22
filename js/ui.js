@@ -572,19 +572,20 @@ export const renderers = {
                     `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-900/20 text-green-400 border border-green-900/50">COMPLETE</span>`;
 
                 // Wyświetlanie wyniku (Score)
-                // Jeśli pruned, wyświetlaj 0.00 lub --- ale w sposób uporządkowany
+                // Jeśli pruned, wyświetlaj 0.0000 (szare) zamiast ---, aby tabela wyglądała na pełną
                 const pfVal = t.profit_factor !== null && t.profit_factor !== undefined ? Number(t.profit_factor).toFixed(4) : "0.0000";
-                const pfDisplay = isPruned ? `<span class="text-gray-600 text-xs">---</span>` : `<span class="text-white font-bold">${pfVal}</span>`;
+                const pfDisplay = isPruned ? `<span class="text-gray-600 text-xs font-mono">${pfVal}</span>` : `<span class="text-white font-bold font-mono text-sm">${pfVal}</span>`;
 
                 const tradesVal = t.total_trades || 0;
 
+                // Zmniejszamy padding w tabeli (p-2 zamiast p-3) dla większej kompaktywności
                 return `<tr class="${rowClass}">
-                    <td class="p-3 text-center font-mono text-gray-500 text-xs">#${t.trial_number}</td>
-                    <td class="p-3 text-center">${statusLabel}</td>
-                    <td class="p-3 text-right font-mono text-sm">${pfDisplay}</td>
-                    <td class="p-3 text-right text-gray-400 text-sm font-mono">${tradesVal}</td>
-                    <td class="p-3">
-                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                    <td class="p-2 text-center font-mono text-gray-500 text-xs">#${t.trial_number}</td>
+                    <td class="p-2 text-center">${statusLabel}</td>
+                    <td class="p-2 text-right">${pfDisplay}</td>
+                    <td class="p-2 text-right text-gray-400 text-xs font-mono">${tradesVal}</td>
+                    <td class="p-2">
+                        <div class="flex flex-wrap gap-1.5">
                             ${paramsHtml || '<span class="text-gray-500 italic text-xs">Brak parametrów</span>'}
                         </div>
                     </td>
@@ -620,15 +621,15 @@ export const renderers = {
                 </div>
 
                 <h4 class="text-xs text-gray-500 uppercase font-bold border-b border-gray-800 pb-2 mt-2">Ranking Prób (Live Feed)</h4>
-                <div class="overflow-x-auto max-h-[600px] border border-gray-800 rounded bg-[#161B22] custom-scrollbar w-full">
+                <div class="overflow-x-auto max-h-[500px] border border-gray-800 rounded bg-[#161B22] custom-scrollbar w-full">
                     <table class="w-full text-sm text-left text-gray-300 table-fixed">
                         <thead class="text-xs text-gray-500 uppercase bg-[#0D1117] sticky top-0 z-10 shadow-sm">
                             <tr>
-                                <th class="p-3 w-12 text-center">#</th>
-                                <th class="p-3 w-24 text-center">Status</th>
-                                <th class="p-3 w-24 text-right">Score</th>
-                                <th class="p-3 w-20 text-right">Trades</th>
-                                <th class="p-3">Parametry</th>
+                                <th class="p-2 w-10 text-center">#</th>
+                                <th class="p-2 w-20 text-center">Status</th>
+                                <th class="p-2 w-20 text-right">Score</th>
+                                <th class="p-2 w-16 text-right">Trades</th>
+                                <th class="p-2">Parametry</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-800">
