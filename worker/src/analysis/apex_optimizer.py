@@ -102,7 +102,7 @@ class QuantumOptimizer:
             best_params = best_trial.params
             best_value = best_trial.value
             
-            logger.info(f"QuantumOptimizer: Zakończono. Najlepszy Robust Score: {best_value:.4f}")
+            logger.info(f"QuantumOptimizer: Zakończono. Najlepszy Wynik: {best_value:.4f}")
             update_system_control(self.session, 'optimization_progress', "Analiza wrażliwości...")
 
             # Analiza Wrażliwości
@@ -207,23 +207,30 @@ class QuantumOptimizer:
                     is_pruned = True
                     raise TrialPruned()
 
-            if total_trades_year < 12: 
+            # === DEBUGOWANIE i OBLICZENIA ===
+            mean_pf = np.mean(period_pfs) if period_pfs else 0.0
+            std_pf = np.std(period_pfs) if period_pfs else 0.0
+            robust_score = mean_pf / (1.0 + std_pf)
+            global_pf = mean_pf
+
+            # Logowanie dla diagnostyki (Zgodnie z instrukcją użytkownika)
+            logger.info(f"Trial {trial.number}: PF={mean_pf:.3f}, Std={std_pf:.3f}, Trades={total_trades_year}, Robust={robust_score:.3f}")
+
+            # KROK 2: Wymaganie minimalnej liczby transakcji (zwiększone do 20)
+            if total_trades_year < 20: 
                 robust_score = 0.0
                 global_pf = 0.0
-            else:
-                mean_pf = np.mean(period_pfs)
-                std_pf = np.std(period_pfs)
-                robust_score = mean_pf / (1.0 + std_pf)
-                global_pf = mean_pf
+                return 0.0 # Odrzucamy próbę
 
         except TrialPruned:
             # Zapisz próbę jako PRUNED, aby była widoczna w UI!
             is_pruned = True
-            robust_score = 0.0 # Dla pruned nie ma wyniku
+            robust_score = 0.0 
+            global_pf = 0.0
             # Kontynuujemy do zapisu w bazie
             
-        except Exception:
-            # Błędy techniczne
+        except Exception as e:
+            logger.error(f"Błąd w symulacji trial: {e}")
             raise
 
         # Zapis do bazy (również dla PRUNED)
@@ -236,7 +243,7 @@ class QuantumOptimizer:
                 total_trades=total_trades_year,
                 win_rate=0.0, 
                 net_profit=total_profit_year,
-                state='PRUNED' if is_pruned else 'COMPLETE', # WAŻNE DLA UI
+                state='PRUNED' if is_pruned else 'COMPLETE', 
                 created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
@@ -247,7 +254,8 @@ class QuantumOptimizer:
         if is_pruned:
             raise TrialPruned()
 
-        return robust_score
+        # KROK 1: Tymczasowo używamy zwykłego Profit Factor (mean_pf) jako celu zamiast robust_score
+        return mean_pf
 
 class AdaptiveExecutor:
     # (Bez zmian)
