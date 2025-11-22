@@ -24,14 +24,32 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 
 logger = logging.getLogger(__name__)
 
+def _ensure_tz_naive(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pomocnicza funkcja usuwająca strefę czasową z indeksu DataFrame.
+    Naprawia błąd: "Cannot compare dtypes datetime64[ns, UTC] and datetime64[ns]"
+    """
+    if df is None or df.empty:
+        return df
+    
+    if isinstance(df.index, pd.DatetimeIndex):
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+    return df
+
 def _calculate_time_dilation_series(ticker_df: pd.DataFrame, spy_df: pd.DataFrame, window: int = 20) -> pd.Series:
     """Oblicza serię Time Dilation (Zmienność Tickera / Zmienność SPY)."""
     try:
+        # Upewniamy się, że oba DF są tz-naive
+        ticker_df = _ensure_tz_naive(ticker_df)
+        spy_df = _ensure_tz_naive(spy_df)
+
         if not isinstance(ticker_df.index, pd.DatetimeIndex): ticker_df.index = pd.to_datetime(ticker_df.index)
         if not isinstance(spy_df.index, pd.DatetimeIndex): spy_df.index = pd.to_datetime(spy_df.index)
 
         ticker_returns = ticker_df['close'].pct_change()
         spy_returns = spy_df['close'].pct_change()
+        # Reindexowanie wymaga zgodnych typów indeksów (tz-naive)
         spy_returns = spy_returns.reindex(ticker_returns.index).ffill().fillna(0)
 
         ticker_std = ticker_returns.rolling(window=window).std()
@@ -50,10 +68,8 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
     """
     Uruchamia pełny backtest historyczny (z zapisem do bazy).
     
-    OPTYMALIZACJA BEZSTRATNA (Vectorization):
-    Zamiast powolnego df.apply() dla każdego dnia, używamy wektorowych operacji
-    rolling() dla metryk H2 (Insider/News), co przyspiesza proces o 50-100x
-    przy zachowaniu 100% dokładności matematycznej względem PDF.
+    NAPRAWA: Rozwiązano problem niezgodności stref czasowych (UTC vs Naive).
+    OPTYMALIZACJA: Używa wektoryzacji dla metryk H2.
     """
     logger.info(f"[Backtest] Rozpoczynanie analizy historycznej dla roku {year}...")
     append_scan_log(session, f"BACKTEST: Uruchamianie symulacji dla roku {year}...")
@@ -84,6 +100,8 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
         if spy_raw:
             spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
             spy_df.index = pd.to_datetime(spy_df.index)
+            # === CRITICAL FIX: Usuwamy strefę czasową ze SPY ===
+            spy_df = _ensure_tz_naive(spy_df)
 
         total_tickers = len(tickers)
         update_scan_progress(session, 0, total_tickers)
@@ -107,12 +125,17 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 daily_adj = standardize_df_columns(pd.DataFrame.from_dict(daily_adj_raw.get('Time Series (Daily)', {}), orient='index'))
                 daily_adj.index = pd.to_datetime(daily_adj.index)
                 
+                # === CRITICAL FIX: Usuwamy strefy czasowe ===
+                daily_ohlcv = _ensure_tz_naive(daily_ohlcv)
+                daily_adj = _ensure_tz_naive(daily_adj)
+                
                 if len(daily_adj) < 201: continue
 
                 if 'high' in daily_ohlcv.columns:
                     daily_ohlcv['vwap_proxy'] = (daily_ohlcv['high'] + daily_ohlcv['low'] + daily_ohlcv['close']) / 3.0
                 else: continue
 
+                # Teraz join zadziała bez błędu "Cannot compare dtypes"
                 df = daily_adj.join(daily_ohlcv[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
                 close_col = 'close_ohlcv' if 'close_ohlcv' in df.columns else 'close'
                 
@@ -127,33 +150,32 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 else:
                     df['time_dilation'] = 0.0
                 
-                # Wymiar 2 (H2) - OPTYMALIZACJA WEKTOROWA
+                # Wymiar 2 (H2) - OPTYMALIZACJA WEKTOROWA + FIX TZ
                 h2_data = load_h2_data_into_cache(ticker, api_client, session)
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
                 
-                # Zamiast df.apply (wolne), używamy rolling window na indeksie czasowym (błyskawiczne)
+                # === CRITICAL FIX: Usuwamy strefy czasowe z danych H2 ===
+                insider_df = _ensure_tz_naive(insider_df)
+                news_df = _ensure_tz_naive(news_df)
                 
                 # 2.1 Institutional Sync (90 dni)
                 if not insider_df.empty:
-                    # Agregacja do dziennych sum
                     insider_buys = insider_df[insider_df['transaction_type'] == 'A']['transaction_shares'].resample('D').sum()
                     insider_sells = insider_df[insider_df['transaction_type'] == 'D']['transaction_shares'].resample('D').sum()
                     
-                    # Rolling sum na 90 dni (kalendarzowych)
                     rolling_buys = insider_buys.rolling('90D').sum()
                     rolling_sells = insider_sells.rolling('90D').sum()
                     denominator = rolling_buys + rolling_sells
                     
-                    # Obliczenie wskaźnika i mapowanie do głównego DF (reindex)
                     sync_series = (rolling_buys - rolling_sells) / denominator.replace(0, np.nan)
+                    # Reindex zadziała teraz poprawnie (obie strony są naive)
                     df['institutional_sync'] = sync_series.reindex(df.index, method='ffill').fillna(0.0)
                 else:
                     df['institutional_sync'] = 0.0
 
                 # 2.2 Retail Herding (7 dni)
                 if not news_df.empty:
-                    # Aby zachować "średnią ważoną wszystkich artykułów z 7 dni", sumujemy score i liczby
                     news_sum = news_df['overall_sentiment_score'].resample('D').sum()
                     news_count = news_df['overall_sentiment_score'].resample('D').count()
                     
@@ -170,17 +192,14 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['market_temperature'] = df['daily_returns'].rolling(window=MARKET_TEMP_WINDOW).std()
                 
                 # Wymiar 3 i 7 (H3 Components)
-                # Używamy proxy liczby newsów dla Entropii (Wymiar 4.2)
                 if not news_df.empty:
-                    # Zliczanie newsów dziennie, potem rolling window 10 dni
                     news_counts = news_df.groupby(news_df.index.date).size()
                     news_counts.index = pd.to_datetime(news_counts.index)
-                    # Reindex do osi czasu akcji, wypełnienie zerami tam gdzie brak newsów
+                    # Reindex (bezpieczny, bo naive)
                     news_counts = news_counts.reindex(df.index, fill_value=0)
                     
                     df['information_entropy'] = news_counts.rolling(window=10).sum()
                     
-                    # Z-Score dla Newsów (200 dni historii)
                     news_mean_200 = df['information_entropy'].rolling(200).mean()
                     news_std_200 = df['information_entropy'].rolling(200).std()
                     df['normalized_news'] = ((df['information_entropy'] - news_mean_200) / news_std_200).replace([np.inf, -np.inf], 0).fillna(0)
@@ -188,17 +207,13 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                     df['information_entropy'] = 0.0
                     df['normalized_news'] = 0.0
                 
-                # Z-Score dla Wolumenu (10 dni średniej vs 200 dni historii)
+                # Z-Score dla Wolumenu
                 df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
                 df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
                 df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
                 df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
                 # C. Budowanie Składników H3 (Base Components)
-                # Symulator (simulate_trades_h3) sam oblicza Z-Scores (J_norm, nabla_norm, etc.) 
-                # i finalny AQM Score na podstawie poniższych kolumn.
-                # Nie musimy ich tu liczyć podwójnie.
-                
                 df['m_sq'] = df['normalized_volume'] + df['normalized_news']
                 df['nabla_sq'] = df['price_gravity']
                 
@@ -207,7 +222,6 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 T = df['market_temperature']
                 mu = df['institutional_sync']
                 
-                # Wzór na J (Siła Napędowa)
                 df['J'] = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
                 df['J'] = df['J'].fillna(0)
 
@@ -231,6 +245,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 
             except Exception as e:
                 logger.error(f"Błąd backtestu dla {ticker}: {e}")
+                # Nie przerywamy całej pętli, idziemy do następnego tickera
                 continue
 
         update_scan_progress(session, total_tickers, total_tickers)
@@ -244,13 +259,14 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 
 
 # ==============================================================================
-# === SEKCJA 2: OPTYMALIZACJA V4 (PRELOAD + FAST LOOP) ===
+# === SEKCJA 2: OPTYMALIZACJA V4 (PRELOAD + FAST LOOP) - ZOPTYMALIZOWANY ===
 # ==============================================================================
 
 def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
     """
     [BEZSTRATNA OPTYMALIZACJA V4]
     Ładuje dane do pamięci RAM dla pętli optymalizacyjnej Optuny.
+    Również zaimplementowano FIX STREF CZASOWYCH.
     """
     logger.info(f"[Preload] Rozpoczynanie ładowania danych do RAM dla roku {year}...")
     api_client = AlphaVantageClient()
@@ -268,10 +284,13 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
     if spy_raw:
         spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
         spy_df.index = pd.to_datetime(spy_df.index)
+        # === CRITICAL FIX ===
+        spy_df = _ensure_tz_naive(spy_df)
 
     cache = {}
     Z_SCORE_WINDOW = 100
     HISTORY_BUFFER = 201
+    MARKET_TEMP_WINDOW = 30
     
     for ticker in tickers:
         try:
@@ -283,10 +302,13 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
             daily_ohlcv = standardize_df_columns(pd.DataFrame.from_dict(daily_raw.get('Time Series (Daily)', {}), orient='index'))
             daily_adj = standardize_df_columns(pd.DataFrame.from_dict(daily_adj_raw.get('Time Series (Daily)', {}), orient='index'))
             
-            if len(daily_adj) < HISTORY_BUFFER: continue
-            
+            # === CRITICAL FIX ===
+            daily_ohlcv = _ensure_tz_naive(daily_ohlcv)
+            daily_adj = _ensure_tz_naive(daily_adj)
             daily_ohlcv.index = pd.to_datetime(daily_ohlcv.index)
             daily_adj.index = pd.to_datetime(daily_adj.index)
+            
+            if len(daily_adj) < HISTORY_BUFFER: continue
             
             if 'high' in daily_ohlcv.columns:
                 daily_ohlcv['vwap_proxy'] = (daily_ohlcv['high'] + daily_ohlcv['low'] + daily_ohlcv['close']) / 3.0
@@ -298,17 +320,37 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
             df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
             df['atr_14'] = calculate_atr(df).ffill().fillna(0)
             
-            # Tutaj też używamy wektoryzacji jeśli to możliwe, lub cache z loadera
             h2_data = load_h2_data_into_cache(ticker, api_client, session)
             insider_df = h2_data.get('insider_df')
             news_df = h2_data.get('news_df')
             
-            # Dla preloada (V4) też warto użyć szybkiej metody, ale tu zachowujemy logikę metryk
-            df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
-            df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
+            # === CRITICAL FIX ===
+            insider_df = _ensure_tz_naive(insider_df)
+            news_df = _ensure_tz_naive(news_df)
+            
+            if not insider_df.empty:
+                insider_buys = insider_df[insider_df['transaction_type'] == 'A']['transaction_shares'].resample('D').sum()
+                insider_sells = insider_df[insider_df['transaction_type'] == 'D']['transaction_shares'].resample('D').sum()
+                rolling_buys = insider_buys.rolling('90D').sum()
+                rolling_sells = insider_sells.rolling('90D').sum()
+                denominator = rolling_buys + rolling_sells
+                sync_series = (rolling_buys - rolling_sells) / denominator.replace(0, np.nan)
+                df['institutional_sync'] = sync_series.reindex(df.index, method='ffill').fillna(0.0)
+            else:
+                df['institutional_sync'] = 0.0
+
+            if not news_df.empty:
+                news_sum = news_df['overall_sentiment_score'].resample('D').sum()
+                news_count = news_df['overall_sentiment_score'].resample('D').count()
+                rolling_sum = news_sum.rolling('7D').sum()
+                rolling_count = news_count.rolling('7D').sum()
+                herding_series = rolling_sum / rolling_count.replace(0, np.nan)
+                df['retail_herding'] = herding_series.reindex(df.index, method='ffill').fillna(0.0)
+            else:
+                df['retail_herding'] = 0.0
             
             df['daily_returns'] = df['close'].pct_change()
-            df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
+            df['market_temperature'] = df['daily_returns'].rolling(window=MARKET_TEMP_WINDOW).std()
             
             if not news_df.empty:
                 news_counts = news_df.groupby(news_df.index.date).size()
@@ -395,11 +437,19 @@ def run_optimization_simulation_fast(preloaded_data: Dict[str, pd.DataFrame], pa
             
             start_idx = HISTORY_BUFFER
             if ts_start:
+                # FIX TZ for Timestamp comparison in searchsorted
+                # Ensure df index is naive before searching
+                # It should be naive due to preload fix, but let's be safe
+                # searchsorted requires same tz awareness
+                if df.index.tz is None and ts_start.tzinfo is not None:
+                    ts_start = ts_start.tz_localize(None)
                 search_idx = df.index.searchsorted(ts_start)
                 start_idx = max(start_idx, search_idx)
             
             end_idx = len(df)
             if ts_end:
+                if df.index.tz is None and ts_end.tzinfo is not None:
+                    ts_end = ts_end.tz_localize(None)
                 search_idx = df.index.searchsorted(ts_end)
                 end_idx = min(end_idx, search_idx)
             
