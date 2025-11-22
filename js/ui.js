@@ -528,9 +528,11 @@ export const renderers = {
         
         const trials = Array.isArray(job.trials) ? job.trials : [];
         
+        // Sortowanie: Najpierw zakończone z wynikiem, potem te z wynikiem 0/null (pruned)
+        // Używamy bezpiecznego parseFloat
         trials.sort((a, b) => {
-            const pfA = (a && a.profit_factor) || 0;
-            const pfB = (b && b.profit_factor) || 0;
+            const pfA = (a && a.profit_factor !== null) ? parseFloat(a.profit_factor) : -1;
+            const pfB = (b && b.profit_factor !== null) ? parseFloat(b.profit_factor) : -1;
             return pfB - pfA;
         });
         
@@ -541,40 +543,51 @@ export const renderers = {
                 const isBest = job.best_trial_id && t.id === job.best_trial_id;
                 const isPruned = t.state === 'PRUNED';
                 
-                let rowClass = "border-b border-gray-800 hover:bg-[#1f2937]";
+                let rowClass = "border-b border-gray-800 hover:bg-[#1f2937] transition-colors";
                 if (isBest) rowClass = "bg-green-900/20 border-l-4 border-green-500";
-                if (isPruned) rowClass = "border-b border-gray-800 opacity-50 hover:opacity-75";
+                // Jeśli pruned, lekko przyciemnij, ale nie za mocno, bo dane też są ważne
+                if (isPruned) rowClass += " opacity-75";
 
                 let paramsObj = t.params || {};
                 if (typeof paramsObj === 'string') {
                     try { paramsObj = JSON.parse(paramsObj); } catch(e) { paramsObj = {}; }
                 }
                 
-                const paramsStr = Object.entries(paramsObj)
+                // Zmiana layoutu parametrów: Grid kafelkowy zamiast długiego ciągu tekstu
+                const paramsHtml = Object.entries(paramsObj)
                     .map(([k, v]) => {
-                        const shortK = k.replace('h3_', '').replace('_multiplier', '_mult');
+                        // Skracanie nazw kluczy dla czytelności
+                        const shortK = k.replace('h3_', '').replace('_multiplier', 'x').replace('_threshold', '').replace('percentile', '%tile');
                         const val = (typeof v === 'number') ? v.toFixed(2) : String(v);
-                        const colorClass = isPruned ? 'text-gray-500' : 'text-sky-300';
-                        return `<span class="text-gray-500">${shortK}:</span> <span class="${colorClass}">${val}</span>`;
+                        // Koloryzacja wartości
+                        return `<div class="flex justify-between items-center bg-[#0D1117] px-2 py-1 rounded border border-gray-700/50">
+                                    <span class="text-[10px] text-gray-500 uppercase tracking-wider mr-2 truncate" title="${k}">${shortK}</span>
+                                    <span class="text-xs font-mono text-sky-300">${val}</span>
+                                </div>`;
                     })
-                    .join(', ') || "Brak parametrów";
+                    .join('');
 
                 const statusLabel = isPruned ? 
-                    `<span class="text-[10px] text-red-400 border border-red-900 px-1 rounded bg-red-900/20">PRUNED</span>` : 
-                    `<span class="text-[10px] text-green-400 border border-green-900 px-1 rounded bg-green-900/20">OK</span>`;
+                    `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-900/20 text-red-400 border border-red-900/50">PRUNED</span>` : 
+                    `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-900/20 text-green-400 border border-green-900/50">COMPLETE</span>`;
 
-                const pfVal = t.profit_factor !== null && t.profit_factor !== undefined ? Number(t.profit_factor).toFixed(2) : "0.00";
+                // Wyświetlanie wyniku (Score)
+                // Jeśli pruned, wyświetlaj 0.00 lub --- ale w sposób uporządkowany
+                const pfVal = t.profit_factor !== null && t.profit_factor !== undefined ? Number(t.profit_factor).toFixed(4) : "0.0000";
+                const pfDisplay = isPruned ? `<span class="text-gray-600 text-xs">---</span>` : `<span class="text-white font-bold">${pfVal}</span>`;
+
                 const tradesVal = t.total_trades || 0;
-                const pfColor = Number(pfVal) >= 1.5 ? 'text-green-400' : 'text-gray-300';
 
                 return `<tr class="${rowClass}">
-                    <td class="p-2 text-center font-mono text-gray-500 text-xs">#${t.trial_number || '?'}</td>
-                    <td class="p-2 text-center">${statusLabel}</td>
-                    <td class="p-2 text-right font-bold font-mono ${pfColor}">
-                        ${isPruned ? '---' : pfVal}
+                    <td class="p-3 text-center font-mono text-gray-500 text-xs">#${t.trial_number}</td>
+                    <td class="p-3 text-center">${statusLabel}</td>
+                    <td class="p-3 text-right font-mono text-sm">${pfDisplay}</td>
+                    <td class="p-3 text-right text-gray-400 text-sm font-mono">${tradesVal}</td>
+                    <td class="p-3">
+                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                            ${paramsHtml || '<span class="text-gray-500 italic text-xs">Brak parametrów</span>'}
+                        </div>
                     </td>
-                    <td class="p-2 text-right text-gray-400 text-xs">${tradesVal}</td>
-                    <td class="p-2 text-xs font-mono leading-tight">${paramsStr}</td>
                 </tr>`;
             } catch (err) {
                 console.error("Błąd renderowania wiersza tabeli:", err);
@@ -589,7 +602,7 @@ export const renderers = {
         }
 
         const bestScoreVal = job.best_score !== null && job.best_score !== undefined ? Number(job.best_score).toFixed(4) : '---';
-        const scoreColor = Number(bestScoreVal) >= 2.0 ? 'text-green-400' : 'text-yellow-400';
+        const scoreColor = Number(bestScoreVal) >= 2.0 ? 'text-green-400' : (Number(bestScoreVal) > 0 ? 'text-yellow-400' : 'text-gray-400');
 
         return `
             <div class="space-y-4">
@@ -607,15 +620,15 @@ export const renderers = {
                 </div>
 
                 <h4 class="text-xs text-gray-500 uppercase font-bold border-b border-gray-800 pb-2 mt-2">Ranking Prób (Live Feed)</h4>
-                <div class="overflow-x-auto max-h-[450px] border border-gray-800 rounded bg-[#0D1117] custom-scrollbar">
-                    <table class="w-full text-sm text-left text-gray-300">
-                        <thead class="text-xs text-gray-500 uppercase bg-[#161B22] sticky top-0 z-10">
+                <div class="overflow-x-auto max-h-[600px] border border-gray-800 rounded bg-[#161B22] custom-scrollbar w-full">
+                    <table class="w-full text-sm text-left text-gray-300 table-fixed">
+                        <thead class="text-xs text-gray-500 uppercase bg-[#0D1117] sticky top-0 z-10 shadow-sm">
                             <tr>
-                                <th class="p-2 text-center">#</th>
-                                <th class="p-2 text-center">Status</th>
-                                <th class="p-2 text-right">PF (Score)</th>
-                                <th class="p-2 text-right">Trades</th>
-                                <th class="p-2">Parametry</th>
+                                <th class="p-3 w-12 text-center">#</th>
+                                <th class="p-3 w-24 text-center">Status</th>
+                                <th class="p-3 w-24 text-right">Score</th>
+                                <th class="p-3 w-20 text-right">Trades</th>
+                                <th class="p-3">Parametry</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-800">
