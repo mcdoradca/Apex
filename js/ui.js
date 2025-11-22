@@ -528,8 +528,7 @@ export const renderers = {
         
         const trials = Array.isArray(job.trials) ? job.trials : [];
         
-        // Sortowanie: Najpierw zakończone z wynikiem, potem te z wynikiem 0/null (pruned)
-        // Używamy bezpiecznego parseFloat
+        // Sortowanie
         trials.sort((a, b) => {
             const pfA = (a && a.profit_factor !== null) ? parseFloat(a.profit_factor) : -1;
             const pfB = (b && b.profit_factor !== null) ? parseFloat(b.profit_factor) : -1;
@@ -543,57 +542,48 @@ export const renderers = {
                 const isBest = job.best_trial_id && t.id === job.best_trial_id;
                 const isPruned = t.state === 'PRUNED';
                 
+                // Stronger highlight for best row
                 let rowClass = "border-b border-gray-800 hover:bg-[#1f2937] transition-colors";
-                if (isBest) rowClass = "bg-green-900/20 border-l-4 border-green-500";
-                // Jeśli pruned, lekko przyciemnij, ale nie za mocno, bo dane też są ważne
-                if (isPruned) rowClass += " opacity-75";
+                if (isBest) rowClass = "bg-green-900/30 border-l-4 border-green-400"; 
+                if (isPruned) rowClass += " opacity-60";
 
                 let paramsObj = t.params || {};
                 if (typeof paramsObj === 'string') {
                     try { paramsObj = JSON.parse(paramsObj); } catch(e) { paramsObj = {}; }
                 }
                 
-                // Zmiana layoutu parametrów: Grid kafelkowy zamiast długiego ciągu tekstu
                 const paramsHtml = Object.entries(paramsObj)
                     .map(([k, v]) => {
-                        // Skracanie nazw kluczy dla czytelności
                         const shortK = k.replace('h3_', '').replace('_multiplier', 'x').replace('_threshold', '').replace('percentile', '%tile');
                         const val = (typeof v === 'number') ? v.toFixed(2) : String(v);
-                        // Koloryzacja wartości
-                        return `<div class="flex justify-between items-center bg-[#0D1117] px-2 py-1 rounded border border-gray-700/50">
-                                    <span class="text-[10px] text-gray-500 uppercase tracking-wider mr-2 truncate" title="${k}">${shortK}</span>
-                                    <span class="text-xs font-mono text-sky-300">${val}</span>
-                                </div>`;
+                        return `<span class="inline-block bg-[#0D1117] px-1.5 py-0.5 rounded border border-gray-700/50 text-[9px] mr-1 mb-1">
+                                    <span class="text-gray-500 uppercase tracking-wider">${shortK}:</span>
+                                    <span class="font-mono text-sky-300">${val}</span>
+                                </span>`;
                     })
                     .join('');
 
                 const statusLabel = isPruned ? 
-                    `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-900/20 text-red-400 border border-red-900/50">PRUNED</span>` : 
-                    `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-900/20 text-green-400 border border-green-900/50">COMPLETE</span>`;
+                    `<span class="text-[9px] font-bold text-red-500">PRUNED</span>` : 
+                    `<span class="text-[9px] font-bold text-green-500">DONE</span>`;
 
-                // Wyświetlanie wyniku (Score)
-                // Jeśli pruned, wyświetlaj 0.0000 (szare) zamiast ---, aby tabela wyglądała na pełną
                 const pfVal = t.profit_factor !== null && t.profit_factor !== undefined ? Number(t.profit_factor).toFixed(4) : "0.0000";
-                const pfDisplay = isPruned ? `<span class="text-gray-600 text-xs font-mono">${pfVal}</span>` : `<span class="text-white font-bold font-mono text-sm">${pfVal}</span>`;
+                const pfDisplay = isPruned ? `<span class="text-gray-600 text-[10px] font-mono">${pfVal}</span>` : `<span class="text-green-400 font-bold font-mono text-xs">${pfVal}</span>`;
 
                 const tradesVal = t.total_trades || 0;
 
-                // Zmniejszamy padding w tabeli (p-2 zamiast p-3) dla większej kompaktywności
                 return `<tr class="${rowClass}">
-                    <td class="p-2 text-center font-mono text-gray-500 text-xs">#${t.trial_number}</td>
-                    <td class="p-2 text-center">${statusLabel}</td>
-                    <td class="p-2 text-right">${pfDisplay}</td>
-                    <td class="p-2 text-right text-gray-400 text-xs font-mono">${tradesVal}</td>
-                    <td class="p-2">
-                        <div class="flex flex-wrap gap-1.5">
-                            ${paramsHtml || '<span class="text-gray-500 italic text-xs">Brak parametrów</span>'}
+                    <td class="p-1.5 text-center font-mono text-gray-500 text-[10px]">#${t.trial_number}</td>
+                    <td class="p-1.5 text-center">${statusLabel}</td>
+                    <td class="p-1.5 text-right">${pfDisplay}</td>
+                    <td class="p-1.5 text-right text-gray-400 text-[10px] font-mono">${tradesVal}</td>
+                    <td class="p-1.5 leading-none">
+                        <div class="flex flex-wrap items-center">
+                            ${paramsHtml || '<span class="text-gray-600 italic text-[9px]">---</span>'}
                         </div>
                     </td>
                 </tr>`;
-            } catch (err) {
-                console.error("Błąd renderowania wiersza tabeli:", err);
-                return ""; 
-            }
+            } catch (err) { return ""; }
         }).join('');
 
         let statusText = job.status || "UNKNOWN";
@@ -603,36 +593,42 @@ export const renderers = {
         }
 
         const bestScoreVal = job.best_score !== null && job.best_score !== undefined ? Number(job.best_score).toFixed(4) : '---';
-        const scoreColor = Number(bestScoreVal) >= 2.0 ? 'text-green-400' : (Number(bestScoreVal) > 0 ? 'text-yellow-400' : 'text-gray-400');
+        const scoreColor = Number(bestScoreVal) >= 1.5 ? 'text-green-400' : (Number(bestScoreVal) > 0 ? 'text-yellow-400' : 'text-gray-400');
 
+        // CRITICAL FIX: Reduced max-heights and using flex column to ensure it fits in view
         return `
-            <div class="space-y-4">
-                <div class="flex justify-between items-center bg-[#0D1117] p-4 rounded border border-gray-700 shadow-sm">
-                    <div>
-                        <h4 class="text-sm text-gray-400 uppercase font-bold tracking-wider">Zadanie: ${job.target_year || '---'}</h4>
-                        <p class="text-[10px] text-gray-600 font-mono mt-1">ID: ${job.id || '---'}</p>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-3xl font-extrabold ${scoreColor} tracking-tight">
-                            Best Score: ${bestScoreVal}
+            <div class="flex flex-col h-full max-h-[70vh]">
+                <!-- Header Section -->
+                <div class="flex-shrink-0 bg-[#0D1117] p-3 rounded border border-gray-700 shadow-sm mb-2">
+                    <div class="flex justify-between items-end">
+                        <div>
+                            <h4 class="text-xs text-gray-400 uppercase font-bold tracking-wider">Zadanie: ${job.target_year || '---'}</h4>
+                            <p class="text-[10px] text-gray-600 font-mono mt-0.5">ID: ${(job.id || '').substring(0,8)}...</p>
                         </div>
-                        <div class="text-xs text-gray-500 mt-1">Status: ${statusHtml}</div>
+                        <div class="text-right">
+                            <div class="text-xl font-extrabold ${scoreColor} tracking-tight leading-none">
+                                Best: ${bestScoreVal}
+                            </div>
+                            <div class="text-[10px] text-gray-500 mt-1">Status: ${statusHtml}</div>
+                        </div>
                     </div>
                 </div>
 
-                <h4 class="text-xs text-gray-500 uppercase font-bold border-b border-gray-800 pb-2 mt-2">Ranking Prób (Live Feed)</h4>
-                <div class="overflow-x-auto max-h-[500px] border border-gray-800 rounded bg-[#161B22] custom-scrollbar w-full">
-                    <table class="w-full text-sm text-left text-gray-300 table-fixed">
-                        <thead class="text-xs text-gray-500 uppercase bg-[#0D1117] sticky top-0 z-10 shadow-sm">
+                <!-- Table Section -->
+                <h4 class="flex-shrink-0 text-[10px] text-gray-500 uppercase font-bold border-b border-gray-800 pb-1 mb-1">Ranking Prób (Live)</h4>
+                
+                <div class="flex-grow overflow-y-auto border border-gray-800 rounded bg-[#161B22] custom-scrollbar min-h-0">
+                    <table class="w-full text-left text-gray-300 table-auto">
+                        <thead class="text-[10px] text-gray-500 uppercase bg-[#0D1117] sticky top-0 z-10 shadow-sm">
                             <tr>
-                                <th class="p-2 w-10 text-center">#</th>
-                                <th class="p-2 w-20 text-center">Status</th>
-                                <th class="p-2 w-20 text-right">Score</th>
-                                <th class="p-2 w-16 text-right">Trades</th>
-                                <th class="p-2">Parametry</th>
+                                <th class="p-1.5 text-center w-8">#</th>
+                                <th class="p-1.5 text-center w-12">St.</th>
+                                <th class="p-1.5 text-right w-16">Score</th>
+                                <th class="p-1.5 text-right w-12">Trd</th>
+                                <th class="p-1.5">Parametry</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-800">
+                        <tbody class="divide-y divide-gray-800 text-[10px]">
                             ${trialsRows || '<tr><td colspan="5" class="p-4 text-center text-gray-500">Brak danych o próbach.</td></tr>'}
                         </tbody>
                     </table>
