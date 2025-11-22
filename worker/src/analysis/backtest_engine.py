@@ -108,6 +108,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
         trades_generated = 0
         
         MARKET_TEMP_WINDOW = 30
+        NORM_WINDOW = 100 # Okno do normalizacji Z-Score
         
         for ticker in tickers:
             try:
@@ -215,14 +216,36 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['m_sq'] = df['normalized_volume'] + df['normalized_news']
                 df['nabla_sq'] = df['price_gravity']
                 
-                S = df['information_entropy']
-                Q = df['retail_herding']
-                T = df['market_temperature']
-                mu = df['institutional_sync']
+                # === NAPRAWA (FIX DATA TRAP) - NORMALIZACJA SKŁADNIKÓW ===
+                # Zamiast używać surowych wartości (które mogą być ogromne dla newsów),
+                # normalizujemy wszystko do Z-Score przed obliczeniem J.
                 
-                df['J'] = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
-                df['J'] = df['J'].fillna(0)
+                # 1. Institutional Sync (mu) -> Z-Score
+                mu_mean = df['institutional_sync'].rolling(window=NORM_WINDOW).mean()
+                mu_std = df['institutional_sync'].rolling(window=NORM_WINDOW).std()
+                df['mu_norm'] = ((df['institutional_sync'] - mu_mean) / mu_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
 
+                # 2. Retail Herding (Q) -> Z-Score
+                q_mean = df['retail_herding'].rolling(window=NORM_WINDOW).mean()
+                q_std = df['retail_herding'].rolling(window=NORM_WINDOW).std()
+                df['Q_norm'] = ((df['retail_herding'] - q_mean) / q_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+                # 3. Market Temp (T) -> Z-Score
+                t_mean = df['market_temperature'].rolling(window=NORM_WINDOW).mean()
+                t_std = df['market_temperature'].rolling(window=NORM_WINDOW).std()
+                df['T_norm'] = ((df['market_temperature'] - t_mean) / t_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+                # 4. Information Entropy (S) -> Z-Score
+                s_mean = df['information_entropy'].rolling(window=NORM_WINDOW).mean()
+                s_std = df['information_entropy'].rolling(window=NORM_WINDOW).std()
+                df['S_norm'] = ((df['information_entropy'] - s_mean) / s_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+                # Nowa formuła J na znormalizowanych danych
+                # Unikamy dzielenia przez zero
+                denom_T = df['T_norm'].replace(0, 0.001)
+                
+                df['J'] = df['S_norm'] - (df['Q_norm'] / denom_T) + (df['mu_norm'] * 1.0)
+                
                 # D. Symulacja Transakcji (Wywolanie naprawionego symulatora)
                 sim_data = { "daily": df }
                 trades = _simulate_trades_h3(session, ticker, sim_data, year, parameters)
@@ -263,7 +286,7 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
     """
     [BEZSTRATNA OPTYMALIZACJA V4]
     Ładuje dane do pamięci RAM dla pętli optymalizacyjnej Optuny.
-    Również zaimplementowano FIX STREF CZASOWYCH.
+    Również zaimplementowano FIX STREF CZASOWYCH oraz FIX DATA TRAP (Normalizacja).
     """
     logger.info(f"[Preload] Rozpoczynanie ładowania danych do RAM dla roku {year}...")
     api_client = AlphaVantageClient()
@@ -285,7 +308,7 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
         spy_df = _ensure_tz_naive(spy_df)
 
     cache = {}
-    Z_SCORE_WINDOW = 100
+    NORM_WINDOW = 100 # Do normalizacji
     HISTORY_BUFFER = 201
     MARKET_TEMP_WINDOW = 30
     
@@ -368,23 +391,44 @@ def preload_optimization_data(session: Session, year: str) -> Dict[str, Any]:
             
             df['m_sq'] = df['normalized_volume'] + df['normalized_news']
             df['nabla_sq'] = df['price_gravity']
-            S = df['information_entropy']
-            Q = df['retail_herding']
-            T = df['market_temperature']
-            mu = df['institutional_sync']
-            df['J'] = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
-            df['J'] = df['J'].fillna(0)
+            
+            # === FIX DATA TRAP: NORMALIZACJA SKŁADNIKÓW W OPTYMALIZACJI ===
+            
+            # 1. Mu Norm
+            mu_mean = df['institutional_sync'].rolling(window=NORM_WINDOW).mean()
+            mu_std = df['institutional_sync'].rolling(window=NORM_WINDOW).std()
+            df['mu_norm'] = ((df['institutional_sync'] - mu_mean) / mu_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
 
-            j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
-            j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
+            # 2. Q Norm
+            q_mean = df['retail_herding'].rolling(window=NORM_WINDOW).mean()
+            q_std = df['retail_herding'].rolling(window=NORM_WINDOW).std()
+            df['Q_norm'] = ((df['retail_herding'] - q_mean) / q_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+            # 3. T Norm
+            t_mean = df['market_temperature'].rolling(window=NORM_WINDOW).mean()
+            t_std = df['market_temperature'].rolling(window=NORM_WINDOW).std()
+            df['T_norm'] = ((df['market_temperature'] - t_mean) / t_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+            # 4. S Norm
+            s_mean = df['information_entropy'].rolling(window=NORM_WINDOW).mean()
+            s_std = df['information_entropy'].rolling(window=NORM_WINDOW).std()
+            df['S_norm'] = ((df['information_entropy'] - s_mean) / s_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+            # Obliczanie J (Normalized)
+            denom_T = df['T_norm'].replace(0, 0.001)
+            df['J'] = df['S_norm'] - (df['Q_norm'] / denom_T) + (df['mu_norm'] * 1.0)
+
+            # Normalizacja finalnych pól
+            j_mean = df['J'].rolling(window=NORM_WINDOW).mean()
+            j_std = df['J'].rolling(window=NORM_WINDOW).std(ddof=1)
             df['J_norm'] = ((df['J'] - j_mean) / j_std).replace([np.inf, -np.inf], 0).fillna(0)
             
-            nabla_mean = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).mean()
-            nabla_std = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
+            nabla_mean = df['nabla_sq'].rolling(window=NORM_WINDOW).mean()
+            nabla_std = df['nabla_sq'].rolling(window=NORM_WINDOW).std(ddof=1)
             df['nabla_sq_norm'] = ((df['nabla_sq'] - nabla_mean) / nabla_std).replace([np.inf, -np.inf], 0).fillna(0)
             
-            m_mean = df['m_sq'].rolling(window=Z_SCORE_WINDOW).mean()
-            m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
+            m_mean = df['m_sq'].rolling(window=NORM_WINDOW).mean()
+            m_std = df['m_sq'].rolling(window=NORM_WINDOW).std(ddof=1)
             df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
 
             # Główna formuła
