@@ -3,9 +3,6 @@ import pandas as pd
 # Importujemy `math` dla logarytmu (Wymiar 4.2) i `sqrt` (Prawo 3)
 import math
 from math import sqrt 
-# Importujemy `statsmodels` i `scipy` dla Wymiaru 6 i 7
-from statsmodels.tsa.stattools import grangercausalitytests
-from scipy.stats import zscore, shapiro
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 # ==================================================================
@@ -14,8 +11,6 @@ from typing import List, Dict, Any, Tuple, Optional
 # ==================================================================
 from datetime import datetime, timedelta, timezone
 # ==================================================================
-# Importujemy Counter do obliczeń Entropii
-from collections import Counter
 
 # Importujemy klienta AV tylko dla funkcji "na żywo",
 # funkcje "_from_data" nie będą go używać.
@@ -43,7 +38,6 @@ def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: 
         spy_returns = spy_df_view['close'].pct_change()
         
         # 2. Oblicz 20-dniowe odchylenie standardowe (ściśle z ostatnich 20 dostępnych próbek)
-        # Poprawka: Wymuszamy okno 20 dni, nawet jeśli widok jest szerszy.
         stddev_ticker_20 = ticker_returns.tail(20).std()
         stddev_spy_20 = spy_returns.tail(20).std()
         
