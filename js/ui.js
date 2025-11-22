@@ -13,7 +13,6 @@ export const ui = {
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
             
-            // Modal H3 Live (Phase 3)
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
                 percentile: get('h3-live-percentile'),
@@ -36,23 +35,19 @@ export const ui = {
                 marketStatus: get('sd-market-status'),
                 nyTime: get('sd-ny-time'),
                 countdown: get('sd-countdown'),
-                
                 entry: get('sd-entry-price'),
                 tp: get('sd-take-profit'),
                 sl: get('sd-stop-loss'),
                 rr: get('sd-risk-reward'),
-                
                 sector: get('sd-sector'),
                 industry: get('sd-industry'),
                 description: get('sd-description'), 
                 generationDate: get('sd-generation-date'),
-                
                 validityMessage: get('sd-validity-message'),
                 closeBtn: get('sd-close-btn'),
                 buyBtn: get('sd-buy-btn') 
             },
 
-            // Modale Quantum Lab
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 yearInput: get('qo-year-input'),
@@ -158,24 +153,29 @@ export const renderers = {
     transactions: (transactions) => { return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia</h2><div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><tbody>${transactions.map(t => `<tr class="border-b border-gray-800"><td class="p-3">${new Date(t.transaction_date).toLocaleDateString()}</td><td class="p-3 text-sky-400">${t.ticker}</td><td class="p-3 ${t.transaction_type==='BUY'?'text-green-400':'text-red-400'}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(2)}</td></tr>`).join('')}</tbody></table></div></div>`; },
     
     agentReport: (report) => { 
-        // (Skrócona wersja dla zwięzłości, w oryginale pełna)
-        return `<div id="agent-report-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności</h2><p class="text-gray-400">Tutaj będzie raport...</p></div>`; 
+        return `<div id="agent-report-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności</h2><p class="text-gray-400">Dane raportu...</p></div>`;
     },
 
-    // === POPRAWIONY KOD RENDEROWANIA WYNIKÓW OPTYMALIZACJI ===
     optimizationResults: (job) => {
-        if (!job) return `<p class="text-gray-500 text-center py-10">Brak danych o optymalizacji.</p>`;
+        // BARDZO WAŻNE: Bezpiecznik na brak danych.
+        if (!job || typeof job !== 'object') {
+            console.warn("optimizationResults otrzymało puste lub błędne dane:", job);
+            return `<div class="text-center py-10"><p class="text-gray-500">Oczekiwanie na wyniki...</p></div>`;
+        }
         
-        // DEBUG: Zobaczmy co przyszło w konsoli
-        console.log("Job Data:", job);
-
-        const trials = job.trials || [];
-        // Sortowanie
-        trials.sort((a, b) => (b.profit_factor || 0) - (a.profit_factor || 0));
+        const trials = Array.isArray(job.trials) ? job.trials : [];
+        
+        // Sortowanie (z zabezpieczeniem przed undefined)
+        trials.sort((a, b) => {
+            const pfA = (a && a.profit_factor) || 0;
+            const pfB = (b && b.profit_factor) || 0;
+            return pfB - pfA;
+        });
         
         const trialsRows = trials.map(t => {
             try {
-                // Bezpieczne pobieranie danych
+                if (!t) return ""; // Pomiń pusty obiekt
+
                 const isBest = job.best_trial_id && t.id === job.best_trial_id;
                 const isPruned = t.state === 'PRUNED';
                 
@@ -183,56 +183,66 @@ export const renderers = {
                 if (isBest) rowClass = "bg-green-900/20 border-l-4 border-green-500";
                 if (isPruned) rowClass = "border-b border-gray-800 opacity-50 hover:opacity-75";
 
-                // Bezpieczne parsowanie parametrów (może być obiektem lub stringiem)
-                let paramsObj = t.params;
+                // Bezpieczne pobieranie parametrów
+                let paramsObj = t.params || {};
                 if (typeof paramsObj === 'string') {
-                    try { paramsObj = JSON.parse(paramsObj); } catch(e) {}
+                    try { paramsObj = JSON.parse(paramsObj); } catch(e) { paramsObj = {}; }
                 }
                 
-                const paramsStr = paramsObj ? Object.entries(paramsObj)
+                // Budowanie stringa parametrów
+                const paramsStr = Object.entries(paramsObj)
                     .map(([k, v]) => {
-                        // Skracamy nazwy dla czytelności
                         const shortK = k.replace('h3_', '').replace('_multiplier', '_mult');
-                        const val = typeof v === 'number' ? v.toFixed(2) : v;
-                        return `<span class="text-gray-500">${shortK}:</span> <span class="${isPruned ? 'text-gray-500' : 'text-sky-300'}">${val}</span>`;
+                        const val = (typeof v === 'number') ? v.toFixed(2) : String(v);
+                        const colorClass = isPruned ? 'text-gray-500' : 'text-sky-300';
+                        return `<span class="text-gray-500">${shortK}:</span> <span class="${colorClass}">${val}</span>`;
                     })
-                    .join(', ') : "Brak parametrów";
+                    .join(', ') || "Brak parametrów";
 
                 const statusLabel = isPruned ? 
                     `<span class="text-[10px] text-red-400 border border-red-900 px-1 rounded bg-red-900/20">PRUNED</span>` : 
                     `<span class="text-[10px] text-green-400 border border-green-900 px-1 rounded bg-green-900/20">OK</span>`;
 
+                // Wartości liczbowe z fallbackiem na 0
+                const pfVal = t.profit_factor !== null && t.profit_factor !== undefined ? Number(t.profit_factor).toFixed(2) : "0.00";
+                const tradesVal = t.total_trades || 0;
+                const pfColor = Number(pfVal) >= 1.5 ? 'text-green-400' : 'text-gray-300';
+
                 return `<tr class="${rowClass}">
-                    <td class="p-2 text-center font-mono text-gray-500 text-xs">#${t.trial_number}</td>
+                    <td class="p-2 text-center font-mono text-gray-500 text-xs">#${t.trial_number || '?'}</td>
                     <td class="p-2 text-center">${statusLabel}</td>
-                    <td class="p-2 text-right font-bold font-mono ${t.profit_factor >= 1.5 ? 'text-green-400' : 'text-gray-300'}">
-                        ${isPruned ? '---' : (t.profit_factor ? t.profit_factor.toFixed(2) : '0.00')}
+                    <td class="p-2 text-right font-bold font-mono ${pfColor}">
+                        ${isPruned ? '---' : pfVal}
                     </td>
-                    <td class="p-2 text-right text-gray-400 text-xs">${t.total_trades || 0}</td>
+                    <td class="p-2 text-right text-gray-400 text-xs">${tradesVal}</td>
                     <td class="p-2 text-xs font-mono leading-tight">${paramsStr}</td>
                 </tr>`;
             } catch (err) {
                 console.error("Błąd renderowania wiersza tabeli:", err, t);
-                return ""; // Pomiń uszkodzony wiersz zamiast wywalać całość
+                return ""; 
             }
         }).join('');
 
-        // Status może być "RUNNING: Próba 5/50" - parsujemy to
-        let statusHtml = `<span class="text-white font-bold">${job.status}</span>`;
-        if (job.status && job.status.includes("RUNNING")) {
-            statusHtml = `<span class="text-yellow-400 font-bold animate-pulse">${job.status}</span>`;
+        // Status nagłówka
+        let statusText = job.status || "UNKNOWN";
+        let statusHtml = `<span class="text-white font-bold">${statusText}</span>`;
+        if (statusText.includes("RUNNING")) {
+            statusHtml = `<span class="text-yellow-400 font-bold animate-pulse">${statusText}</span>`;
         }
+
+        const bestScoreVal = job.best_score !== null && job.best_score !== undefined ? Number(job.best_score).toFixed(4) : '---';
+        const scoreColor = Number(bestScoreVal) >= 2.0 ? 'text-green-400' : 'text-yellow-400';
 
         return `
             <div class="space-y-4">
                 <div class="flex justify-between items-center bg-[#0D1117] p-4 rounded border border-gray-700 shadow-sm">
                     <div>
-                        <h4 class="text-sm text-gray-400 uppercase font-bold tracking-wider">Zadanie: ${job.target_year}</h4>
-                        <p class="text-[10px] text-gray-600 font-mono mt-1">ID: ${job.id}</p>
+                        <h4 class="text-sm text-gray-400 uppercase font-bold tracking-wider">Zadanie: ${job.target_year || '---'}</h4>
+                        <p class="text-[10px] text-gray-600 font-mono mt-1">ID: ${job.id || '---'}</p>
                     </div>
                     <div class="text-right">
-                        <div class="text-3xl font-extrabold ${job.best_score >= 2.0 ? 'text-green-400' : 'text-yellow-400'} tracking-tight">
-                            Best Score: ${job.best_score ? job.best_score.toFixed(4) : '---'}
+                        <div class="text-3xl font-extrabold ${scoreColor} tracking-tight">
+                            Best Score: ${bestScoreVal}
                         </div>
                         <div class="text-xs text-gray-500 mt-1">Status: ${statusHtml}</div>
                     </div>
@@ -251,7 +261,7 @@ export const renderers = {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-800">
-                            ${trialsRows}
+                            ${trialsRows || '<tr><td colspan="5" class="p-4 text-center text-gray-500">Brak danych o próbach.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
