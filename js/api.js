@@ -79,12 +79,16 @@ export const api = {
     getExportCsvUrl: () => `${API_BASE_URL}/api/v1/export/trades.csv`,
 
     // === NOWE METODY DLA APEX V4 (Quantum Optimization) ===
+    
+    // 1. Start Optymalizacji
     startOptimization: (requestData) => apiRequest('api/v1/optimization/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestData)
     }),
     
+    // 2. Pobranie wyników (Brakujące ogniwo)
     getOptimizationResults: () => apiRequest('api/v1/optimization/results')
+    
     // =======================================================
 };
