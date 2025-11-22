@@ -20,6 +20,7 @@ def _simulate_trades_h3(
     """
     Symulator Hipotezy H3 (Simplified Field Model).
     Wersja ZNORMALIZOWANA (Fix: Data Trap).
+    Musi być matematycznie spójna z 'backtest_engine.py' i 'apex_optimizer.py'.
     """
     trades_found = 0
     daily_df = historical_data.get("daily")
@@ -29,13 +30,14 @@ def _simulate_trades_h3(
 
     # === KONFIGURACJA PARAMETRÓW ===
     params = parameters or {}
+    # Wartości domyślne (zgodne z APEX V4)
     DEFAULT_PERCENTILE = 0.95
     DEFAULT_M_SQ_THRESHOLD = -0.5
     DEFAULT_TP_MULT = 5.0
     DEFAULT_SL_MULT = 2.0
     DEFAULT_MAX_HOLD = 5
     DEFAULT_SETUP_NAME = 'AQM_V3_H3_NORMALIZED'
-    DEFAULT_MIN_SCORE = 1.0 
+    DEFAULT_MIN_SCORE = 1.0 # Hard Floor (V4)
 
     try:
         param_percentile = float(params.get('h3_percentile')) if params.get('h3_percentile') is not None else DEFAULT_PERCENTILE
@@ -60,13 +62,15 @@ def _simulate_trades_h3(
         setup_name_suffix = param_name
 
     history_buffer = 201 
-    # Okno do normalizacji Z-Score (musi być wystarczająco długie)
+    # Okno do normalizacji Z-Score (musi być wystarczająco długie, identyczne jak w backtest_engine)
     norm_window = 100 
     
     if len(daily_df) < history_buffer + 1:
         return 0
 
     # === PRE-PROCESSING: NORMALIZACJA SKŁADNIKÓW (Fix Data Trap) ===
+    # Cel: Sprowadzenie wszystkich metryk do wspólnego mianownika (odchylenia standardowe)
+    # Aby surowa liczba newsów nie dominowała nad sentymentem.
     
     # 1. Institutional Sync (mu) -> mu_norm (Z-Score)
     # Ograniczamy (clip) ekstremalne wartości do +/- 3 sigma
@@ -85,14 +89,12 @@ def _simulate_trades_h3(
     daily_df['T_norm'] = ((daily_df['market_temperature'] - t_mean) / t_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
 
     # 4. Information Entropy (S) -> S_norm (Z-Score)
-    # (To już było częściowo robione w loaderze jako normalized_news, ale ujednolicamy)
     s_mean = daily_df['information_entropy'].rolling(window=norm_window).mean()
     s_std = daily_df['information_entropy'].rolling(window=norm_window).std(ddof=1)
     daily_df['S_norm'] = ((daily_df['information_entropy'] - s_mean) / s_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
 
     # === OBLICZENIE J (POTENCJAŁU) NA ZNORMALIZOWANYCH DANYCH ===
     # J = S_norm - (Q_norm / T_norm) + (mu_norm * 1.0)
-    # Uwaga: T_norm może być bliskie zera, więc dodajemy mały epsilon lub replace
     
     # Unikamy dzielenia przez zero w Q/T
     denominator = daily_df['T_norm'].replace(0, 0.001)
@@ -116,6 +118,7 @@ def _simulate_trades_h3(
     m_norm_final = ((daily_df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
 
     # Główna Formuła Pola (AQM V3 Score)
+    # Score = Potencjał (J) - Opór (Nabla) - Masa (M)
     aqm_score_series = (1.0 * j_norm_final) - (1.0 * nabla_norm_final) - (1.0 * m_norm_final)
     
     # Dynamiczny próg (percentyl)
@@ -133,22 +136,28 @@ def _simulate_trades_h3(
         if pd.isna(current_aqm_score) or pd.isna(current_threshold):
             continue
         
+        # WARUNKI WEJŚCIA (STRICT)
+        # 1. Przebicie percentyla (Sygnał relatywny)
         is_h3_signal = current_aqm_score > current_threshold
+        
+        # 2. Masa poniżej progu (Low inertia)
         is_mass_ok = current_m_norm < param_m_sq_threshold
+        
+        # 3. Hard Floor (Sygnał absolutny - Fix V4)
         is_score_high_enough = current_aqm_score > param_min_score
 
         if is_h3_signal:
-            if is_mass_ok and is_score_high_enough:
-                # LOGOWANIE DIAGNOSTYCZNE (Naprawa 2)
-                # Logujemy tylko dla wybranych tickerów lub rzadko, żeby nie zabić logów
-                if ticker in ['SSP', 'BCG', 'AAPL', 'TSLA'] or trades_found < 5:
-                    logger.info(f"AQM Debug - {ticker} @ {date_str}: "
-                                f"J_raw={candle_D['J_new']:.2f}, "
-                                f"mu_raw={candle_D['institutional_sync']:.2f}, "
-                                f"mu_norm={candle_D['mu_norm']:.2f}, "
-                                f"AQM={current_aqm_score:.2f} > {current_threshold:.2f}")
+            # LOGOWANIE DIAGNOSTYCZNE
+            # Logujemy szczegóły dla wybranych tickerów, abyś widział składowe AQM
+            if ticker in ['SSP', 'BCG', 'AAPL', 'TSLA'] or trades_found < 3:
+                logger.info(f"AQM Debug - {ticker} @ {date_str}: "
+                            f"J_raw={candle_D['J_new']:.2f}, "
+                            f"J_norm={j_norm_final.iloc[i]:.2f}, "
+                            f"M_norm={current_m_norm:.2f}, "
+                            f"AQM={current_aqm_score:.2f} > {current_threshold:.2f}")
 
-                logger.info(f"✅ H3 SIGNAL: {ticker} on {date_str}, Score: {current_aqm_score:.2f} > Thresh: {current_threshold:.2f}")
+            if is_mass_ok and is_score_high_enough:
+                logger.info(f"✅ H3 SIGNAL ACCEPTED: {ticker} on {date_str}. Score: {current_aqm_score:.2f}")
                 
                 try:
                     candle_D_plus_1 = daily_df.iloc[i + 1]
@@ -174,7 +183,7 @@ def _simulate_trades_h3(
                         "stop_loss": float(stop_loss),
                         "take_profit": float(take_profit),
                         
-                        # Metryki
+                        # Metryki (Zapisujemy znormalizowane wersje dla analizy)
                         "metric_atr_14": float(atr_value),
                         "metric_aqm_score_h3": float(current_aqm_score),
                         "metric_aqm_percentile_95": float(current_threshold), 
@@ -182,7 +191,7 @@ def _simulate_trades_h3(
                         "metric_nabla_sq_norm": float(nabla_norm_final.iloc[i]),
                         "metric_m_sq_norm": float(current_m_norm),
                         
-                        "metric_J": float(candle_D['J_new']), # Używamy nowego J
+                        "metric_J": float(candle_D['J_new']), # Nowe J
                         "metric_inst_sync": float(candle_D['institutional_sync']),
                         "metric_retail_herding": float(candle_D['retail_herding']),
                         "metric_time_dilation": time_dilation,
@@ -205,7 +214,9 @@ def _simulate_trades_h3(
                     logger.error(f"[Backtest H3] Error processing signal (Day {date_str}): {e}", exc_info=True)
                     session.rollback()
             else:
-                pass # Filtered out
+                # Logowanie odrzucenia (diagnostyka)
+                if ticker in ['SSP', 'BCG']:
+                    logger.info(f"❌ H3 REJECTED: {ticker} (Mass: {current_m_norm:.2f} < {param_m_sq_threshold}? {is_mass_ok} | Score: {current_aqm_score:.2f} > {param_min_score}? {is_score_high_enough})")
         
         else:
             pass
