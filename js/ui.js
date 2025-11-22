@@ -13,7 +13,6 @@ export const ui = {
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
             
-            // Modal H3 Live (Phase 3)
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
                 percentile: get('h3-live-percentile'),
@@ -36,23 +35,19 @@ export const ui = {
                 marketStatus: get('sd-market-status'),
                 nyTime: get('sd-ny-time'),
                 countdown: get('sd-countdown'),
-                
                 entry: get('sd-entry-price'),
                 tp: get('sd-take-profit'),
                 sl: get('sd-stop-loss'),
                 rr: get('sd-risk-reward'),
-                
                 sector: get('sd-sector'),
                 industry: get('sd-industry'),
                 description: get('sd-description'), 
                 generationDate: get('sd-generation-date'),
-                
                 validityMessage: get('sd-validity-message'),
                 closeBtn: get('sd-close-btn'),
                 buyBtn: get('sd-buy-btn') 
             },
 
-            // Modale Quantum Lab
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 yearInput: get('qo-year-input'),
@@ -116,6 +111,7 @@ export const renderers = {
     phase3List: (signals) => signals.map(s => {
         let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
+        
         let scoreDisplay = "";
         if (s.notes && s.notes.includes("Score:")) {
             try {
@@ -126,38 +122,114 @@ export const renderers = {
                 }
             } catch(e) {}
         }
-        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
+
+        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
+                    <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
+                    <span class="font-bold">${s.ticker}</span>
+                    ${scoreDisplay}
+                    <span class="ml-auto text-gray-500">${s.status}</span>
+                </div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
-    dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p><p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanera (F1)</h3><div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div><div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div></div><div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="target" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały H3</h3><div class="mt-2"><p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Aktywne / Oczekujące</p></div></div></div><h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3><div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div></div>`,
-    
-    portfolio: (holdings, quotes) => { 
+    dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
+                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
+                                <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
+                                <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
+                            </div>
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanera (F1)</h3>
+                                <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
+                                <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
+                            </div>
+                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="target" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały H3</h3>
+                                <div class="mt-2">
+                                    <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
+                                    <p class="text-sm text-gray-500 mt-1">Aktywne / Oczekujące</p>
+                                </div>
+                            </div>
+                        </div>
+                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
+                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
+                            <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
+                        </div>
+                    </div>`,
+        
+    portfolio: (holdings, quotes) => {
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
         const rows = holdings.map(h => {
             const quote = quotes[h.ticker];
-            let currentPrice = null, profitLoss = null;
+            let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
             let priceClass = 'text-gray-400';
+            
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
-                    const dayChange = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
-                    priceClass = dayChange >= 0 ? 'text-green-500' : 'text-red-500';
-                    const currentValue = h.quantity * currentPrice;
-                    profitLoss = currentValue - (h.quantity * h.average_buy_price);
+                    dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
+                    priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
+                    currentValue = h.quantity * currentPrice;
+                    const costBasis = h.quantity * h.average_buy_price;
+                    profitLoss = currentValue - costBasis;
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
-                } catch (e) {}
+                } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400">${h.ticker}</td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td><td class="p-3 text-right text-cyan-400 font-bold">${h.take_profit ? h.take_profit.toFixed(2) : '---'}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
+            const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
+            
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
+                        <td class="p-3 font-bold text-sky-400">${h.ticker}</td>
+                        <td class="p-3 text-right">${h.quantity}</td>
+                        <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
+                        <td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td>
+                        <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
+                        <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
+                        <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
+                    </tr>`;
         }).join('');
-        return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500'}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Pusty portfel.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th class="p-3">Ticker</th><th class="p-3 text-right">Ilość</th><th class="p-3 text-right">Śr. Cena</th><th class="p-3 text-right">Aktualna</th><th class="p-3 text-right">TP</th><th class="p-3 text-right">Z/S</th><th class="p-3 text-right">Akcja</th></tr></thead><tbody>${rows}</tbody></table></div>`}</div>`;
+        const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
+        
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
+                                <tr>
+                                    <th scope="col" class="p-3">Ticker</th>
+                                    <th scope="col" class="p-3 text-right">Ilość</th>
+                                    <th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th>
+                                    <th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th>
+                                    <th scope="col" class="p-3 text-right">Cena Docelowa (USD)</th>
+                                    <th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th>
+                                    <th scope="col" class="p-3 text-right">Akcja</th>
+                                </tr>
+                             </thead>`;
+                             
+        return `<div id="portfolio-view" class="max-w-6xl mx-auto">
+                    <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">
+                        Portfel Inwestycyjny
+                        <span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span>
+                    </h2>
+                    ${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : 
+                    `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
+                        <table class="w-full text-sm text-left text-gray-300">
+                            ${tableHeader}
+                            <tbody>${rows}</tbody>
+                        </table>
+                     </div>` }
+                </div>`;
     },
     
-    transactions: (transactions) => { return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia</h2><div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><tbody>${transactions.map(t => `<tr class="border-b border-gray-800"><td class="p-3">${new Date(t.transaction_date).toLocaleDateString()}</td><td class="p-3 text-sky-400">${t.ticker}</td><td class="p-3 ${t.transaction_type==='BUY'?'text-green-400':'text-red-400'}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(2)}</td></tr>`).join('')}</tbody></table></div></div>`; },
+    transactions: (transactions) => {
+         const rows = transactions.map(t => {
+            const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
+            const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
+            const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL');
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${transactionDate}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${typeClass}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${profitLossClass}">${t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
+        }).join('');
+        return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+    },
     
-    // === PRZYWRÓCONY PEŁNY RENDERER RAPORTU ===
     agentReport: (report) => {
         if (!report || !report.stats) return `<div id="agent-report-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2><p class="text-center text-gray-500 py-10">Brak danych do wyświetlenia. Upewnij się, że przeprowadzono testy.</p></div>`;
 
@@ -268,7 +340,6 @@ export const renderers = {
                 </table>
              </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
         
-        // Sekcje narzędzi (Backtest, Quantum, AI, Export, Deep Dive)
         const backtestSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
@@ -450,7 +521,6 @@ export const renderers = {
                     ${paginationControls} </div>`;
     },
 
-    // === POPRAWIONY KOD RENDEROWANIA WYNIKÓW OPTYMALIZACJI (Bezpieczny) ===
     optimizationResults: (job) => {
         if (!job || typeof job !== 'object') {
             return `<div class="text-center py-10"><p class="text-gray-500">Oczekiwanie na wyniki...</p></div>`;
@@ -458,7 +528,6 @@ export const renderers = {
         
         const trials = Array.isArray(job.trials) ? job.trials : [];
         
-        // Sortowanie bezpieczne
         trials.sort((a, b) => {
             const pfA = (a && a.profit_factor) || 0;
             const pfB = (b && b.profit_factor) || 0;
