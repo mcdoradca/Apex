@@ -36,7 +36,7 @@ class OptimizationCallback:
             best_val = study.best_value if len(study.trials) > 0 else 0.0
             
             # Aktualizujemy system_control (dla szybkiego podglądu w UI)
-            progress_msg = f"Próba {completed}/{self.total_trials}. Najlepszy wynik: {best_val:.4f}"
+            progress_msg = f"Próba {completed}/{self.total_trials}. Najlepszy wynik (Score): {best_val:.4f}"
             update_system_control(self.session, 'optimization_progress', progress_msg)
             
             # Aktualizujemy rekord Job
@@ -102,7 +102,7 @@ class QuantumOptimizer:
             best_params = best_trial.params
             best_value = best_trial.value
             
-            logger.info(f"QuantumOptimizer: Zakończono. Najlepszy Wynik: {best_value:.4f}")
+            logger.info(f"QuantumOptimizer: Zakończono. Najlepszy Wynik (Score): {best_value:.4f}")
             update_system_control(self.session, 'optimization_progress', "Analiza wrażliwości...")
 
             # Analiza Wrażliwości
@@ -174,8 +174,7 @@ class QuantumOptimizer:
         period_pfs = []
         total_trades_year = 0
         total_profit_year = 0.0
-        cumulative_pf_sum = 0.0
-
+        
         # Flaga sukcesu (czy dotrwaliśmy do końca bez pruning)
         is_pruned = False
 
@@ -198,36 +197,46 @@ class QuantumOptimizer:
                 period_pfs.append(pf)
                 total_trades_year += trades
                 total_profit_year += sim_res.get('net_profit', 0.0)
-                cumulative_pf_sum += pf
-
-                current_mean_pf = cumulative_pf_sum / (step + 1)
-                trial.report(current_mean_pf, step)
+                
+                # Optuna Pruning (na podstawie średniego PF w okresach)
+                cumulative_mean_pf = np.mean(period_pfs)
+                trial.report(cumulative_mean_pf, step)
                 
                 if trial.should_prune():
                     is_pruned = True
                     raise TrialPruned()
 
-            # === DEBUGOWANIE i OBLICZENIA ===
+            # === NOWA FUNKCJA CELU (FIX 3) ===
+            # Zamiast prostego Robust Score, używamy kombinacji PF i kary za liczbę transakcji.
+            
             mean_pf = np.mean(period_pfs) if period_pfs else 0.0
-            std_pf = np.std(period_pfs) if period_pfs else 0.0
-            robust_score = mean_pf / (1.0 + std_pf)
-            global_pf = mean_pf
+            final_score = 0.0
+            penalty_factor = 0.0
 
-            # Logowanie dla diagnostyki (Zgodnie z instrukcją użytkownika)
-            logger.info(f"Trial {trial.number}: PF={mean_pf:.3f}, Std={std_pf:.3f}, Trades={total_trades_year}, Robust={robust_score:.3f}")
+            # 1. Filtr Hard-Cap (Odrzucamy skrajności)
+            # System generujący > 2000 transakcji to szum/overtrading.
+            # System generujący < 100 transakcji to curve-fitting.
+            if total_trades_year < 100 or total_trades_year > 2000:
+                final_score = 0.0
+            else:
+                # 2. Obliczanie Kary (Target: 1000 transakcji)
+                # Im dalej od 1000, tym większa kara.
+                # Przykład: 1000 transakcji -> kara 0%. 1500 transakcji -> kara 50%.
+                trade_penalty = abs(total_trades_year - 1000) / 1000
+                penalty_factor = max(0.0, min(1.0, trade_penalty)) # Clip 0-1
+                
+                # 3. Finalny Score
+                # Nagradzamy wysoki PF, ale redukujemy go o karę za złą liczbę transakcji.
+                final_score = mean_pf * (1.0 - penalty_factor)
 
-            # KROK 2: Wymaganie minimalnej liczby transakcji (zwiększone do 20)
-            if total_trades_year < 20: 
-                robust_score = 0.0
-                global_pf = 0.0
-                return 0.0 # Odrzucamy próbę
+            # Logowanie diagnostyczne (pokazuje teraz Penalty i Score)
+            logger.info(f"Trial {trial.number}: PF={mean_pf:.3f}, Trades={total_trades_year}, Penalty={penalty_factor:.2f}, SCORE={final_score:.4f}")
 
         except TrialPruned:
-            # Zapisz próbę jako PRUNED, aby była widoczna w UI!
+            # Zapisz próbę jako PRUNED
             is_pruned = True
-            robust_score = 0.0 
-            global_pf = 0.0
-            # Kontynuujemy do zapisu w bazie
+            final_score = 0.0
+            mean_pf = 0.0
             
         except Exception as e:
             logger.error(f"Błąd w symulacji trial: {e}")
@@ -239,7 +248,7 @@ class QuantumOptimizer:
                 job_id=self.job_id,
                 trial_number=trial.number,
                 params=params,
-                profit_factor=global_pf if not is_pruned else None,
+                profit_factor=mean_pf if not is_pruned else None, # Zapisujemy czysty PF do bazy
                 total_trades=total_trades_year,
                 win_rate=0.0, 
                 net_profit=total_profit_year,
@@ -254,8 +263,8 @@ class QuantumOptimizer:
         if is_pruned:
             raise TrialPruned()
 
-        # KROK 1: Tymczasowo używamy zwykłego Profit Factor (mean_pf) jako celu zamiast robust_score
-        return mean_pf
+        # Zwracamy Score do Optuny (maksymalizacja)
+        return final_score
 
 class AdaptiveExecutor:
     # (Bez zmian)
