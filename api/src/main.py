@@ -24,12 +24,15 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.9.0") # Bump version
+app = FastAPI(title="APEX Predator API", version="2.9.2")
 
+# === KONFIGURACJA CORS (OSTATECZNA NAPRAWA) ===
+# Używamy ["*"] i allow_credentials=False, co jest najbardziej niezawodną
+# konfiguracją dla API publicznych/rozwojowych, eliminującą błędy "Access-Control-Allow-Origin".
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"],  # Zezwól na każdy frontend
+    allow_credentials=False, # Wyłączamy credentials przy wildcard (*), to kluczowe dla uniknięcia konfliktów przeglądarki
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -38,7 +41,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API is running (V4 Quantum Ready)"}
+    return {"status": "APEX Predator API is running (V4 Quantum Ready & CORS Fixed)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -63,7 +66,7 @@ async def startup_event():
             'h3_live_parameters': '{}',
             'macro_sentiment': 'UNKNOWN',
             'optimization_request': 'NONE',
-            'optimization_progress': 'Oczekiwanie na start...' # Nowy klucz
+            'optimization_progress': 'Oczekiwanie na start...'
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -118,7 +121,6 @@ def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
-    # (Kod bez zmian - długi, więc skracam w myśli, ale w pliku pozostaje pełny)
     ticker = ticker.upper().strip()
     signal = db.query(models.TradingSignal).filter(
         models.TradingSignal.ticker == ticker,
@@ -301,7 +303,6 @@ def get_h3_deep_dive_report_endpoint(db: Session = Depends(get_db)):
 
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
 def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
-    # (Kod bez zmian)
     try:
         stmt = text("""
             INSERT INTO trading_signals (ticker, generation_date, status, notes)
@@ -345,7 +346,7 @@ def get_live_quote(ticker: str):
         raise HTTPException(status_code=503, detail="Błąd AV.")
 
 # =========================================================
-# === OPTIMIZATION ENDPOINTS (APEX V4) - FIX ===
+# === OPTIMIZATION ENDPOINTS (APEX V4) ===
 # =========================================================
 
 @app.post("/api/v1/optimization/start", status_code=202, response_model=schemas.OptimizationJob)
@@ -399,8 +400,6 @@ def get_latest_optimization_results(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Błąd pobierania wyników optymalizacji: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Błąd serwera.")
-
-# =========================================================
 
 # --- ENDPOINTY KONTROLI (Bez zmian) ---
 @app.post("/api/v1/worker/control/{action}", status_code=202)
