@@ -1,5 +1,6 @@
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
+// Inicjalizacja referencji do elementów DOM
 export const ui = {
     init: () => {
         const get = (id) => document.getElementById(id);
@@ -103,33 +104,43 @@ export const ui = {
     }
 };
 
+// Generatory HTML (Renderery)
 export const renderers = {
+    // Loader z animacją
     loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
     
-    phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
-    
-    phase3List: (signals) => signals.map(s => {
-        let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
-        let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
-        
-        let scoreDisplay = "";
-        if (s.notes && s.notes.includes("Score:")) {
-            try {
-                const parts = s.notes.split("Score:");
-                if (parts.length > 1) {
-                    const scorePart = parts[1].trim().split(" ")[0].replace(",", "").replace(".", ".");
-                    scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${parseFloat(scorePart).toFixed(2)}</span>`;
-                }
-            } catch(e) {}
-        }
+    error: (msg) => `<div class="flex flex-col items-center justify-center py-10"><div class="bg-red-900/30 border border-red-500 p-4 rounded-lg text-center max-w-lg"><i data-lucide="alert-triangle" class="w-10 h-10 text-red-500 mx-auto mb-2"></i><h3 class="text-lg font-bold text-red-400 mb-2">Wystąpił Błąd</h3><p class="text-red-200 text-sm">${msg}</p></div></div>`,
 
-        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
-                    <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
-                    <span class="font-bold">${s.ticker}</span>
-                    ${scoreDisplay}
-                    <span class="ml-auto text-gray-500">${s.status}</span>
-                </div>`;
-    }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
+    phase1List: (candidates) => {
+        if (!candidates || candidates.length === 0) return `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`;
+        return candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('');
+    },
+    
+    phase3List: (signals) => {
+        if (!signals || signals.length === 0) return `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`;
+        return signals.map(s => {
+            let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
+            let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
+            
+            let scoreDisplay = "";
+            if (s.notes && s.notes.includes("Score:")) {
+                try {
+                    const parts = s.notes.split("Score:");
+                    if (parts.length > 1) {
+                        const scorePart = parts[1].trim().split(" ")[0].replace(",", "").replace(".", ".");
+                        scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${parseFloat(scorePart).toFixed(2)}</span>`;
+                    }
+                } catch(e) {}
+            }
+
+            return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
+                        <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
+                        <span class="font-bold">${s.ticker}</span>
+                        ${scoreDisplay}
+                        <span class="ml-auto text-gray-500">${s.status}</span>
+                    </div>`;
+        }).join('');
+    },
 
     dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
@@ -159,8 +170,12 @@ export const renderers = {
                     </div>`,
         
     portfolio: (holdings, quotes) => {
+        // Zabezpieczenie przed nullem
+        if (!holdings) return `<p class="text-center text-gray-500 py-10">Brak danych portfela.</p>`;
+
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
+        
         const rows = holdings.map(h => {
             const quote = quotes[h.ticker];
             let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
@@ -176,8 +191,9 @@ export const renderers = {
                     profitLoss = currentValue - costBasis;
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
-                } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
+                } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker}:`, e); }
             }
+            
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
             const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
             
@@ -191,6 +207,7 @@ export const renderers = {
                         <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
                     </tr>`;
         }).join('');
+        
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
         
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
@@ -221,17 +238,30 @@ export const renderers = {
     },
     
     transactions: (transactions) => {
+         if (!transactions) return `<p class="text-center text-gray-500 py-10">Brak danych.</p>`;
+         
          const rows = transactions.map(t => {
             const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
             const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
             const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL');
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${transactionDate}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${typeClass}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${profitLossClass}">${t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
         }).join('');
+        
         return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
     },
     
     agentReport: (report) => {
-        if (!report || !report.stats) return `<div id="agent-report-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2><p class="text-center text-gray-500 py-10">Brak danych do wyświetlenia. Upewnij się, że przeprowadzono testy.</p></div>`;
+        // === NAPRAWA BŁĘDU FAILED TO FETCH ===
+        // Jeśli report jest nullem lub nie ma stats, wyświetl komunikat zamiast pustego ekranu
+        if (!report || !report.stats) {
+            return `<div id="agent-report-view" class="max-w-6xl mx-auto">
+                <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
+                <div class="text-center py-10 text-gray-500">
+                    <p>Brak danych do wyświetlenia.</p>
+                    <p class="text-sm mt-2">Upewnij się, że przeprowadzono testy historyczne i API jest aktywne.</p>
+                </div>
+            </div>`;
+        }
 
         const stats = report.stats;
         const trades = report.trades || [];
@@ -340,6 +370,7 @@ export const renderers = {
                 </table>
              </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
         
+        // Sekcje Narzędzi (HTML)
         const backtestSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
@@ -542,7 +573,6 @@ export const renderers = {
                 const isBest = job.best_trial_id && t.id === job.best_trial_id;
                 const isPruned = t.state === 'PRUNED';
                 
-                // Stronger highlight for best row
                 let rowClass = "border-b border-gray-800 hover:bg-[#1f2937] transition-colors";
                 if (isBest) rowClass = "bg-green-900/30 border-l-4 border-green-400"; 
                 if (isPruned) rowClass += " opacity-60";
@@ -595,7 +625,6 @@ export const renderers = {
         const bestScoreVal = job.best_score !== null && job.best_score !== undefined ? Number(job.best_score).toFixed(4) : '---';
         const scoreColor = Number(bestScoreVal) >= 1.5 ? 'text-green-400' : (Number(bestScoreVal) > 0 ? 'text-yellow-400' : 'text-gray-400');
 
-        // CRITICAL FIX: Reduced max-heights and using flex column to ensure it fits in view
         return `
             <div class="flex flex-col h-full max-h-[70vh]">
                 <!-- Header Section -->
