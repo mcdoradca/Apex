@@ -20,6 +20,10 @@ def _simulate_trades_h3(
     """
     Symulator Hipotezy H3 (Simplified Field Model).
     W pełni niezależny od innych symulatorów.
+    
+    AKTUALIZACJA V4.1:
+    - Wdrożono normalizację Z-Score dla Institutional Sync (Naprawa 'Pułapki Danych')
+    - Wdrożono Capping dla ekstremalnych wartości
     """
     trades_found = 0
     daily_df = historical_data.get("daily")
@@ -64,8 +68,26 @@ def _simulate_trades_h3(
     if len(daily_df) < history_buffer + 1:
         return 0
 
-    # === OBLICZENIA METRYK H3 ===
+    # === OBLICZENIA METRYK H3 (Z POPRAWKAMI NORMALIZACYJNYMI) ===
     
+    # 1. Normalizacja institutional_sync (Z-Score) - aby uniknąć dominacji tickerów z dużą liczbą danych
+    daily_df['mu_normalized'] = (daily_df['institutional_sync'] - daily_df['institutional_sync'].rolling(percentile_window).mean()) / daily_df['institutional_sync'].rolling(percentile_window).std()
+    daily_df['mu_normalized'] = daily_df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
+
+    # 2. Cap wartości ekstremalnych
+    daily_df['retail_herding_capped'] = daily_df['retail_herding'].clip(-1.0, 1.0)
+
+    # 3. Obliczenie J z użyciem znormalizowanego mu
+    S = daily_df['information_entropy']
+    Q = daily_df['retail_herding_capped']
+    T = daily_df['market_temperature']
+    mu_norm = daily_df['mu_normalized']
+    
+    # Formuła H3: J = S - (Q/T) + (mu * 1.0)
+    daily_df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
+    daily_df['J'] = daily_df['J'].fillna(0)
+
+    # 4. Dalsza normalizacja składników AQM (standardowa procedura)
     j_mean = daily_df['J'].rolling(window=percentile_window).mean()
     j_norm = (daily_df['J'] - j_mean) / daily_df['J'].rolling(window=percentile_window).std(ddof=1)
     
@@ -96,6 +118,10 @@ def _simulate_trades_h3(
         if pd.isna(current_aqm_score) or pd.isna(current_threshold):
             continue
         
+        # WARUNEK WEJŚCIA:
+        # 1. AQM Score musi przebić dynamiczny próg percentyla (np. 95%)
+        # 2. Masa m^2 musi być poniżej progu (np. -0.5) - unikamy tłoku
+        # 3. AQM Score musi być powyżej absolutnego minimum (Hard Floor)
         if (current_aqm_score > current_threshold) and \
            (current_m_norm < param_m_sq_threshold) and \
            (current_aqm_score > param_min_score):  
@@ -111,14 +137,12 @@ def _simulate_trades_h3(
                 take_profit = entry_price + (param_tp_mult * atr_value)
                 stop_loss = entry_price - (param_sl_mult * atr_value)
                 
-                # === ZABEZPIECZENIE PRZED KEYERROR: Time Dilation ===
+                # Zabezpieczenie Time Dilation
                 time_dilation = 0.0
                 if 'time_dilation' in candle_D:
                     time_dilation = float(candle_D['time_dilation'])
                 elif 'time_dilation' in daily_df.columns:
-                     # Próba odczytu z dataframe, jeśli w serii jest błąd
                      time_dilation = float(daily_df.iloc[i]['time_dilation'])
-                # ===================================================
                 
                 setup_h3 = {
                     "ticker": ticker,
@@ -139,7 +163,7 @@ def _simulate_trades_h3(
                     "metric_J": float(candle_D['J']),
                     "metric_inst_sync": float(candle_D['institutional_sync']),
                     "metric_retail_herding": float(candle_D['retail_herding']),
-                    "metric_time_dilation": time_dilation, # Używamy bezpiecznej zmiennej
+                    "metric_time_dilation": time_dilation, 
                     "metric_price_gravity": float(candle_D['price_gravity']),
                 }
 
