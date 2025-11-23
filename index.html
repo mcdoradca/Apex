@@ -187,7 +187,7 @@
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Min. AQM Score (Hard Floor)</label>
-                    <input type="number" id="h3-live-min-score" class="modal-input" placeholder="0.0" step="0.1" value="0.0">
+                    <input type="number" id="h3-live-min-score" class="modal-input" placeholder="1.0" step="0.1" value="1.0">
                 </div>
                 <div class="grid grid-cols-2 gap-2">
                     <div>
@@ -199,7 +199,6 @@
                         <input type="number" id="h3-live-sl" class="modal-input" placeholder="2.0" step="0.5" value="2.0">
                     </div>
                 </div>
-                <!-- DODANO: Nowy parametr V4 dla spójności -->
                 <div>
                     <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Max Hold (Dni)</label>
                     <input type="number" id="h3-live-hold" class="modal-input" placeholder="5" step="1" value="5">
@@ -229,7 +228,6 @@
                     <p id="sd-company-name" class="text-base text-gray-400 mt-1">Company Name</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <!-- NOWY PRZYCISK KUP -->
                     <button id="sd-buy-btn" class="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors shadow-lg shadow-green-900/20">
                         <i data-lucide="shopping-cart" class="w-4 h-4"></i>
                         Inwestuj (Kup)
@@ -321,7 +319,7 @@
                         </div>
                     </div>
 
-                    <!-- Sekcja Opisu Firmy (NOWOŚĆ) -->
+                    <!-- Sekcja Opisu Firmy -->
                     <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
                         <h4 class="text-xs font-bold text-gray-500 uppercase mb-2 tracking-wider">O Firmie</h4>
                         <p id="sd-description" class="text-sm text-gray-400 leading-relaxed text-justify max-h-32 overflow-y-auto pr-2 custom-scrollbar">
@@ -368,7 +366,7 @@
     <!-- ========================================== -->
     <!-- === NOWE MODALE DLA QUANTUM LAB (V4) === -->
     
-    <!-- 1. Modal Konfiguracyjny -->
+    <!-- 1. Modal Konfiguracyjny - ZWIĘKSZONO LIMIT -->
     <div id="quantum-optimization-modal" class="modal-backdrop hidden">
         <div class="modal-content">
             <h3 class="text-xl font-bold mb-4 text-white flex items-center">
@@ -384,7 +382,7 @@
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Liczba Prób (Trials)</label>
-                    <input type="number" id="qo-trials-input" class="modal-input" placeholder="50" min="10" max="200" value="30">
+                    <input type="number" id="qo-trials-input" class="modal-input" placeholder="50" min="10" max="5000" value="30">
                     <p class="text-xs text-gray-500 mt-1">Więcej prób = lepszy wynik, ale dłuższy czas.</p>
                 </div>
             </div>
