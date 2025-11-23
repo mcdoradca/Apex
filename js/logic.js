@@ -57,12 +57,14 @@ const updateMarketTimeDisplay = () => {
 
 export const showDashboard = async () => {
     if (!UI) return;
+    
+    // 1. Renderowanie struktury dashboardu
     UI.mainContent.innerHTML = renderers.dashboard();
-    try {
-        const countData = await api.getDiscardedCount();
-    } catch (e) {
-        logger.error("Błąd dashboardu:", e);
-    }
+    
+    // 2. Usunięto błędne wywołanie api.getDiscardedCount(), które powodowało błędy u użytkownika.
+    // Dashboard nie wymaga tych danych do poprawnego wyświetlania.
+    
+    // 3. Odświeżenie danych w sidebarze (Kandydaci F1 / Sygnały F3)
     refreshSidebarData();
 };
 
@@ -70,8 +72,8 @@ export const showPortfolio = async () => {
     showLoading();
     try {
         const holdings = await api.getPortfolio();
-        state.portfolio = holdings;
-        const tickers = holdings.map(h => h.ticker);
+        state.portfolio = Array.isArray(holdings) ? holdings : [];
+        const tickers = state.portfolio.map(h => h.ticker);
         const quotes = {};
         
         if (tickers.length > 0) {
@@ -82,7 +84,7 @@ export const showPortfolio = async () => {
                 } catch(e) {}
             }
         }
-        UI.mainContent.innerHTML = renderers.portfolio(holdings, quotes);
+        UI.mainContent.innerHTML = renderers.portfolio(state.portfolio, quotes);
     } catch (error) {
         UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania portfela: ${error.message}</p>`;
     }
@@ -92,7 +94,8 @@ export const showTransactions = async () => {
     showLoading();
     try {
         const history = await api.getTransactionHistory();
-        UI.mainContent.innerHTML = renderers.transactions(history);
+        const safeHistory = Array.isArray(history) ? history : [];
+        UI.mainContent.innerHTML = renderers.transactions(safeHistory);
     } catch (error) {
         UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania historii: ${error.message}</p>`;
     }
@@ -115,13 +118,14 @@ export const loadAgentReportPage = async (page) => {
 
 export const refreshSidebarData = async () => {
     try {
+        // Zabezpieczenie: upewniamy się, że otrzymujemy tablicę
         const phase1Data = await api.getPhase1Candidates();
-        state.phase1 = phase1Data || [];
+        state.phase1 = Array.isArray(phase1Data) ? phase1Data : [];
         updateElement(UI.phase1.count, state.phase1.length);
         updateElement(UI.phase1.list, renderers.phase1List(state.phase1), true);
 
         const phase3Data = await api.getPhase3Signals();
-        state.phase3 = phase3Data || [];
+        state.phase3 = Array.isArray(phase3Data) ? phase3Data : [];
         updateElement(UI.phase3.count, state.phase3.length);
         updateElement(UI.phase3.list, renderers.phase3List(state.phase3), true);
 
@@ -175,7 +179,8 @@ export const pollWorkerStatus = () => {
             }
             
             const dashboardSignals = document.getElementById('dashboard-active-signals');
-            if (dashboardSignals) dashboardSignals.textContent = state.phase3.length;
+            // Zabezpieczenie: używamy bezpiecznej tablicy ze stanu
+            if (dashboardSignals) dashboardSignals.textContent = (state.phase3 || []).length;
 
         } catch (e) {}
     };
@@ -287,7 +292,6 @@ export const handleYearBacktestRequest = async () => {
         return;
     }
 
-    // === NOWE DOMYŚLNE WARTOŚCI (ZGODNE Z V4) ===
     const getVal = (id, def) => {
         const el = document.getElementById(id);
         return (el && el.value !== "") ? el.value : def;
@@ -296,7 +300,6 @@ export const handleYearBacktestRequest = async () => {
     const params = {
         h3_percentile: getVal('h3-param-percentile', 0.95),
         h3_m_sq_threshold: getVal('h3-param-mass', -0.5),
-        // ZMIANA: Domyślny Min Score podniesiony do 1.0 (Hard Floor)
         h3_min_score: getVal('h3-param-min-score', 1.0),
         h3_tp_multiplier: getVal('h3-param-tp', 5.0),
         h3_sl_multiplier: getVal('h3-param-sl', 2.0),
@@ -304,7 +307,6 @@ export const handleYearBacktestRequest = async () => {
         setup_name: getVal('h3-param-name', "")
     };
     
-    // Logowanie parametrów dla pewności
     logger.info(`Wysyłanie zlecenia Backtestu (${input.value}). Params:`, params);
 
     try {
@@ -415,13 +417,12 @@ export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.r
 export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
 export const handleRunH3LiveScan = async () => {
-    // Tutaj również stosujemy pobieranie bezpieczne z nowymi domyślnymi
     const getVal = (el, def) => (el && el.value !== "") ? el.value : def;
 
     const params = {
         h3_percentile: getVal(UI.h3LiveModal.percentile, 0.95),
         h3_m_sq_threshold: getVal(UI.h3LiveModal.mass, -0.5),
-        h3_min_score: getVal(UI.h3LiveModal.minScore, 1.0), // HARD FLOOR V4
+        h3_min_score: getVal(UI.h3LiveModal.minScore, 1.0),
         h3_tp_multiplier: getVal(UI.h3LiveModal.tp, 5.0),
         h3_sl_multiplier: getVal(UI.h3LiveModal.sl, 2.0),
         h3_max_hold: getVal(UI.h3LiveModal.maxHold, 5)
@@ -577,7 +578,6 @@ export const showSignalDetails = async (ticker) => {
     signalDetailsInterval = setInterval(fetchData, 3000);
 };
 
-// === PRZYWRÓCONA FUNKCJA ===
 export const hideSignalDetails = () => {
     UI.signalDetails.backdrop.classList.add('hidden');
     if (signalDetailsInterval) clearInterval(signalDetailsInterval);
@@ -585,7 +585,6 @@ export const hideSignalDetails = () => {
     signalDetailsInterval = null;
     signalDetailsClockInterval = null;
 };
-// ============================
 
 // === NOWOŚĆ: Logika Quantum Lab (V4) ===
 
@@ -613,6 +612,11 @@ export const handleStartQuantumOptimization = async () => {
         UI.quantumModal.statusMessage.textContent = "Uruchamianie silnika...";
         UI.quantumModal.statusMessage.className = "text-yellow-400 text-sm mt-3 h-4 text-center";
         
+        // Zabezpieczenie przed brakiem funkcji w starym api.js
+        if (typeof api.startOptimization !== 'function') {
+            throw new Error("Funkcja startOptimization nie jest dostępna. Odśwież aplikację lub sprawdź api.js.");
+        }
+
         await api.startOptimization({ target_year: year, n_trials: trials });
         
         UI.quantumModal.statusMessage.textContent = "Zlecenie przyjęte! Sprawdź wyniki.";
@@ -638,6 +642,11 @@ export const showOptimizationResults = async () => {
     // Funkcja do odpytywania
     const fetchResults = async () => {
         try {
+            // Zabezpieczenie przed brakiem funkcji w starym api.js
+            if (typeof api.getOptimizationResults !== 'function') {
+                throw new Error("Funkcja getOptimizationResults nie jest dostępna.");
+            }
+
             const results = await api.getOptimizationResults();
             UI.optimizationResultsModal.content.innerHTML = renderers.optimizationResults(results);
             
@@ -650,6 +659,10 @@ export const showOptimizationResults = async () => {
             }
         } catch (e) {
             UI.optimizationResultsModal.content.innerHTML = `<p class="text-red-500 p-4">Błąd: ${e.message}</p>`;
+            if (optimizationPollingInterval) {
+                clearInterval(optimizationPollingInterval);
+                optimizationPollingInterval = null;
+            }
         }
     };
 
