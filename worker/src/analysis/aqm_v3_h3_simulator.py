@@ -21,9 +21,10 @@ def _simulate_trades_h3(
     Symulator Hipotezy H3 (Simplified Field Model).
     W pełni niezależny od innych symulatorów.
     
-    AKTUALIZACJA V4.1:
+    AKTUALIZACJA V4.1 (Zgodna z "Tajemniczą Rozmową"):
     - Wdrożono normalizację Z-Score dla Institutional Sync (Naprawa 'Pułapki Danych')
-    - Wdrożono Capping dla ekstremalnych wartości
+    - Wdrożono Capping dla ekstremalnych wartości Retail Herding
+    - Synchronizacja logiki obliczeń z Backtest Engine
     """
     trades_found = 0
     daily_df = historical_data.get("daily")
@@ -68,35 +69,45 @@ def _simulate_trades_h3(
     if len(daily_df) < history_buffer + 1:
         return 0
 
-    # === OBLICZENIA METRYK H3 (Z POPRAWKAMI NORMALIZACYJNYMI) ===
+    # === OBLICZENIA METRYK H3 (Z POPRAWKAMI NORMALIZACYJNYMI V4.1) ===
     
-    # 1. Normalizacja institutional_sync (Z-Score) - aby uniknąć dominacji tickerów z dużą liczbą danych
-    daily_df['mu_normalized'] = (daily_df['institutional_sync'] - daily_df['institutional_sync'].rolling(percentile_window).mean()) / daily_df['institutional_sync'].rolling(percentile_window).std()
+    # 1. Normalizacja institutional_sync (Z-Score) - KLUCZOWA POPRAWKA
+    # Obliczamy średnią i odchylenie w oknie 100 dni (percentile_window)
+    rolling_mean = daily_df['institutional_sync'].rolling(percentile_window).mean()
+    rolling_std = daily_df['institutional_sync'].rolling(percentile_window).std()
+    
+    daily_df['mu_normalized'] = (daily_df['institutional_sync'] - rolling_mean) / rolling_std
+    # Zabezpieczenie przed dzieleniem przez zero i nieskończonością
     daily_df['mu_normalized'] = daily_df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
 
-    # 2. Cap wartości ekstremalnych
+    # 2. Cap wartości ekstremalnych dla Retail Herding
     daily_df['retail_herding_capped'] = daily_df['retail_herding'].clip(-1.0, 1.0)
 
-    # 3. Obliczenie J z użyciem znormalizowanego mu
+    # 3. Obliczenie J z użyciem ZNORMALIZOWANEGO mu
     S = daily_df['information_entropy']
     Q = daily_df['retail_herding_capped']
     T = daily_df['market_temperature']
     mu_norm = daily_df['mu_normalized']
     
     # Formuła H3: J = S - (Q/T) + (mu * 1.0)
+    # Używamy mu_norm zamiast surowego institutional_sync!
     daily_df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
     daily_df['J'] = daily_df['J'].fillna(0)
 
     # 4. Dalsza normalizacja składników AQM (standardowa procedura)
+    # J_norm
     j_mean = daily_df['J'].rolling(window=percentile_window).mean()
     j_norm = (daily_df['J'] - j_mean) / daily_df['J'].rolling(window=percentile_window).std(ddof=1)
     
+    # Nabla_sq_norm
     nabla_mean = daily_df['nabla_sq'].rolling(window=percentile_window).mean()
     nabla_norm = (daily_df['nabla_sq'] - nabla_mean) / daily_df['nabla_sq'].rolling(window=percentile_window).std(ddof=1)
     
+    # M_sq_norm
     m_mean = daily_df['m_sq'].rolling(window=percentile_window).mean()
     m_norm = (daily_df['m_sq'] - m_mean) / daily_df['m_sq'].rolling(window=percentile_window).std(ddof=1)
 
+    # Czyszczenie NaN/Inf po normalizacji
     j_norm = j_norm.replace([np.inf, -np.inf], np.nan).fillna(0)
     nabla_norm = nabla_norm.replace([np.inf, -np.inf], np.nan).fillna(0)
     m_norm = m_norm.replace([np.inf, -np.inf], np.nan).fillna(0)
@@ -137,7 +148,7 @@ def _simulate_trades_h3(
                 take_profit = entry_price + (param_tp_mult * atr_value)
                 stop_loss = entry_price - (param_sl_mult * atr_value)
                 
-                # Zabezpieczenie Time Dilation
+                # Zabezpieczenie Time Dilation (pobranie bezpieczne)
                 time_dilation = 0.0
                 if 'time_dilation' in candle_D:
                     time_dilation = float(candle_D['time_dilation'])
@@ -161,8 +172,8 @@ def _simulate_trades_h3(
                     
                     # Logowanie Komponentów Składowych
                     "metric_J": float(candle_D['J']),
-                    "metric_inst_sync": float(candle_D['institutional_sync']),
-                    "metric_retail_herding": float(candle_D['retail_herding']),
+                    "metric_inst_sync": float(candle_D['institutional_sync']), # Logujemy surowe
+                    "metric_retail_herding": float(candle_D['retail_herding']), # Logujemy surowe
                     "metric_time_dilation": time_dilation, 
                     "metric_price_gravity": float(candle_D['price_gravity']),
                 }
@@ -188,7 +199,7 @@ def _simulate_trades_h3(
     if trades_found > 0:
         try:
             session.commit()
-            logger.debug(f"[Backtest H3] Saved {trades_found} trades for {ticker}.")
+            # logger.debug(f"[Backtest H3] Saved {trades_found} trades for {ticker}.")
         except Exception as e:
             logger.error(f"Error committing H3 trades: {e}")
             session.rollback()
