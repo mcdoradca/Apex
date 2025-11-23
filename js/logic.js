@@ -281,25 +281,49 @@ export const handleSellConfirm = async () => {
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
-    if (!input || !input.value) return;
-    const params = {
-        h3_percentile: document.getElementById('h3-param-percentile')?.value || 0.95,
-        h3_m_sq_threshold: document.getElementById('h3-param-mass')?.value || -0.5,
-        h3_min_score: document.getElementById('h3-param-min-score')?.value || 0.0,
-        h3_tp_multiplier: document.getElementById('h3-param-tp')?.value || 5.0,
-        h3_sl_multiplier: document.getElementById('h3-param-sl')?.value || 2.0,
-        h3_max_hold: document.getElementById('h3-param-hold')?.value || 5,
-        setup_name: document.getElementById('h3-param-name')?.value || ""
+    
+    if (!input || !input.value) {
+        if(status) status.textContent = "Podaj rok.";
+        return;
+    }
+
+    // === NOWE DOMYŚLNE WARTOŚCI (ZGODNE Z V4) ===
+    const getVal = (id, def) => {
+        const el = document.getElementById(id);
+        return (el && el.value !== "") ? el.value : def;
     };
+
+    const params = {
+        h3_percentile: getVal('h3-param-percentile', 0.95),
+        h3_m_sq_threshold: getVal('h3-param-mass', -0.5),
+        // ZMIANA: Domyślny Min Score podniesiony do 1.0 (Hard Floor)
+        h3_min_score: getVal('h3-param-min-score', 1.0),
+        h3_tp_multiplier: getVal('h3-param-tp', 5.0),
+        h3_sl_multiplier: getVal('h3-param-sl', 2.0),
+        h3_max_hold: getVal('h3-param-hold', 5),
+        setup_name: getVal('h3-param-name', "")
+    };
+    
+    // Logowanie parametrów dla pewności
+    logger.info(`Wysyłanie zlecenia Backtestu (${input.value}). Params:`, params);
+
     try {
-        status.textContent = "Wysyłanie zlecenia...";
-        status.className = "text-yellow-400 text-sm mt-3 h-4";
+        if(status) {
+            status.textContent = "Wysyłanie zlecenia...";
+            status.className = "text-yellow-400 text-sm mt-3 h-4";
+        }
+        
         await api.requestBacktest(input.value, params);
-        status.textContent = "Zlecenie przyjęte. Sprawdź status Workera.";
-        status.className = "text-green-400 text-sm mt-3 h-4";
+        
+        if(status) {
+            status.textContent = "Zlecenie przyjęte. Sprawdź status Workera.";
+            status.className = "text-green-400 text-sm mt-3 h-4";
+        }
     } catch (e) {
-        status.textContent = "Błąd: " + e.message;
-        status.className = "text-red-400 text-sm mt-3 h-4";
+        if(status) {
+            status.textContent = "Błąd: " + e.message;
+            status.className = "text-red-400 text-sm mt-3 h-4";
+        }
     }
 };
 
@@ -391,13 +415,16 @@ export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.r
 export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
 export const handleRunH3LiveScan = async () => {
+    // Tutaj również stosujemy pobieranie bezpieczne z nowymi domyślnymi
+    const getVal = (el, def) => (el && el.value !== "") ? el.value : def;
+
     const params = {
-        h3_percentile: UI.h3LiveModal.percentile.value,
-        h3_m_sq_threshold: UI.h3LiveModal.mass.value,
-        h3_min_score: UI.h3LiveModal.minScore.value,
-        h3_tp_multiplier: UI.h3LiveModal.tp.value,
-        h3_sl_multiplier: UI.h3LiveModal.sl.value,
-        h3_max_hold: UI.h3LiveModal.maxHold.value
+        h3_percentile: getVal(UI.h3LiveModal.percentile, 0.95),
+        h3_m_sq_threshold: getVal(UI.h3LiveModal.mass, -0.5),
+        h3_min_score: getVal(UI.h3LiveModal.minScore, 1.0), // HARD FLOOR V4
+        h3_tp_multiplier: getVal(UI.h3LiveModal.tp, 5.0),
+        h3_sl_multiplier: getVal(UI.h3LiveModal.sl, 2.0),
+        h3_max_hold: getVal(UI.h3LiveModal.maxHold, 5)
     };
     try {
         UI.h3LiveModal.startBtn.disabled = true;
@@ -548,14 +575,6 @@ export const showSignalDetails = async (ticker) => {
     fetchData();
     if (signalDetailsInterval) clearInterval(signalDetailsInterval);
     signalDetailsInterval = setInterval(fetchData, 3000);
-};
-
-export const hideSignalDetails = () => {
-    UI.signalDetails.backdrop.classList.add('hidden');
-    if (signalDetailsInterval) clearInterval(signalDetailsInterval);
-    if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
-    signalDetailsInterval = null;
-    signalDetailsClockInterval = null;
 };
 
 // === NOWOŚĆ: Logika Quantum Lab (V4) ===
