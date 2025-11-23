@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime, date
-from typing import List, Optional, Any, Dict # Dodano Dict i Field
+from typing import List, Optional, Any, Dict
 
 # === Schematy dla danych wejściowych transakcji ===
 
@@ -28,7 +28,7 @@ class PortfolioHolding(PortfolioHoldingBase):
     last_updated: datetime
     take_profit: Optional[float] = None 
 
-    model_config = ConfigDict(from_attributes=True) # Umożliwia tworzenie z obiektów ORM
+    model_config = ConfigDict(from_attributes=True)
 
 
 # === Schematy dla Historii Transakcji (TransactionHistory) ===
@@ -140,12 +140,21 @@ class VirtualTrade(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+# NOWOŚĆ: Ścisły model dla statystyk pojedynczego setupu
+# To zapobiega wyciekom Decimal do JSON
+class VirtualAgentSetupStats(BaseModel):
+    total_trades: int
+    win_rate_percent: float
+    total_p_l_percent: float
+    profit_factor: float
+
 class VirtualAgentStats(BaseModel):
     total_trades: int
     win_rate_percent: float
     total_p_l_percent: float
     profit_factor: float
-    by_setup: Dict[str, Any] 
+    # ZMIANA: Zamiast Dict[str, Any] używamy konkretnego modelu
+    by_setup: Dict[str, VirtualAgentSetupStats]
 
 class VirtualAgentReport(BaseModel):
     stats: VirtualAgentStats 
