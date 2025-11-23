@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Funkcja pomocnicza do bezpiecznej konwersji na Decimal
 def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
-    """Konwertuje float lub str na Decimal z określoną precyją."""
+    """Konwertuje float lub str na Decimal z określoną precyzją."""
     if value is None:
         return None
     try:
@@ -69,7 +69,7 @@ def get_optimization_trials(db: Session, job_id: str) -> List[models.Optimizatio
     ).order_by(models.OptimizationTrial.trial_number).all()
 
 # ==========================================================
-# === POZOSTAŁE FUNKCJE CRUD (Bez zmian) ===
+# === POZOSTAŁE FUNKCJE CRUD ===
 # ==========================================================
 
 def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
@@ -328,62 +328,69 @@ def set_system_control_value(db: Session, key: str, value: str):
 
 def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -> schemas.VirtualAgentReport:
     """
-    Profesjonalnie zoptymalizowany endpoint raportowy.
-    Używa RAW SQL zamiast ORM, aby uniknąć błędów serializacji typów Decimal
-    i zapewnić maksymalną wydajność.
+    Generuje raport wydajności używając agregacji ORM.
+    
+    POPRAWKA KRYTYCZNA (500 Internal Server Error):
+    Błąd wynika z próby rzutowania (float()) wartości None, którą zwraca baza danych 
+    w przypadku braku rekordów spełniających warunki agregacji (SUM).
+    
+    Wprowadzono ścisłą walidację typów (if x is not None else 0.0) przed jakimikolwiek obliczeniami.
     """
     try:
-        # 1. Globalne Statystyki (Raw SQL - Bezpieczeństwo typów)
-        # Używamy Raw SQL, aby uniknąć narzutu ORM i problemów z rzutowaniem typów Numeric->Decimal
-        sql_global = text("""
-            SELECT 
-                COUNT(id) as total_trades,
-                SUM(CASE WHEN final_profit_loss_percent > 0 THEN 1 ELSE 0 END) as wins,
-                SUM(final_profit_loss_percent) as total_pl,
-                SUM(CASE WHEN final_profit_loss_percent > 0 THEN final_profit_loss_percent ELSE 0 END) as gross_profit,
-                SUM(CASE WHEN final_profit_loss_percent <= 0 THEN final_profit_loss_percent ELSE 0 END) as gross_loss
-            FROM virtual_trades 
-            WHERE status != 'OPEN'
-        """)
+        # 1. Globalne Statystyki (SQLAlchemy ORM Aggregation)
+        # Obliczamy sumy i liczniki bezpośrednio w bazie.
+        stats_query = db.query(
+            func.count(models.VirtualTrade.id).label('total_trades'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, 1), else_=0)).label('wins'),
+            func.sum(models.VirtualTrade.final_profit_loss_percent).label('total_pl'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_profit'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent <= 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_loss')
+        ).filter(models.VirtualTrade.status != 'OPEN')
         
-        result_global = db.execute(sql_global).fetchone()
+        stats_result = stats_query.first()
         
-        # Jawna konwersja na float/int (eliminuje błędy JSON serialization)
-        total_trades = int(result_global.total_trades or 0)
-        wins = int(result_global.wins or 0)
-        total_pl = float(result_global.total_pl or 0.0)
-        gross_profit = float(result_global.gross_profit or 0.0)
-        gross_loss = abs(float(result_global.gross_loss or 0.0))
-
-        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+        # === BEZPIECZNA KONWERSJA WYNIKÓW ===
+        # Każde pole z bazy może być None. Obsługujemy to jawnie.
+        
+        total_trades = int(stats_result.total_trades) if stats_result.total_trades is not None else 0
+        wins = int(stats_result.wins) if stats_result.wins is not None else 0
+        
+        # SQLAlchemy zwraca Decimal dla pól numerycznych. Konwertujemy na float, obsługując None.
+        total_pl = float(stats_result.total_pl) if stats_result.total_pl is not None else 0.0
+        gross_profit = float(stats_result.gross_profit) if stats_result.gross_profit is not None else 0.0
+        
+        # gross_loss może być ujemne lub None. Bierzemy wartość bezwzględną.
+        raw_gross_loss = float(stats_result.gross_loss) if stats_result.gross_loss is not None else 0.0
+        gross_loss = abs(raw_gross_loss)
+        
+        # Obliczenia pochodne (zabezpieczenie przed dzieleniem przez zero)
+        win_rate = (wins / total_trades * 100.0) if total_trades > 0 else 0.0
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
 
-        # 2. Statystyki wg Strategii (Raw SQL - Group By)
-        sql_setup = text("""
-            SELECT 
-                setup_type,
-                COUNT(id) as count,
-                SUM(CASE WHEN final_profit_loss_percent > 0 THEN 1 ELSE 0 END) as wins,
-                SUM(final_profit_loss_percent) as total_pl,
-                SUM(CASE WHEN final_profit_loss_percent > 0 THEN final_profit_loss_percent ELSE 0 END) as gross_profit,
-                SUM(CASE WHEN final_profit_loss_percent <= 0 THEN final_profit_loss_percent ELSE 0 END) as gross_loss
-            FROM virtual_trades 
-            WHERE status != 'OPEN'
-            GROUP BY setup_type
-        """)
-        
-        results_setup = db.execute(sql_setup).fetchall()
+        # 2. Statystyki per Strategia (SQL Group By)
+        setup_query = db.query(
+            models.VirtualTrade.setup_type,
+            func.count(models.VirtualTrade.id).label('count'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, 1), else_=0)).label('wins'),
+            func.sum(models.VirtualTrade.final_profit_loss_percent).label('total_pl'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_profit'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent <= 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_loss')
+        ).filter(models.VirtualTrade.status != 'OPEN').group_by(models.VirtualTrade.setup_type).all()
         
         by_setup_processed = {}
-        for row in results_setup:
+        for row in setup_query:
+            # Bezpieczne rzutowanie dla każdego wiersza grupy
             s_key = row.setup_type or "UNKNOWN"
-            s_total = int(row.count or 0)
-            s_wins = int(row.wins or 0)
-            s_pl = float(row.total_pl or 0.0)
-            s_gross_p = float(row.gross_profit or 0.0)
-            s_gross_l = abs(float(row.gross_loss or 0.0))
+            s_total = int(row.count) if row.count is not None else 0
+            s_wins = int(row.wins) if row.wins is not None else 0
             
-            s_win_rate = (s_wins / s_total * 100) if s_total > 0 else 0.0
+            s_pl = float(row.total_pl) if row.total_pl is not None else 0.0
+            s_gross_p = float(row.gross_profit) if row.gross_profit is not None else 0.0
+            
+            raw_s_gross_l = float(row.gross_loss) if row.gross_loss is not None else 0.0
+            s_gross_l = abs(raw_s_gross_l)
+            
+            s_win_rate = (s_wins / s_total * 100.0) if s_total > 0 else 0.0
             s_pf = (s_gross_p / s_gross_l) if s_gross_l > 0 else 0.0
             
             by_setup_processed[s_key] = {
@@ -393,7 +400,7 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
                 'profit_factor': s_pf
             }
 
-        stats_obj = schemas.VirtualAgentStats(
+        stats_schema = schemas.VirtualAgentStats(
             total_trades=total_trades,
             win_rate_percent=win_rate,
             total_p_l_percent=total_pl,
@@ -401,26 +408,30 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
             by_setup=by_setup_processed
         )
 
-        # 3. Pobranie listy transakcji (Stronicowanie)
-        # Tutaj ORM jest bezpieczny, bo pobieramy mało rekordów (page_size)
+        # 3. Pobieranie listy transakcji (Stronicowanie)
+        # Pobieramy tylko 200 rekordów na raz - to nie obciąży pamięci
         offset = (page - 1) * page_size
         paged_trades = db.query(models.VirtualTrade).filter(
             models.VirtualTrade.status != 'OPEN'
         ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
         
         return schemas.VirtualAgentReport(
-            stats=stats_obj,
+            stats=stats_schema,
             trades=paged_trades, 
             total_trades_count=total_trades 
         )
-
+        
     except Exception as e:
-        logger.error(f"REPORT ERROR: {e}", exc_info=True)
-        # Fallback: Zwracamy pusty raport zamiast błędu 500, aby UI wstało
+        logger.error(f"Błąd krytyczny generowania raportu: {e}", exc_info=True)
+        # Fallback: Zwracamy pusty raport, aby UI nie wyświetlało błędu 500, tylko komunikat o braku danych
         empty_stats = schemas.VirtualAgentStats(
-            total_trades=0, win_rate_percent=0, total_p_l_percent=0, profit_factor=0, by_setup={}
+            total_trades=0, win_rate_percent=0.0, total_p_l_percent=0.0, profit_factor=0.0, by_setup={}
         )
-        return schemas.VirtualAgentReport(stats=empty_stats, trades=[], total_trades_count=0)
+        return schemas.VirtualAgentReport(
+            stats=empty_stats,
+            trades=[], 
+            total_trades_count=0 
+        )
 
 def get_ai_optimizer_report(db: Session) -> schemas.AIOptimizerReport:
     try:
