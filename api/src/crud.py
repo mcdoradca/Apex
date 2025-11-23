@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import text, desc, func, update, delete, Row
+from sqlalchemy import text, desc, func, update, delete, Row, case
 from . import models, schemas
 from typing import Optional, Any, Dict, List
 from datetime import date, datetime, timezone, timedelta 
@@ -9,7 +9,7 @@ from collections import defaultdict
 import io
 import csv
 from typing import Generator
-import uuid # Do generowania ID zadań
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -326,93 +326,87 @@ def set_system_control_value(db: Session, key: str, value: str):
         logger.error(f"Error setting system control value for key {key}: {e}", exc_info=True)
         raise
 
-def _calculate_stats_from_rows(trades_rows: List[Row]) -> schemas.VirtualAgentStats:
-    total_trades = len(trades_rows)
-    if total_trades == 0:
-        return schemas.VirtualAgentStats(
-            total_trades=0, win_rate_percent=0, total_p_l_percent=0,
-            profit_factor=0, by_setup={}
-        )
-
-    wins = 0
-    losses = 0
-    total_p_l = Decimal(0)
-    total_win_p_l = Decimal(0)
-    total_loss_p_l = Decimal(0)
-    
-    setup_stats = defaultdict(lambda: {
-        'trades': 0, 'wins': 0, 'total_p_l': Decimal(0), 'total_loss_p_l': Decimal(0), 'total_win_p_l': Decimal(0)
-    })
-
-    valid_trades_count = 0
-    for trade in trades_rows:
-        if trade.final_profit_loss_percent is None:
-            continue
-
-        valid_trades_count += 1
-        p_l = Decimal(trade.final_profit_loss_percent)
-        
-        total_p_l += p_l
-        setup_type = trade.setup_type or "UNKNOWN"
-        setup_stats[setup_type]['trades'] += 1
-        setup_stats[setup_type]['total_p_l'] += p_l
-
-        if p_l > 0:
-            wins += 1
-            total_win_p_l += p_l
-            setup_stats[setup_type]['wins'] += 1
-            setup_stats[setup_type]['total_win_p_l'] += p_l
-        elif p_l < 0:
-            losses += 1
-            total_loss_p_l += p_l 
-            setup_stats[setup_type]['total_loss_p_l'] += p_l
-
-    win_rate = (wins / valid_trades_count) * 100 if valid_trades_count > 0 else 0
-    profit_factor = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0.0
-
-    by_setup_processed = {}
-    for setup, data in setup_stats.items():
-        by_setup_processed[setup] = {
-            'total_trades': data['trades'],
-            'win_rate_percent': (data['wins'] / data['trades']) * 100 if data['trades'] > 0 else 0,
-            'total_p_l_percent': float(data['total_p_l']),
-            'profit_factor': float(abs(data['total_win_p_l'] / data['total_loss_p_l'])) if data['total_loss_p_l'] != 0 else 0.0
-        }
-
-    return schemas.VirtualAgentStats(
-        total_trades=valid_trades_count,
-        win_rate_percent=float(win_rate),
-        total_p_l_percent=float(total_p_l),
-        profit_factor=profit_factor,
-        by_setup=by_setup_processed
-    )
-
 def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -> schemas.VirtualAgentReport:
+    """
+    Profesjonalnie zoptymalizowany endpoint raportowy.
+    Wykorzystuje agregację po stronie bazy danych (SQL) zamiast przetwarzania w Pythonie.
+    Eliminuje błędy timeout przy dużej liczbie transakcji.
+    """
     try:
-        stats_query_result = db.query(
-            models.VirtualTrade.final_profit_loss_percent,
-            models.VirtualTrade.setup_type
-        ).filter(models.VirtualTrade.status != 'OPEN').all()
-        
-        stats = _calculate_stats_from_rows(stats_query_result)
-        total_trades_count = len(stats_query_result)
+        # 1. Agregacja Globalna (SQL)
+        # Obliczamy KPI dla wszystkich zamkniętych transakcji jednym zapytaniem
+        global_stats = db.query(
+            func.count(models.VirtualTrade.id).label('total_trades'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, 1), else_=0)).label('wins'),
+            func.sum(models.VirtualTrade.final_profit_loss_percent).label('total_pl'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_profit'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent <= 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_loss')
+        ).filter(models.VirtualTrade.status != 'OPEN').first()
 
-        if total_trades_count == 0:
-             return schemas.VirtualAgentReport(stats=stats, trades=[], total_trades_count=0)
+        # Przetwarzanie wyników (Obsługa None)
+        total_trades = global_stats.total_trades or 0
+        wins = global_stats.wins or 0
+        total_pl = float(global_stats.total_pl or 0)
+        gross_profit = float(global_stats.gross_profit or 0)
+        gross_loss = abs(float(global_stats.gross_loss or 0))
 
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
+
+        # 2. Agregacja per Strategia (SQL Group By)
+        setup_stats_query = db.query(
+            models.VirtualTrade.setup_type,
+            func.count(models.VirtualTrade.id).label('total'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, 1), else_=0)).label('wins'),
+            func.sum(models.VirtualTrade.final_profit_loss_percent).label('pl'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_profit'),
+            func.sum(case((models.VirtualTrade.final_profit_loss_percent <= 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_loss')
+        ).filter(models.VirtualTrade.status != 'OPEN').group_by(models.VirtualTrade.setup_type).all()
+
+        by_setup_processed = {}
+        for row in setup_stats_query:
+            s_total = row.total or 0
+            s_wins = row.wins or 0
+            s_gross_p = float(row.gross_profit or 0)
+            s_gross_l = abs(float(row.gross_loss or 0))
+            s_pl = float(row.pl or 0)
+            
+            key = row.setup_type or "UNKNOWN"
+            by_setup_processed[key] = {
+                'total_trades': s_total,
+                'win_rate_percent': (s_wins / s_total * 100) if s_total > 0 else 0.0,
+                'total_p_l_percent': s_pl,
+                'profit_factor': (s_gross_p / s_gross_l) if s_gross_l > 0 else 0.0
+            }
+
+        # 3. Pobranie listy transakcji (Stronicowanie)
+        # Pobieramy tylko 200 rekordów, co jest błyskawiczne
         offset = (page - 1) * page_size
         paged_trades = db.query(models.VirtualTrade).filter(
             models.VirtualTrade.status != 'OPEN'
         ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
         
-        return schemas.VirtualAgentReport(
-            stats=stats,
-            trades=paged_trades, 
-            total_trades_count=total_trades_count 
+        # Budowanie obiektu odpowiedzi
+        stats_obj = schemas.VirtualAgentStats(
+            total_trades=total_trades,
+            win_rate_percent=win_rate,
+            total_p_l_percent=total_pl,
+            profit_factor=profit_factor,
+            by_setup=by_setup_processed
         )
+        
+        return schemas.VirtualAgentReport(
+            stats=stats_obj,
+            trades=paged_trades, 
+            total_trades_count=total_trades 
+        )
+
     except Exception as e:
-        logger.error(f"Nie można wygenerować raportu Wirtualnego Agenta: {e}", exc_info=True)
-        empty_stats = _calculate_stats_from_rows([]) 
+        logger.error(f"Krytyczny błąd podczas generowania raportu agenta (SQL): {e}", exc_info=True)
+        # Fallback: Zwracamy pusty raport zamiast błędu 500, aby UI wstało
+        empty_stats = schemas.VirtualAgentStats(
+            total_trades=0, win_rate_percent=0, total_p_l_percent=0, profit_factor=0, by_setup={}
+        )
         return schemas.VirtualAgentReport(stats=empty_stats, trades=[], total_trades_count=0)
 
 def get_ai_optimizer_report(db: Session) -> schemas.AIOptimizerReport:
