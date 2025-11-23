@@ -56,6 +56,7 @@ export const ui = {
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 yearInput: get('qo-year-input'),
+                // ZMIANA: Zwiększono limit w UI do 5000
                 trialsInput: get('qo-trials-input'),
                 cancelBtn: get('qo-cancel-btn'),
                 startBtn: get('qo-start-btn'),
