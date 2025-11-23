@@ -51,25 +51,18 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
     
     try:
         # === OPTYMALIZACJA SELEKCJI SPÓŁEK ===
-        # Zamiast "SELECT * FROM companies", bierzemy tylko te, które przeszły sito Fazy 1
-        # oraz te, które mamy w portfelu. To zmniejsza pulę z 3000+ do np. 50-100 istotnych.
-        
-        # 1. Pobierz kandydatów z Fazy 1
         phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
         phase1_tickers = [r[0] for r in phase1_rows]
         
-        # 2. Pobierz spółki z portfela (zawsze warto je testować)
         portfolio_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
         portfolio_tickers = [r[0] for r in portfolio_rows]
         
-        # 3. Połącz i usuń duplikaty
         tickers = list(set(phase1_tickers + portfolio_tickers))
         
         if not tickers:
             msg = "BACKTEST: Brak kandydatów w Fazie 1 i Portfelu. Pobieram Top 50 z bazy (tryb awaryjny)."
             logger.warning(msg)
             append_scan_log(session, msg)
-            # Fallback: Pobierz 50 losowych spółek, żeby backtest w ogóle ruszył
             fallback_rows = session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
             tickers = [r[0] for r in fallback_rows]
         
@@ -153,16 +146,30 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
                 df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
-                # H3 Score Components
+                # === KROK C: Konstrukcja Pola H3 (Z POPRAWKAMI NORMALIZACYJNYMI) ===
+                
+                # 1. NORMALIZACJA INSTITUTIONAL_SYNC (KLUCZOWA ZMIANA!)
+                # Używamy Z-Score, aby spółki z tysiącami transakcji nie dominowały
+                df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(Z_SCORE_WINDOW).mean()) / df['institutional_sync'].rolling(Z_SCORE_WINDOW).std()
+                df['mu_normalized'] = df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
+
+                # 2. CAP EKSTREMALNYCH WARTOŚCI (Przycięcie szumu)
+                df['institutional_sync_capped'] = df['institutional_sync'].clip(-1.0, 1.0)
+                df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+                
+                # 3. Obliczenie J z NORMALIZOWANYM mu
+                S = df['information_entropy']
+                Q = df['retail_herding_capped'] # Używamy wersji przyciętej
+                T = df['market_temperature']
+                mu_norm = df['mu_normalized']   # Używamy wersji znormalizowanej
+                
+                # Formuła H3: J = S - (Q/T) + (mu * 1.0)
+                df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
+                df['J'] = df['J'].fillna(0)
+
+                # 4. Reszta pozostaje bez zmian (Z-Score, AQM_V3_SCORE, percentyle)
                 df['m_sq'] = df['normalized_volume'] + df['normalized_news']
                 df['nabla_sq'] = df['price_gravity']
-                
-                S = df['information_entropy']
-                Q = df['retail_herding']
-                T = df['market_temperature']
-                mu = df['institutional_sync']
-                df['J'] = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
-                df['J'] = df['J'].fillna(0)
 
                 j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
                 j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
@@ -176,6 +183,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
                 df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
 
+                # AQM Score: Pole - Potencjał - Opór
                 df['aqm_score_h3'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
                 df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(window=Z_SCORE_WINDOW).quantile(0.95)
 
@@ -186,7 +194,6 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 
                 processed_count += 1
                 
-                # Logowanie Sukcesów
                 if trades > 0:
                     append_scan_log(session, f"✨ BACKTEST: {ticker} -> Znaleziono {trades} wirtualnych setupów.")
 
@@ -216,6 +223,7 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
     """
     Tryb 'Lightweight' dla QuantumOptimizer.
     Używa tej samej puli tickerów co główny backtest (Faza 1 + Portfel).
+    ZAWIERA TE SAME POPRAWKI NORMALIZACYJNE CO GŁÓWNY BACKTEST.
     """
     api_client = AlphaVantageClient()
     
@@ -223,7 +231,6 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
     trades_results = [] 
     
     try:
-        # === OPTYMALIZACJA: Używamy tej samej logiki co w Backteście ===
         phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
         phase1_tickers = [r[0] for r in phase1_rows]
         
@@ -233,11 +240,9 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
         tickers = list(set(phase1_tickers + portfolio_tickers))
         
         if not tickers:
-            # Fallback dla Optymalizacji: jeśli nie ma F1, weź próbkę 50 spółek z bazy
             fallback_rows = session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
             tickers = [r[0] for r in fallback_rows]
         
-        # === KROK PRE-A: Pobierz dane SPY (Benchmark) ===
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         if spy_raw:
             spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -320,15 +325,28 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
                 df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
-                # Score H3
+                # === POPRAWIONA LOGIKA H3 (Z-Score dla Institutional Sync) ===
+                
+                # 1. Normalizacja institutional_sync
+                df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(Z_SCORE_WINDOW).mean()) / df['institutional_sync'].rolling(Z_SCORE_WINDOW).std()
+                df['mu_normalized'] = df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
+
+                # 2. Cap wartości
+                df['institutional_sync_capped'] = df['institutional_sync'].clip(-1.0, 1.0)
+                df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+
+                # 3. Obliczenie J
+                S = df['information_entropy']
+                Q = df['retail_herding_capped']
+                T = df['market_temperature']
+                mu_norm = df['mu_normalized']
+                
+                df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
+                df['J'] = df['J'].fillna(0)
+
+                # Standard H3 Flow
                 df['m_sq'] = df['normalized_volume'] + df['normalized_news']
                 df['nabla_sq'] = df['price_gravity']
-                S = df['information_entropy']
-                Q = df['retail_herding']
-                T = df['market_temperature']
-                mu = df['institutional_sync']
-                df['J'] = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
-                df['J'] = df['J'].fillna(0)
 
                 j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
                 j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
