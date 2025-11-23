@@ -330,15 +330,12 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
     """
     Generuje raport wydajności używając agregacji ORM.
     
-    POPRAWKA KRYTYCZNA (500 Internal Server Error):
-    Błąd wynika z próby rzutowania (float()) wartości None, którą zwraca baza danych 
-    w przypadku braku rekordów spełniających warunki agregacji (SUM).
-    
-    Wprowadzono ścisłą walidację typów (if x is not None else 0.0) przed jakimikolwiek obliczeniami.
+    POPRAWKA KRYTYCZNA:
+    1. Użycie poprawnej składni `case` dla SQLAlchemy.
+    2. Bezpieczne rzutowanie typów (Decimal -> float) dla Pydantic.
     """
     try:
         # 1. Globalne Statystyki (SQLAlchemy ORM Aggregation)
-        # Obliczamy sumy i liczniki bezpośrednio w bazie.
         stats_query = db.query(
             func.count(models.VirtualTrade.id).label('total_trades'),
             func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, 1), else_=0)).label('wins'),
@@ -350,20 +347,17 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         stats_result = stats_query.first()
         
         # === BEZPIECZNA KONWERSJA WYNIKÓW ===
-        # Każde pole z bazy może być None. Obsługujemy to jawnie.
-        
         total_trades = int(stats_result.total_trades) if stats_result.total_trades is not None else 0
         wins = int(stats_result.wins) if stats_result.wins is not None else 0
         
-        # SQLAlchemy zwraca Decimal dla pól numerycznych. Konwertujemy na float, obsługując None.
+        # Konwersja Decimal -> float
         total_pl = float(stats_result.total_pl) if stats_result.total_pl is not None else 0.0
         gross_profit = float(stats_result.gross_profit) if stats_result.gross_profit is not None else 0.0
         
-        # gross_loss może być ujemne lub None. Bierzemy wartość bezwzględną.
         raw_gross_loss = float(stats_result.gross_loss) if stats_result.gross_loss is not None else 0.0
         gross_loss = abs(raw_gross_loss)
         
-        # Obliczenia pochodne (zabezpieczenie przed dzieleniem przez zero)
+        # Obliczenia pochodne
         win_rate = (wins / total_trades * 100.0) if total_trades > 0 else 0.0
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
 
@@ -379,7 +373,6 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         
         by_setup_processed = {}
         for row in setup_query:
-            # Bezpieczne rzutowanie dla każdego wiersza grupy
             s_key = row.setup_type or "UNKNOWN"
             s_total = int(row.count) if row.count is not None else 0
             s_wins = int(row.wins) if row.wins is not None else 0
@@ -408,8 +401,7 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
             by_setup=by_setup_processed
         )
 
-        # 3. Pobieranie listy transakcji (Stronicowanie)
-        # Pobieramy tylko 200 rekordów na raz - to nie obciąży pamięci
+        # 3. Pobieranie listy transakcji
         offset = (page - 1) * page_size
         paged_trades = db.query(models.VirtualTrade).filter(
             models.VirtualTrade.status != 'OPEN'
@@ -423,7 +415,7 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         
     except Exception as e:
         logger.error(f"Błąd krytyczny generowania raportu: {e}", exc_info=True)
-        # Fallback: Zwracamy pusty raport, aby UI nie wyświetlało błędu 500, tylko komunikat o braku danych
+        # Fallback: Pusty raport, aby uniknąć 500 w UI
         empty_stats = schemas.VirtualAgentStats(
             total_trades=0, win_rate_percent=0.0, total_p_l_percent=0.0, profit_factor=0.0, by_setup={}
         )
