@@ -577,6 +577,16 @@ export const showSignalDetails = async (ticker) => {
     signalDetailsInterval = setInterval(fetchData, 3000);
 };
 
+// === PRZYWRÓCONA FUNKCJA ===
+export const hideSignalDetails = () => {
+    UI.signalDetails.backdrop.classList.add('hidden');
+    if (signalDetailsInterval) clearInterval(signalDetailsInterval);
+    if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
+    signalDetailsInterval = null;
+    signalDetailsClockInterval = null;
+};
+// ============================
+
 // === NOWOŚĆ: Logika Quantum Lab (V4) ===
 
 export const showQuantumModal = () => {
