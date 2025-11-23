@@ -72,6 +72,11 @@ def _simulate_trades_h3(
     # Cel: Sprowadzenie wszystkich metryk do wspólnego mianownika (odchylenia standardowe)
     # Aby surowa liczba newsów nie dominowała nad sentymentem.
     
+    # Sprawdzenie czy kolumny istnieją, jeśli nie - inicjalizacja zerami (zabezpieczenie)
+    for col in ['institutional_sync', 'retail_herding', 'market_temperature', 'information_entropy']:
+        if col not in daily_df.columns:
+            daily_df[col] = 0.0
+
     # 1. Institutional Sync (mu) -> mu_norm (Z-Score)
     # Ograniczamy (clip) ekstremalne wartości do +/- 3 sigma
     mu_mean = daily_df['institutional_sync'].rolling(window=norm_window).mean()
@@ -104,6 +109,10 @@ def _simulate_trades_h3(
     
     # === OBLICZENIA METRYK KOŃCOWYCH (AQM SCORE) ===
     
+    # Upewnij się, że m_sq i nabla_sq są obecne
+    if 'm_sq' not in daily_df.columns: daily_df['m_sq'] = 0.0
+    if 'nabla_sq' not in daily_df.columns: daily_df['nabla_sq'] = 0.0
+
     # Teraz normalizujemy same finalne składniki pola (J, Nabla, M)
     j_mean = daily_df['J_new'].rolling(window=norm_window).mean()
     j_std = daily_df['J_new'].rolling(window=norm_window).std(ddof=1)
