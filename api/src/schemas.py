@@ -190,7 +190,8 @@ class H3DeepDiveReport(BaseModel):
 
 class OptimizationRequest(BaseModel):
     target_year: int = Field(..., description="Rok, na którym ma być przeprowadzona optymalizacja (np. 2023)", ge=2000, le=2100)
-    n_trials: int = Field(default=50, description="Liczba prób algorytmu Optuna", ge=10, le=500)
+    # ZWIĘKSZONY LIMIT DO 5000
+    n_trials: int = Field(default=50, description="Liczba prób algorytmu Optuna", ge=10, le=5000)
     # Opcjonalnie można nadpisać domyślną przestrzeń poszukiwań
     parameter_space: Optional[Dict[str, Any]] = None
 
