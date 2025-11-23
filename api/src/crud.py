@@ -329,64 +329,70 @@ def set_system_control_value(db: Session, key: str, value: str):
 def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -> schemas.VirtualAgentReport:
     """
     Profesjonalnie zoptymalizowany endpoint raportowy.
-    Wykorzystuje agregację po stronie bazy danych (SQL) zamiast przetwarzania w Pythonie.
-    Eliminuje błędy timeout przy dużej liczbie transakcji.
+    Używa RAW SQL zamiast ORM, aby uniknąć błędów serializacji typów Decimal
+    i zapewnić maksymalną wydajność.
     """
     try:
-        # 1. Agregacja Globalna (SQL)
-        # Obliczamy KPI dla wszystkich zamkniętych transakcji jednym zapytaniem
-        global_stats = db.query(
-            func.count(models.VirtualTrade.id).label('total_trades'),
-            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, 1), else_=0)).label('wins'),
-            func.sum(models.VirtualTrade.final_profit_loss_percent).label('total_pl'),
-            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_profit'),
-            func.sum(case((models.VirtualTrade.final_profit_loss_percent <= 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_loss')
-        ).filter(models.VirtualTrade.status != 'OPEN').first()
-
-        # Przetwarzanie wyników (Obsługa None)
-        total_trades = global_stats.total_trades or 0
-        wins = global_stats.wins or 0
-        total_pl = float(global_stats.total_pl or 0)
-        gross_profit = float(global_stats.gross_profit or 0)
-        gross_loss = abs(float(global_stats.gross_loss or 0))
+        # 1. Globalne Statystyki (Raw SQL - Bezpieczeństwo typów)
+        # Używamy Raw SQL, aby uniknąć narzutu ORM i problemów z rzutowaniem typów Numeric->Decimal
+        sql_global = text("""
+            SELECT 
+                COUNT(id) as total_trades,
+                SUM(CASE WHEN final_profit_loss_percent > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(final_profit_loss_percent) as total_pl,
+                SUM(CASE WHEN final_profit_loss_percent > 0 THEN final_profit_loss_percent ELSE 0 END) as gross_profit,
+                SUM(CASE WHEN final_profit_loss_percent <= 0 THEN final_profit_loss_percent ELSE 0 END) as gross_loss
+            FROM virtual_trades 
+            WHERE status != 'OPEN'
+        """)
+        
+        result_global = db.execute(sql_global).fetchone()
+        
+        # Jawna konwersja na float/int (eliminuje błędy JSON serialization)
+        total_trades = int(result_global.total_trades or 0)
+        wins = int(result_global.wins or 0)
+        total_pl = float(result_global.total_pl or 0.0)
+        gross_profit = float(result_global.gross_profit or 0.0)
+        gross_loss = abs(float(result_global.gross_loss or 0.0))
 
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
 
-        # 2. Agregacja per Strategia (SQL Group By)
-        setup_stats_query = db.query(
-            models.VirtualTrade.setup_type,
-            func.count(models.VirtualTrade.id).label('total'),
-            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, 1), else_=0)).label('wins'),
-            func.sum(models.VirtualTrade.final_profit_loss_percent).label('pl'),
-            func.sum(case((models.VirtualTrade.final_profit_loss_percent > 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_profit'),
-            func.sum(case((models.VirtualTrade.final_profit_loss_percent <= 0, models.VirtualTrade.final_profit_loss_percent), else_=0)).label('gross_loss')
-        ).filter(models.VirtualTrade.status != 'OPEN').group_by(models.VirtualTrade.setup_type).all()
-
+        # 2. Statystyki wg Strategii (Raw SQL - Group By)
+        sql_setup = text("""
+            SELECT 
+                setup_type,
+                COUNT(id) as count,
+                SUM(CASE WHEN final_profit_loss_percent > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(final_profit_loss_percent) as total_pl,
+                SUM(CASE WHEN final_profit_loss_percent > 0 THEN final_profit_loss_percent ELSE 0 END) as gross_profit,
+                SUM(CASE WHEN final_profit_loss_percent <= 0 THEN final_profit_loss_percent ELSE 0 END) as gross_loss
+            FROM virtual_trades 
+            WHERE status != 'OPEN'
+            GROUP BY setup_type
+        """)
+        
+        results_setup = db.execute(sql_setup).fetchall()
+        
         by_setup_processed = {}
-        for row in setup_stats_query:
-            s_total = row.total or 0
-            s_wins = row.wins or 0
-            s_gross_p = float(row.gross_profit or 0)
-            s_gross_l = abs(float(row.gross_loss or 0))
-            s_pl = float(row.pl or 0)
+        for row in results_setup:
+            s_key = row.setup_type or "UNKNOWN"
+            s_total = int(row.count or 0)
+            s_wins = int(row.wins or 0)
+            s_pl = float(row.total_pl or 0.0)
+            s_gross_p = float(row.gross_profit or 0.0)
+            s_gross_l = abs(float(row.gross_loss or 0.0))
             
-            key = row.setup_type or "UNKNOWN"
-            by_setup_processed[key] = {
+            s_win_rate = (s_wins / s_total * 100) if s_total > 0 else 0.0
+            s_pf = (s_gross_p / s_gross_l) if s_gross_l > 0 else 0.0
+            
+            by_setup_processed[s_key] = {
                 'total_trades': s_total,
-                'win_rate_percent': (s_wins / s_total * 100) if s_total > 0 else 0.0,
+                'win_rate_percent': s_win_rate,
                 'total_p_l_percent': s_pl,
-                'profit_factor': (s_gross_p / s_gross_l) if s_gross_l > 0 else 0.0
+                'profit_factor': s_pf
             }
 
-        # 3. Pobranie listy transakcji (Stronicowanie)
-        # Pobieramy tylko 200 rekordów, co jest błyskawiczne
-        offset = (page - 1) * page_size
-        paged_trades = db.query(models.VirtualTrade).filter(
-            models.VirtualTrade.status != 'OPEN'
-        ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
-        
-        # Budowanie obiektu odpowiedzi
         stats_obj = schemas.VirtualAgentStats(
             total_trades=total_trades,
             win_rate_percent=win_rate,
@@ -394,6 +400,13 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
             profit_factor=profit_factor,
             by_setup=by_setup_processed
         )
+
+        # 3. Pobranie listy transakcji (Stronicowanie)
+        # Tutaj ORM jest bezpieczny, bo pobieramy mało rekordów (page_size)
+        offset = (page - 1) * page_size
+        paged_trades = db.query(models.VirtualTrade).filter(
+            models.VirtualTrade.status != 'OPEN'
+        ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
         
         return schemas.VirtualAgentReport(
             stats=stats_obj,
@@ -402,7 +415,7 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         )
 
     except Exception as e:
-        logger.error(f"Krytyczny błąd podczas generowania raportu agenta (SQL): {e}", exc_info=True)
+        logger.error(f"REPORT ERROR: {e}", exc_info=True)
         # Fallback: Zwracamy pusty raport zamiast błędu 500, aby UI wstało
         empty_stats = schemas.VirtualAgentStats(
             total_trades=0, win_rate_percent=0, total_p_l_percent=0, profit_factor=0, by_setup={}
