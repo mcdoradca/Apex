@@ -58,13 +58,11 @@ const updateMarketTimeDisplay = () => {
 export const showDashboard = async () => {
     if (!UI) return;
     
-    // Renderowanie struktury dashboardu (HTML)
+    // 1. Renderuj strukturę (zawsze zadziała)
     UI.mainContent.innerHTML = renderers.dashboard();
     
-    // Weryfikacja: Bezpieczne odświeżanie danych
-    // Jeśli wystąpi błąd CORS/Network w refreshSidebarData, zostanie on złapany i zalogowany,
-    // ale nie przerwie renderowania strony.
-    refreshSidebarData();
+    // 2. Próbuj pobrać dane (bezpiecznie)
+    await refreshSidebarData();
 };
 
 export const showPortfolio = async () => {
@@ -109,32 +107,35 @@ export const loadAgentReportPage = async (page) => {
     try {
         state.currentReportPage = page;
         const reportData = await api.getVirtualAgentReport(page, REPORT_PAGE_SIZE);
+        // Dodatkowe zabezpieczenie danych
+        if (!reportData) throw new Error("Otrzymano puste dane z API");
         UI.mainContent.innerHTML = renderers.agentReport(reportData);
     } catch (error) {
-        // Tutaj wyświetlany jest błąd, jeśli API zwróci CORS Error (Failed to fetch)
-        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd raportu agenta: ${error.message} (Sprawdź konsolę pod kątem błędów CORS/Sieci)</p>`;
-        console.error("API Error Detail:", error);
+        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd raportu agenta: ${error.message}</p>`;
+        logger.error("Agent Report Error:", error);
     }
 };
 
 export const refreshSidebarData = async () => {
+    // Odseparowane bloki try-catch dla F1 i F3, aby błąd jednego nie blokował drugiego
     try {
         const phase1Data = await api.getPhase1Candidates();
         state.phase1 = Array.isArray(phase1Data) ? phase1Data : [];
         updateElement(UI.phase1.count, state.phase1.length);
         updateElement(UI.phase1.list, renderers.phase1List(state.phase1), true);
+    } catch (e) {
+        // logger.error("Sidebar F1 Error:", e); // Ciche logowanie
+        updateElement(UI.phase1.count, "-");
+    }
 
+    try {
         const phase3Data = await api.getPhase3Signals();
         state.phase3 = Array.isArray(phase3Data) ? phase3Data : [];
         updateElement(UI.phase3.count, state.phase3.length);
         updateElement(UI.phase3.list, renderers.phase3List(state.phase3), true);
-
     } catch (e) {
-        // Ciche logowanie błędu, aby nie blokować UI
-        logger.error("Błąd odświeżania sidebaru (możliwy problem z siecią/CORS):", e);
-        // Można dodać wizualny wskaźnik błędu w sidebarze, jeśli potrzebne
-        updateElement(UI.phase1.count, "err");
-        updateElement(UI.phase3.count, "err");
+        // logger.error("Sidebar F3 Error:", e); // Ciche logowanie
+        updateElement(UI.phase3.count, "-");
     }
 };
 
@@ -142,6 +143,11 @@ export const pollWorkerStatus = () => {
     const check = async () => {
         try {
             const status = await api.getWorkerStatus();
+            
+            // === KRYTYCZNA NAPRAWA ===
+            // Jeśli API zwróci null/błąd (np. przez CORS), przerywamy, aby nie wywołać błędu JS
+            if (!status || !status.progress) return; 
+            
             state.workerStatus = status;
             
             if (UI.workerStatusText) {
@@ -151,7 +157,7 @@ export const pollWorkerStatus = () => {
                 }`;
             }
 
-            if (UI.heartbeatStatus) {
+            if (UI.heartbeatStatus && status.last_heartbeat_utc) {
                 const hb = new Date(status.last_heartbeat_utc);
                 UI.heartbeatStatus.textContent = hb.toLocaleTimeString();
             }
@@ -161,7 +167,7 @@ export const pollWorkerStatus = () => {
             const scanLog = document.getElementById('scan-log');
             const currentPhaseTxt = document.getElementById('dashboard-current-phase');
 
-            if (progressBar && status.progress.total > 0) {
+            if (progressBar && progressText && status.progress.total > 0) {
                 const pct = Math.round((status.progress.processed / status.progress.total) * 100);
                 progressBar.style.width = `${pct}%`;
                 progressText.textContent = `${status.progress.processed} / ${status.progress.total}`;
@@ -171,7 +177,7 @@ export const pollWorkerStatus = () => {
                 const container = document.getElementById('scan-log-container');
                 const isAtTop = container ? container.scrollTop < 50 : true;
                 
-                scanLog.textContent = status.log;
+                scanLog.textContent = status.log || "Brak logów.";
                 
                 if (container && isAtTop) {
                     container.scrollTop = 0;
@@ -185,7 +191,9 @@ export const pollWorkerStatus = () => {
             const dashboardSignals = document.getElementById('dashboard-active-signals');
             if (dashboardSignals) dashboardSignals.textContent = (state.phase3 || []).length;
 
-        } catch (e) {}
+        } catch (e) {
+            // Błędy sieciowe ignorujemy w pętli, żeby nie spamować konsoli
+        }
     };
     
     check();
@@ -196,7 +204,7 @@ export const pollSystemAlerts = () => {
     setInterval(async () => {
         try {
             const alert = await api.getSystemAlert();
-            if (alert && alert.message !== 'NONE') {
+            if (alert && alert.message && alert.message !== 'NONE') {
                 showSystemAlert(alert.message);
             }
         } catch(e) {}
@@ -220,7 +228,7 @@ export const showBuyModal = (ticker) => {
         if (q && q['05. price']) {
             UI.buyModal.priceInput.value = parseFloat(q['05. price']).toFixed(2);
         }
-    });
+    }).catch(() => {}); // Cichy błąd
     UI.buyModal.backdrop.classList.remove('hidden');
 };
 
@@ -258,7 +266,7 @@ export const showSellModal = (ticker, maxQty) => {
     UI.sellModal.priceInput.value = "";
     api.getLiveQuote(ticker).then(q => {
         if (q && q['05. price']) UI.sellModal.priceInput.value = parseFloat(q['05. price']).toFixed(2);
-    });
+    }).catch(() => {});
     UI.sellModal.backdrop.classList.remove('hidden');
 };
 
@@ -348,7 +356,9 @@ export const showH3DeepDiveModal = () => {
     UI.h3DeepDiveModal.statusMsg.textContent = "";
     UI.h3DeepDiveModal.content.innerHTML = '<p class="text-gray-500">Oczekiwanie na dane...</p>';
     api.getH3DeepDiveReport().then(r => {
-        if (r.report_text) UI.h3DeepDiveModal.content.innerHTML = `<pre class="whitespace-pre-wrap text-xs font-mono text-green-300">${r.report_text}</pre>`;
+        if (r && r.report_text) UI.h3DeepDiveModal.content.innerHTML = `<pre class="whitespace-pre-wrap text-xs font-mono text-green-300">${r.report_text}</pre>`;
+    }).catch(e => {
+        UI.h3DeepDiveModal.content.innerHTML = `<p class="text-red-500">Błąd: ${e.message}</p>`;
     });
 };
 
@@ -366,17 +376,19 @@ export const handleRunH3DeepDive = async () => {
         await api.requestH3DeepDive(parseInt(year));
         UI.h3DeepDiveModal.statusMsg.textContent = "Przetwarzanie... Proszę czekać.";
         state.activeH3DeepDivePolling = setInterval(async () => {
-            const rep = await api.getH3DeepDiveReport();
-            if (rep.status === 'DONE') {
-                UI.h3DeepDiveModal.content.innerHTML = `<pre class="whitespace-pre-wrap text-xs font-mono text-green-300">${rep.report_text}</pre>`;
-                UI.h3DeepDiveModal.statusMsg.textContent = "Zakończono.";
-                UI.h3DeepDiveModal.runBtn.disabled = false;
-                clearInterval(state.activeH3DeepDivePolling);
-            } else if (rep.status === 'ERROR') {
-                UI.h3DeepDiveModal.content.textContent = "Błąd: " + rep.report_text;
-                UI.h3DeepDiveModal.runBtn.disabled = false;
-                clearInterval(state.activeH3DeepDivePolling);
-            }
+            try {
+                const rep = await api.getH3DeepDiveReport();
+                if (rep.status === 'DONE') {
+                    UI.h3DeepDiveModal.content.innerHTML = `<pre class="whitespace-pre-wrap text-xs font-mono text-green-300">${rep.report_text}</pre>`;
+                    UI.h3DeepDiveModal.statusMsg.textContent = "Zakończono.";
+                    UI.h3DeepDiveModal.runBtn.disabled = false;
+                    clearInterval(state.activeH3DeepDivePolling);
+                } else if (rep.status === 'ERROR') {
+                    UI.h3DeepDiveModal.content.textContent = "Błąd: " + rep.report_text;
+                    UI.h3DeepDiveModal.runBtn.disabled = false;
+                    clearInterval(state.activeH3DeepDivePolling);
+                }
+            } catch(e) {}
         }, H3_DEEP_DIVE_POLL_INTERVAL);
     } catch (e) {
         UI.h3DeepDiveModal.statusMsg.textContent = "Błąd API: " + e.message;
@@ -478,7 +490,8 @@ export const showSignalDetails = async (ticker) => {
     const fetchData = async () => {
         try {
             const data = await api.getSignalDetails(ticker);
-            
+            if (!data) return; // Zabezpieczenie
+
             if (data.status === 'INVALIDATED' && !data.company) {
                  UI.signalDetails.validityBadge.textContent = "INVALID";
                  UI.signalDetails.validityBadge.className = "text-sm px-2 py-1 rounded bg-red-900 text-red-200 font-mono";
@@ -617,7 +630,7 @@ export const handleStartQuantumOptimization = async () => {
         
         // Zabezpieczenie przed brakiem funkcji w starym api.js
         if (typeof api.startOptimization !== 'function') {
-            throw new Error("Funkcja startOptimization nie jest dostępna. Odśwież aplikację lub sprawdź api.js.");
+            throw new Error("Funkcja startOptimization nie jest dostępna. Odśwież aplikację.");
         }
 
         await api.startOptimization({ target_year: year, n_trials: trials });
@@ -645,16 +658,16 @@ export const showOptimizationResults = async () => {
     // Funkcja do odpytywania
     const fetchResults = async () => {
         try {
-            // Zabezpieczenie przed brakiem funkcji w starym api.js
-            if (typeof api.getOptimizationResults !== 'function') {
-                throw new Error("Funkcja getOptimizationResults nie jest dostępna.");
-            }
+            // Zabezpieczenie
+            if (typeof api.getOptimizationResults !== 'function') return;
 
             const results = await api.getOptimizationResults();
+            if (!results) return; // Pusta odpowiedź
+
             UI.optimizationResultsModal.content.innerHTML = renderers.optimizationResults(results);
             
             // Jeśli zakończono, zatrzymaj polling
-            if (results && (results.status === 'COMPLETED' || results.status === 'FAILED')) {
+            if (results.status === 'COMPLETED' || results.status === 'FAILED') {
                 if (optimizationPollingInterval) {
                     clearInterval(optimizationPollingInterval);
                     optimizationPollingInterval = null;
