@@ -116,8 +116,12 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     """
     Główna pętla Fazy 3 (H3 LIVE SNIPER).
     Analizuje rynek w czasie rzeczywistym, ADAPTUJE parametry i szuka sygnałów.
+    
+    AKTUALIZACJA V4.1:
+    - Wdrożono normalizację Z-Score dla Institutional Sync
+    - Wdrożono Capping dla ekstremalnych wartości
     """
-    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive)...")
+    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive + Normalized)...")
     
     # 1. Pobierz i scal parametry (Użytkownik > Domyślne)
     base_params = DEFAULT_PARAMS.copy()
@@ -218,13 +222,26 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             
             df['m_sq'] = df['normalized_volume'] + df['normalized_news']
 
-            S = df['information_entropy']
-            Q = df['retail_herding']
-            T = df['market_temperature']
-            mu = df['institutional_sync']
-            J = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
-            df['J'] = J.fillna(S + (mu * 1.0))
+            # === POPRAWIONA LOGIKA H3 (Live) ===
+            
+            # 1. Normalizacja institutional_sync (Z-Score)
+            df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(H3_CALC_WINDOW).mean()) / df['institutional_sync'].rolling(H3_CALC_WINDOW).std()
+            df['mu_normalized'] = df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
 
+            # 2. Cap wartości ekstremalnych
+            df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+
+            # 3. Obliczenie J z użyciem znormalizowanego mu
+            S = df['information_entropy']
+            Q = df['retail_herding_capped']
+            T = df['market_temperature']
+            mu_norm = df['mu_normalized']
+            
+            # Formuła H3
+            J = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
+            df['J'] = J.fillna(S + (mu_norm * 1.0))
+
+            # 4. Normalizacja składników
             j_mean = df['J'].rolling(window=H3_CALC_WINDOW).mean()
             j_std = df['J'].rolling(window=H3_CALC_WINDOW).std(ddof=1)
             j_norm = ((df['J'] - j_mean) / j_std).fillna(0)
@@ -246,6 +263,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             current_thresh = threshold_series.iloc[-1]
             current_m = m_norm.iloc[-1]
 
+            # WARUNEK WEJŚCIA (zaktualizowany)
             if (current_aqm > current_thresh) and \
                (current_m < h3_m_sq_threshold) and \
                (current_aqm > h3_min_score):
@@ -290,7 +308,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                         entry_zone_top=float(ref_price + (0.5 * atr)),
                         entry_zone_bottom=float(ref_price - (0.5 * atr)),
                         risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
-                        notes=f"AQM H3 Live (Adapted). Score:{current_aqm:.2f}. J:{last_candle['J']:.2f}. VIX:{market_conditions['vix']:.1f}"
+                        notes=f"AQM H3 Live (Normalized). Score:{current_aqm:.2f}. J:{last_candle['J']:.2f}. VIX:{market_conditions['vix']:.1f}"
                     )
                     session.add(new_signal)
                     session.commit()
