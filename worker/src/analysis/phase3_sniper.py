@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PARAMS = {
     'h3_percentile': 0.95,
     'h3_m_sq_threshold': -0.5,
-    'h3_min_score': 0.0,
+    'h3_min_score': 1.0, # Zmieniono na 1.0 (Hard Floor V4)
     'h3_tp_multiplier': 5.0,
     'h3_sl_multiplier': 2.0
 }
@@ -130,8 +130,9 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     """
     Główna pętla Fazy 3 (H3 LIVE SNIPER).
     Analizuje rynek w czasie rzeczywistym, ADAPTUJE parametry i szuka sygnałów.
+    ZAKTUALIZOWANA O LOGIKĘ "FIX DATA TRAP" (Normalizacja).
     """
-    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive)...")
+    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive + Normalized)...")
     
     # 1. Pobierz i scal parametry (Użytkownik > Domyślne)
     base_params = DEFAULT_PARAMS.copy()
@@ -214,8 +215,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             df['atr_14'] = calculate_atr(df, period=14).ffill().fillna(0)
             df['close'] = df[close_col]
 
-            # C. Metryki (Vectorized)
-            # Uwaga: Funkcje 'metrics' muszą obsługiwać tz-naive index, co zostało naprawione powyżej poprzez _ensure_tz_naive
+            # C. Metryki (Vectorized) - obliczanie surowych wartości
             df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
             df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
             
@@ -226,6 +226,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
             df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
             df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
+            # Z-Score dla wolumenu (to jest poprawne)
             df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
 
             if not news_df.empty:
@@ -233,6 +234,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                 news_counts.index = pd.to_datetime(news_counts.index)
                 news_counts = news_counts.reindex(df.index, fill_value=0)
                 df['information_entropy'] = news_counts.rolling(window=10).sum()
+                # To był stary "normalized_news", ale teraz robimy pełną normalizację S
                 df['news_mean_200d'] = df['information_entropy'].rolling(window=200).mean()
                 df['news_std_200d'] = df['information_entropy'].rolling(window=200).std()
                 df['normalized_news'] = ((df['information_entropy'] - df['news_mean_200d']) / df['news_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
@@ -240,28 +242,51 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                 df['information_entropy'] = 0.0
                 df['normalized_news'] = 0.0
             
-            df['m_sq'] = df['normalized_volume'] + df['normalized_news']
+            # === FIX DATA TRAP: PEŁNA NORMALIZACJA SKŁADNIKÓW (JAK W BACKTEŚCIE) ===
+            
+            # 1. Mu Norm (Institutional)
+            mu_mean = df['institutional_sync'].rolling(window=H3_CALC_WINDOW).mean()
+            mu_std = df['institutional_sync'].rolling(window=H3_CALC_WINDOW).std()
+            df['mu_norm'] = ((df['institutional_sync'] - mu_mean) / mu_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
 
-            S = df['information_entropy']
-            Q = df['retail_herding']
-            T = df['market_temperature']
-            mu = df['institutional_sync']
-            J = S - (Q / T.replace(0, np.nan)) + (mu * 1.0)
-            df['J'] = J.fillna(S + (mu * 1.0))
+            # 2. Q Norm (Retail)
+            q_mean = df['retail_herding'].rolling(window=H3_CALC_WINDOW).mean()
+            q_std = df['retail_herding'].rolling(window=H3_CALC_WINDOW).std()
+            df['Q_norm'] = ((df['retail_herding'] - q_mean) / q_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
 
+            # 3. T Norm (Temp)
+            t_mean = df['market_temperature'].rolling(window=H3_CALC_WINDOW).mean()
+            t_std = df['market_temperature'].rolling(window=H3_CALC_WINDOW).std()
+            df['T_norm'] = ((df['market_temperature'] - t_mean) / t_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+            # 4. S Norm (Entropy/News)
+            s_mean = df['information_entropy'].rolling(window=H3_CALC_WINDOW).mean()
+            s_std = df['information_entropy'].rolling(window=H3_CALC_WINDOW).std()
+            df['S_norm'] = ((df['information_entropy'] - s_mean) / s_std).replace([np.inf, -np.inf], 0).fillna(0).clip(-3.0, 3.0)
+
+            # === NOWA FORMUŁA J (ZNORMALIZOWANA) ===
+            denom_T = df['T_norm'].replace(0, 0.001)
+            df['J'] = df['S_norm'] - (df['Q_norm'] / denom_T) + (df['mu_norm'] * 1.0)
+            df['J'] = df['J'].fillna(0)
+
+            # === Normalizacja finalnych pól (J, Nabla, M) ===
             j_mean = df['J'].rolling(window=H3_CALC_WINDOW).mean()
             j_std = df['J'].rolling(window=H3_CALC_WINDOW).std(ddof=1)
-            j_norm = ((df['J'] - j_mean) / j_std).fillna(0)
+            j_norm = ((df['J'] - j_mean) / j_std).replace([np.inf, -np.inf], 0).fillna(0)
             
+            # Nabla (Opór)
             nabla_mean = df['nabla_sq'].rolling(window=H3_CALC_WINDOW).mean()
             nabla_std = df['nabla_sq'].rolling(window=H3_CALC_WINDOW).std(ddof=1)
-            nabla_norm = ((df['nabla_sq'] - nabla_mean) / nabla_std).fillna(0)
+            nabla_norm = ((df['nabla_sq'] - nabla_mean) / nabla_std).replace([np.inf, -np.inf], 0).fillna(0)
             
+            # M (Masa)
+            # m_sq = normalized_volume + normalized_news (ale normalized_news to też Z-score)
+            df['m_sq'] = df['normalized_volume'] + df['normalized_news']
             m_mean = df['m_sq'].rolling(window=H3_CALC_WINDOW).mean()
             m_std = df['m_sq'].rolling(window=H3_CALC_WINDOW).std(ddof=1)
-            m_norm = ((df['m_sq'] - m_mean) / m_std).fillna(0)
+            m_norm = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
             
-            # Formuła AQM Score (Napęd - Opory)
+            # === GLÓWNY WSKAŹNIK: AQM SCORE ===
             aqm_score_series = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
             threshold_series = aqm_score_series.rolling(window=H3_CALC_WINDOW).quantile(h3_percentile)
 
@@ -271,6 +296,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             current_thresh = threshold_series.iloc[-1]
             current_m = m_norm.iloc[-1]
 
+            # STRICT MODE CONDITIONS (takie same jak w backteście)
             if (current_aqm > current_thresh) and \
                (current_m < h3_m_sq_threshold) and \
                (current_aqm > h3_min_score):
@@ -315,16 +341,17 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                         entry_zone_top=float(ref_price + (0.5 * atr)),
                         entry_zone_bottom=float(ref_price - (0.5 * atr)),
                         risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
-                        notes=f"AQM H3 Live (Adapted). Score:{current_aqm:.2f}. J:{last_candle['J']:.2f}. VIX:{market_conditions['vix']:.1f}"
+                        # Zapisujemy szczegółowe metryki w notatce dla debugowania
+                        notes=f"AQM H3 Live (Strict). Score:{current_aqm:.2f}. J_norm:{j_norm.iloc[-1]:.2f}. M_norm:{current_m:.2f}. VIX:{market_conditions['vix']:.1f}"
                     )
                     session.add(new_signal)
                     session.commit()
                     signals_generated += 1
                     
-                    msg = (f"⚛️ H3 QUANTUM SIGNAL (ADAPTIVE): {ticker}\n"
+                    msg = (f"⚛️ H3 QUANTUM SIGNAL (LIVE STRICT): {ticker}\n"
                            f"Cena: {ref_price:.2f} | Live: {current_live_price if current_live_price else '---'}\n"
                            f"TP: {take_profit:.2f} | SL: {stop_loss:.2f}\n"
-                           f"VIX Ref: {market_conditions['vix']:.1f}")
+                           f"AQM: {current_aqm:.2f}")
                     send_telegram_alert(msg)
 
         except Exception as e:
@@ -333,5 +360,5 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             continue
 
     update_scan_progress(session, total_candidates, total_candidates)
-    append_scan_log(session, f"Faza 3 (H3 Live Adaptive) zakończona. Wygenerowano {signals_generated} sygnałów.")
+    append_scan_log(session, f"Faza 3 (H3 Live Strict) zakończona. Wygenerowano {signals_generated} sygnałów.")
     logger.info(f"Faza 3 zakończona. Sygnałów: {signals_generated}")
