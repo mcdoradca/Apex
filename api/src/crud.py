@@ -10,6 +10,7 @@ import io
 import csv
 from typing import Generator
 import uuid # Do generowania ID zadań
+import math # === DODANO IMPORT MATH DO SPRAWDZANIA INF/NAN ===
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,45 @@ def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
     except Exception:
         logger.error(f"Nie można przekonwertować {value} na Decimal.")
         return None
+
+# === NOWE FUNKCJE POMOCNICZE DO SANITYZACJI (Fix JSON Error) ===
+
+def _safe_float_stat(val) -> float:
+    """
+    Bezpieczna konwersja na float dla statystyk.
+    Zamienia Infinity/NaN na 0.0, aby uniknąć błędu JSON.
+    """
+    if val is None: return 0.0
+    try:
+        f = float(val)
+        if math.isinf(f) or math.isnan(f): return 0.0
+        return f
+    except Exception:
+        return 0.0
+
+def _sanitize_trade_metrics(trade: models.VirtualTrade):
+    """
+    Czyści obiekt VirtualTrade z wartości NaN/Infinity w metrykach (in-place).
+    Postgres pozwala na NaN/Inf, ale JSON nie.
+    """
+    metric_fields = [
+        'metric_atr_14', 'metric_time_dilation', 'metric_price_gravity',
+        'metric_td_percentile_90', 'metric_pg_percentile_90',
+        'metric_inst_sync', 'metric_retail_herding',
+        'metric_aqm_score_h3', 'metric_aqm_percentile_95',
+        'metric_J_norm', 'metric_nabla_sq_norm', 'metric_m_sq_norm',
+        'metric_J', 'metric_J_threshold_2sigma'
+    ]
+    
+    for field in metric_fields:
+        val = getattr(trade, field)
+        if val is not None:
+            try:
+                f_val = float(val)
+                if math.isinf(f_val) or math.isnan(f_val):
+                    setattr(trade, field, None) # JSON null jest bezpieczny
+            except Exception:
+                setattr(trade, field, None)
 
 # ==========================================================
 # === FUNKCJE CRUD DLA OPTYMALIZACJI (APEX V4) ===
@@ -330,8 +370,8 @@ def _calculate_stats_from_rows(trades_rows: List[Row]) -> schemas.VirtualAgentSt
     total_trades = len(trades_rows)
     if total_trades == 0:
         return schemas.VirtualAgentStats(
-            total_trades=0, win_rate_percent=0, total_p_l_percent=0,
-            profit_factor=0, by_setup={}
+            total_trades=0, win_rate_percent=0.0, total_p_l_percent=0.0,
+            profit_factor=0.0, by_setup={}
         )
 
     wins = 0
@@ -367,22 +407,31 @@ def _calculate_stats_from_rows(trades_rows: List[Row]) -> schemas.VirtualAgentSt
             total_loss_p_l += p_l 
             setup_stats[setup_type]['total_loss_p_l'] += p_l
 
-    win_rate = (wins / valid_trades_count) * 100 if valid_trades_count > 0 else 0
-    profit_factor = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0.0
+    # --- SANITYZACJA STATYSTYK (Fix JSON Error) ---
+    
+    raw_win_rate = (wins / valid_trades_count) * 100 if valid_trades_count > 0 else 0
+    raw_pf = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0.0
+    
+    win_rate = _safe_float_stat(raw_win_rate)
+    profit_factor = _safe_float_stat(raw_pf)
+    safe_total_pl = _safe_float_stat(total_p_l)
 
     by_setup_processed = {}
     for setup, data in setup_stats.items():
+        s_raw_win_rate = (data['wins'] / data['trades']) * 100 if data['trades'] > 0 else 0
+        s_raw_pf = float(abs(data['total_win_p_l'] / data['total_loss_p_l'])) if data['total_loss_p_l'] != 0 else 0.0
+        
         by_setup_processed[setup] = {
             'total_trades': data['trades'],
-            'win_rate_percent': (data['wins'] / data['trades']) * 100 if data['trades'] > 0 else 0,
-            'total_p_l_percent': float(data['total_p_l']),
-            'profit_factor': float(abs(data['total_win_p_l'] / data['total_loss_p_l'])) if data['total_loss_p_l'] != 0 else 0.0
+            'win_rate_percent': _safe_float_stat(s_raw_win_rate),
+            'total_p_l_percent': _safe_float_stat(data['total_p_l']),
+            'profit_factor': _safe_float_stat(s_raw_pf)
         }
 
     return schemas.VirtualAgentStats(
         total_trades=valid_trades_count,
-        win_rate_percent=float(win_rate),
-        total_p_l_percent=float(total_p_l),
+        win_rate_percent=win_rate,
+        total_p_l_percent=safe_total_pl,
         profit_factor=profit_factor,
         by_setup=by_setup_processed
     )
@@ -405,6 +454,11 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
             models.VirtualTrade.status != 'OPEN'
         ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
         
+        # --- SANITYZACJA TRANSAKCJI (Fix JSON Error) ---
+        # Czyścimy wyniki zapytania "w locie", zanim trafią do Pydantic -> JSON
+        for trade in paged_trades:
+            _sanitize_trade_metrics(trade)
+        
         return schemas.VirtualAgentReport(
             stats=stats,
             trades=paged_trades, 
@@ -412,7 +466,11 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         )
     except Exception as e:
         logger.error(f"Nie można wygenerować raportu Wirtualnego Agenta: {e}", exc_info=True)
-        empty_stats = _calculate_stats_from_rows([]) 
+        # Zwracamy pusty raport zamiast błędu 500, jeśli coś poszło nie tak
+        empty_stats = schemas.VirtualAgentStats(
+            total_trades=0, win_rate_percent=0.0, total_p_l_percent=0.0,
+            profit_factor=0.0, by_setup={}
+        )
         return schemas.VirtualAgentReport(stats=empty_stats, trades=[], total_trades_count=0)
 
 def get_ai_optimizer_report(db: Session) -> schemas.AIOptimizerReport:
