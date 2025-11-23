@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from .. import models
 from . import backtest_engine
 from .utils import update_system_control, append_scan_log
-# Importujemy narzędzia analityczne (Krok 1.3 Mapy Drogowej - zakładamy że istnieją w apex_audit)
+# Importujemy narzędzia analityczne
 from .apex_audit import SensitivityAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -21,9 +21,11 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 class QuantumOptimizer:
     """
     Serce systemu Apex V4 (Advanced).
-    Wykorzystuje Optymalizację Bayesowską (TPE) oraz Multi-Period Validation
-    do przeszukiwania przestrzeni parametrów strategii H3 w celu znalezienia 
-    konfiguracji odpornych na zmiany rynkowe (Anty-kruchość).
+    Wykorzystuje Optymalizację Bayesowską (TPE) oraz Multi-Period Validation.
+    
+    ZMIANA V4.1: Nowa funkcja celu (Objective Function) zgodna z "Tajemniczą Rozmową".
+    Zamiast szukać tylko 'Robust Score', szukamy balansu między wysokim PF 
+    a optymalną liczbą transakcji (500-2000 rocznie).
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -46,7 +48,7 @@ class QuantumOptimizer:
         
         try:
             # 2. Utworzenie badania (Study) Optuna
-            # direction='maximize' ponieważ chcemy maksymalizować Robust Score
+            # direction='maximize' ponieważ chcemy maksymalizować Score (PF po karach)
             self.study = optuna.create_study(direction='maximize')
             
             # 3. Uruchomienie pętli optymalizacyjnej
@@ -57,15 +59,13 @@ class QuantumOptimizer:
             best_params = best_trial.params
             best_value = best_trial.value
             
-            logger.info(f"QuantumOptimizer: Zakończono. Najlepszy Robust Score: {best_value:.4f}")
+            logger.info(f"QuantumOptimizer: Zakończono. Najlepszy Wynik (Score): {best_value:.4f}")
             logger.info(f"Najlepsze parametry: {best_params}")
 
             # 5. Analiza Wrażliwości (Automatyczny Audyt V4)
-            # Pobieramy historię wszystkich prób do analizy przez Random Forest
             trials_data = []
             for t in self.study.trials:
                 if t.state == optuna.trial.TrialState.COMPLETE:
-                    # Przekazujemy parametry i wynik (Robust Score)
                     row = {'params': t.params, 'profit_factor': t.value} 
                     trials_data.append(row)
             
@@ -74,7 +74,6 @@ class QuantumOptimizer:
                 if len(trials_data) >= 10:
                     logger.info("Uruchamianie analizy wrażliwości (SensitivityAnalyzer)...")
                     analyzer = SensitivityAnalyzer()
-                    # Metoda analyze_parameter_sensitivity zwraca mapę ważności cech
                     sensitivity_report = analyzer.analyze_parameter_sensitivity(trials_data)
                 else:
                     logger.warning("Za mało prób (<10) do rzetelnej analizy wrażliwości.")
@@ -82,20 +81,17 @@ class QuantumOptimizer:
                 logger.error(f"Błąd podczas analizy wrażliwości: {e}", exc_info=True)
 
             # 6. Aktualizacja rekordu Job w bazie
-            # Odświeżamy obiekt sesji
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job:
                 job.status = 'COMPLETED'
                 job.best_score = float(best_value)
                 
-                # Zapisujemy konfigurację zwycięską ORAZ raport z analizy wrażliwości
                 final_config = {
                     'best_params': best_params,
                     'sensitivity_analysis': sensitivity_report
                 }
-                job.configuration = final_config # Zapis do pola JSONB
+                job.configuration = final_config
                 
-                # Linkujemy najlepszą próbę
                 best_trial_db = self.session.query(models.OptimizationTrial).filter(
                     models.OptimizationTrial.job_id == self.job_id,
                     models.OptimizationTrial.trial_number == best_trial.number
@@ -115,26 +111,26 @@ class QuantumOptimizer:
 
     def _objective(self, trial):
         """
-        Funkcja celu (Robust Optimization).
-        Zamiast jednego wyniku rocznego, dzieli rok na 4 kwartały, 
-        symuluje każdy osobno i oblicza Robust Score.
+        ZMODYFIKOWANA Funkcja Celu (V4.1).
         
-        Robust Score = Mean(PF) / (1 + StdDev(PF))
+        Zasady z "Tajemniczej Rozmowy":
+        1.  Wymuszamy zakres transakcji: 500 - 2000.
+            - Jeśli mniej lub więcej -> Score = 0.0 (odrzucamy).
+        2.  Idealny cel ("Sweet Spot"): 800 - 1200 transakcji.
+        3.  Score = Średni PF * (1.0 - Kara_za_odchylenie_od_celu).
         """
         
-        # === A. Definicja Przestrzeni Parametrów (Search Space) ===
+        # === A. Definicja Przestrzeni Parametrów ===
         params = {
-            # Parametry H3 Core
-            'h3_percentile': trial.suggest_float('h3_percentile', 0.90, 0.99),
-            'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -1.5, 0.5),
-            'h3_min_score': trial.suggest_float('h3_min_score', -1.0, 2.0),
-            'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 8.0),
-            'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 4.0),
-            'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 10),
+            'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), # Szerszy zakres
+            'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -2.0, 0.0),
+            'h3_min_score': trial.suggest_float('h3_min_score', -1.0, 3.0),
+            'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0),
+            'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 5.0),
+            'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15),
         }
 
-        # === B. Multi-Period Simulation (Kwartalna Walidacja) ===
-        # Definiujemy 4 okresy testowe dla zadanego roku
+        # === B. Symulacja Kwartalna (Multi-Period) ===
         periods = [
             (f"{self.target_year}-01-01", f"{self.target_year}-03-31"),
             (f"{self.target_year}-04-01", f"{self.target_year}-06-30"),
@@ -148,13 +144,10 @@ class QuantumOptimizer:
 
         for start_date, end_date in periods:
             try:
-                # Kopiujemy parametry i dodajemy zakres dat dla danego kwartału
-                # (Wymaga, aby backtest_engine obsługiwał simulation_start_date/end_date - zrobimy to w Kroku 2)
                 period_params = params.copy()
                 period_params['simulation_start_date'] = start_date
                 period_params['simulation_end_date'] = end_date
                 
-                # Uruchamiamy "lekką" symulację
                 sim_res = backtest_engine.run_optimization_simulation(
                     self.session,
                     str(self.target_year),
@@ -164,7 +157,6 @@ class QuantumOptimizer:
                 pf = sim_res.get('profit_factor', 0.0)
                 trades = sim_res.get('total_trades', 0)
                 
-                # Jeśli w kwartale nie było transakcji, PF=0 (lub neutralnie 1.0? Tu przyjmujemy surowo 0)
                 if trades == 0:
                     pf = 0.0
                 
@@ -172,26 +164,44 @@ class QuantumOptimizer:
                 total_trades_year += trades
                 total_profit_year += sim_res.get('net_profit', 0.0)
                 
-            except Exception as e:
-                # logger.warning(f"Błąd symulacji okresu {start_date}: {e}")
+            except Exception:
                 period_pfs.append(0.0)
 
-        # === C. Obliczenie Robust Score ===
-        # Kara za zbyt małą aktywność w skali roku (np. < 12 transakcji rocznie to overfitting/przypadek)
-        if total_trades_year < 12: 
-            robust_score = 0.0
-            global_pf = 0.0
+        # === C. Obliczenie Nowego Score (Logic V4.1) ===
+        
+        mean_pf = np.mean(period_pfs)
+        
+        # 1. TWARDY LIMIT TRANSAKCJI
+        # Jeśli system generuje mniej niż 500 lub więcej niż 2000 transakcji rocznie, 
+        # uznajemy to za błąd strategii (zbyt pasywna lub zbyt agresywna/śmieciowa).
+        if total_trades_year < 500 or total_trades_year > 2000:
+            final_score = 0.0
+            
+            # Logowanie odrzucenia (dla debugowania - widoczne w logach workera)
+            # logger.info(f"Trial {trial.number} REJECTED: Trades={total_trades_year} (Out of bounds 500-2000)")
+        
         else:
-            mean_pf = np.mean(period_pfs)
-            std_pf = np.std(period_pfs)
+            # 2. OBLICZANIE KARY (Trade Penalty)
+            # Idealny zakres ("Sweet Spot"): 800 - 1200 transakcji
+            trade_penalty = 0.0
             
-            # KLUCZOWY WZÓR APEX V4:
-            # Nagradzamy wysoki średni PF, karzemy dużą zmienność wyników między kwartałami.
-            # 1.0 w mianowniku zapobiega dzieleniu przez zero i stabilizuje wynik.
-            robust_score = mean_pf / (1.0 + std_pf)
+            if total_trades_year < 800:
+                # Kara rośnie im bliżej 500. Przy 500 kara wynosi ok. 37% z (800-500)/800
+                trade_penalty = (800 - total_trades_year) / 800.0
+            elif total_trades_year > 1200:
+                # Kara rośnie im bliżej 2000.
+                trade_penalty = (total_trades_year - 1200) / 1200.0
             
-            # Estymata rocznego PF (średnia z kwartałów)
-            global_pf = mean_pf
+            # Maksymalna kara to 50% wyniku (aby wysoki PF nadal miał znaczenie)
+            impact_factor = 0.5 
+            
+            # 3. FINALNY SCORE
+            # Bierzemy średni PF i odejmujemy karę.
+            # Przykład: PF 2.0, idealna liczba transakcji -> Score = 2.0
+            # Przykład: PF 2.0, liczba transakcji 600 (kara ~0.25 * 0.5 = 0.125) -> Score = 2.0 * 0.875 = 1.75
+            final_score = mean_pf * (1.0 - (trade_penalty * impact_factor))
+            
+            logger.info(f"Trial {trial.number}: PF={mean_pf:.2f}, Trades={total_trades_year}, Penalty={trade_penalty:.2f}, Score={final_score:.3f}")
 
         # === D. Zapis Próby do Bazy Danych ===
         try:
@@ -199,11 +209,11 @@ class QuantumOptimizer:
                 job_id=self.job_id,
                 trial_number=trial.number,
                 params=params,
-                profit_factor=global_pf, # Zapisujemy średni PF
+                profit_factor=mean_pf, # Zapisujemy rzeczywisty PF, nie Score!
                 total_trades=total_trades_year,
-                win_rate=0.0, # Tu upraszczamy (trudno uśrednić win rate bez wag)
+                win_rate=0.0, # Uproszczenie
                 net_profit=total_profit_year,
-                state='COMPLETE' if robust_score > 0 else 'FAIL',
+                state='COMPLETE' if final_score > 0 else 'PRUNED', # PRUNED jeśli odrzucony przez limit
                 created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
@@ -212,59 +222,43 @@ class QuantumOptimizer:
             logger.error(f"Błąd zapisu próby do DB: {db_err}")
             self.session.rollback()
 
-        return robust_score
+        return final_score
 
 class AdaptiveExecutor:
     """
     Mózg operacyjny Apex V4.
-    Odpowiedzialny za dostosowywanie "Zwycięskich Parametrów" z optymalizacji
-    do bieżących warunków rynkowych (VIX, Trend, Faza Rynku) w czasie rzeczywistym.
+    Dostosowuje parametry w czasie rzeczywistym w oparciu o VIX i Trend.
     """
     
     def __init__(self, base_params: dict):
         self.base_params = base_params
-        # Reguły adaptacji oparte na analizie historycznej
+        # Reguły adaptacji
         self.adaptation_rules = {
             'HIGH_VOLATILITY': { # VIX > 25
-                # W stresie rynkowym:
-                'h3_percentile': lambda p: min(0.99, p * 1.01), # Podnosimy próg wejścia (bądź bardziej wybredny)
-                'h3_sl_multiplier': lambda p: p * 1.3, # Poszerzamy SL (unikaj noise stop-out)
-                'h3_m_sq_threshold': lambda p: p - 0.2 # Wymagaj mniejszej "masy" (tłumu)
+                'h3_percentile': lambda p: min(0.99, p * 1.01),
+                'h3_sl_multiplier': lambda p: p * 1.3,
+                'h3_m_sq_threshold': lambda p: p - 0.2
             },
             'LOW_VOLATILITY': { # VIX < 15
-                # W ciszy rynkowej:
-                'h3_percentile': lambda p: max(0.90, p * 0.99), # Poluzuj wejście
-                'h3_tp_multiplier': lambda p: p * 1.1 # Szukaj dalszych zasięgów (swing)
+                'h3_percentile': lambda p: max(0.90, p * 0.99),
+                'h3_tp_multiplier': lambda p: p * 1.1
             },
             'BEAR_MARKET': { # Trend spadkowy
-                'h3_tp_multiplier': lambda p: p * 0.8, # Szybciej realizuj zyski (hit & run)
-                'h3_min_score': lambda p: max(0.5, p + 0.5) # Wymagaj bardzo silnego sygnału
+                'h3_tp_multiplier': lambda p: p * 0.8,
+                'h3_min_score': lambda p: max(0.5, p + 0.5)
             }
         }
 
     def get_adapted_params(self, market_conditions: dict) -> dict:
-        """
-        Zwraca zmodyfikowany słownik parametrów w oparciu o warunki rynkowe.
-        
-        Args:
-            market_conditions: dict np. {'vix': 28.5, 'trend': 'BEAR'}
-        """
         adapted = self.base_params.copy()
-        
-        # 1. Analiza Zmienności (VIX)
-        # Domyślnie 20 jeśli brak danych
         vix = market_conditions.get('vix', 20.0)
-        
         if vix > 25.0:
             self._apply_rules(adapted, 'HIGH_VOLATILITY')
         elif vix < 15.0:
             self._apply_rules(adapted, 'LOW_VOLATILITY')
-            
-        # 2. Analiza Trendu
         trend = market_conditions.get('trend', 'NEUTRAL')
         if trend == 'BEAR':
             self._apply_rules(adapted, 'BEAR_MARKET')
-            
         return adapted
 
     def _apply_rules(self, params_dict, rule_key):
