@@ -42,10 +42,14 @@ def _safe_float_stat(val) -> float:
 
 def _sanitize_trade_metrics(trade: models.VirtualTrade):
     """
-    Czyści obiekt VirtualTrade z wartości NaN/Infinity w metrykach (in-place).
+    Czyści obiekt VirtualTrade z wartości NaN/Infinity w metrykach I POLACH CENOWYCH (in-place).
     Postgres pozwala na NaN/Inf, ale JSON nie.
     """
-    metric_fields = [
+    # === POPRAWKA KRYTYCZNA: Dodano podstawowe pola finansowe do czyszczenia ===
+    fields_to_clean = [
+        # Pola podstawowe (tutaj najczęściej ukrywa się NaN w P/L)
+        'entry_price', 'stop_loss', 'take_profit', 'close_price', 'final_profit_loss_percent',
+        # Pola metryk
         'metric_atr_14', 'metric_time_dilation', 'metric_price_gravity',
         'metric_td_percentile_90', 'metric_pg_percentile_90',
         'metric_inst_sync', 'metric_retail_herding',
@@ -54,13 +58,13 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         'metric_J', 'metric_J_threshold_2sigma'
     ]
     
-    for field in metric_fields:
+    for field in fields_to_clean:
         val = getattr(trade, field)
         if val is not None:
             try:
                 f_val = float(val)
                 if math.isinf(f_val) or math.isnan(f_val):
-                    setattr(trade, field, None) # JSON null jest bezpieczny
+                    setattr(trade, field, None) # JSON null jest bezpieczny i poprawny dla frontend'u
             except Exception:
                 setattr(trade, field, None)
 
@@ -301,13 +305,13 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
             "ticker": signal.ticker,
             "generation_date": signal.generation_date.isoformat() if signal.generation_date else None,
             "status": signal.status,
-            "entry_price": float(signal.entry_price) if signal.entry_price is not None else None,
-            "stop_loss": float(signal.stop_loss) if signal.stop_loss is not None else None,
-            "take_profit": float(signal.take_profit) if signal.take_profit is not None else None,
-            "risk_reward_ratio": float(signal.risk_reward_ratio) if signal.risk_reward_ratio is not None else None,
+            "entry_price": _safe_float_stat(signal.entry_price), # Bezpieczne floatowanie
+            "stop_loss": _safe_float_stat(signal.stop_loss),
+            "take_profit": _safe_float_stat(signal.take_profit),
+            "risk_reward_ratio": _safe_float_stat(signal.risk_reward_ratio),
             "signal_candle_timestamp": signal.signal_candle_timestamp.isoformat() if signal.signal_candle_timestamp else None,
-            "entry_zone_bottom": float(signal.entry_zone_bottom) if signal.entry_zone_bottom is not None else None,
-            "entry_zone_top": float(signal.entry_zone_top) if signal.entry_zone_top is not None else None,
+            "entry_zone_bottom": _safe_float_stat(signal.entry_zone_bottom),
+            "entry_zone_top": _safe_float_stat(signal.entry_zone_top),
             "notes": signal.notes
         } for signal in signals_from_db
     ]
@@ -392,6 +396,10 @@ def _calculate_stats_from_rows(trades_rows: List[Row]) -> schemas.VirtualAgentSt
         valid_trades_count += 1
         p_l = Decimal(trade.final_profit_loss_percent)
         
+        # Jeśli P/L jest NaN w bazie, Decimal(NaN) zatruje sumy
+        if p_l.is_nan() or p_l.is_infinite():
+             p_l = Decimal(0)
+
         total_p_l += p_l
         setup_type = trade.setup_type or "UNKNOWN"
         setup_stats[setup_type]['trades'] += 1
@@ -456,6 +464,7 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         
         # --- SANITYZACJA TRANSAKCJI (Fix JSON Error) ---
         # Czyścimy wyniki zapytania "w locie", zanim trafią do Pydantic -> JSON
+        # Dzięki temu nawet jeśli w bazie są "toksyczne" dane (NaN), raport zadziała
         for trade in paged_trades:
             _sanitize_trade_metrics(trade)
         
