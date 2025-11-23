@@ -58,13 +58,12 @@ const updateMarketTimeDisplay = () => {
 export const showDashboard = async () => {
     if (!UI) return;
     
-    // 1. Renderowanie struktury dashboardu
+    // Renderowanie struktury dashboardu (HTML)
     UI.mainContent.innerHTML = renderers.dashboard();
     
-    // 2. Usunięto błędne wywołanie api.getDiscardedCount(), które powodowało błędy u użytkownika.
-    // Dashboard nie wymaga tych danych do poprawnego wyświetlania.
-    
-    // 3. Odświeżenie danych w sidebarze (Kandydaci F1 / Sygnały F3)
+    // Weryfikacja: Bezpieczne odświeżanie danych
+    // Jeśli wystąpi błąd CORS/Network w refreshSidebarData, zostanie on złapany i zalogowany,
+    // ale nie przerwie renderowania strony.
     refreshSidebarData();
 };
 
@@ -112,13 +111,14 @@ export const loadAgentReportPage = async (page) => {
         const reportData = await api.getVirtualAgentReport(page, REPORT_PAGE_SIZE);
         UI.mainContent.innerHTML = renderers.agentReport(reportData);
     } catch (error) {
-        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd raportu agenta: ${error.message}</p>`;
+        // Tutaj wyświetlany jest błąd, jeśli API zwróci CORS Error (Failed to fetch)
+        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd raportu agenta: ${error.message} (Sprawdź konsolę pod kątem błędów CORS/Sieci)</p>`;
+        console.error("API Error Detail:", error);
     }
 };
 
 export const refreshSidebarData = async () => {
     try {
-        // Zabezpieczenie: upewniamy się, że otrzymujemy tablicę
         const phase1Data = await api.getPhase1Candidates();
         state.phase1 = Array.isArray(phase1Data) ? phase1Data : [];
         updateElement(UI.phase1.count, state.phase1.length);
@@ -130,7 +130,11 @@ export const refreshSidebarData = async () => {
         updateElement(UI.phase3.list, renderers.phase3List(state.phase3), true);
 
     } catch (e) {
-        logger.error("Błąd odświeżania sidebaru:", e);
+        // Ciche logowanie błędu, aby nie blokować UI
+        logger.error("Błąd odświeżania sidebaru (możliwy problem z siecią/CORS):", e);
+        // Można dodać wizualny wskaźnik błędu w sidebarze, jeśli potrzebne
+        updateElement(UI.phase1.count, "err");
+        updateElement(UI.phase3.count, "err");
     }
 };
 
@@ -179,7 +183,6 @@ export const pollWorkerStatus = () => {
             }
             
             const dashboardSignals = document.getElementById('dashboard-active-signals');
-            // Zabezpieczenie: używamy bezpiecznej tablicy ze stanu
             if (dashboardSignals) dashboardSignals.textContent = (state.phase3 || []).length;
 
         } catch (e) {}
