@@ -11,7 +11,7 @@ from .utils import (
     standardize_df_columns, 
     calculate_atr, 
     append_scan_log, 
-    update_system_control,
+    update_system_control, 
     update_scan_progress
 )
 
@@ -44,13 +44,13 @@ def _calculate_time_dilation_series(ticker_df: pd.DataFrame, spy_df: pd.DataFram
 def run_historical_backtest(session: Session, api_client, year: str, parameters: dict = None):
     """
     Uruchamia pełny backtest historyczny (z zapisem do bazy).
-    OPTYMALIZACJA: Skanuje TYLKO spółki z Fazy 1 i Portfela, a nie cały rynek.
+    To jest pełny raport, więc tutaj skanujemy WSZYSTKO (może trwać dłużej).
     """
     logger.info(f"[Backtest] Rozpoczynanie analizy historycznej dla roku {year}...")
     append_scan_log(session, f"BACKTEST: Uruchamianie symulacji dla roku {year}...")
     
     try:
-        # === OPTYMALIZACJA SELEKCJI SPÓŁEK ===
+        # === SELEKCJA SPÓŁEK (PEŁNA) ===
         phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
         phase1_tickers = [r[0] for r in phase1_rows]
         
@@ -69,7 +69,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
         logger.info(f"[Backtest] Wybrano {len(tickers)} tickerów do analizy (Faza 1 + Portfel).")
         append_scan_log(session, f"BACKTEST: Wybrano {len(tickers)} tickerów do analizy.")
         
-        # === KROK PRE-A: Pobierz dane SPY (Benchmark) raz dla całej pętli ===
+        # === KROK PRE-A: Pobierz dane SPY ===
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         spy_df = pd.DataFrame()
         if spy_raw:
@@ -87,7 +87,6 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
         
         for ticker in tickers:
             try:
-                # === KROK A: Pobieranie Danych Historycznych (Cache + API) ===
                 daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
                 daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
                 
@@ -108,16 +107,11 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df = daily_adj.join(daily_ohlcv[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
                 close_col = 'close_ohlcv' if 'close_ohlcv' in df.columns else 'close'
                 
-                # === KROK B: Obliczanie Metryk ===
+                # Metryki
                 df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
                 df['atr_14'] = calculate_atr(df, period=14).ffill().fillna(0)
+                df['time_dilation'] = _calculate_time_dilation_series(df, spy_df) if not spy_df.empty else 0.0
                 
-                if not spy_df.empty:
-                    df['time_dilation'] = _calculate_time_dilation_series(df, spy_df)
-                else:
-                    df['time_dilation'] = 0.0
-                
-                # Dane H2
                 h2_data = load_h2_data_into_cache(ticker, api_client, session)
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
@@ -128,7 +122,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['daily_returns'] = df['close'].pct_change()
                 df['market_temperature'] = df['daily_returns'].rolling(window=MARKET_TEMP_WINDOW).std()
                 
-                # Metryki H3
+                # H3 & Normalizacja
                 if not news_df.empty:
                     news_counts = news_df.groupby(news_df.index.date).size()
                     news_counts.index = pd.to_datetime(news_counts.index)
@@ -146,28 +140,20 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
                 df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
-                # === KROK C: Konstrukcja Pola H3 (Z POPRAWKAMI NORMALIZACYJNYMI) ===
-                
-                # 1. NORMALIZACJA INSTITUTIONAL_SYNC (KLUCZOWA ZMIANA!)
-                # Używamy Z-Score, aby spółki z tysiącami transakcji nie dominowały
                 df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(Z_SCORE_WINDOW).mean()) / df['institutional_sync'].rolling(Z_SCORE_WINDOW).std()
                 df['mu_normalized'] = df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
 
-                # 2. CAP EKSTREMALNYCH WARTOŚCI (Przycięcie szumu)
                 df['institutional_sync_capped'] = df['institutional_sync'].clip(-1.0, 1.0)
                 df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
                 
-                # 3. Obliczenie J z NORMALIZOWANYM mu
                 S = df['information_entropy']
-                Q = df['retail_herding_capped'] # Używamy wersji przyciętej
+                Q = df['retail_herding_capped'] 
                 T = df['market_temperature']
-                mu_norm = df['mu_normalized']   # Używamy wersji znormalizowanej
+                mu_norm = df['mu_normalized']
                 
-                # Formuła H3: J = S - (Q/T) + (mu * 1.0)
                 df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
                 df['J'] = df['J'].fillna(0)
 
-                # 4. Reszta pozostaje bez zmian (Z-Score, AQM_V3_SCORE, percentyle)
                 df['m_sq'] = df['normalized_volume'] + df['normalized_news']
                 df['nabla_sq'] = df['price_gravity']
 
@@ -183,11 +169,9 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
                 df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
 
-                # AQM Score: Pole - Potencjał - Opór
                 df['aqm_score_h3'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
                 df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(window=Z_SCORE_WINDOW).quantile(0.95)
 
-                # Symulacja Transakcji
                 sim_data = { "daily": df }
                 trades = _simulate_trades_h3(session, ticker, sim_data, year, parameters)
                 trades_generated += trades
@@ -222,8 +206,9 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 def run_optimization_simulation(session: Session, year: str, params: dict) -> dict:
     """
     Tryb 'Lightweight' dla QuantumOptimizer.
-    Używa tej samej puli tickerów co główny backtest (Faza 1 + Portfel).
-    ZAWIERA TE SAME POPRAWKI NORMALIZACYJNE CO GŁÓWNY BACKTEST.
+    PRZYSPIESZENIE:
+    1. Skanuje LOSOWĄ próbkę (100 tickerów) z Fazy 1 (reprezentatywna statystyka).
+    2. Logowanie postępu.
     """
     api_client = AlphaVantageClient()
     
@@ -231,18 +216,34 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
     trades_results = [] 
     
     try:
+        # === OPTYMALIZACJA SELEKCJI (LOSOWA PRÓBKA) ===
+        # Zamiast sortować (co daje bias na te same spółki), bierzemy LOSOWE 100.
+        # To zapewnia, że Optuna nie przetrenuje się (overfit) na jednej grupie liderów.
+        
+        # Pobierz wszystkich kandydatów i portfel
         phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
         phase1_tickers = [r[0] for r in phase1_rows]
         
         portfolio_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
         portfolio_tickers = [r[0] for r in portfolio_rows]
         
-        tickers = list(set(phase1_tickers + portfolio_tickers))
+        # Scal listę
+        all_tickers = list(set(phase1_tickers + portfolio_tickers))
+        
+        # Wybierz losowe 100 (lub mniej, jeśli brak) - to jest "Smart Sampling"
+        import random
+        if len(all_tickers) > 100:
+            tickers = random.sample(all_tickers, 100)
+        else:
+            tickers = all_tickers
         
         if not tickers:
-            fallback_rows = session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
+            # Fallback: Szybka próbka losowych 20 z bazy
+            fallback_rows = session.execute(text("SELECT ticker FROM companies ORDER BY RANDOM() LIMIT 20")).fetchall()
             tickers = [r[0] for r in fallback_rows]
         
+        total_tickers_in_trial = len(tickers)
+
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         if spy_raw:
             spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -250,7 +251,7 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
         else:
             spy_df = pd.DataFrame()
 
-        # Parametry z Optuny
+        # Parametry
         h3_percentile = params.get('h3_percentile', 0.95)
         h3_m_sq_threshold = params.get('h3_m_sq_threshold', -0.5)
         h3_min_score = params.get('h3_min_score', 0.0)
@@ -266,7 +267,15 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
         Z_SCORE_WINDOW = 100
         HISTORY_BUFFER = 201
 
-        for ticker in tickers:
+        # === GŁÓWNA PĘTLA TPE ===
+        for idx, ticker in enumerate(tickers):
+            
+            # Logowanie postępu co 20 tickerów
+            if idx > 0 and idx % 20 == 0:
+                period_label = f"{sim_start_str[:7]}"
+                progress_msg = f"⏳ Symulacja [{period_label}]: Przetworzono {idx}/{total_tickers_in_trial} tickerów..."
+                append_scan_log(session, progress_msg)
+
             try:
                 daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
                 daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
@@ -325,17 +334,13 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
                 df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
-                # === POPRAWIONA LOGIKA H3 (Z-Score dla Institutional Sync) ===
-                
-                # 1. Normalizacja institutional_sync
+                # Normalizacja i Cap (zgodnie z H3 V4.1)
                 df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(Z_SCORE_WINDOW).mean()) / df['institutional_sync'].rolling(Z_SCORE_WINDOW).std()
                 df['mu_normalized'] = df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
 
-                # 2. Cap wartości
                 df['institutional_sync_capped'] = df['institutional_sync'].clip(-1.0, 1.0)
                 df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
 
-                # 3. Obliczenie J
                 S = df['information_entropy']
                 Q = df['retail_herding_capped']
                 T = df['market_temperature']
@@ -344,7 +349,6 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
                 df['J'] = df['J'].fillna(0)
 
-                # Standard H3 Flow
                 df['m_sq'] = df['normalized_volume'] + df['normalized_news']
                 df['nabla_sq'] = df['price_gravity']
 
@@ -363,10 +367,9 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                 aqm_score_series = j_norm - nabla_norm - m_norm
                 threshold_series = aqm_score_series.rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile)
 
-                # Pętla symulacyjna
+                # Pętla symulacyjna (SZYBKA)
                 start_idx = df.index.searchsorted(sim_start_ts)
                 end_idx = df.index.searchsorted(sim_end_ts)
-                
                 start_idx = max(HISTORY_BUFFER, start_idx)
                 
                 if start_idx >= len(df) or start_idx >= end_idx: continue
@@ -387,8 +390,7 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                             atr = df.iloc[i]['atr_14']
                             
                             if pd.isna(entry_price) or pd.isna(atr) or atr == 0:
-                                i += 1
-                                continue
+                                i += 1; continue
                                 
                             tp = entry_price + (h3_tp_mult * atr)
                             sl = entry_price - (h3_sl_mult * atr)
@@ -397,28 +399,21 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
                             
                             for day_offset in range(h3_max_hold):
                                 if i + 1 + day_offset >= len(df): break
-                                
                                 day_candle = df.iloc[i + 1 + day_offset]
                                 if day_candle['low'] <= sl:
-                                    pnl_percent = ((sl - entry_price) / entry_price) * 100
-                                    break
+                                    pnl_percent = ((sl - entry_price) / entry_price) * 100; break
                                 if day_candle['high'] >= tp:
-                                    pnl_percent = ((tp - entry_price) / entry_price) * 100
-                                    break
-                                
+                                    pnl_percent = ((tp - entry_price) / entry_price) * 100; break
                                 if day_offset == h3_max_hold - 1:
                                     exit_price = day_candle['close']
                                     pnl_percent = ((exit_price - entry_price) / entry_price) * 100
                             
                             trades_results.append(pnl_percent)
                             i += max(1, day_offset)
-                            
                         except Exception:
                             pass
-                    
                     i += 1
-
-            except Exception as e:
+            except Exception:
                 continue
 
         if not trades_results:
