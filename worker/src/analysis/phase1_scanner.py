@@ -8,9 +8,8 @@ from datetime import datetime, timedelta
 from .utils import (
     append_scan_log, update_scan_progress, safe_float, 
     standardize_df_columns, calculate_atr,
-    get_raw_data_with_cache # Potrzebne do pobrania danych sektora
+    get_raw_data_with_cache 
 )
-# Import konfiguracji (Mapowanie Sektorów)
 from ..config import SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
 
 logger = logging.getLogger(__name__)
@@ -23,15 +22,15 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
     etf_ticker = SECTOR_TO_ETF_MAP.get(sector_name, DEFAULT_MARKET_ETF)
     
     try:
-        # Pobierz dane dzienne dla ETF
         raw_data = get_raw_data_with_cache(
             session, api_client, etf_ticker, 
             'DAILY_ADJUSTED', 'get_daily_adjusted', 
-            expiry_hours=24, outputsize='compact' # Wystarczy compact dla SMA50
+            expiry_hours=24, outputsize='compact' 
         )
         
         if not raw_data:
-            return True, 0.0, etf_ticker # Brak danych = przepuść (fail-open)
+            # Brak danych ETF = uznajemy za zdrowy (fail-open), żeby nie blokować skanowania
+            return True, 0.0, etf_ticker 
 
         df = standardize_df_columns(pd.DataFrame.from_dict(raw_data.get('Time Series (Daily)', {}), orient='index'))
         df.index = pd.to_datetime(df.index)
@@ -43,8 +42,6 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
         current_price = df['close'].iloc[-1]
         sma_50 = df['close'].rolling(window=50).mean().iloc[-1]
         
-        # Logika Strażnika:
-        # Trend jest ZDROWY, jeśli cena jest powyżej SMA50
         is_healthy = current_price > sma_50
         trend_score = 1.0 if is_healthy else -1.0
         
@@ -52,53 +49,20 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
 
     except Exception as e:
         logger.warning(f"Błąd sprawdzania sektora {sector_name} ({etf_ticker}): {e}")
-        return True, 0.0, etf_ticker # W razie błędu nie blokuj
-
-def _check_earnings_proximity(api_client, ticker: str) -> int:
-    """
-    Sprawdza, za ile dni są wyniki finansowe.
-    Zwraca liczbę dni (lub 999 jeśli nieznane/odległe).
-    """
-    try:
-        # To zapytanie nie jest cache'owane w ten sam sposób, bo jest rzadkie
-        # Używamy bezpośrednio klienta, ale z rate limiterem
-        earnings_data = api_client.get_earnings(ticker)
-        
-        if not earnings_data or 'quarterlyEarnings' not in earnings_data:
-            return 999
-            
-        # Szukamy najbliższej PRZYSZŁEJ daty
-        # Alpha Vantage często zwraca tylko historię w 'quarterlyEarnings', 
-        # ale 'annualEarnings' lub inne pola mogą mieć hinty. 
-        # Niestety darmowy endpoint jest ograniczony. 
-        # W wersji Premium (którą masz) 'quarterlyEarnings' powinno zawierać raportowane daty.
-        # Jednak dla pewności sprawdzamy strukturę.
-        
-        # PROSTSZE PODEJŚCIE DLA V5:
-        # Jeśli nie ma wprost "next earnings date", zakładamy bezpieczeństwo.
-        # (Pełna implementacja wymagałaby płatnego kalendarza, AV Earnings endpoint jest specyficzny).
-        
-        return 999 # Placeholder - włączenie tego wymagałoby parsowania skomplikowanego JSONA z AV
-                   # Na razie zostawiamy to jako "future feature" lub prosty check, jeśli dane są dostępne.
-
-    except Exception:
-        return 999
+        return True, 0.0, etf_ticker
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
-    DEKONSTRUKCJA (KROK 4): Faza 1 z nową, uproszczoną logiką "Pierwszego Sita".
+    Skaner Fazy 1 (V5.1 - Diagnostyka).
     
-    NOWA LOGIKA V5 (Holy Grail):
-    - Filtr Ceny (1-40$)
-    - Filtr Płynności (Vol > 500k)
-    - Filtr Zmienności (ATR > 3%)
-    - Filtr Danych (Intraday Check)
-    - NOWOŚĆ: Filtr Sektorowy (Sector Rotation Guardian)
+    ZMIANY NAPRAWCZE:
+    - Szczegółowe logowanie przyczyn odrzucenia.
+    - Złagodzenie filtra płynności (300k).
+    - Sektor nie blokuje całkowicie (jest logowany).
     """
-    logger.info("Running Phase 1: EOD Scan (V5 Holy Grail - Sector Guardian Active)...")
-    append_scan_log(session, "Faza 1 (V5): Start skanowania. Strażnik Sektora: AKTYWNY.")
+    logger.info("Running Phase 1: EOD Scan (V5.1 Fix - Detailed Logging)...")
+    append_scan_log(session, "Faza 1 (V5.1): Start diagnostycznego skanowania.")
 
-    # Czyszczenie starych kandydatów
     try:
         session.execute(text("DELETE FROM phase1_candidates"))
         session.commit()
@@ -108,7 +72,6 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         return [] 
 
     try:
-        # Pobieramy ticker ORAZ sektor
         all_tickers_rows = session.execute(text("SELECT ticker, sector FROM companies ORDER BY ticker")).fetchall()
         total_tickers = len(all_tickers_rows)
         logger.info(f"Found {total_tickers} tickers to process.")
@@ -117,6 +80,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         return []
 
     final_candidate_tickers = []
+    
+    # Liczniki odrzuceń (do raportu końcowego)
+    reject_stats = {'price': 0, 'volume': 0, 'atr': 0, 'intraday': 0, 'sector': 0}
     
     for processed_count, row in enumerate(all_tickers_rows):
         ticker = row[0]
@@ -137,8 +103,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             daily_df_raw = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
             daily_df = standardize_df_columns(daily_df_raw)
 
-            if len(daily_df) < 50: # Potrzebujemy 50 dni do SMA
-                continue
+            if len(daily_df) < 50: continue
 
             latest_candle = daily_df.iloc[-1]
             current_price = latest_candle['close']
@@ -146,48 +111,55 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             if pd.isna(current_price): continue
                 
             # ==================================================================
-            # === FILTRY V5 (ZŁOTA LISTA + STRAŻNIK) ===
+            # === FILTRY V5 (ZŁAGODZONE + DIAGNOSTYKA) ===
             # ==================================================================
 
-            # WARUNEK 1: Cena (1-40$)
-            if not (1.0 <= current_price <= 40.0): continue
+            # WARUNEK 1: Cena (1-100$ - zwiększony zakres dla testów)
+            if not (1.0 <= current_price <= 100.0): 
+                reject_stats['price'] += 1
+                continue
             
-            # WARUNEK 2: Płynność (Vol > 500k)
+            # WARUNEK 2: Płynność (Vol > 300k - złagodzone)
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if pd.isna(avg_volume) or avg_volume < 500000: continue
+            if pd.isna(avg_volume) or avg_volume < 300000: 
+                reject_stats['volume'] += 1
+                continue
             
-            # WARUNEK 3: Zmienność (ATR > 3%)
+            # WARUNEK 3: Zmienność (ATR > 2% - złagodzone)
             atr_series = calculate_atr(daily_df, period=14)
             if atr_series.empty: continue
             current_atr = atr_series.iloc[-1]
             atr_percent = (current_atr / current_price)
-            if atr_percent < 0.03: continue 
+            if atr_percent < 0.02: 
+                reject_stats['atr'] += 1
+                continue 
             
             # WARUNEK 4: Dane Intraday (Pre-flight)
+            # Jeśli API zwraca błąd, to nie wina spółki, tylko limitu.
+            # Dodajemy try-except, żeby nie odrzucać pochopnie.
             try:
                 intraday_test = api_client.get_intraday(ticker, interval='60min', outputsize='compact')
-                if not intraday_test or 'Time Series (60min)' not in intraday_test:
-                    continue 
-            except: continue
+                # Odrzucamy TYLKO jeśli otrzymaliśmy pusty słownik danych (a nie błąd sieci)
+                if intraday_test and 'Time Series (60min)' not in intraday_test and 'Information' not in intraday_test:
+                     reject_stats['intraday'] += 1
+                     continue
+            except: 
+                pass # Ignoruj błędy sieciowe przy pre-flight, daj szansę w F3
 
-            # === NOWOŚĆ V5: STRAŻNIK SEKTORA ===
-            # Sprawdzamy kondycję całego sektora. Jeśli sektor krwawi, nie kupujemy.
+            # WARUNEK 5: Strażnik Sektora (Ostrzegawczy)
             is_sector_healthy, sector_trend, etf_symbol = _check_sector_health(session, api_client, sector)
             
+            # ZMIANA: Jeśli sektor słaby, logujemy to, ale NIE ODRZUCAMY (na razie).
+            # Pozwoli to zobaczyć kandydatów i ocenić, czy Strażnik nie jest nadgorliwy.
             if not is_sector_healthy:
-                # Logujemy odrzucenie (cicha eliminacja słabych ogniw)
-                # append_scan_log(session, f"Odrzucono {ticker}: Słaby sektor {sector} ({etf_symbol} < SMA50).")
-                continue 
-
-            # (Warunek 5: Earnings - placeholder, w przyszłości tu wstawimy _check_earnings_proximity)
+                reject_stats['sector'] += 1
+                # append_scan_log(session, f"Ostrzeżenie {ticker}: Słaby sektor {etf_symbol}. Przepuszczam warunkowo.")
 
             # ==================================================================
             
             # KWALIFIKACJA
-            log_msg = f"Kwalifikacja (F1): {ticker} (Cena: {current_price:.2f}, Sektor: {etf_symbol} OK)"
-            append_scan_log(session, log_msg)
+            # append_scan_log(session, f"Kwalifikacja (F1): {ticker}")
             
-            # Zapisz kandydata (z nowymi polami V5)
             insert_stmt = text("""
                 INSERT INTO phase1_candidates (ticker, price, volume, change_percent, score, sector_ticker, sector_trend_score, analysis_date)
                 VALUES (:ticker, :price, :volume, 0.0, 1, :sector_ticker, :sector_trend, NOW())
@@ -209,5 +181,13 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             session.rollback()
     
     update_scan_progress(session, total_tickers, total_tickers)
-    logger.info(f"Phase 1 (V5) completed. Found {len(final_candidate_tickers)} candidates.")
+    
+    # RAPORT KOŃCOWY
+    summary_msg = (f"Faza 1 zakończona. Kandydatów: {len(final_candidate_tickers)}. "
+                   f"Odrzucono: Cena={reject_stats['price']}, Vol={reject_stats['volume']}, "
+                   f"ATR={reject_stats['atr']}, Intra={reject_stats['intraday']}")
+    
+    logger.info(summary_msg)
+    append_scan_log(session, summary_msg)
+    
     return final_candidate_tickers
