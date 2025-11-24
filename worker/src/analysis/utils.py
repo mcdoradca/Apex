@@ -154,7 +154,7 @@ def safe_float(value) -> float | None:
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     mapping = {'1. open':'open', '2. high':'high', '3. low':'low', '4. close':'close', '5. vwap':'vwap', '5. volume':'volume', '6. volume':'volume', '7. adjusted close':'adjusted close'}
-    df.rename(columns=lambda c: mapping.get(c, c.split('. ')[-1]), inplace=True)
+    df.rename(columns=lambda c: mapping.get(c, c.split('. ')[-1}), inplace=True)
     for c in ['open','high','low','close','volume','adjusted close','vwap']:
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
     return df.sort_index()
@@ -304,3 +304,42 @@ def get_optimized_periods_v4(target_year: int) -> list:
         (f"{target_year}-01-01", f"{target_year}-06-30"),
         (f"{target_year}-07-01", f"{target_year}-12-31")
     ]
+
+def get_optimized_tickers_v4(session: Session, limit: int = 100) -> list:
+    """
+    PRZYSPIESZENIE: Zwraca tylko najbardziej płynne tickery
+    """
+    try:
+        result = session.execute(text("""
+            SELECT DISTINCT ticker FROM (
+                SELECT ticker FROM phase1_candidates 
+                UNION 
+                SELECT ticker FROM portfolio_holdings
+                UNION
+                SELECT symbol as ticker FROM sp500_constituents 
+            ) AS all_tickers
+            ORDER BY ticker LIMIT :limit
+        """), {'limit': limit})
+        return [r[0] for r in result]
+    except:
+        result = session.execute(text("SELECT ticker FROM companies LIMIT :limit"), {'limit': limit})
+        return [r[0] for r in result]
+
+def precompute_h3_metrics_v4(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    PRZYSPIESZENIE: Prekomputuje metryki H3
+    """
+    # Uproszczone obliczenia dla szybkości
+    df['m_sq'] = df['volume'].rolling(10).mean() / df['volume'].rolling(200).mean() - 1
+    df['nabla_sq'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
+    
+    # Szybka normalizacja
+    for col in ['m_sq', 'nabla_sq']:
+        mean = df[col].rolling(100).mean()
+        std = df[col].rolling(100).std()
+        df[f'{col}_norm'] = (df[col] - mean) / std.replace(0, 1)
+    
+    df['aqm_score_h3'] = -df['m_sq_norm'] - df['nabla_sq_norm']
+    df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(100).quantile(0.95)
+    
+    return df.fillna(0)
