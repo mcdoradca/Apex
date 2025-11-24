@@ -11,19 +11,50 @@ from .utils import send_telegram_alert, append_scan_log, safe_float
 logger = logging.getLogger(__name__)
 
 # Stała dla Trailing Stopu: ile ATR od szczytu ma być oddalony stop?
-# 2.5 - 3.0 to standard dla Swing Tradingu. Daje oddech, ale chroni zysk.
 TRAILING_ATR_MULTIPLIER = 2.5 
+
+def _update_linked_virtual_trade(session: Session, signal_id: int, close_price: float, exit_reason: str):
+    """
+    Pomocnicza funkcja do natychmiastowej synchronizacji Wirtualnego Portfela.
+    Gdy Strażnik zamyka sygnał, zamykamy też powiązaną transakcję wirtualną.
+    """
+    try:
+        virtual_trade = session.query(models.VirtualTrade).filter(
+            models.VirtualTrade.signal_id == signal_id,
+            models.VirtualTrade.status == 'OPEN'
+        ).first()
+
+        if virtual_trade:
+            # Mapowanie statusu sygnału na status transakcji
+            vt_status = 'CLOSED_TP' if exit_reason == 'COMPLETED' else 'CLOSED_SL'
+            if "TRAILING" in exit_reason: # Jeśli to był trailing stop, oznaczamy jako TP (zysk) lub SL (ochrona)
+                 # Zazwyczaj Trailing to forma TP (ochrona zysku)
+                 vt_status = 'CLOSED_TP' 
+
+            virtual_trade.status = vt_status
+            virtual_trade.close_price = close_price
+            virtual_trade.close_date = datetime.now(timezone.utc)
+            
+            # Oblicz P/L %
+            if virtual_trade.entry_price:
+                p_l = ((close_price - float(virtual_trade.entry_price)) / float(virtual_trade.entry_price)) * 100
+                virtual_trade.final_profit_loss_percent = p_l
+            
+            logger.info(f"Strażnik: Zsynchronizowano Wirtualną Transakcję ID {virtual_trade.id}. P/L: {virtual_trade.final_profit_loss_percent:.2f}%")
+
+    except Exception as e:
+        logger.error(f"Strażnik: Błąd synchronizacji wirtualnego portfela: {e}")
 
 def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
     """
-    Cykl Strażnika Sygnałów (Signal Monitor) - V5 UPGRADE.
+    Cykl Strażnika Sygnałów (Signal Monitor) - V5.1 FIXED.
     
-    Funkcje V5:
-    - Obsługa Trailing Stop (Chandelier Exit).
-    - Śledzenie 'highest_price_since_entry'.
-    - Dynamiczne zamykanie pozycji.
+    Funkcje:
+    - Trailing Stop (Chandelier Exit).
+    - Hard TP/SL.
+    - NOWOŚĆ: Synchronizacja czasu rzeczywistego z Wirtualnym Agentem (eliminacja rozbieżności).
     """
-    logger.info("Uruchamianie cyklu Strażnika Sygnałów (V5 Trailing Stop)...")
+    logger.info("Uruchamianie cyklu Strażnika Sygnałów (V5.1 Sync)...")
 
     # 1. Pobierz aktywne i oczekujące sygnały
     signals = session.query(models.TradingSignal).filter(
@@ -68,10 +99,8 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
         tp = float(signal.take_profit) if signal.take_profit else 0
         entry = float(signal.entry_price) if signal.entry_price else 0
         
-        # V5: Obsługa Trailing Stop
+        # Obsługa Trailing Stop
         highest_price = float(signal.highest_price_since_entry) if signal.highest_price_since_entry else 0.0
-        
-        # Jeśli najwyższa cena nie jest ustawiona, a mamy cenę wejścia, zacznij od wejścia
         if highest_price == 0 and entry > 0:
             highest_price = entry
 
@@ -79,59 +108,54 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
         new_status = signal.status
         note_update = ""
         alert_msg = ""
+        
+        # Flaga do synchronizacji
+        sync_virtual_portfolio = False
 
         # --- LOGIKA V5 (Trailing Stop) ---
-        
         if signal.status == 'ACTIVE':
-            # 1. Aktualizacja szczytu (High Watermark)
             if current_price > highest_price:
                 highest_price = current_price
-                signal.highest_price_since_entry = highest_price # Zapisz nowy szczyt
-                # (Nie commitujemy jeszcze, zrobimy to zbiorczo na końcu)
+                signal.highest_price_since_entry = highest_price 
             
-            # 2. Sprawdzenie warunku Trailing Stop
             if signal.is_trailing_active:
-                # Obliczamy przybliżony ATR z różnicy Entry-SL (zakładamy, że SL był ustawiony np. na 2 ATR)
-                # To heurystyka, bo nie mamy pełnego ATR w bazie sygnałów, ale działa.
-                # SL_distance = Entry - SL. Jeśli to było 2 ATR, to 1 ATR = SL_distance / 2.
-                
                 initial_risk = entry - sl
-                estimated_atr = initial_risk / 2.0 if initial_risk > 0 else (current_price * 0.02) # Fallback 2%
-                
-                # Dynamiczny Stop Loss (Chandelier Exit)
+                estimated_atr = initial_risk / 2.0 if initial_risk > 0 else (current_price * 0.02)
                 dynamic_sl = highest_price - (estimated_atr * TRAILING_ATR_MULTIPLIER)
                 
-                # Jeśli cena spadła poniżej dynamicznego SL (ale jest powyżej sztywnego SL)
                 if current_price <= dynamic_sl and current_price > sl:
-                    new_status = 'COMPLETED' # Traktujemy to jako realizację zysku (lub ochronę kapitału)
-                    note_update = f"[TRAILING STOP] Cena ({current_price}) spadła poniżej dynamicznego SL ({dynamic_sl:.2f}). Szczyt był: {highest_price}."
-                    alert_msg = f"🛡️ TRAILING STOP HIT: {signal.ticker}\nWyjście ochronne: {current_price}.\nObroniono zysk z poziomu {highest_price}."
+                    new_status = 'COMPLETED' 
+                    note_update = f"[TRAILING STOP] Cena ({current_price}) spadła poniżej dynamicznego SL ({dynamic_sl:.2f})."
+                    alert_msg = f"🛡️ TRAILING STOP HIT: {signal.ticker}\nWyjście: {current_price}."
                     status_changed = True
+                    sync_virtual_portfolio = True
 
-        # --- LOGIKA STANDARDOWA (Hard TP/SL) ---
-
+        # --- LOGIKA STANDARDOWA ---
         if not status_changed:
             if current_price <= sl:
                 new_status = 'INVALIDATED'
                 note_update = f"[HARD SL] Cena ({current_price}) przebiła SL ({sl})."
-                alert_msg = f"🛑 STOP LOSS ALERT: {signal.ticker}\nCena spadła do {current_price} (SL: {sl})."
+                alert_msg = f"🛑 STOP LOSS: {signal.ticker}\nWyjście: {current_price}."
                 status_changed = True
+                sync_virtual_portfolio = True
 
             elif current_price >= tp:
                 new_status = 'COMPLETED'
                 note_update = f"[TP HIT] Cena ({current_price}) osiągnęła cel ({tp})."
-                alert_msg = f"💰 TAKE PROFIT ALERT: {signal.ticker}\nCel osiągnięty! Cena: {current_price}."
+                alert_msg = f"💰 TAKE PROFIT: {signal.ticker}\nCel: {current_price}."
                 status_changed = True
+                sync_virtual_portfolio = True
 
             elif signal.status == 'PENDING':
                 if current_price >= entry:
                     new_status = 'ACTIVE'
-                    note_update = f"[ENTRY] Cena ({current_price}) przebiła Entry ({entry}). AKTYWACJA."
-                    alert_msg = f"🚀 ENTRY ALERT: {signal.ticker}\nSetup AKTYWNY (Cena: {current_price}).\nTrailing Stop włączony."
+                    note_update = f"[ENTRY] Cena ({current_price}) przebiła Entry ({entry})."
+                    alert_msg = f"🚀 ENTRY: {signal.ticker}\nCena: {current_price}."
                     status_changed = True
-                    
-                    # Przy aktywacji inicjujemy 'highest_price'
                     signal.highest_price_since_entry = current_price
+                    
+                    # Tu opcjonalnie można by otwierać Virtual Trade automatycznie,
+                    # ale zostawmy to VirtualAgentowi (lub dodajmy tu w przyszłości).
 
         # --- APLIKOWANIE ZMIAN ---
         if status_changed:
@@ -145,16 +169,19 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
             updates_count += 1
             send_telegram_alert(alert_msg)
             append_scan_log(session, f"STRAŻNIK: {signal.ticker} -> {new_status}. Cena: {current_price}")
+            
+            # === FIX ROZBIEŻNOŚCI ===
+            if sync_virtual_portfolio:
+                _update_linked_virtual_trade(session, signal.id, current_price, new_status)
         
-        # Nawet jeśli status się nie zmienił, zapisz nowy 'highest_price' jeśli wzrósł
         elif signal.status == 'ACTIVE' and current_price > (float(signal.highest_price_since_entry or 0)):
              signal.highest_price_since_entry = current_price
-             updates_count += 1 # Wymuś commit, żeby zapisać nowy szczyt
+             updates_count += 1
 
     if updates_count > 0:
         try:
             session.commit()
-            logger.info(f"Strażnik: Zaktualizowano {updates_count} sygnałów.")
+            logger.info(f"Strażnik: Zaktualizowano {updates_count} sygnałów (i zsynchronizowano portfel).")
         except Exception as e:
             logger.error(f"Strażnik: Błąd zapisu do bazy: {e}")
             session.rollback()
