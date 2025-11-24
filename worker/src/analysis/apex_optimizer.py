@@ -4,6 +4,8 @@ import json
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
+# === POPRAWKA: Dodano import 'text' niezbędny do zapytań SQL ===
+from sqlalchemy import text
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
@@ -140,6 +142,7 @@ class QuantumOptimizer:
         """Pobiera wszystkie tickery z bazy"""
         try:
             # Tylko płynne akcje z S&P500
+            # Tutaj właśnie występował błąd - użycie text() bez importu
             result = self.session.execute(text("""
                 SELECT DISTINCT ticker FROM phase1_candidates 
                 UNION 
