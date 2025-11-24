@@ -20,7 +20,6 @@ class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
     # === OPTYMALIZACJA: Limit 150 zapytań/minuta (Premium) ===
-    # Zwiększono z domyślnych wartości. Usunięto sztuczne dławienie.
     def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             logger.error("API key is missing for AlphaVantageClient instance in WORKER.")
@@ -29,39 +28,27 @@ class AlphaVantageClient:
         self.backoff_factor = backoff_factor
         self.requests_per_minute = requests_per_minute
         
-        # Pacing: Równomierne rozłożenie zapytań w czasie (ok. 0.4s odstępu dla 150 req/min)
-        # Zapobiega wysyceniu limitu w pierwszych kilku sekundach ("burst") i banowi.
+        # Pacing
         self.request_interval = 60.0 / requests_per_minute
         self.request_timestamps = deque()
         
         # === OPTYMALIZACJA: Session Keep-Alive ===
-        # Utrzymuje połączenie TCP/SSL, eliminując narzut na handshake przy każdym zapytaniu.
-        # Drastycznie przyspiesza serie zapytań w pętlach (np. Faza 1 i 3).
         self.session = requests.Session()
 
     def _rate_limiter(self):
-        """
-        Zaawansowany Rate Limiter typu 'Rolling Window'.
-        Zapobiega przekroczeniu limitu w DOWOLNYM oknie 60-sekundowym.
-        """
-        if not self.api_key:
-             return
+        """Zaawansowany Rate Limiter typu 'Rolling Window'."""
+        if not self.api_key: return
              
         now = time.monotonic()
-        
-        # 1. Usuń wpisy starsze niż 60 sekund (przesuń okno)
         while self.request_timestamps and (now - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
             
-        # 2. Sprawdź "Twardy Limit" ilościowy w bieżącym oknie
         if len(self.request_timestamps) >= self.requests_per_minute:
-            time_to_wait = 60 - (now - self.request_timestamps[0]) + 0.1 # +0.1s bufora
+            time_to_wait = 60 - (now - self.request_timestamps[0]) + 0.1
             if time_to_wait > 0:
-                # logger.warning(f"Rate limit reached ({len(self.request_timestamps)}/min). Sleeping for {time_to_wait:.2f}s.")
                 time.sleep(time_to_wait)
-                now = time.monotonic() # Aktualizacja czasu po wybudzeniu
+                now = time.monotonic()
 
-        # 3. Sprawdź "Pacing" (Mikro-odstępy dla płynności)
         if self.request_timestamps:
             time_since_last = now - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
@@ -80,23 +67,19 @@ class AlphaVantageClient:
         request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
         
         for attempt in range(self.retries):
-            self._rate_limiter() # Limiter zawsze przed wykonaniem zapytania
+            self._rate_limiter()
             
             try:
-                # === OPTYMALIZACJA: Użycie self.session zamiast requests.get ===
                 response = self.session.get(self.BASE_URL, params=request_params, timeout=30)
                 
-                # Obsługa specyficznych typów odpowiedzi (np. CSV vs JSON)
                 try:
                     data = response.json()
                 except json.JSONDecodeError:
                     response.raise_for_status() 
-                    # Jeśli to nie JSON i status 200 (np. CSV), zwróć tekst
                     if params.get('datatype') == 'csv':
                         return response.text
                     raise requests.exceptions.RequestException("Response was not valid JSON.")
 
-                # Wykrywanie "miękkich" limitów w treści JSON (Alpha Vantage specyfika)
                 is_rate_limit_json = False
                 if "Information" in data:
                     info_text = data["Information"].lower()
@@ -106,28 +89,26 @@ class AlphaVantageClient:
                 is_error_msg = "Error Message" in data
 
                 if is_rate_limit_json:
-                    wait_time = 5 * (attempt + 1) # Dłuższy czas oczekiwania przy limicie API
+                    wait_time = 5 * (attempt + 1)
                     logger.warning(f"API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
                     time.sleep(wait_time)
-                    continue # Ponów próbę
+                    continue
 
                 if not data or is_error_msg:
-                    # logger.warning(f"API Error for {request_identifier}: {data.get('Error Message', 'Empty Data')}")
-                    return None # Błąd merytoryczny (np. zły ticker), nie ponawiamy
+                    return None
                 
                 response.raise_for_status()
                 return data
 
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-                # logger.error(f"Network error for {request_identifier}: {e}")
                 if attempt < self.retries - 1:
-                    time.sleep(1) # Krótki sleep przy błędzie sieci
+                    time.sleep(1)
                 else:
-                    pass # Max retries
+                    pass
 
         return None
 
-    # === METODY DANYCH RYNKOWYCH ===
+    # === DANE RYNKOWE ===
 
     def get_market_status(self):
         params = {"function": "MARKET_STATUS"}
@@ -208,6 +189,16 @@ class AlphaVantageClient:
         }
         if time_from:
             params["time_from"] = time_from
+        return self._make_request(params)
+
+    # === DANE FUNDAMENTALNE (APEX V5 NOWOŚĆ) ===
+
+    def get_earnings(self, symbol: str):
+        """
+        Pobiera dane o wynikach finansowych (Earnings Calendar).
+        Kluczowe dla Filtru Min (Unikanie wejścia przed wynikami).
+        """
+        params = {"function": "EARNINGS", "symbol": symbol}
         return self._make_request(params)
 
     # === NARZĘDZIA POMOCNICZE ===
