@@ -4,7 +4,6 @@ import json
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
-# === POPRAWKA: Dodano import 'text' niezbędny do zapytań SQL ===
 from sqlalchemy import text
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -88,6 +87,8 @@ class QuantumOptimizer:
             self._finalize_job(best_trial, sensitivity_report)
 
         except Exception as e:
+            # Rollback w przypadku błędu SQL, aby nie blokować sesji
+            self.session.rollback()
             error_msg = f"❌ QUANTUM OPTIMIZER V4: Błąd krytyczny: {str(e)}"
             logger.error(error_msg, exc_info=True)
             append_scan_log(self.session, error_msg)
@@ -101,6 +102,11 @@ class QuantumOptimizer:
         # Pobierz wszystkie tickery raz
         tickers = self._get_all_tickers()
         
+        if not tickers:
+            logger.warning("Brak tickerów do załadowania. Próba pobrania fallback z bazy companies.")
+            fallback = self.session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
+            tickers = [r[0] for r in fallback]
+
         # Równoległe ładowanie danych
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = []
@@ -139,20 +145,26 @@ class QuantumOptimizer:
             }
 
     def _get_all_tickers(self):
-        """Pobiera wszystkie tickery z bazy"""
+        """Pobiera wszystkie tickery z bazy (NAPRAWIONE)"""
         try:
-            # Tylko płynne akcje z S&P500
-            # Tutaj właśnie występował błąd - użycie text() bez importu
-            result = self.session.execute(text("""
-                SELECT DISTINCT ticker FROM phase1_candidates 
+            # === POPRAWKA: Usunięto sp500_constituents, używamy companies ===
+            # Pobieramy tickery z:
+            # 1. Kandydatów Fazy 1 (najświeższe)
+            # 2. Portfela (posiadane)
+            # 3. Tabeli companies (jako uzupełnienie do limitu)
+            query = text("""
+                (SELECT ticker FROM phase1_candidates)
                 UNION 
-                SELECT ticker FROM portfolio_holdings
+                (SELECT ticker FROM portfolio_holdings)
                 UNION
-                SELECT symbol as ticker FROM sp500_constituents 
+                (SELECT ticker FROM companies LIMIT 300)
                 LIMIT 300
-            """))
+            """)
+            result = self.session.execute(query)
             return [r[0] for r in result]
-        except:
+        except Exception as e:
+            logger.error(f"Błąd pobierania tickerów: {e}")
+            self.session.rollback() # Ważne przy błędach transakcji
             # Fallback
             result = self.session.execute(text("SELECT ticker FROM companies LIMIT 200"))
             return [r[0] for r in result]
