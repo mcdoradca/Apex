@@ -19,24 +19,32 @@
 # ==================================================================
 
 
-# === Mapowanie Sektorów na ETFy ===
-# (Nadal używane przez `backtest_engine.py`)
+# === Mapowanie Sektorów na ETFy (APEX V5 UPDATE) ===
+# Rozszerzona lista mapowania sektorów Alpha Vantage na fundusze SPDR (State Street).
+# Używane przez Strażnika Sektora do oceny kondycji rynku.
 SECTOR_TO_ETF_MAP = {
     "Technology": "XLK",
+    "Life Sciences": "XLV",
+    "Healthcare": "XLV",
     "Health Care": "XLV",
     "Financials": "XLF",
+    "Financial Services": "XLF",
     "Consumer Discretionary": "XLY",
+    "Consumer Cyclical": "XLY", 
     "Communication Services": "XLC",
     "Industrials": "XLI",
     "Consumer Staples": "XLP",
+    "Consumer Defensive": "XLP",
     "Energy": "XLE",
     "Utilities": "XLU",
     "Real Estate": "XLRE",
-    "Materials": "XLB"
+    "Materials": "XLB",
+    "Basic Materials": "XLB"
 }
-DEFAULT_MARKET_ETF = "QQQ" # (Nadal używane przez backtest_engine)
+
+# Domyślny ETF rynkowy (Benchmark), gdy sektor jest nieznany
+DEFAULT_MARKET_ETF = "QQQ" 
 
 # === Konfiguracja Workera ===
-# (Nadal używane przez `worker/src/main.py`)
 ANALYSIS_SCHEDULE_TIME_CET = "02:30"
 COMMAND_CHECK_INTERVAL_SECONDS = 5
