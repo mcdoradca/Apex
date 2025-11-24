@@ -89,10 +89,21 @@ def send_telegram_alert(message: str):
 
 def get_market_status_and_time(api_client) -> dict:
     try:
-        # Uproszczona wersja bez pytz (zależność opcjonalna) lub używamy timezone.utc
         now = datetime.now(timezone.utc)
-        # ... (logika statusu)
-        return {"status": "UNKNOWN", "time_ny": now.strftime('%H:%M UTC'), "date_ny": now.strftime('%Y-%m-%d')}
+        ny_tz = pytz.timezone('America/New_York')
+        ny_time = now.astimezone(ny_tz)
+        
+        is_market_open = False
+        if ny_time.weekday() < 5:  # Monday-Friday
+            market_open = ny_time.replace(hour=9, minute=30, second=0, microsecond=0)
+            market_close = ny_time.replace(hour=16, minute=0, second=0, microsecond=0)
+            is_market_open = market_open <= ny_time <= market_close
+        
+        return {
+            "status": "OPEN" if is_market_open else "CLOSED",
+            "time_ny": ny_time.strftime('%H:%M'),
+            "date_ny": ny_time.strftime('%Y-%m-%d')
+        }
     except: return {"status": "UNKNOWN", "time_ny": "N/A", "date_ny": "N/A"}
 
 def update_system_control(session: Session, key: str, value: str):
@@ -121,7 +132,6 @@ def append_scan_log(session: Session, message: str):
 def clear_scan_log(session: Session):
     update_system_control(session, 'scan_log', '')
 
-# ZMIANA: Zwracamy typ komendy (str) zamiast boola
 def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
     cmd = get_system_control_value(session, 'worker_command')
     if cmd == "START_REQUESTED":
@@ -154,7 +164,7 @@ def safe_float(value) -> float | None:
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     mapping = {'1. open':'open', '2. high':'high', '3. low':'low', '4. close':'close', '5. vwap':'vwap', '5. volume':'volume', '6. volume':'volume', '7. adjusted close':'adjusted close'}
-    df.rename(columns=lambda c: mapping.get(c, c.split('. ')[-1}), inplace=True)
+    df.rename(columns=lambda c: mapping.get(c, c.split('. ')[-1]), inplace=True)
     for c in ['open','high','low','close','volume','adjusted close','vwap']:
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
     return df.sort_index()
