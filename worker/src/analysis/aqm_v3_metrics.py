@@ -523,3 +523,27 @@ def calculate_retail_herding_live(ticker: str, api_client: AlphaVantageClient) -
     except Exception as e:
         logger.error(f"Błąd w 'calculate_retail_herding_live' dla {ticker}: {e}", exc_info=True)
         return None
+
+# ==================================================================
+# === NOWE FUNKCJE V4 - BEZPIECZNIE DODANE PONIŻEJ ISTNIEJĄCYCH ===
+# ==================================================================
+
+def calculate_h3_components_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
+    """
+    BEZPIECZNA NOWA FUNKCJA: Ulepszona implementacja H3 z normalizacją V4
+    Używana przez backtest_engine i phase3_sniper dla spójności
+    """
+    try:
+        # Importujemy nową funkcję z utils
+        from .utils import calculate_h3_metrics_v4
+        return calculate_h3_metrics_v4(df, params)
+        
+    except Exception as e:
+        logger.error(f"Błąd calculate_h3_components_v4: {e}")
+        return df
+
+def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
+    """
+    BEZPIECZNA NOWA FUNKCJA: Capping wartości ekstremalnych Retail Herding
+    """
+    return retail_herding_series.clip(-1.0, 1.0)
