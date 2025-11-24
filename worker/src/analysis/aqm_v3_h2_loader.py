@@ -2,23 +2,27 @@ import logging
 import pandas as pd
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session 
-# ==================================================================
-# === BŁĄD KRYTYCZNY: BRAK IMPORTU 'timezone' ===
-from datetime import datetime, timezone # <--- DODANO BRAKUJĄCY IMPORT
-# ==================================================================
+from datetime import datetime, timezone
+from functools import lru_cache # <--- KLUCZ DO SZYBKOŚCI
+
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .utils import get_raw_data_with_cache 
 
 logger = logging.getLogger(__name__)
 
+# Prosty cache w pamięci dla przetworzonych DataFrame'ów
+# Zapobiega wielokrotnemu parsowaniu tych samych danych JSON przy każdej próbie Optuny
+_H2_DATA_MEMORY_CACHE = {}
+
+def clear_h2_memory_cache():
+    """Czyści cache w pamięci (np. przed nowym dużym zadaniem)"""
+    global _H2_DATA_MEMORY_CACHE
+    _H2_DATA_MEMORY_CACHE.clear()
+    logger.info("H2 Memory Cache cleared.")
+
 def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
-    """
-    Przetwarza surową odpowiedź JSON z INSIDER_TRANSACTIONS na DataFrame.
-    (LOGIKA OBLICZENIOWA BEZ ZMIAN)
-    """
     try:
         transactions = raw_data.get('data', [])
-        
         if not transactions:
             return pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
 
@@ -29,9 +33,7 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
                 tx_type = tx.get('acquisition_or_disposal')
                 tx_shares_str = tx.get('shares') 
                 
-                if not tx_shares_str:
-                    continue
-                    
+                if not tx_shares_str: continue
                 tx_shares = float(tx_shares_str)
                 
                 if tx_type in ['A', 'D'] and tx_shares > 0:
@@ -50,16 +52,10 @@ def _parse_insider_transactions(raw_data: Dict[str, Any]) -> Optional[pd.DataFra
         df.set_index('transaction_date', inplace=True)
         df.sort_index(inplace=True)
         return df
-        
-    except Exception as e:
-        logger.error(f"Błąd podczas parsowania danych Insider Transactions: {e}", exc_info=True)
+    except Exception:
         return None
 
 def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
-    """
-    Przetwarza surową odpowiedź JSON z NEWS_SENTIMENT na DataFrame
-    gotowy do backtestu.
-    """
     try:
         feed = raw_data.get('feed', [])
         if not feed:
@@ -69,17 +65,14 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
         for article in feed:
             try:
                 pub_time_str = article.get('time_published')
-                # ZMIANA: Upewnij się, że parsujesz z uwzględnieniem strefy czasowej
                 pub_time = pd.to_datetime(pub_time_str, format='%Y%m%dT%H%M%S', utc=True)
                 score = float(article.get('overall_sentiment_score'))
-                
-                article_topics = article.get('topics', [])
-                topic_list = [t['topic'] for t in article_topics if 'topic' in t]
+                topics = [t['topic'] for t in article.get('topics', [])]
                 
                 processed_data.append({
                     'published_at': pub_time,
                     'overall_sentiment_score': score,
-                    'topics': topic_list
+                    'topics': topics
                 })
             except (ValueError, TypeError, AttributeError):
                 continue
@@ -91,22 +84,21 @@ def _parse_news_sentiment(raw_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
         df.set_index('published_at', inplace=True)
         df.sort_index(inplace=True)
         return df
-        
-    except Exception as e:
-        logger.error(f"Błąd podczas parsowania danych News Sentiment: {e}", exc_info=True)
+    except Exception:
         return None
 
 def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session: Session) -> Dict[str, pd.DataFrame]:
     """
-    Pobiera i przetwarza dane Wymiaru 2 dla pojedynczego tickera, używając MECHANIZMU CACHE.
+    Pobiera i przetwarza dane Wymiaru 2.
+    Używa CACHE W PAMIĘCI RAM, aby drastycznie przyspieszyć Optimizera.
     """
-    logger.info(f"[Backtest V3][H2 Loader] Ładowanie danych Wymiaru 2 dla {ticker} (z cache)...")
+    # Sprawdź Memory Cache (najszybsze)
+    if ticker in _H2_DATA_MEMORY_CACHE:
+        return _H2_DATA_MEMORY_CACHE[ticker]
+
+    # logger.info(f"[H2 Loader] Loading data for {ticker} (DB/API)...")
     
-    # Używamy datetime i timezone poprawnie zaimportowanych na górze
-    now_utc = datetime.now(timezone.utc)
-    
-    # 1. Pobierz dane Insider (Wymiar 2.1) - UŻYJ CACHE
-    # Używamy cache, ale data aktualizacji jest używana do walidacji w utils.py (CACHE_EXPIRY_DAYS)
+    # 1. Pobierz dane Insider (DB Cache lub API)
     insider_raw = get_raw_data_with_cache(
         session=session,
         api_client=api_client, 
@@ -117,28 +109,28 @@ def load_h2_data_into_cache(ticker: str, api_client: AlphaVantageClient, session
     insider_df = _parse_insider_transactions(insider_raw)
     
     if insider_df is None:
-        logger.warning(f"[Backtest V3][H2 Loader] Nie udało się przetworzyć danych Insider dla {ticker}. Tworzenie pustego DataFrame.")
         insider_df = pd.DataFrame(columns=['transaction_type', 'transaction_shares']).set_index(pd.to_datetime([]))
     
-    # 2. Pobierz dane News (Wymiar 2.2 i 4.2) - UŻYJ CACHE
-    # Zmieniliśmy logikę na pobieranie pełnej historii do backtestu (limit=1000)
+    # 2. Pobierz dane News (DB Cache lub API)
     news_raw = get_raw_data_with_cache(
         session=session,
         api_client=api_client, 
         ticker=ticker,
-        data_type='NEWS_SENTIMENT_FULL_HISTORY', # Zmieniono na unikalny klucz
+        data_type='NEWS_SENTIMENT_FULL_HISTORY', 
         api_func='get_news_sentiment',
-        limit=1000 # Pełna historia
+        limit=1000 
     )
     news_df = _parse_news_sentiment(news_raw)
     
     if news_df is None:
-        logger.warning(f"[Backtest V3][H2 Loader] Nie udało się przetworzyć danych News dla {ticker}. Tworzenie pustego DataFrame.")
         news_df = pd.DataFrame(columns=['overall_sentiment_score', 'topics']).set_index(pd.to_datetime([]))
 
-    logger.info(f"[Backtest V3][H2 Loader] Załadowano {len(insider_df)} transakcji i {len(news_df)} newsów dla {ticker}.")
-
-    return {
+    result = {
         "insider_df": insider_df,
         "news_df": news_df 
     }
+    
+    # Zapisz do Memory Cache
+    _H2_DATA_MEMORY_CACHE[ticker] = result
+    
+    return result
