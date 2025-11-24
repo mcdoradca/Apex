@@ -29,7 +29,6 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
         )
         
         if not raw_data:
-            # Brak danych ETF = uznajemy za zdrowy (fail-open), żeby nie blokować skanowania
             return True, 0.0, etf_ticker 
 
         df = standardize_df_columns(pd.DataFrame.from_dict(raw_data.get('Time Series (Daily)', {}), orient='index'))
@@ -53,15 +52,15 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
-    Skaner Fazy 1 (V5.1 - Diagnostyka).
+    Skaner Fazy 1 (V5.2 - Verbose Logging).
     
-    ZMIANY NAPRAWCZE:
-    - Szczegółowe logowanie przyczyn odrzucenia.
-    - Złagodzenie filtra płynności (300k).
-    - Sektor nie blokuje całkowicie (jest logowany).
+    ZMIANY:
+    - Logowanie postępu co 50 tickerów (Heartbeat).
+    - Logowanie każdego znalezionego kandydata.
+    - Raportowanie odrzuceń w locie.
     """
-    logger.info("Running Phase 1: EOD Scan (V5.1 Fix - Detailed Logging)...")
-    append_scan_log(session, "Faza 1 (V5.1): Start diagnostycznego skanowania.")
+    logger.info("Running Phase 1: EOD Scan (V5.2 Verbose)...")
+    append_scan_log(session, "Faza 1 (V5.2): Start skanowania. Pełny podgląd włączony.")
 
     try:
         session.execute(text("DELETE FROM phase1_candidates"))
@@ -80,22 +79,37 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         return []
 
     final_candidate_tickers = []
-    
-    # Liczniki odrzuceń (do raportu końcowego)
     reject_stats = {'price': 0, 'volume': 0, 'atr': 0, 'intraday': 0, 'sector': 0}
     
+    start_time = time.time()
+
     for processed_count, row in enumerate(all_tickers_rows):
         ticker = row[0]
         sector = row[1]
         
+        # Obsługa pauzy
         if get_current_state() == 'PAUSED':
             while get_current_state() == 'PAUSED': time.sleep(1)
 
+        # Pasek postępu (dla UI)
         if processed_count % 20 == 0: 
             update_scan_progress(session, processed_count, total_tickers)
 
+        # === NOWE LOGOWANIE POSTĘPU (CO 50 SPÓŁEK) ===
+        if processed_count > 0 and processed_count % 50 == 0:
+            elapsed = time.time() - start_time
+            rate = processed_count / elapsed if elapsed > 0 else 0
+            progress_pct = (processed_count / total_tickers) * 100
+            
+            log_msg = (f"🔄 SKANER: {processed_count}/{total_tickers} ({progress_pct:.1f}%) | "
+                       f"Znaleziono: {len(final_candidate_tickers)} | "
+                       f"Tempo: {rate:.1f} ticker/s | "
+                       f"Odrzuty: Cena={reject_stats['price']} Vol={reject_stats['volume']} ATR={reject_stats['atr']}")
+            logger.info(log_msg)
+            append_scan_log(session, log_msg)
+        # =============================================
+
         try:
-            # 1. Pobierz dane EOD
             price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='compact')
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 continue
@@ -110,22 +124,20 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             
             if pd.isna(current_price): continue
                 
-            # ==================================================================
-            # === FILTRY V5 (ZŁAGODZONE + DIAGNOSTYKA) ===
-            # ==================================================================
+            # === FILTRY V5 ===
 
-            # WARUNEK 1: Cena (1-100$ - zwiększony zakres dla testów)
+            # 1. Cena (1-100$)
             if not (1.0 <= current_price <= 100.0): 
                 reject_stats['price'] += 1
                 continue
             
-            # WARUNEK 2: Płynność (Vol > 300k - złagodzone)
+            # 2. Płynność (Vol > 300k)
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
             if pd.isna(avg_volume) or avg_volume < 300000: 
                 reject_stats['volume'] += 1
                 continue
             
-            # WARUNEK 3: Zmienność (ATR > 2% - złagodzone)
+            # 3. Zmienność (ATR > 2%)
             atr_series = calculate_atr(daily_df, period=14)
             if atr_series.empty: continue
             current_atr = atr_series.iloc[-1]
@@ -134,31 +146,25 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 reject_stats['atr'] += 1
                 continue 
             
-            # WARUNEK 4: Dane Intraday (Pre-flight)
-            # Jeśli API zwraca błąd, to nie wina spółki, tylko limitu.
-            # Dodajemy try-except, żeby nie odrzucać pochopnie.
+            # 4. Dane Intraday
             try:
                 intraday_test = api_client.get_intraday(ticker, interval='60min', outputsize='compact')
-                # Odrzucamy TYLKO jeśli otrzymaliśmy pusty słownik danych (a nie błąd sieci)
                 if intraday_test and 'Time Series (60min)' not in intraday_test and 'Information' not in intraday_test:
                      reject_stats['intraday'] += 1
                      continue
-            except: 
-                pass # Ignoruj błędy sieciowe przy pre-flight, daj szansę w F3
+            except: pass
 
-            # WARUNEK 5: Strażnik Sektora (Ostrzegawczy)
+            # 5. Strażnik Sektora (Logujący)
             is_sector_healthy, sector_trend, etf_symbol = _check_sector_health(session, api_client, sector)
-            
-            # ZMIANA: Jeśli sektor słaby, logujemy to, ale NIE ODRZUCAMY (na razie).
-            # Pozwoli to zobaczyć kandydatów i ocenić, czy Strażnik nie jest nadgorliwy.
             if not is_sector_healthy:
                 reject_stats['sector'] += 1
-                # append_scan_log(session, f"Ostrzeżenie {ticker}: Słaby sektor {etf_symbol}. Przepuszczam warunkowo.")
-
-            # ==================================================================
             
-            # KWALIFIKACJA
-            # append_scan_log(session, f"Kwalifikacja (F1): {ticker}")
+            # === KWALIFIKACJA SUKCES ===
+            # Logujemy każdego kandydata
+            log_msg = (f"✅ KANDYDAT: {ticker} | Cena: {current_price:.2f}$ | "
+                       f"Vol: {int(avg_volume/1000)}k | ATR: {atr_percent:.1%} | Sektor: {etf_symbol}")
+            logger.info(log_msg)
+            append_scan_log(session, log_msg)
             
             insert_stmt = text("""
                 INSERT INTO phase1_candidates (ticker, price, volume, change_percent, score, sector_ticker, sector_trend_score, analysis_date)
@@ -182,10 +188,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     
     update_scan_progress(session, total_tickers, total_tickers)
     
-    # RAPORT KOŃCOWY
-    summary_msg = (f"Faza 1 zakończona. Kandydatów: {len(final_candidate_tickers)}. "
-                   f"Odrzucono: Cena={reject_stats['price']}, Vol={reject_stats['volume']}, "
-                   f"ATR={reject_stats['atr']}, Intra={reject_stats['intraday']}")
+    summary_msg = (f"🏁 Faza 1 zakończona. Kandydatów: {len(final_candidate_tickers)}. "
+                   f"Odrzucono łącznie: Cena={reject_stats['price']}, Vol={reject_stats['volume']}, "
+                   f"ATR={reject_stats['atr']}, Intra={reject_stats['intraday']}, Sektor(Ostrzeżenie)={reject_stats['sector']}")
     
     logger.info(summary_msg)
     append_scan_log(session, summary_msg)
