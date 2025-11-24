@@ -21,7 +21,7 @@ export const ui = {
                 minScore: get('h3-live-min-score'),
                 tp: get('h3-live-tp'),
                 sl: get('h3-live-sl'),
-                maxHold: get('h3-live-hold'), // NOWE V4
+                maxHold: get('h3-live-hold'), // V4 Parameter
                 cancelBtn: get('h3-live-cancel-btn'),
                 startBtn: get('h3-live-start-btn')
             },
@@ -56,7 +56,6 @@ export const ui = {
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 yearInput: get('qo-year-input'),
-                // ZMIANA: Zwiększono limit w UI do 5000
                 trialsInput: get('qo-trials-input'),
                 cancelBtn: get('qo-cancel-btn'),
                 startBtn: get('qo-start-btn'),
@@ -344,9 +343,6 @@ export const renderers = {
                 </table>
              </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
         
-        // =========================================================================
-        // PRZYWRÓCONY I ROZSZERZONY MODUŁ BACKTESTU (V3 + V4 Params)
-        // =========================================================================
         const backtestSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
                 <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
@@ -407,7 +403,6 @@ export const renderers = {
                 <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
             </div>
         `;
-        // =========================================================================
         
         const quantumLabSection = `
             <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden">
@@ -529,15 +524,13 @@ export const renderers = {
                     ${paginationControls} </div>`;
     },
 
-    // === NOWOŚĆ: Renderowanie wyników optymalizacji ===
+    // === NOWOŚĆ: Renderowanie wyników optymalizacji Z PRZYCISKIEM UŻYJ ===
     optimizationResults: (job) => {
         if (!job) return `<p class="text-gray-500">Brak danych o optymalizacji.</p>`;
         
         const trials = job.trials || [];
         // Sortowanie: Najlepsze wyniki na górze (Profit Factor)
         trials.sort((a, b) => (b.profit_factor || 0) - (a.profit_factor || 0));
-        
-        const bestTrial = trials[0];
         
         const trialsRows = trials.map(t => {
             const isBest = t.id === job.best_trial_id;
@@ -547,6 +540,9 @@ export const renderers = {
             const paramsStr = Object.entries(t.params)
                 .map(([k, v]) => `<span class="text-gray-400">${k}:</span> <span class="text-sky-300">${typeof v === 'number' ? v.toFixed(2) : v}</span>`)
                 .join(', ');
+            
+            // Zakoduj parametry do atrybutu data, aby łatwo je pobrać w JS
+            const paramsJson = JSON.stringify(t.params).replace(/"/g, '&quot;');
 
             return `<tr class="${rowClass}">
                 <td class="p-2 text-center font-mono text-gray-500">#${t.trial_number}</td>
@@ -554,6 +550,11 @@ export const renderers = {
                 <td class="p-2 text-right">${t.win_rate ? t.win_rate.toFixed(1) : '0.0'}%</td>
                 <td class="p-2 text-right">${t.total_trades || 0}</td>
                 <td class="p-2 text-xs font-mono">${paramsStr}</td>
+                <td class="p-2 text-right">
+                    <button class="use-params-btn bg-purple-600 hover:bg-purple-700 text-white text-xs px-2 py-1 rounded flex items-center ml-auto" data-params="${paramsJson}">
+                        <i data-lucide="play-circle" class="w-3 h-3 mr-1"></i> Użyj
+                    </button>
+                </td>
             </tr>`;
         }).join('');
 
@@ -582,6 +583,7 @@ export const renderers = {
                                 <th class="p-2 text-right">Win Rate</th>
                                 <th class="p-2 text-right">Trades</th>
                                 <th class="p-2">Parametry</th>
+                                <th class="p-2 text-right">Akcja</th>
                             </tr>
                         </thead>
                         <tbody>
