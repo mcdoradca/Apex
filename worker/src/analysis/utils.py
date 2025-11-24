@@ -225,3 +225,82 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
     except Exception as e:
         logger.error(f"[Backtest Utils] Błąd transakcji: {e}")
         return None
+
+# ==================================================================
+# === NOWE FUNKCJE V4 - BEZPIECZNIE DODANE PONIŻEJ ISTNIEJĄCYCH ===
+# ==================================================================
+
+def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.Series:
+    """
+    BEZPIECZNA NOWA FUNKCJA: Normalizacja Institutional Sync (Z-Score) dla V4
+    Zachowuje backward compatibility - nie zmienia istniejącego kodu
+    """
+    try:
+        rolling_mean = df['institutional_sync'].rolling(window).mean()
+        rolling_std = df['institutional_sync'].rolling(window).std()
+        normalized = (df['institutional_sync'] - rolling_mean) / rolling_std
+        return normalized.replace([np.inf, -np.inf], 0).fillna(0)
+    except Exception as e:
+        logger.error(f"Błąd normalizacji institutional_sync_v4: {e}")
+        return pd.Series(0, index=df.index)
+
+def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
+    """
+    BEZPIECZNA NOWA FUNKCJA: Ujednolicone obliczenia H3 V4
+    Eliminuje duplikację między backtest_engine i phase3_sniper
+    """
+    try:
+        Z_SCORE_WINDOW = 100
+        
+        # 1. Normalizacja institutional_sync (Z-Score) - KLUCZOWA POPRAWKA V4
+        df['mu_normalized'] = normalize_institutional_sync_v4(df, Z_SCORE_WINDOW)
+        
+        # 2. Cap wartości ekstremalnych dla Retail Herding
+        df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+        
+        # 3. Obliczenie J z użyciem ZNORMALIZOWANEGO mu
+        S = df['information_entropy']
+        Q = df['retail_herding_capped']
+        T = df['market_temperature']
+        mu_norm = df['mu_normalized']
+        
+        # Formuła H3: J = S - (Q/T) + (mu * 1.0)
+        df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
+        df['J'] = df['J'].fillna(0)
+        
+        # 4. Normalizacja składników AQM
+        j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
+        j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
+        df['J_norm'] = ((df['J'] - j_mean) / j_std).replace([np.inf, -np.inf], 0).fillna(0)
+        
+        nabla_mean = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).mean()
+        nabla_std = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
+        df['nabla_sq_norm'] = ((df['nabla_sq'] - nabla_mean) / nabla_std).replace([np.inf, -np.inf], 0).fillna(0)
+        
+        m_mean = df['m_sq'].rolling(window=Z_SCORE_WINDOW).mean()
+        m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
+        df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
+        
+        # 5. Główna Formuła Pola (AQM V3 Score)
+        df['aqm_score_h3'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
+        
+        # 6. Dynamiczny próg percentyla
+        h3_percentile = params.get('h3_percentile', 0.95)
+        df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile)
+        
+        logger.debug("Obliczenia H3 V4 zakończone pomyślnie")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Błąd calculate_h3_metrics_v4: {e}")
+        return df
+
+def get_optimized_periods_v4(target_year: int) -> list:
+    """
+    BEZPIECZNA NOWA FUNKCJA: Optymalizacja okresów dla przyspieszenia V4
+    Zwraca 2 okresy zamiast 4 (2x przyspieszenie)
+    """
+    return [
+        (f"{target_year}-01-01", f"{target_year}-06-30"),
+        (f"{target_year}-07-01", f"{target_year}-12-31")
+    ]
