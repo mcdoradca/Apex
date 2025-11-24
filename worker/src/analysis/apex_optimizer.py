@@ -73,12 +73,15 @@ class QuantumOptimizer:
             
             # ZAPIS WYNIKÓW
             best_trial = self.study.best_trial
-            best_value = best_trial.value
+            best_value = float(best_trial.value) # Rzutowanie na float
             
             end_msg = f"🏁 QUANTUM OPTIMIZER V4: Zakończono! Najlepszy Score: {best_value:.4f}"
             logger.info(end_msg)
             append_scan_log(self.session, end_msg)
-            append_scan_log(self.session, f"🏆 Parametry: {json.dumps(best_trial.params, indent=2)}")
+            
+            # Konwersja parametrów na JSON-friendly format (na wszelki wypadek)
+            safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
+            append_scan_log(self.session, f"🏆 Parametry: {json.dumps(safe_params, indent=2)}")
 
             # ANALIZA WRAŻLIWOŚCI
             trials_data = self._collect_trials_data()
@@ -87,7 +90,6 @@ class QuantumOptimizer:
             self._finalize_job(best_trial, sensitivity_report)
 
         except Exception as e:
-            # Rollback w przypadku błędu SQL, aby nie blokować sesji
             self.session.rollback()
             error_msg = f"❌ QUANTUM OPTIMIZER V4: Błąd krytyczny: {str(e)}"
             logger.error(error_msg, exc_info=True)
@@ -104,8 +106,16 @@ class QuantumOptimizer:
         
         if not tickers:
             logger.warning("Brak tickerów do załadowania. Próba pobrania fallback z bazy companies.")
-            fallback = self.session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
-            tickers = [r[0] for r in fallback]
+            try:
+                fallback = self.session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
+                tickers = [r[0] for r in fallback]
+            except Exception as e:
+                logger.error(f"Błąd pobierania fallback tickerów: {e}")
+                tickers = []
+
+        if not tickers:
+             logger.error("Nie udało się pobrać żadnych tickerów. Optymalizacja może się nie powieść.")
+             return
 
         # Równoległe ładowanie danych
         with ThreadPoolExecutor(max_workers=10) as executor:
@@ -147,11 +157,6 @@ class QuantumOptimizer:
     def _get_all_tickers(self):
         """Pobiera wszystkie tickery z bazy (NAPRAWIONE)"""
         try:
-            # === POPRAWKA: Usunięto sp500_constituents, używamy companies ===
-            # Pobieramy tickery z:
-            # 1. Kandydatów Fazy 1 (najświeższe)
-            # 2. Portfela (posiadane)
-            # 3. Tabeli companies (jako uzupełnienie do limitu)
             query = text("""
                 (SELECT ticker FROM phase1_candidates)
                 UNION 
@@ -164,7 +169,7 @@ class QuantumOptimizer:
             return [r[0] for r in result]
         except Exception as e:
             logger.error(f"Błąd pobierania tickerów: {e}")
-            self.session.rollback() # Ważne przy błędach transakcji
+            self.session.rollback()
             # Fallback
             result = self.session.execute(text("SELECT ticker FROM companies LIMIT 200"))
             return [r[0] for r in result]
@@ -219,7 +224,7 @@ class QuantumOptimizer:
             # ZAPIS PRÓBY
             self._save_trial(trial, params, pf, trades, final_score)
             
-            return final_score
+            return float(final_score)
 
         except Exception as e:
             logger.warning(f"Próba {trial.number} nieudana: {e}")
@@ -383,9 +388,11 @@ class QuantumOptimizer:
         trials_data = []
         for t in self.study.trials:
             if t.state == optuna.trial.TrialState.COMPLETE:
+                # Konwersja typów numpy
+                safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in t.params.items()}
                 trials_data.append({
-                    'params': t.params, 
-                    'profit_factor': t.value
+                    'params': safe_params, 
+                    'profit_factor': float(t.value) if t.value is not None else 0.0
                 })
         return trials_data
 
@@ -406,28 +413,41 @@ class QuantumOptimizer:
         try:
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job:
-                job.best_score = float(score)
+                # === POPRAWKA: Konwersja na float ===
+                job.best_score = float(score) if score is not None else 0.0
                 self.session.commit()
         except Exception as e:
             logger.error(f"Błąd aktualizacji best score: {e}")
+            self.session.rollback()
 
     def _save_trial(self, trial, params, pf, trades, score):
-        """Zapisuje próbę do bazy"""
+        """Zapisuje próbę do bazy (NAPRAWIONE - RZUTOWANIE TYPÓW)"""
         try:
+            # === POPRAWKA KRYTYCZNA: Konwersja numpy types na python types ===
+            safe_pf = float(pf) if pf is not None and not np.isnan(pf) else 0.0
+            safe_trades = int(trades) if trades is not None else 0
+            safe_score = float(score) if score is not None and not np.isnan(score) else 0.0
+            
+            # Konwersja parametrów - jeśli są numpy floatami
+            safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
+
             trial_record = models.OptimizationTrial(
                 job_id=self.job_id,
                 trial_number=trial.number,
-                params=params,
-                profit_factor=pf,
-                total_trades=trades,
-                win_rate=0.0,
-                net_profit=0.0,
-                state='COMPLETE' if score > 0 else 'PRUNED',
+                params=safe_params,
+                profit_factor=safe_pf,
+                total_trades=safe_trades,
+                win_rate=0.0, # Placeholder
+                net_profit=0.0, # Placeholder
+                state='COMPLETE' if safe_score > 0 else 'PRUNED',
                 created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
-            if trial.number % 20 == 0:  # PRZYSPIESZENIE: Batch commit
+            
+            # Batch commit co 20 prób, ale też wymuszony commit przy sukcesie
+            if trial.number % 10 == 0:
                 self.session.commit()
+                
         except Exception as e:
             logger.error(f"Błąd zapisu próby: {e}")
             self.session.rollback()
@@ -437,10 +457,14 @@ class QuantumOptimizer:
         job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
         if job:
             job.status = 'COMPLETED'
-            job.best_score = float(best_trial.value)
+            # Rzutowanie wartości best_trial
+            job.best_score = float(best_trial.value) if best_trial.value is not None else 0.0
+            
+            # Bezpieczna konwersja parametrów
+            best_params_safe = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
             
             final_config = {
-                'best_params': best_trial.params,
+                'best_params': best_params_safe,
                 'sensitivity_analysis': sensitivity_report,
                 'optimization_version': 'V4_TURBO_20X',
                 'total_trials_processed': len(self.study.trials)
@@ -451,10 +475,13 @@ class QuantumOptimizer:
 
     def _mark_job_failed(self):
         """Oznacza zadanie jako failed"""
-        job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
-        if job:
-            job.status = 'FAILED'
-            self.session.commit()
+        try:
+            job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
+            if job:
+                job.status = 'FAILED'
+                self.session.commit()
+        except:
+            self.session.rollback()
 
 class AdaptiveExecutor:
     """
