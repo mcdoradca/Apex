@@ -132,6 +132,13 @@ class AlphaVantageClient:
     def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
+
+    # === FIX: DODANO BRAKUJĄCĄ METODĘ ===
+    def get_time_series_daily(self, symbol: str, outputsize: str = 'full'):
+        """Pobiera nieskorygowane dane dzienne (OHLC). Wymagane przez Fazę 3."""
+        params = {"function": "TIME_SERIES_DAILY", "symbol": symbol, "outputsize": outputsize}
+        return self._make_request(params)
+    # =====================================
         
     def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True, month: str = None):
         params = {
@@ -191,13 +198,9 @@ class AlphaVantageClient:
             params["time_from"] = time_from
         return self._make_request(params)
 
-    # === DANE FUNDAMENTALNE (APEX V5 NOWOŚĆ) ===
+    # === DANE FUNDAMENTALNE ===
 
     def get_earnings(self, symbol: str):
-        """
-        Pobiera dane o wynikach finansowych (Earnings Calendar).
-        Kluczowe dla Filtru Min (Unikanie wejścia przed wynikami).
-        """
         params = {"function": "EARNINGS", "symbol": symbol}
         return self._make_request(params)
 
@@ -251,7 +254,7 @@ class AlphaVantageClient:
         except Exception:
             return None
 
-    # === DANE MAKROEKONOMICZNE (FAZA 0) ===
+    # === DANE MAKROEKONOMICZNE ===
     
     def get_inflation_rate(self, interval: str = 'monthly'):
         params = {"function": "INFLATION", "interval": interval, "datatype": "json"}
