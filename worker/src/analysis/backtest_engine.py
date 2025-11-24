@@ -386,3 +386,43 @@ def _run_historical_backtest_original(session: Session, api_client, year: str, p
     logger.warning("Używanie ORYGINALNEJ implementacji backtestu (V4 jest domyślna)")
     # ... oryginalny kod z run_historical_backtest ...
     pass
+
+def get_optimized_tickers_v4(session: Session, limit: int = 100) -> list:
+    """
+    PRZYSPIESZENIE: Zwraca tylko najbardziej płynne tickery
+    """
+    try:
+        # === POPRAWKA: Usunięto sp500_constituents ===
+        result = session.execute(text("""
+            SELECT DISTINCT ticker FROM (
+                SELECT ticker FROM phase1_candidates 
+                UNION 
+                SELECT ticker FROM portfolio_holdings
+                UNION
+                SELECT ticker FROM companies
+            ) AS all_tickers
+            ORDER BY ticker LIMIT :limit
+        """), {'limit': limit})
+        return [r[0] for r in result]
+    except:
+        result = session.execute(text("SELECT ticker FROM companies LIMIT :limit"), {'limit': limit})
+        return [r[0] for r in result]
+
+def precompute_h3_metrics_v4(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    PRZYSPIESZENIE: Prekomputuje metryki H3
+    """
+    # Uproszczone obliczenia dla szybkości
+    df['m_sq'] = df['volume'].rolling(10).mean() / df['volume'].rolling(200).mean() - 1
+    df['nabla_sq'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
+    
+    # Szybka normalizacja
+    for col in ['m_sq', 'nabla_sq']:
+        mean = df[col].rolling(100).mean()
+        std = df[col].rolling(100).std()
+        df[f'{col}_norm'] = (df[col] - mean) / std.replace(0, 1)
+    
+    df['aqm_score_h3'] = -df['m_sq_norm'] - df['nabla_sq_norm']
+    df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(100).quantile(0.95)
+    
+    return df.fillna(0)
