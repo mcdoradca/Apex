@@ -23,9 +23,9 @@ class QuantumOptimizer:
     Serce systemu Apex V4 (Advanced).
     Wykorzystuje Optymalizację Bayesowską (TPE) oraz Multi-Period Validation.
     
-    ZMIANA V4.1: Nowa funkcja celu (Objective Function) zgodna z "Tajemniczą Rozmową".
-    Zamiast szukać tylko 'Robust Score', szukamy balansu między wysokim PF 
-    a optymalną liczbą transakcji (500-2000 rocznie).
+    ZMIANA V4.2 (Live Feedback):
+    - Dodano logowanie postępów do UI (append_scan_log) po każdej próbie.
+    - Dodano aktualizację 'best_score' w bazie danych w czasie rzeczywistym.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -33,12 +33,16 @@ class QuantumOptimizer:
         self.job_id = job_id
         self.target_year = target_year
         self.study = None
+        # Śledzenie najlepszego wyniku lokalnie, aby aktualizować bazę
+        self.best_score_so_far = -1.0
 
     def run(self, n_trials: int = 50):
         """
         Uruchamia główny proces optymalizacji.
         """
-        logger.info(f"QuantumOptimizer: Start zadania {self.job_id} (Rok: {self.target_year}, Próby: {n_trials})")
+        start_msg = f"QuantumOptimizer: Start zadania {self.job_id} (Rok: {self.target_year}, Próby: {n_trials})"
+        logger.info(start_msg)
+        append_scan_log(self.session, f"🚀 {start_msg}")
         
         # 1. Aktualizacja statusu zadania na RUNNING
         job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
@@ -59,8 +63,10 @@ class QuantumOptimizer:
             best_params = best_trial.params
             best_value = best_trial.value
             
-            logger.info(f"QuantumOptimizer: Zakończono. Najlepszy Wynik (Score): {best_value:.4f}")
-            logger.info(f"Najlepsze parametry: {best_params}")
+            end_msg = f"QuantumOptimizer: Zakończono. Najlepszy Wynik (Score): {best_value:.4f}"
+            logger.info(end_msg)
+            append_scan_log(self.session, f"🏁 {end_msg}")
+            append_scan_log(self.session, f"🏆 Najlepsze parametry: {json.dumps(best_params)}")
 
             # 5. Analiza Wrażliwości (Automatyczny Audyt V4)
             trials_data = []
@@ -73,6 +79,7 @@ class QuantumOptimizer:
             try:
                 if len(trials_data) >= 10:
                     logger.info("Uruchamianie analizy wrażliwości (SensitivityAnalyzer)...")
+                    append_scan_log(self.session, "🔍 Uruchamianie analizy wrażliwości parametrów...")
                     analyzer = SensitivityAnalyzer()
                     sensitivity_report = analyzer.analyze_parameter_sensitivity(trials_data)
                 else:
@@ -80,7 +87,7 @@ class QuantumOptimizer:
             except Exception as e:
                 logger.error(f"Błąd podczas analizy wrażliwości: {e}", exc_info=True)
 
-            # 6. Aktualizacja rekordu Job w bazie
+            # 6. Aktualizacja rekordu Job w bazie (Finalizacja)
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job:
                 job.status = 'COMPLETED'
@@ -102,7 +109,9 @@ class QuantumOptimizer:
                 self.session.commit()
 
         except Exception as e:
-            logger.error(f"QuantumOptimizer: Błąd krytyczny w procesie optymalizacji: {e}", exc_info=True)
+            err_msg = f"QuantumOptimizer: Błąd krytyczny: {e}"
+            logger.error(err_msg, exc_info=True)
+            append_scan_log(self.session, f"❌ {err_msg}")
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job:
                 job.status = 'FAILED'
@@ -111,18 +120,12 @@ class QuantumOptimizer:
 
     def _objective(self, trial):
         """
-        ZMODYFIKOWANA Funkcja Celu (V4.1).
-        
-        Zasady z "Tajemniczej Rozmowy":
-        1.  Wymuszamy zakres transakcji: 500 - 2000.
-            - Jeśli mniej lub więcej -> Score = 0.0 (odrzucamy).
-        2.  Idealny cel ("Sweet Spot"): 800 - 1200 transakcji.
-        3.  Score = Średni PF * (1.0 - Kara_za_odchylenie_od_celu).
+        Funkcja celu. Zawiera logikę 'Log & Update' dla interfejsu.
         """
         
         # === A. Definicja Przestrzeni Parametrów ===
         params = {
-            'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), # Szerszy zakres
+            'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99),
             'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -2.0, 0.0),
             'h3_min_score': trial.suggest_float('h3_min_score', -1.0, 3.0),
             'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0),
@@ -130,7 +133,7 @@ class QuantumOptimizer:
             'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15),
         }
 
-        # === B. Symulacja Kwartalna (Multi-Period) ===
+        # === B. Symulacja Kwartalna ===
         periods = [
             (f"{self.target_year}-01-01", f"{self.target_year}-03-31"),
             (f"{self.target_year}-04-01", f"{self.target_year}-06-30"),
@@ -167,53 +170,56 @@ class QuantumOptimizer:
             except Exception:
                 period_pfs.append(0.0)
 
-        # === C. Obliczenie Nowego Score (Logic V4.1) ===
-        
+        # === C. Obliczenie Score ===
         mean_pf = np.mean(period_pfs)
-        
-        # 1. TWARDY LIMIT TRANSAKCJI
-        # Jeśli system generuje mniej niż 500 lub więcej niż 2000 transakcji rocznie, 
-        # uznajemy to za błąd strategii (zbyt pasywna lub zbyt agresywna/śmieciowa).
+        final_score = 0.0
+        log_prefix = "🔸" # Domyślny status (Pruned/Low)
+
         if total_trades_year < 500 or total_trades_year > 2000:
             final_score = 0.0
-            
-            # Logowanie odrzucenia (dla debugowania - widoczne w logach workera)
-            # logger.info(f"Trial {trial.number} REJECTED: Trades={total_trades_year} (Out of bounds 500-2000)")
-        
+            log_prefix = "🔴 [PRUNED]" # Odrzucony
         else:
-            # 2. OBLICZANIE KARY (Trade Penalty)
-            # Idealny zakres ("Sweet Spot"): 800 - 1200 transakcji
             trade_penalty = 0.0
-            
             if total_trades_year < 800:
-                # Kara rośnie im bliżej 500. Przy 500 kara wynosi ok. 37% z (800-500)/800
                 trade_penalty = (800 - total_trades_year) / 800.0
             elif total_trades_year > 1200:
-                # Kara rośnie im bliżej 2000.
                 trade_penalty = (total_trades_year - 1200) / 1200.0
             
-            # Maksymalna kara to 50% wyniku (aby wysoki PF nadal miał znaczenie)
             impact_factor = 0.5 
-            
-            # 3. FINALNY SCORE
-            # Bierzemy średni PF i odejmujemy karę.
-            # Przykład: PF 2.0, idealna liczba transakcji -> Score = 2.0
-            # Przykład: PF 2.0, liczba transakcji 600 (kara ~0.25 * 0.5 = 0.125) -> Score = 2.0 * 0.875 = 1.75
             final_score = mean_pf * (1.0 - (trade_penalty * impact_factor))
-            
-            logger.info(f"Trial {trial.number}: PF={mean_pf:.2f}, Trades={total_trades_year}, Penalty={trade_penalty:.2f}, Score={final_score:.3f}")
+            log_prefix = "🟢 [OK]"
 
-        # === D. Zapis Próby do Bazy Danych ===
+        # === D. Logowanie i Aktualizacja Live (NAPRAWA UI) ===
+        
+        # 1. Log do konsoli (widoczny w Dashboardzie)
+        log_msg = f"{log_prefix} Próba {trial.number}: PF={mean_pf:.2f}, Trades={total_trades_year}, Score={final_score:.3f}"
+        logger.info(log_msg)
+        # To sprawia, że tekst pojawia się w oknie "Logi Silnika" na żywo
+        append_scan_log(self.session, log_msg)
+
+        # 2. Aktualizacja "Best Score" w nagłówku zadania (widoczne w Modalu)
+        if final_score > self.best_score_so_far:
+            self.best_score_so_far = final_score
+            try:
+                job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
+                if job:
+                    job.best_score = float(final_score)
+                    # Commit tutaj jest kluczowy, aby UI odczytało zmianę natychmiast
+                    self.session.commit()
+            except Exception as e:
+                logger.error(f"Błąd aktualizacji Best Score: {e}")
+
+        # === E. Zapis Próby do Bazy Danych ===
         try:
             trial_record = models.OptimizationTrial(
                 job_id=self.job_id,
                 trial_number=trial.number,
                 params=params,
-                profit_factor=mean_pf, # Zapisujemy rzeczywisty PF, nie Score!
+                profit_factor=mean_pf, 
                 total_trades=total_trades_year,
-                win_rate=0.0, # Uproszczenie
+                win_rate=0.0, 
                 net_profit=total_profit_year,
-                state='COMPLETE' if final_score > 0 else 'PRUNED', # PRUNED jeśli odrzucony przez limit
+                state='COMPLETE' if final_score > 0 else 'PRUNED',
                 created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
@@ -232,18 +238,17 @@ class AdaptiveExecutor:
     
     def __init__(self, base_params: dict):
         self.base_params = base_params
-        # Reguły adaptacji
         self.adaptation_rules = {
-            'HIGH_VOLATILITY': { # VIX > 25
+            'HIGH_VOLATILITY': { 
                 'h3_percentile': lambda p: min(0.99, p * 1.01),
                 'h3_sl_multiplier': lambda p: p * 1.3,
                 'h3_m_sq_threshold': lambda p: p - 0.2
             },
-            'LOW_VOLATILITY': { # VIX < 15
+            'LOW_VOLATILITY': { 
                 'h3_percentile': lambda p: max(0.90, p * 0.99),
                 'h3_tp_multiplier': lambda p: p * 1.1
             },
-            'BEAR_MARKET': { # Trend spadkowy
+            'BEAR_MARKET': { 
                 'h3_tp_multiplier': lambda p: p * 0.8,
                 'h3_min_score': lambda p: max(0.5, p + 0.5)
             }
