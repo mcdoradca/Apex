@@ -44,7 +44,6 @@ def _calculate_time_dilation_series(ticker_df: pd.DataFrame, spy_df: pd.DataFram
 def run_historical_backtest(session: Session, api_client, year: str, parameters: dict = None):
     """
     Uruchamia pełny backtest historyczny (z zapisem do bazy).
-    To jest pełny raport, więc tutaj skanujemy WSZYSTKO (może trwać dłużej).
     """
     logger.info(f"[Backtest] Rozpoczynanie analizy historycznej dla roku {year}...")
     append_scan_log(session, f"BACKTEST: Uruchamianie symulacji dla roku {year}...")
@@ -140,6 +139,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
                 df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
+                # Normalizacja i Cap
                 df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(Z_SCORE_WINDOW).mean()) / df['institutional_sync'].rolling(Z_SCORE_WINDOW).std()
                 df['mu_normalized'] = df['mu_normalized'].replace([np.inf, -np.inf], 0).fillna(0)
 
@@ -147,7 +147,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
                 df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
                 
                 S = df['information_entropy']
-                Q = df['retail_herding_capped'] 
+                Q = df['retail_herding_capped']
                 T = df['market_temperature']
                 mu_norm = df['mu_normalized']
                 
@@ -206,9 +206,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 def run_optimization_simulation(session: Session, year: str, params: dict) -> dict:
     """
     Tryb 'Lightweight' dla QuantumOptimizer.
-    PRZYSPIESZENIE:
-    1. Skanuje LOSOWĄ próbkę (100 tickerów) z Fazy 1 (reprezentatywna statystyka).
-    2. Logowanie postępu.
+    Uruchamia symulację na PEŁNEJ liście kandydatów (bez limitu), ale z częstym logowaniem.
     """
     api_client = AlphaVantageClient()
     
@@ -216,34 +214,21 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
     trades_results = [] 
     
     try:
-        # === OPTYMALIZACJA SELEKCJI (LOSOWA PRÓBKA) ===
-        # Zamiast sortować (co daje bias na te same spółki), bierzemy LOSOWE 100.
-        # To zapewnia, że Optuna nie przetrenuje się (overfit) na jednej grupie liderów.
-        
-        # Pobierz wszystkich kandydatów i portfel
+        # === PEŁNA SELEKCJA SPÓŁEK (Bez sztucznego limitu) ===
         phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
         phase1_tickers = [r[0] for r in phase1_rows]
         
         portfolio_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
         portfolio_tickers = [r[0] for r in portfolio_rows]
         
-        # Scal listę
-        all_tickers = list(set(phase1_tickers + portfolio_tickers))
-        
-        # Wybierz losowe 100 (lub mniej, jeśli brak) - to jest "Smart Sampling"
-        import random
-        if len(all_tickers) > 100:
-            tickers = random.sample(all_tickers, 100)
-        else:
-            tickers = all_tickers
+        tickers = list(set(phase1_tickers + portfolio_tickers))
         
         if not tickers:
-            # Fallback: Szybka próbka losowych 20 z bazy
-            fallback_rows = session.execute(text("SELECT ticker FROM companies ORDER BY RANDOM() LIMIT 20")).fetchall()
+            fallback_rows = session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()
             tickers = [r[0] for r in fallback_rows]
         
         total_tickers_in_trial = len(tickers)
-
+        
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         if spy_raw:
             spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -270,7 +255,7 @@ def run_optimization_simulation(session: Session, year: str, params: dict) -> di
         # === GŁÓWNA PĘTLA TPE ===
         for idx, ticker in enumerate(tickers):
             
-            # Logowanie postępu co 20 tickerów
+            # Logowanie postępu co 20 tickerów - aby widzieć, że proces żyje
             if idx > 0 and idx % 20 == 0:
                 period_label = f"{sim_start_str[:7]}"
                 progress_msg = f"⏳ Symulacja [{period_label}]: Przetworzono {idx}/{total_tickers_in_trial} tickerów..."
