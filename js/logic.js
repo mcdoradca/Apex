@@ -607,6 +607,39 @@ export const showOptimizationResults = async () => {
     try {
         const results = await api.getOptimizationResults();
         UI.optimizationResultsModal.content.innerHTML = renderers.optimizationResults(results);
+        
+        // === OBSŁUGA KLIKNIĘCIA W 'UŻYJ' ===
+        // Dodajemy listenery do nowo wygenerowanych przycisków
+        const useButtons = UI.optimizationResultsModal.content.querySelectorAll('.use-params-btn');
+        useButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const paramsData = e.currentTarget.dataset.params;
+                try {
+                    const params = JSON.parse(paramsData);
+                    // 1. Zamknij okno wyników
+                    hideOptimizationResults();
+                    
+                    // 2. Otwórz okno H3 Live (jeśli nie otwarte)
+                    // Lub jeśli chcemy tylko wypełnić formularz przed otwarciem...
+                    // Najlepszy flow: Otwórz modal H3 Live i wypełnij go.
+                    showH3LiveParamsModal();
+                    
+                    // 3. Wypełnij pola (z małym opóźnieniem dla pewności renderowania)
+                    setTimeout(() => {
+                        if (UI.h3LiveModal.percentile) UI.h3LiveModal.percentile.value = params.h3_percentile;
+                        if (UI.h3LiveModal.mass) UI.h3LiveModal.mass.value = params.h3_m_sq_threshold;
+                        if (UI.h3LiveModal.minScore) UI.h3LiveModal.minScore.value = params.h3_min_score;
+                        if (UI.h3LiveModal.tp) UI.h3LiveModal.tp.value = params.h3_tp_multiplier;
+                        if (UI.h3LiveModal.sl) UI.h3LiveModal.sl.value = params.h3_sl_multiplier;
+                        if (UI.h3LiveModal.maxHold) UI.h3LiveModal.maxHold.value = params.h3_max_hold;
+                    }, 100);
+                    
+                } catch(err) {
+                    console.error("Błąd parsowania parametrów:", err);
+                }
+            });
+        });
+
     } catch (e) {
         UI.optimizationResultsModal.content.innerHTML = `<p class="text-red-500 p-4">Błąd: ${e.message}</p>`;
     }
