@@ -24,9 +24,20 @@ RETRY_COUNT = 5
 RETRY_DELAY = 5
 for i in range(RETRY_COUNT):
     try:
-        engine = create_engine(DATABASE_URL)
+        # === UAKTUALNIENIE KONFIGURACJI (Synchronizacja z Workerem) ===
+        # pool_size=20: Zwiększona liczba stałych połączeń (dla obsługi ruchu HTTP)
+        # max_overflow=30: Zwiększony bufor dla nagłych skoków zapytań
+        # pool_pre_ping=True: Zapobiega błędom "closed connection" poprzez testowanie połączenia
+        engine = create_engine(
+            DATABASE_URL,
+            pool_size=20,
+            max_overflow=30,
+            pool_timeout=30,
+            pool_recycle=1800,
+            pool_pre_ping=True 
+        )
         with engine.connect():
-            logger.info("Successfully connected to the database.")
+            logger.info("Successfully connected to the database (Enhanced Pool Config).")
             break
     except OperationalError as e:
         logger.warning(f"Database connection failed (attempt {i+1}/{RETRY_COUNT}): {e}. Retrying in {RETRY_DELAY}s...")
