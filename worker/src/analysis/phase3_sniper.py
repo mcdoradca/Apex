@@ -336,9 +336,12 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                 news_counts.index = pd.to_datetime(news_counts.index)
                 news_counts = news_counts.reindex(df.index, fill_value=0)
                 df['information_entropy'] = news_counts.rolling(window=10).sum()
-                df['news_mean_200d'] = df['information_entropy'].rolling(window=200).mean()
-                df['news_std_200d'] = df['information_entropy'].rolling(window=200).std()
-                df['normalized_news'] = ((df['information_entropy'] - df['news_mean_200d']) / df['news_std_200d']).fillna(0)
+                
+                # === FIX (V5.4): SYNCHRONIZACJA Z BACKTESTEM ===
+                # W Backteście V4 (Optimizer) normalized_news jest zerowane (uproszczenie).
+                # Phase 3 (Live) w V5 wliczała newsy do m_sq, co zawyżało wartości i psuło progi (-1.48).
+                # Przywracamy logikę Backtestu dla m_sq (ale zachowujemy Entropy dla J).
+                df['normalized_news'] = 0.0
             else:
                 df['information_entropy'] = 0.0; df['normalized_news'] = 0.0
             
