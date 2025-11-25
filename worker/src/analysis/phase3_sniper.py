@@ -27,9 +27,10 @@ from .apex_optimizer import AdaptiveExecutor
 
 logger = logging.getLogger(__name__)
 
+# ZMIANA: Domyślne parametry bardziej liberalne (dla testów)
 DEFAULT_PARAMS = {
-    'h3_percentile': 0.95,
-    'h3_m_sq_threshold': -0.5,
+    'h3_percentile': 0.90, # Obniżono z 0.95
+    'h3_m_sq_threshold': 0.0, # Podniesiono z -0.5 (akceptujemy średni tłok)
     'h3_min_score': 0.0,
     'h3_tp_multiplier': 5.0,
     'h3_sl_multiplier': 2.0,
@@ -76,30 +77,30 @@ def _is_setup_still_valid(entry: float, sl: float, tp: float, current_price: flo
     potential_loss = current_price - sl
     if potential_loss <= 0: return False, "Cena poniżej SL"
     current_rr = potential_profit / potential_loss
-    if current_rr < 1.2: return False, f"RR za niski: {current_rr:.2f}" # Złagodzono z 1.5
+    if current_rr < 1.2: return False, f"RR za niski: {current_rr:.2f}"
     return True, "OK"
 
 def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaVantageClient, parameters: Dict[str, Any] = None):
     """
-    Faza 3 (H3 Live Sniper V5.3 - Robustness Fix).
+    Faza 3 (H3 Live Sniper V5.4 - Tuned).
     ZMIANY:
-    - Dodatkowe zabezpieczenia przed brakującymi kolumnami.
-    - Odporność na błędy pojedynczych tickerów.
+    - Logowanie wartości AQM dla odrzuconych (Debugging).
+    - Złagodzone parametry domyślne.
     """
-    logger.info("Uruchamianie Fazy 3 (V5.3 Robustness)...")
+    logger.info("Uruchamianie Fazy 3 (V5.4 Tuned)...")
     
     base_params = DEFAULT_PARAMS.copy()
     if parameters:
         for k, v in parameters.items():
             if v is not None: base_params[k] = float(v)
 
-    append_scan_log(session, "Faza 3 (V5.3): Analiza...")
-    
     market_conditions = _get_market_conditions(session, api_client)
     executor = AdaptiveExecutor(base_params)
     adapted_params = executor.get_adapted_params(market_conditions)
     
-    # Parametry
+    # Logujemy parametry, żeby mieć pewność co wchodzi
+    append_scan_log(session, f"Faza 3 Params: {adapted_params}")
+    
     h3_percentile = float(adapted_params['h3_percentile'])
     h3_m_sq_threshold = float(adapted_params['h3_m_sq_threshold'])
     h3_min_score = float(adapted_params['h3_min_score'])
@@ -109,16 +110,16 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     signals_generated = 0
     total_candidates = len(candidates)
     
-    # Statystyki odrzuceń
     rejects = {'data': 0, 'history': 0, 'score': 0, 'mass': 0, 'min_floor': 0, 'validation': 0, 'error': 0}
 
     for i, ticker in enumerate(candidates):
         if i % 5 == 0: update_scan_progress(session, i, total_candidates)
+        
+        # Raport co 50
         if i > 0 and i % 50 == 0:
-             append_scan_log(session, f"Faza 3: Przetworzono {i}/{total_candidates}. Sygnałów: {signals_generated}. Odrzuty(Score/Mass): {rejects['score']}/{rejects['mass']}")
+             append_scan_log(session, f"F3: {i}/{total_candidates}. Sygnałów: {signals_generated}. Odrzuty: Score={rejects['score']}, Mass={rejects['mass']}")
 
         try:
-            # 1. Dane
             daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', expiry_hours=12, outputsize='full')
             daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=12, outputsize='full')
             
@@ -150,7 +151,6 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
             df['nabla_sq'] = df['price_gravity']
 
-            # V5 Volume Hunter
             df['vol_mean_20'] = df['volume'].rolling(window=20).mean()
             df['rvol'] = df['volume'] / df['vol_mean_20']
             df['is_silent_accumulation'] = (df['daily_returns'].abs() < 0.02) & (df['rvol'] > 1.2) 
@@ -163,12 +163,9 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             else:
                 df['information_entropy'] = 0.0
             
-            # === CRITICAL FIX ===
             df = calculate_h3_metrics_v4(df, adapted_params)
             
             last_candle = df.iloc[-1]
-            
-            # Bezpieczne pobieranie metryk
             if 'aqm_score_h3' not in last_candle:
                 rejects['error'] += 1; continue
                 
@@ -179,7 +176,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             is_accumulation = bool(last_candle.get('is_silent_accumulation', False))
             rvol_val = last_candle.get('rvol', 1.0)
             
-            # === LOGIKA DECYZYJNA V5.2 (HYBRYDOWA) ===
+            # Logika hybrydowa
             if is_accumulation:
                 score_pass = current_aqm > (current_thresh * 0.8) 
                 mass_pass = current_m < (h3_m_sq_threshold + 0.5) 
@@ -189,9 +186,15 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
 
             floor_pass = current_aqm > h3_min_score
             
-            if not score_pass: rejects['score'] += 1
-            elif not mass_pass: rejects['mass'] += 1
-            elif not floor_pass: rejects['min_floor'] += 1
+            if not score_pass: 
+                rejects['score'] += 1
+                # LOGOWANIE PRZYCZYNY (Diagnostyka)
+                # if i < 50: # Loguj tylko dla pierwszych 50, żeby nie zaspamować
+                #    logger.info(f"DEBUG {ticker}: AQM={current_aqm:.2f} < Thresh={current_thresh:.2f}")
+            elif not mass_pass: 
+                rejects['mass'] += 1
+            elif not floor_pass: 
+                rejects['min_floor'] += 1
 
             if score_pass and mass_pass and floor_pass:
                 atr = last_candle['atr_14']
@@ -200,7 +203,6 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                 stop_loss = ref_price - (h3_sl_mult * atr)
                 entry_price = ref_price
 
-                # Walidacja Live
                 current_live_quote = api_client.get_global_quote(ticker)
                 current_live_price = safe_float(current_live_quote.get('05. price')) if current_live_quote else None
                 
@@ -234,13 +236,13 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                             risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
                             is_trailing_active=True, 
                             highest_price_since_entry=float(ref_price),
-                            notes=f"AQM H3 V5.2. Score:{current_aqm:.2f} (Thresh:{current_thresh:.2f}){vol_note}{acc_note}"
+                            notes=f"AQM H3 V5.4. Score:{current_aqm:.2f} (Thresh:{current_thresh:.2f}){vol_note}{acc_note}"
                         )
                         session.add(new_signal)
                         session.commit()
                         signals_generated += 1
                         
-                        msg = (f"⚛️ H3 QUANTUM V5.2: {ticker}\n"
+                        msg = (f"⚛️ H3 QUANTUM V5.4: {ticker}\n"
                                f"Cena: {ref_price:.2f}{vol_note}{acc_note}\n"
                                f"Score: {current_aqm:.2f} vs {current_thresh:.2f}")
                         send_telegram_alert(msg)
