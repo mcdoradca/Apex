@@ -14,6 +14,8 @@ from .. import models
 from . import backtest_engine
 from .utils import update_system_control, append_scan_log, get_optimized_periods_v4
 from .apex_audit import SensitivityAnalyzer
+# === POPRAWKA: Importujemy generator sesji ===
+from ..database import get_db_session 
 
 logger = logging.getLogger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -27,7 +29,7 @@ class QuantumOptimizer:
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
-        self.session = session
+        self.session = session # Sesja główna (dla Joba i logów)
         self.job_id = job_id
         self.target_year = target_year
         self.study = None
@@ -79,7 +81,7 @@ class QuantumOptimizer:
             logger.info(end_msg)
             append_scan_log(self.session, end_msg)
             
-            # Konwersja parametrów na JSON-friendly format (na wszelki wypadek)
+            # Konwersja parametrów na JSON-friendly format
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
             append_scan_log(self.session, f"🏆 Parametry: {json.dumps(safe_params, indent=2)}")
 
@@ -101,7 +103,7 @@ class QuantumOptimizer:
         """PRZYSPIESZENIE: Ładuje wszystkie dane do cache RAM"""
         logger.info("🔄 PRZYSPIESZENIE: Ładowanie danych do cache RAM...")
         
-        # Pobierz wszystkie tickery raz
+        # Pobierz wszystkie tickery raz (używając głównej sesji - to bezpieczne bo jeden wątek)
         tickers = self._get_all_tickers()
         
         if not tickers:
@@ -118,52 +120,64 @@ class QuantumOptimizer:
              return
 
         # Równoległe ładowanie danych
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        # Ograniczamy tickery do ładowania, żeby nie zabić bazy przy starcie
+        tickers_to_load = tickers[:150] 
+
+        with ThreadPoolExecutor(max_workers=5) as executor: # Zmniejszamy workerów dla stabilności
             futures = []
-            for ticker in tickers[:200]:  # Ogranicz do 200 najbardziej płynnych
+            for ticker in tickers_to_load:
                 futures.append(executor.submit(self._load_ticker_data, ticker))
             
             for future in as_completed(futures):
                 try:
                     future.result()
                 except Exception as e:
-                    logger.warning(f"Błąd ładowania danych: {e}")
+                    logger.warning(f"Błąd ładowania danych w wątku: {e}")
         
         logger.info(f"✅ PRZYSPIESZENIE: Załadowano {len(self.data_cache)} tickerów do cache")
 
     def _load_ticker_data(self, ticker):
-        """Ładuje dane dla pojedynczego tickera"""
+        """Ładuje dane dla pojedynczego tickera - THREAD SAFE"""
         from .utils import get_raw_data_with_cache
         from .aqm_v3_h2_loader import load_h2_data_into_cache
         
-        api_client = backtest_engine.AlphaVantageClient()
-        
-        # Dane dzienne
-        daily_data = get_raw_data_with_cache(
-            self.session, api_client, ticker, 
-            'DAILY_OHLCV', 'get_time_series_daily', outputsize='full'
-        )
-        
-        # Dane H2
-        h2_data = load_h2_data_into_cache(ticker, api_client, self.session)
-        
-        if daily_data and h2_data:
-            self.data_cache[ticker] = {
-                'daily': daily_data,
-                'h2': h2_data,
-                'processed_df': None  # Będzie przetworzone na żądanie
-            }
+        # === POPRAWKA: Każdy wątek ma własną sesję ===
+        with get_db_session() as thread_session:
+            try:
+                # Tworzymy nowego klienta API dla wątku (bezpieczniej)
+                api_client = backtest_engine.AlphaVantageClient()
+                
+                # Dane dzienne
+                daily_data = get_raw_data_with_cache(
+                    thread_session, api_client, ticker, 
+                    'DAILY_OHLCV', 'get_time_series_daily', outputsize='full'
+                )
+                
+                # Dane H2
+                h2_data = load_h2_data_into_cache(ticker, api_client, thread_session)
+                
+                if daily_data and h2_data:
+                    # Zapis do słownika jest thread-safe w Pythonie (GIL), ale dla pewności
+                    # robimy to atomowo
+                    self.data_cache[ticker] = {
+                        'daily': daily_data,
+                        'h2': h2_data,
+                        'processed_df': None
+                    }
+            except Exception as e:
+                logger.error(f"Błąd w wątku load_ticker_data ({ticker}): {e}")
+                # Nie podnosimy wyjątku, żeby nie przerwać całego procesu
 
     def _get_all_tickers(self):
-        """Pobiera wszystkie tickery z bazy (NAPRAWIONE)"""
+        """Pobiera wszystkie tickery z bazy"""
         try:
             query = text("""
                 (SELECT ticker FROM phase1_candidates)
                 UNION 
                 (SELECT ticker FROM portfolio_holdings)
                 UNION
-                (SELECT ticker FROM companies LIMIT 300)
-                LIMIT 300
+                (SELECT ticker FROM companies LIMIT 200)
+                LIMIT 200
             """)
             result = self.session.execute(query)
             return [r[0] for r in result]
@@ -171,7 +185,7 @@ class QuantumOptimizer:
             logger.error(f"Błąd pobierania tickerów: {e}")
             self.session.rollback()
             # Fallback
-            result = self.session.execute(text("SELECT ticker FROM companies LIMIT 200"))
+            result = self.session.execute(text("SELECT ticker FROM companies LIMIT 100"))
             return [r[0] for r in result]
 
     def _objective(self, trial):
