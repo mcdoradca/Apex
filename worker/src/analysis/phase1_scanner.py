@@ -127,22 +127,22 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             # === FILTRY V5 ===
 
             # 1. Cena (1-100$)
-            if not (1.0 <= current_price <= 100.0): 
+            if not (1.0 <= current_price <= 20.0): 
                 reject_stats['price'] += 1
                 continue
             
-            # 2. Płynność (Vol > 300k)
+            # 2. Płynność (Vol > 500k)
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
             if pd.isna(avg_volume) or avg_volume < 300000: 
                 reject_stats['volume'] += 1
                 continue
             
-            # 3. Zmienność (ATR > 2%)
+            # 3. Zmienność (ATR > 3%)
             atr_series = calculate_atr(daily_df, period=14)
             if atr_series.empty: continue
             current_atr = atr_series.iloc[-1]
             atr_percent = (current_atr / current_price)
-            if atr_percent < 0.02: 
+            if atr_percent < 0.03: 
                 reject_stats['atr'] += 1
                 continue 
             
