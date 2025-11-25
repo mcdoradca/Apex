@@ -117,11 +117,9 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     Główna pętla Fazy 3 (H3 LIVE SNIPER).
     Analizuje rynek w czasie rzeczywistym, ADAPTUJE parametry i szuka sygnałów.
     
-    AKTUALIZACJA V4.1:
-    - Wdrożono normalizację Z-Score dla Institutional Sync
-    - Wdrożono Capping dla ekstremalnych wartości
+    ZMIANA V5.3: PEŁNE LOGOWANIE (Verbose Mode)
     """
-    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive + Normalized)...")
+    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive + Normalized + Verbose)...")
     
     # 1. Pobierz i scal parametry (Użytkownik > Domyślne)
     base_params = DEFAULT_PARAMS.copy()
@@ -159,6 +157,9 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     
     signals_generated = 0
     total_candidates = len(candidates)
+    
+    # Statystyki odrzuceń dla podsumowania
+    reject_stats = {'aqm_low': 0, 'm_sq_high': 0, 'history': 0, 'data_error': 0, 'validation': 0}
 
     # 3. Główna Pętla Skanowania
     for i, ticker in enumerate(candidates):
@@ -169,7 +170,10 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', expiry_hours=12, outputsize='full')
             daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=12, outputsize='full')
             
-            if not daily_raw or not daily_adj_raw: continue
+            if not daily_raw or not daily_adj_raw: 
+                reject_stats['data_error'] += 1
+                append_scan_log(session, f"❌ {ticker}: Brak kompletnych danych dziennych.")
+                continue
             
             bbands_raw = get_raw_data_with_cache(session, api_client, ticker, 'BBANDS', 'get_bollinger_bands', expiry_hours=24, interval='daily', time_period=20)
             bbands_df = _parse_bbands(bbands_raw)
@@ -185,7 +189,10 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             daily_adj = standardize_df_columns(pd.DataFrame.from_dict(daily_adj_raw.get('Time Series (Daily)', {}), orient='index'))
             daily_adj.index = pd.to_datetime(daily_adj.index)
 
-            if len(daily_adj) < REQUIRED_HISTORY_SIZE: continue
+            if len(daily_adj) < REQUIRED_HISTORY_SIZE: 
+                reject_stats['history'] += 1
+                append_scan_log(session, f"❌ {ticker}: Za krótka historia ({len(daily_adj)} < {REQUIRED_HISTORY_SIZE}).")
+                continue
 
             daily_ohlcv['vwap_proxy'] = (daily_ohlcv['high'] + daily_ohlcv['low'] + daily_ohlcv['close']) / 3.0
             df = daily_adj.join(daily_ohlcv[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
@@ -264,67 +271,93 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             current_m = m_norm.iloc[-1]
 
             # WARUNEK WEJŚCIA (zaktualizowany)
-            if (current_aqm > current_thresh) and \
-               (current_m < h3_m_sq_threshold) and \
-               (current_aqm > h3_min_score):
-               
-                atr = last_candle['atr_14']
-                ref_price = last_candle['close']
+            is_score_good = (current_aqm > current_thresh) and (current_aqm > h3_min_score)
+            is_mass_good = (current_m < h3_m_sq_threshold)
+            
+            # === NOWOŚĆ: Logowanie nieudanych warunków ===
+            if not is_score_good:
+                reject_stats['aqm_low'] += 1
+                append_scan_log(session, f"❌ {ticker}: AQM {current_aqm:.2f} < Thresh {current_thresh:.2f} (Min: {h3_min_score})")
+                continue
                 
-                take_profit = ref_price + (h3_tp_mult * atr)
-                stop_loss = ref_price - (h3_sl_mult * atr)
-                entry_price = ref_price
+            if not is_mass_good:
+                reject_stats['m_sq_high'] += 1
+                append_scan_log(session, f"❌ {ticker}: Masa m² {current_m:.2f} > Limit {h3_m_sq_threshold:.2f} (Za tłoczno)")
+                continue
 
-                # E. WALIDACJA LIVE (Realtime Price Check)
-                current_live_quote = api_client.get_global_quote(ticker)
-                current_live_price = safe_float(current_live_quote.get('05. price')) if current_live_quote else None
-                
-                validation_status = True
-                validation_reason = "Setup świeży (Post/Pre-Market)"
-                
-                if current_live_price:
-                    validation_status, validation_reason = _is_setup_still_valid(entry_price, stop_loss, take_profit, current_live_price)
+            # Jeśli dotarliśmy tutaj, to kandydat technicznie spełnia H3
+            
+            atr = last_candle['atr_14']
+            ref_price = last_candle['close']
+            
+            take_profit = ref_price + (h3_tp_mult * atr)
+            stop_loss = ref_price - (h3_sl_mult * atr)
+            entry_price = ref_price
 
-                if not validation_status:
-                    append_scan_log(session, f"Odrzucono {ticker}: {validation_reason} (AQM: {current_aqm:.2f})")
-                    continue
+            # E. WALIDACJA LIVE (Realtime Price Check)
+            current_live_quote = api_client.get_global_quote(ticker)
+            current_live_price = safe_float(current_live_quote.get('05. price')) if current_live_quote else None
+            
+            validation_status = True
+            validation_reason = "Setup świeży (Post/Pre-Market)"
+            
+            if current_live_price:
+                validation_status, validation_reason = _is_setup_still_valid(entry_price, stop_loss, take_profit, current_live_price)
+
+            if not validation_status:
+                reject_stats['validation'] += 1
+                append_scan_log(session, f"❌ {ticker}: Odrzucony LIVE: {validation_reason} (AQM: {current_aqm:.2f})")
+                continue
+            
+            # F. Zapis Sygnału (SUKCES)
+            existing = session.query(models.TradingSignal).filter(
+                models.TradingSignal.ticker == ticker,
+                models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
+            ).first()
+            
+            if not existing:
+                new_signal = models.TradingSignal(
+                    ticker=ticker,
+                    status='PENDING',
+                    generation_date=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                    signal_candle_timestamp=last_candle.name,
+                    entry_price=float(entry_price),
+                    stop_loss=float(stop_loss),
+                    take_profit=float(take_profit),
+                    entry_zone_top=float(ref_price + (0.5 * atr)),
+                    entry_zone_bottom=float(ref_price - (0.5 * atr)),
+                    risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
+                    notes=f"AQM H3 Live (Normalized). Score:{current_aqm:.2f}. J:{last_candle['J']:.2f}. VIX:{market_conditions['vix']:.1f}"
+                )
+                session.add(new_signal)
+                session.commit()
+                signals_generated += 1
                 
-                # F. Zapis Sygnału
-                existing = session.query(models.TradingSignal).filter(
-                    models.TradingSignal.ticker == ticker,
-                    models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
-                ).first()
+                success_msg = (f"⚛️ H3 SIGNAL: {ticker} | AQM: {current_aqm:.2f} | "
+                               f"TP: {take_profit:.2f} | SL: {stop_loss:.2f}")
+                logger.info(success_msg)
+                append_scan_log(session, success_msg)
                 
-                if not existing:
-                    new_signal = models.TradingSignal(
-                        ticker=ticker,
-                        status='PENDING',
-                        generation_date=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc),
-                        signal_candle_timestamp=last_candle.name,
-                        entry_price=float(entry_price),
-                        stop_loss=float(stop_loss),
-                        take_profit=float(take_profit),
-                        entry_zone_top=float(ref_price + (0.5 * atr)),
-                        entry_zone_bottom=float(ref_price - (0.5 * atr)),
-                        risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
-                        notes=f"AQM H3 Live (Normalized). Score:{current_aqm:.2f}. J:{last_candle['J']:.2f}. VIX:{market_conditions['vix']:.1f}"
-                    )
-                    session.add(new_signal)
-                    session.commit()
-                    signals_generated += 1
-                    
-                    msg = (f"⚛️ H3 QUANTUM SIGNAL (ADAPTIVE): {ticker}\n"
-                           f"Cena: {ref_price:.2f} | Live: {current_live_price if current_live_price else '---'}\n"
-                           f"TP: {take_profit:.2f} | SL: {stop_loss:.2f}\n"
-                           f"VIX Ref: {market_conditions['vix']:.1f}")
-                    send_telegram_alert(msg)
+                msg = (f"⚛️ H3 QUANTUM SIGNAL (ADAPTIVE): {ticker}\n"
+                       f"Cena: {ref_price:.2f} | Live: {current_live_price if current_live_price else '---'}\n"
+                       f"TP: {take_profit:.2f} | SL: {stop_loss:.2f}\n"
+                       f"VIX Ref: {market_conditions['vix']:.1f}")
+                send_telegram_alert(msg)
+            else:
+                append_scan_log(session, f"ℹ️ {ticker}: Sygnał już aktywny.")
 
         except Exception as e:
             logger.error(f"Błąd H3 Live dla {ticker}: {e}", exc_info=True)
+            append_scan_log(session, f"⛔ BŁĄD dla {ticker}: {e}")
             session.rollback()
             continue
 
     update_scan_progress(session, total_candidates, total_candidates)
-    append_scan_log(session, f"Faza 3 (H3 Live Adaptive) zakończona. Wygenerowano {signals_generated} sygnałów.")
+    
+    summary_msg = (f"🏁 Faza 3 zakończona. Sygnałów: {signals_generated}. "
+                   f"Odrzuty: AQM(Słaby)={reject_stats['aqm_low']}, Masa(Tłok)={reject_stats['m_sq_high']}, "
+                   f"Live(Spalone)={reject_stats['validation']}, Dane/Hist={reject_stats['data_error'] + reject_stats['history']}")
+    
+    append_scan_log(session, summary_msg)
     logger.info(f"Faza 3 zakończona. Sygnałów: {signals_generated}")
