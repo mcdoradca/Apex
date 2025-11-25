@@ -243,7 +243,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
 def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.Series:
     """
     BEZPIECZNA NOWA FUNKCJA: Normalizacja Institutional Sync (Z-Score) dla V4
-    Zachowuje backward compatibility - nie zmienia istniejącego kodu
     """
     try:
         rolling_mean = df['institutional_sync'].rolling(window).mean()
@@ -256,37 +255,54 @@ def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.S
 
 def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     """
-    BEZPIECZNA NOWA FUNKCJA: Ujednolicone obliczenia H3 V4
-    Eliminuje duplikację między backtest_engine i phase3_sniper
+    BEZPIECZNA NOWA FUNKCJA (V5.3 FIX): Ujednolicone obliczenia H3 V4
+    Zabezpieczona przed KeyError i NaN. Gwarantuje zwrot kolumn H3.
     """
     try:
+        # === INITIALIZATION (Ensure columns exist) ===
+        required_cols = ['J', 'J_norm', 'nabla_sq_norm', 'm_sq_norm', 'aqm_score_h3', 'aqm_percentile_95']
+        for col in required_cols:
+            if col not in df.columns: df[col] = 0.0
+
         Z_SCORE_WINDOW = 100
         
-        # 1. Normalizacja institutional_sync (Z-Score) - KLUCZOWA POPRAWKA V4
-        df['mu_normalized'] = normalize_institutional_sync_v4(df, Z_SCORE_WINDOW)
+        # 1. Normalizacja institutional_sync (Z-Score)
+        if 'institutional_sync' in df.columns:
+            df['mu_normalized'] = normalize_institutional_sync_v4(df, Z_SCORE_WINDOW)
+        else:
+            df['mu_normalized'] = 0.0
         
         # 2. Cap wartości ekstremalnych dla Retail Herding
-        df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+        if 'retail_herding' in df.columns:
+            df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+        else:
+            df['retail_herding_capped'] = 0.0
         
-        # 3. Obliczenie J z użyciem ZNORMALIZOWANEGO mu
+        # 3. Obliczenie J
+        # Upewnij się, że kolumny wejściowe istnieją
+        if 'information_entropy' not in df.columns: df['information_entropy'] = 0.0
+        if 'market_temperature' not in df.columns: df['market_temperature'] = 0.0001 # Unikamy dzielenia przez 0
+
         S = df['information_entropy']
         Q = df['retail_herding_capped']
-        T = df['market_temperature']
+        T = df['market_temperature'].replace(0, np.nan).fillna(0.0001) # Safety net
         mu_norm = df['mu_normalized']
         
         # Formuła H3: J = S - (Q/T) + (mu * 1.0)
-        df['J'] = S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)
-        df['J'] = df['J'].fillna(0)
+        df['J'] = S - (Q / T) + (mu_norm * 1.0)
+        df['J'] = df['J'].replace([np.inf, -np.inf], 0).fillna(0)
         
         # 4. Normalizacja składników AQM
         j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
         j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
         df['J_norm'] = ((df['J'] - j_mean) / j_std).replace([np.inf, -np.inf], 0).fillna(0)
         
+        if 'nabla_sq' not in df.columns: df['nabla_sq'] = 0.0
         nabla_mean = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).mean()
         nabla_std = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
         df['nabla_sq_norm'] = ((df['nabla_sq'] - nabla_mean) / nabla_std).replace([np.inf, -np.inf], 0).fillna(0)
         
+        if 'm_sq' not in df.columns: df['m_sq'] = 0.0
         m_mean = df['m_sq'].rolling(window=Z_SCORE_WINDOW).mean()
         m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
         df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
@@ -295,14 +311,20 @@ def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
         df['aqm_score_h3'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
         
         # 6. Dynamiczny próg percentyla
-        h3_percentile = params.get('h3_percentile', 0.95)
-        df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile)
+        h3_percentile = 0.95
+        if params and 'h3_percentile' in params:
+             try: h3_percentile = float(params['h3_percentile'])
+             except: pass
+             
+        df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile).fillna(0)
         
-        logger.debug("Obliczenia H3 V4 zakończone pomyślnie")
         return df
         
     except Exception as e:
-        logger.error(f"Błąd calculate_h3_metrics_v4: {e}")
+        logger.error(f"Błąd calculate_h3_metrics_v4 (CRITICAL FIX): {e}", exc_info=True)
+        # Fallback: Zwróć DF z zerami w wymaganych kolumnach, aby nie wysypać Snipera
+        for col in ['aqm_score_h3', 'aqm_percentile_95', 'm_sq_norm']:
+            if col not in df.columns: df[col] = 0.0
         return df
 
 def get_optimized_periods_v4(target_year: int) -> list:
@@ -326,7 +348,7 @@ def get_optimized_tickers_v4(session: Session, limit: int = 100) -> list:
                 UNION 
                 SELECT ticker FROM portfolio_holdings
                 UNION
-                SELECT symbol as ticker FROM sp500_constituents 
+                SELECT ticker FROM companies 
             ) AS all_tickers
             ORDER BY ticker LIMIT :limit
         """), {'limit': limit})
