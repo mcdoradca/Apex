@@ -81,19 +81,19 @@ def _is_setup_still_valid(entry: float, sl: float, tp: float, current_price: flo
 
 def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaVantageClient, parameters: Dict[str, Any] = None):
     """
-    Faza 3 (H3 Live Sniper V5.2).
+    Faza 3 (H3 Live Sniper V5.3 - Robustness Fix).
     ZMIANY:
-    - Szczegółowe raportowanie odrzuceń.
-    - Hybrydowa logika wejścia (Akumulacja LUB Silny Sygnał).
+    - Dodatkowe zabezpieczenia przed brakującymi kolumnami.
+    - Odporność na błędy pojedynczych tickerów.
     """
-    logger.info("Uruchamianie Fazy 3 (V5.2 Verbose)...")
+    logger.info("Uruchamianie Fazy 3 (V5.3 Robustness)...")
     
     base_params = DEFAULT_PARAMS.copy()
     if parameters:
         for k, v in parameters.items():
             if v is not None: base_params[k] = float(v)
 
-    append_scan_log(session, "Faza 3 (V5.2): Analiza...")
+    append_scan_log(session, "Faza 3 (V5.3): Analiza...")
     
     market_conditions = _get_market_conditions(session, api_client)
     executor = AdaptiveExecutor(base_params)
@@ -110,7 +110,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     total_candidates = len(candidates)
     
     # Statystyki odrzuceń
-    rejects = {'data': 0, 'history': 0, 'score': 0, 'mass': 0, 'min_floor': 0, 'validation': 0}
+    rejects = {'data': 0, 'history': 0, 'score': 0, 'mass': 0, 'min_floor': 0, 'validation': 0, 'error': 0}
 
     for i, ticker in enumerate(candidates):
         if i % 5 == 0: update_scan_progress(session, i, total_candidates)
@@ -153,7 +153,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             # V5 Volume Hunter
             df['vol_mean_20'] = df['volume'].rolling(window=20).mean()
             df['rvol'] = df['volume'] / df['vol_mean_20']
-            df['is_silent_accumulation'] = (df['daily_returns'].abs() < 0.02) & (df['rvol'] > 1.2) # Poluzowano do 2%
+            df['is_silent_accumulation'] = (df['daily_returns'].abs() < 0.02) & (df['rvol'] > 1.2) 
 
             if not news_df.empty:
                 news_counts = news_df.groupby(news_df.index.date).size()
@@ -163,30 +163,32 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
             else:
                 df['information_entropy'] = 0.0
             
+            # === CRITICAL FIX ===
             df = calculate_h3_metrics_v4(df, adapted_params)
             
             last_candle = df.iloc[-1]
+            
+            # Bezpieczne pobieranie metryk
+            if 'aqm_score_h3' not in last_candle:
+                rejects['error'] += 1; continue
+                
             current_aqm = last_candle['aqm_score_h3']
-            current_thresh = last_candle['aqm_percentile_95']
-            current_m = last_candle['m_sq_norm']
+            current_thresh = last_candle.get('aqm_percentile_95', 0.0)
+            current_m = last_candle.get('m_sq_norm', 0.0)
             
             is_accumulation = bool(last_candle.get('is_silent_accumulation', False))
             rvol_val = last_candle.get('rvol', 1.0)
             
             # === LOGIKA DECYZYJNA V5.2 (HYBRYDOWA) ===
-            # Scenariusz A: Cicha Akumulacja (Wchodzimy wcześniej)
             if is_accumulation:
-                # Obniżamy wymagania, jeśli widzimy akumulację
                 score_pass = current_aqm > (current_thresh * 0.8) 
-                mass_pass = current_m < (h3_m_sq_threshold + 0.5) # Tolerujemy większy tłok
+                mass_pass = current_m < (h3_m_sq_threshold + 0.5) 
             else:
-                # Scenariusz B: Czysty Momentum (Standard H3)
                 score_pass = current_aqm > current_thresh
                 mass_pass = current_m < h3_m_sq_threshold
 
             floor_pass = current_aqm > h3_min_score
             
-            # Diagnostyka odrzuceń
             if not score_pass: rejects['score'] += 1
             elif not mass_pass: rejects['mass'] += 1
             elif not floor_pass: rejects['min_floor'] += 1
@@ -207,7 +209,6 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
                     valid_status, reason = _is_setup_still_valid(entry_price, stop_loss, take_profit, current_live_price)
                     if not valid_status: 
                         rejects['validation'] += 1
-                        # append_scan_log(session, f"Odrzucono {ticker}: {reason}")
 
                 if valid_status:
                     existing = session.query(models.TradingSignal).filter(
@@ -247,6 +248,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
 
         except Exception as e:
             logger.error(f"Błąd H3 Live dla {ticker}: {e}", exc_info=True)
+            rejects['error'] += 1
             session.rollback()
             continue
 
@@ -254,7 +256,7 @@ def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaV
     
     summary = (f"Faza 3 zakończona. Sygnałów: {signals_generated}. "
                f"Odrzuty: Score={rejects['score']}, Mass={rejects['mass']}, "
-               f"Floor={rejects['min_floor']}, Valid={rejects['validation']}, Data={rejects['data']}")
+               f"Floor={rejects['min_floor']}, Valid={rejects['validation']}, Data={rejects['data']}, Error={rejects['error']}")
     
     append_scan_log(session, summary)
     logger.info(summary)
