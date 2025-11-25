@@ -20,24 +20,25 @@ class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
     # === OPTYMALIZACJA: Limit 150 zapytań/minuta (Premium) ===
-    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3):
         if not api_key:
             logger.warning("API key is missing for AlphaVantageClient instance in API.")
         self.api_key = api_key
         self.retries = retries
-        self.backoff_factor = backoff_factor
         self.requests_per_minute = requests_per_minute
         
-        # Pacing: Równomierne rozłożenie zapytań
+        # Rate Limiting (Rolling Window)
         self.request_interval = 60.0 / requests_per_minute
         self.request_timestamps = deque()
         
         # === OPTYMALIZACJA: Session Keep-Alive ===
+        # Utrzymywanie sesji TCP znacznie przyspiesza seryjne zapytania
         self.session = requests.Session()
 
     def _rate_limiter(self):
         """
         Zaawansowany Rate Limiter typu 'Rolling Window'.
+        Zapobiega przekroczeniu limitów API podczas intensywnego odświeżania UI.
         """
         if not self.api_key:
              return
@@ -56,7 +57,7 @@ class AlphaVantageClient:
                 time.sleep(time_to_wait)
                 now = time.monotonic()
 
-        # 3. Sprawdź "Pacing"
+        # 3. Sprawdź "Pacing" (równomierne odstępy)
         if self.request_timestamps:
             time_since_last = now - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
@@ -75,25 +76,28 @@ class AlphaVantageClient:
         for attempt in range(self.retries):
             try:
                 # Użycie self.session
-                response = self.session.get(self.BASE_URL, params=params, timeout=30)
+                response = self.session.get(self.BASE_URL, params=params, timeout=10) # Krótszy timeout dla API (UI nie może wisieć)
                 
                 # Obsługa specyficznych typów odpowiedzi (np. CSV vs JSON)
                 try:
+                    if params.get('datatype') == 'csv':
+                        response.raise_for_status()
+                        return response.text
+                    
                     data = response.json()
                 except json.JSONDecodeError:
                     response.raise_for_status() 
-                    if params.get('datatype') == 'csv':
-                        return response.text
+                    # Jeśli spodziewaliśmy się JSON a dostaliśmy co innego (i nie CSV)
                     raise requests.exceptions.RequestException("Response was not valid JSON.")
                     
                 # Wykrywanie limitów w JSON
                 is_rate_limit_json = False
-                if "Information" in data:
+                if isinstance(data, dict) and "Information" in data:
                     info_text = data["Information"].lower()
-                    if "frequency" in info_text or "api call volume" in info_text or "please contact premium" in info_text:
+                    if "frequency" in info_text or "api call volume" in info_text:
                         is_rate_limit_json = True
                 
-                is_error_msg = "Error Message" in data
+                is_error_msg = isinstance(data, dict) and "Error Message" in data
 
                 if is_rate_limit_json:
                     wait_time = 2 * (attempt + 1)
@@ -111,7 +115,7 @@ class AlphaVantageClient:
                 if attempt < self.retries - 1:
                     time.sleep(0.5 * (attempt + 1))
                 else:
-                    pass # Max retries
+                    logger.error(f"API Request failed after retries: {e}")
         return None
 
     # === NARZĘDZIA POMOCNICZE (PARSOWANIE CSV) ===
@@ -151,9 +155,26 @@ class AlphaVantageClient:
         params = {"function": "OVERVIEW", "symbol": symbol}
         return self._make_request(params)
 
+    def get_bulk_quotes(self, symbols: list[str]):
+        """
+        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
+        """
+        if not symbols: return None
+        params = {
+            "function": "REALTIME_BULK_QUOTES",
+            "symbol": ",".join(symbols),
+            "datatype": "csv"
+        }
+        # Tutaj nie musimy ustawiać API Key ręcznie, zrobi to _make_request
+        text_response = self._make_request(params)
+        if isinstance(text_response, str) and "symbol" in text_response:
+             return text_response
+        return None
+
     def get_global_quote(self, symbol: str):
         """
-        Pobiera najnowsze dane cenowe (Premium: REALTIME_BULK_QUOTES).
+        Pobiera najnowsze dane cenowe (Optymalizacja: używa REALTIME_BULK_QUOTES CSV).
+        Jest to znacznie szybsze i lżejsze niż standardowy endpoint JSON GLOBAL_QUOTE.
         """
         # Optymalizacja: Używamy Bulk Quotes jako głównego źródła
         bulk_csv = self.get_bulk_quotes([symbol])
@@ -176,7 +197,7 @@ class AlphaVantageClient:
                 "_price_source": "close" # Domyślne
             }
             
-            # Obsługa Extended Hours
+            # Obsługa Extended Hours (Pre/Post Market)
             ext_price_str = quote_data.get("extended_hours_quote")
             ext_price = self._safe_float(ext_price_str)
 
@@ -192,84 +213,7 @@ class AlphaVantageClient:
             logger.error(f"Błąd mapowania danych Bulk w API dla {symbol}: {e}")
             return None
 
-    def get_daily_adjusted(self, symbol: str, outputsize: str = 'full'):
-        params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
-        return self._make_request(params)
-        
-    def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact'):
-        params = {
-            "function": "TIME_SERIES_INTRADAY", 
-            "symbol": symbol, 
-            "interval": interval, 
-            "outputsize": outputsize
-        }
-        return self._make_request(params)
-
-    # === WSKAŹNIKI TECHNICZNE ===
-
-    def get_atr(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
-        params = {"function": "ATR", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
-        return self._make_request(params)
-
-    def get_rsi(self, symbol: str, time_period: int = 9, interval: str = 'daily', series_type: str = 'close'):
-        params = {"function": "RSI", "symbol": symbol, "interval": interval, "time_period": str(time_period), "series_type": series_type}
-        return self._make_request(params)
-        
-    def get_stoch(self, symbol: str, interval: str = 'daily'):
-        params = {"function": "STOCH", "symbol": symbol, "interval": interval}
-        return self._make_request(params)
-
-    def get_adx(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
-        params = {"function": "ADX", "symbol": symbol, "interval": interval, "time_period": str(time_period)}
-        return self._make_request(params)
-
-    def get_macd(self, symbol: str, interval: str = 'daily', series_type: str = 'close'):
-        params = {"function": "MACD", "symbol": symbol, "interval": interval, "series_type": series_type}
-        return self._make_request(params)
-        
-    def get_bollinger_bands(self, symbol: str, time_period: int = 20, interval: str = 'daily', series_type: str = 'close'):
-        params = {
-            "function": "BBANDS", 
-            "symbol": symbol, 
-            "interval": interval, 
-            "time_period": str(time_period), 
-            "series_type": series_type
-        }
-        return self._make_request(params)
-    
+    # Pozostałe metody (dla zgodności, jeśli API ich używa)
     def get_news_sentiment(self, ticker: str, limit: int = 50):
         params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)}
-        return self._make_request(params)
-
-    def get_bulk_quotes(self, symbols: list[str]):
-        """
-        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
-        """
-        params = {
-            "function": "REALTIME_BULK_QUOTES",
-            "symbol": ",".join(symbols),
-            "datatype": "csv"
-        }
-        # Tutaj nie musimy ustawiać API Key ręcznie, zrobi to _make_request
-        text_response = self._make_request(params)
-        if isinstance(text_response, str) and "symbol" in text_response:
-             return text_response
-        return None
-
-    # === ENDPOINTY MAKRO (FAZA 0) ===
-    
-    def get_inflation_rate(self, interval: str = 'monthly'):
-        params = {"function": "INFLATION", "interval": interval, "datatype": "json"}
-        return self._make_request(params)
-
-    def get_fed_funds_rate(self, interval: str = 'monthly'):
-        params = {"function": "FEDERAL_FUNDS_RATE", "interval": interval, "datatype": "json"}
-        return self._make_request(params)
-
-    def get_treasury_yield(self, interval: str = 'monthly', maturity: str = '10year'):
-        params = {"function": "TREASURY_YIELD", "interval": interval, "maturity": maturity, "datatype": "json"}
-        return self._make_request(params)
-
-    def get_unemployment(self):
-        params = {"function": "UNEMPLOYMENT", "datatype": "json"}
         return self._make_request(params)
