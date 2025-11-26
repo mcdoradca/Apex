@@ -123,6 +123,7 @@ class QuantumOptimizer:
             logger.info(end_msg)
             append_scan_log(self.session, end_msg)
             
+            # Konwersja parametrów na native float
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
             append_scan_log(self.session, f"🏆 Zwycięskie Parametry:\n{json.dumps(safe_params, indent=2)}")
 
@@ -375,6 +376,7 @@ class QuantumOptimizer:
         trials_data = []
         for t in self.study.trials:
             if t.state == optuna.trial.TrialState.COMPLETE:
+                # Konwersja na natywne typy float
                 safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in t.params.items()}
                 trials_data.append({'params': safe_params, 'profit_factor': float(t.value) if t.value is not None else 0.0})
         return trials_data
@@ -389,14 +391,25 @@ class QuantumOptimizer:
     def _update_best_score(self, score):
         try:
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
-            if job: job.best_score = float(score); self.session.commit()
+            if job: 
+                job.best_score = float(score) # Konwersja na native float
+                self.session.commit()
         except: self.session.rollback()
 
     def _save_trial(self, trial, params, pf, trades, score):
         try:
+            # === FIX SQL ERROR: Rzutowanie typów numpy ===
+            safe_pf = float(pf) if pf is not None and not np.isnan(pf) else 0.0
+            safe_trades = int(trades) if trades is not None else 0
+            safe_score = float(score) if score is not None and not np.isnan(score) else 0.0
+            
+            # Rzutowanie parametrów w JSON
+            safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
+
             trial_record = models.OptimizationTrial(
-                job_id=self.job_id, trial_number=trial.number, params=params,
-                profit_factor=pf, total_trades=trades, state='COMPLETE', created_at=datetime.now(timezone.utc)
+                job_id=self.job_id, trial_number=trial.number, params=safe_params,
+                profit_factor=safe_pf, total_trades=safe_trades, win_rate=0.0, net_profit=0.0,
+                state='COMPLETE', created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
             if trial.number % 20 == 0: self.session.commit()
@@ -407,6 +420,7 @@ class QuantumOptimizer:
         if job:
             job.status = 'COMPLETED'
             job.best_score = float(best_trial.value)
+            # Konwersja parametrów w best_trial
             best_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
             job.configuration = {'best_params': best_params, 'sensitivity_analysis': sensitivity_report, 'version': 'V7_TURBO_HIGH_PF'}
             self.session.commit()
