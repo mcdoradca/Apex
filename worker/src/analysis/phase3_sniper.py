@@ -17,7 +17,9 @@ from .utils import (
     update_scan_progress,
     send_telegram_alert,
     safe_float,
-    get_system_control_value
+    get_system_control_value,
+    calculate_h3_metrics_v4, # Ujednolicona funkcja
+    calculate_retail_herding_capped_v4
 )
 from . import aqm_v3_metrics
 from . import aqm_v3_h2_loader
@@ -27,9 +29,6 @@ from ..config import SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# === STAŁE DOMYŚLNE ===
-# ============================================================================
 DEFAULT_PARAMS = {
     'h3_percentile': 0.95,
     'h3_m_sq_threshold': -0.5,
@@ -41,68 +40,41 @@ DEFAULT_PARAMS = {
 H3_CALC_WINDOW = 100 
 REQUIRED_HISTORY_SIZE = 201 
 
-# ============================================================================
-# === NARZĘDZIE 1: LIVE GUARD (STRAŻNIK) - PRZYWRÓCONY ===
-# ============================================================================
-
+# === LIVE GUARD (PRZYWRÓCONY) ===
 def _is_setup_still_valid(entry_price: float, stop_loss: float, take_profit: float, current_price: float) -> Tuple[bool, str]:
-    """
-    Weryfikuje czy setup jest nadal ważny w kontekście aktualnej ceny (Live).
-    Zabezpiecza przed wejściem w "uciekający pociąg" lub po spalonym SL.
-    """
     try:
-        # 1. Sprawdź czy cena nie przebiła SL
         if current_price <= stop_loss:
             return False, f"Cena {current_price:.2f} poniżej SL {stop_loss:.2f} (Spalony)"
-        
-        # 2. Sprawdź czy cena nie osiągnęła już TP
         if current_price >= take_profit:
             return False, f"Cena {current_price:.2f} powyżej TP {take_profit:.2f} (Zrealizowany)"
-            
-        # 3. Sprawdź R:R (Risk:Reward) przy obecnej cenie
         if current_price > entry_price:
             potential_profit = take_profit - current_price
             potential_risk = current_price - stop_loss
-            
-            if potential_risk <= 0: return False, "Błąd wyliczenia ryzyka (Cena <= SL)"
-            
+            if potential_risk <= 0: return False, "Błąd ryzyka"
             current_rr = potential_profit / potential_risk
-            
-            # Minimalny akceptowalny R:R dla spóźnionego wejścia
-            MIN_LIVE_RR = 1.3 
-            
-            if current_rr < MIN_LIVE_RR:
-                return False, f"R:R spadł do {current_rr:.2f} (Cena uciekła do {current_price:.2f})"
-                
+            if current_rr < 1.3:
+                return False, f"R:R spadł do {current_rr:.2f}"
         return True, "OK"
-        
     except Exception as e:
-        return False, f"Błąd walidacji live: {e}"
+        return False, f"Błąd walidacji: {e}"
 
-# ============================================================================
-# === NARZĘDZIE 2: SILNIK RANKINGOWY (EV + SCORE) ===
-# ============================================================================
-
+# === SILNIK EV ===
 def _get_historical_ev_stats(session: Session) -> Dict[str, Dict[str, float]]:
-    """Analizuje historię VirtualTrades dla EV."""
     try:
-        trades = session.query(
-            models.VirtualTrade.final_profit_loss_percent,
-            models.VirtualTrade.metric_aqm_score_h3,
-            models.VirtualTrade.metric_aqm_percentile_95
-        ).filter(
+        trades = session.query(models.VirtualTrade).filter(
             models.VirtualTrade.status.in_(['CLOSED_TP', 'CLOSED_SL', 'CLOSED_EXPIRED']),
-            models.VirtualTrade.final_profit_loss_percent.isnot(None),
             models.VirtualTrade.metric_aqm_score_h3.isnot(None)
-        ).all()
+        ).limit(500).all() # Limit dla wydajności
 
         if len(trades) < 10: return {}
 
         data = []
         for t in trades:
-            power_surplus = float(t.metric_aqm_score_h3) - float(t.metric_aqm_percentile_95)
-            data.append({'pl': float(t.final_profit_loss_percent), 'power': power_surplus})
+            if t.metric_aqm_score_h3 is None or t.metric_aqm_percentile_95 is None or t.final_profit_loss_percent is None: continue
+            power = float(t.metric_aqm_score_h3) - float(t.metric_aqm_percentile_95)
+            data.append({'pl': float(t.final_profit_loss_percent), 'power': power})
         
+        if not data: return {}
         df = pd.DataFrame(data)
         
         buckets = {
@@ -112,7 +84,7 @@ def _get_historical_ev_stats(session: Session) -> Dict[str, Dict[str, float]]:
         }
         
         stats = {}
-        for bucket_name, subset in buckets.items():
+        for name, subset in buckets.items():
             if len(subset) < 5: subset = df 
             wins = subset[subset['pl'] > 0]
             losses = subset[subset['pl'] <= 0]
@@ -120,275 +92,241 @@ def _get_historical_ev_stats(session: Session) -> Dict[str, Dict[str, float]]:
             avg_win = wins['pl'].mean() if not wins.empty else 0
             avg_loss = abs(losses['pl'].mean()) if not losses.empty else 0
             ev = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
-            stats[bucket_name] = {'ev': ev, 'win_rate': win_rate}
-            
+            stats[name] = {'ev': ev}
         return stats
-    except Exception as e:
-        logger.warning(f"Błąd EV: {e}")
-        return {}
+    except: return {}
 
-def _calculate_setup_score(aqm_score, aqm_threshold, mass_sq, ticker_df, spy_df, sector_trend_score):
-    """Oblicza punktowy wynik jakości setupu (0-100)."""
+# === SETUP SCORE ===
+def _calculate_setup_score(aqm_score, aqm_thresh, mass_sq, ticker_df, spy_df, sector_trend):
     score = 0
     details = {}
-
-    surplus = aqm_score - aqm_threshold
-    tech_score = 0 if surplus <= 0 else 10 + min(30, (surplus / 0.5) * 30)
-    score += tech_score
-    details['tech_score'] = int(tech_score)
-
-    market_score = 0
+    
+    surplus = aqm_score - aqm_thresh
+    tech = 0 if surplus <= 0 else 10 + min(30, (surplus/0.5)*30)
+    score += tech; details['tech_score'] = int(tech)
+    
+    mkt = 0
     if not spy_df.empty:
-        spy_price = spy_df['close'].iloc[-1]
-        spy_sma200 = spy_df['close'].rolling(200).mean().iloc[-1]
-        if not pd.isna(spy_sma200) and spy_price > spy_sma200: market_score += 15
-    if sector_trend_score > 0: market_score += 15
-    score += market_score
-    details['market_score'] = market_score
-
-    rs_score = 0
-    if not spy_df.empty and len(ticker_df) > 5 and len(spy_df) > 5:
-        ticker_5d = ticker_df['close'].pct_change(5).iloc[-1]
-        spy_5d = spy_df['close'].pct_change(5).iloc[-1]
-        if not pd.isna(ticker_5d) and not pd.isna(spy_5d):
-            if ticker_5d > spy_5d: rs_score += 10
-            if ticker_5d > 0 and spy_5d < 0: rs_score += 10
-            elif ticker_5d > (spy_5d * 1.5): rs_score += 5
-    score += rs_score
-    details['rs_score'] = rs_score
-
-    setup_context_score = 0
-    if mass_sq < -1.0: setup_context_score = 10
-    elif mass_sq < -0.5: setup_context_score = 5
-    score += setup_context_score
-    details['context_score'] = setup_context_score
-
+        spy_curr = spy_df['close'].iloc[-1]
+        spy_ma = spy_df['close'].rolling(200).mean().iloc[-1]
+        if not pd.isna(spy_ma) and spy_curr > spy_ma: mkt += 15
+    if sector_trend > 0: mkt += 15
+    score += mkt; details['market_score'] = int(mkt)
+    
+    rs = 0
+    if not spy_df.empty and len(ticker_df) > 5:
+        t_ch = ticker_df['close'].pct_change(5).iloc[-1]
+        s_ch = spy_df['close'].pct_change(5).iloc[-1]
+        if not pd.isna(t_ch) and not pd.isna(s_ch):
+            if t_ch > s_ch: rs += 10
+            elif t_ch > 0 and s_ch < 0: rs += 10
+    score += rs; details['rs_score'] = int(rs)
+    
+    ctx = 0
+    if mass_sq < -1.0: ctx = 10
+    elif mass_sq < -0.5: ctx = 5
+    score += ctx; details['context_score'] = int(ctx)
+    
     return int(score), details
 
-# ============================================================================
-# === FUNKCJE POMOCNICZE FAZY 3 ===
-# ============================================================================
-
-def _get_market_data_package(session: Session, api_client: AlphaVantageClient) -> Dict[str, Any]:
-    package = {'vix': 20.0, 'trend': 'NEUTRAL', 'spy_df': pd.DataFrame(), 'macro': 'UNKNOWN'}
+# === POMOCNICZE ===
+def _get_market_pkg(session, client):
+    pkg = {'vix': 20.0, 'trend': 'NEUTRAL', 'spy_df': pd.DataFrame(), 'macro': 'UNKNOWN'}
     try:
-        package['macro'] = get_system_control_value(session, 'macro_sentiment') or "UNKNOWN"
-        spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=24, outputsize='full')
-        if spy_raw:
-            spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
-            spy_df.index = pd.to_datetime(spy_df.index)
-            spy_df.sort_index(inplace=True)
-            package['spy_df'] = spy_df
-            if len(spy_df) > 200:
-                recent_returns = spy_df['close'].pct_change().tail(30)
-                vix_proxy = recent_returns.std() * (252 ** 0.5) * 100
-                package['vix'] = float(vix_proxy) if not pd.isna(vix_proxy) else 20.0
-                current_price = spy_df['close'].iloc[-1]
-                sma_200 = spy_df['close'].rolling(window=200).mean().iloc[-1]
-                package['trend'] = 'BULL' if current_price > sma_200 else 'BEAR'
-        if "RISK_OFF" in package['macro']: package['vix'] = max(package['vix'], 30.0)
-        return package
-    except Exception: return package
+        pkg['macro'] = get_system_control_value(session, 'macro_sentiment') or "UNKNOWN"
+        spy = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=24)
+        if spy:
+            df = standardize_df_columns(pd.DataFrame.from_dict(spy.get('Time Series (Daily)', {}), orient='index'))
+            df.index = pd.to_datetime(df.index); df.sort_index(inplace=True)
+            pkg['spy_df'] = df
+            if len(df) > 200:
+                pkg['vix'] = float(df['close'].pct_change().tail(30).std() * (252**0.5) * 100)
+                pkg['trend'] = 'BULL' if df['close'].iloc[-1] > df['close'].rolling(200).mean().iloc[-1] else 'BEAR'
+        if "RISK_OFF" in pkg['macro']: pkg['vix'] = max(pkg['vix'], 30.0)
+    except: pass
+    return pkg
 
-def _get_sector_trend_from_cache(session: Session, ticker: str) -> float:
+def _get_sector_trend(session, ticker):
     try:
-        result = session.execute(text("SELECT sector_trend_score FROM phase1_candidates WHERE ticker = :ticker"), {'ticker': ticker}).fetchone()
-        return float(result[0]) if result and result[0] is not None else 0.0
+        res = session.execute(text("SELECT sector_trend_score FROM phase1_candidates WHERE ticker=:t"), {'t': ticker}).fetchone()
+        return float(res[0]) if res and res[0] is not None else 0.0
     except: return 0.0
 
-# ============================================================================
-# === GŁÓWNA FUNKCJA SKANOWANIA ===
-# ============================================================================
-
-def run_h3_live_scan(session: Session, candidates: List[str], api_client: AlphaVantageClient, parameters: Dict[str, Any] = None):
-    logger.info("Uruchamianie Fazy 3: H3 LIVE SNIPER (Adaptive + Ranking EV/Score)...")
-    
+# === GŁÓWNA PĘTLA ===
+def run_h3_live_scan(session, candidates, client, parameters=None):
+    logger.info("Start H3 Live Sniper (V5 Logic)...")
     base_params = DEFAULT_PARAMS.copy()
     if parameters:
-        for k, v in parameters.items():
+        for k,v in parameters.items(): 
             if v is not None: base_params[k] = float(v)
-
-    market_pkg = _get_market_data_package(session, api_client)
+            
+    mkt = _get_market_pkg(session, client)
     ev_model = _get_historical_ev_stats(session)
     
+    # Adaptacja
     executor = AdaptiveExecutor(base_params)
-    market_conditions = {'vix': market_pkg['vix'], 'trend': market_pkg['trend']}
-    adapted_params = executor.get_adapted_params(market_conditions)
+    adapted = executor.get_adapted_params({'vix': mkt['vix'], 'trend': mkt['trend']})
     
-    changes_log = [f"{k}: {base_params.get(k)}->{v:.3f}" for k, v in adapted_params.items() if base_params.get(k) != v]
-    if changes_log: append_scan_log(session, f"ADAPTACJA (VIX {market_pkg['vix']:.1f}): " + ", ".join(changes_log))
+    h3_p = float(adapted['h3_percentile'])
+    h3_m = float(adapted['h3_m_sq_threshold'])
+    h3_min = float(adapted['h3_min_score'])
+    tp_mult = float(adapted['h3_tp_multiplier'])
+    sl_mult = float(adapted['h3_sl_multiplier'])
     
-    h3_percentile = float(adapted_params['h3_percentile'])
-    h3_m_sq_threshold = float(adapted_params['h3_m_sq_threshold'])
-    h3_min_score = float(adapted_params['h3_min_score'])
-    h3_tp_mult = float(adapted_params['h3_tp_multiplier'])
-    h3_sl_mult = float(adapted_params['h3_sl_multiplier'])
-    h3_max_hold = int(adapted_params.get('h3_max_hold', 10)) # Upewniamy się, że jest max_hold
+    chg = [f"{k}: {base_params.get(k)}->{v:.3f}" for k,v in adapted.items() if base_params.get(k)!=v]
+    if chg: append_scan_log(session, f"ADAPTACJA (VIX {mkt['vix']:.1f}): {', '.join(chg)}")
     
-    signals_generated = 0
-    total_candidates = len(candidates)
-    reject_stats = {'aqm_low': 0, 'm_sq_high': 0, 'history': 0, 'data_error': 0, 'validation': 0}
-
+    signals = 0
+    rejects = {'aqm':0, 'mass':0, 'data':0, 'live':0}
+    
     for i, ticker in enumerate(candidates):
-        if i % 5 == 0: update_scan_progress(session, i, total_candidates)
+        if i%5==0: update_scan_progress(session, i, len(candidates))
         
         try:
-            daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', expiry_hours=12, outputsize='full')
-            daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=12, outputsize='full')
+            # Dane
+            d_raw = get_raw_data_with_cache(session, client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', expiry_hours=12)
+            da_raw = get_raw_data_with_cache(session, client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=12)
+            if not d_raw or not da_raw:
+                rejects['data']+=1; append_scan_log(session, f"❌ {ticker}: Brak danych"); continue
+                
+            h2 = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, client, session)
             
-            if not daily_raw or not daily_adj_raw: 
-                reject_stats['data_error'] += 1; append_scan_log(session, f"❌ {ticker}: Brak danych."); continue
+            # Preprocessing
+            ohlcv = standardize_df_columns(pd.DataFrame.from_dict(d_raw.get('Time Series (Daily)', {}), orient='index'))
+            adj = standardize_df_columns(pd.DataFrame.from_dict(da_raw.get('Time Series (Daily)', {}), orient='index'))
+            ohlcv.index = pd.to_datetime(ohlcv.index); adj.index = pd.to_datetime(adj.index)
             
-            h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, session)
-            insider_df = h2_data.get('insider_df')
-            news_df = h2_data.get('news_df')
-
-            daily_ohlcv = standardize_df_columns(pd.DataFrame.from_dict(daily_raw.get('Time Series (Daily)', {}), orient='index'))
-            daily_ohlcv.index = pd.to_datetime(daily_ohlcv.index)
-            daily_adj = standardize_df_columns(pd.DataFrame.from_dict(daily_adj_raw.get('Time Series (Daily)', {}), orient='index'))
-            daily_adj.index = pd.to_datetime(daily_adj.index)
-
-            if len(daily_adj) < REQUIRED_HISTORY_SIZE: 
-                reject_stats['history'] += 1; append_scan_log(session, f"❌ {ticker}: Krótka historia."); continue
-
-            daily_ohlcv['vwap_proxy'] = (daily_ohlcv['high'] + daily_ohlcv['low'] + daily_ohlcv['close']) / 3.0
-            df = daily_adj.join(daily_ohlcv[['open', 'high', 'low', 'vwap_proxy']], rsuffix='_ohlcv')
+            if len(adj) < REQUIRED_HISTORY_SIZE:
+                rejects['data']+=1; append_scan_log(session, f"❌ {ticker}: Krótka historia"); continue
+                
+            # Merge & Metrics
+            ohlcv['vwap_proxy'] = (ohlcv['high']+ohlcv['low']+ohlcv['close'])/3.0
+            df = adj.join(ohlcv[['open','high','low','vwap_proxy']], rsuffix='_ohlcv')
             close_col = 'close_ohlcv' if 'close_ohlcv' in df.columns else 'close'
             df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
-            df['atr_14'] = calculate_atr(df, period=14).ffill().fillna(0)
+            df['atr_14'] = calculate_atr(df).ffill().fillna(0)
             df['close'] = df[close_col]
-
-            df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
-            df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
-            df['daily_returns'] = df['close'].pct_change()
-            df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
-            df['nabla_sq'] = df['price_gravity']
             
-            df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
-            df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
-            df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
+            # H2 Metrics
+            insider = h2.get('insider_df')
+            news = h2.get('news_df')
+            df['institutional_sync'] = df.apply(lambda r: aqm_v3_metrics.calculate_institutional_sync_from_data(insider, r.name), axis=1)
+            df['retail_herding'] = df.apply(lambda r: aqm_v3_metrics.calculate_retail_herding_from_data(news, r.name), axis=1)
+            
+            # H3 Pre-Calc (Manual Override for m_sq news fix)
+            df['daily_returns'] = df['close'].pct_change()
+            df['market_temperature'] = df['daily_returns'].rolling(30).std()
+            
+            if not news.empty:
+                nc = news.groupby(news.index.date).size()
+                nc.index = pd.to_datetime(nc.index)
+                nc = nc.reindex(df.index, fill_value=0)
+                df['information_entropy'] = nc.rolling(10).sum()
+            else: df['information_entropy'] = 0.0
+            
+            # === FIX: NEWSY W MASIE ===
+            # Obliczamy m_sq "ręcznie" zamiast przez funkcję, żeby wymusić normalized_news=0
+            df['avg_volume_10d'] = df['volume'].rolling(10).mean()
+            df['vol_mean_200d'] = df['avg_volume_10d'].rolling(200).mean()
+            df['vol_std_200d'] = df['avg_volume_10d'].rolling(200).std()
             df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).fillna(0)
             
-            if not news_df.empty:
-                news_counts = news_df.groupby(news_df.index.date).size()
-                news_counts.index = pd.to_datetime(news_counts.index)
-                news_counts = news_counts.reindex(df.index, fill_value=0)
-                df['information_entropy'] = news_counts.rolling(window=10).sum()
-                # === FIX: PRZYWRÓCENIE LOGIKI "222 SETUPY" ===
-                # W oryginalnym (udanym) backteście V4/V3, normalized_news było zerowane dla obliczeń MASY (m^2).
-                # Newsy wchodziły tylko do 'information_entropy' (J).
-                # Wprowadzenie normalized_news do m_sq w V5 podbiło masę i zabiło sygnały.
-                df['normalized_news'] = 0.0
-            else:
-                df['information_entropy'] = 0.0; df['normalized_news'] = 0.0
-            
+            df['normalized_news'] = 0.0 # IGNORUJ NEWSY W MASIE (Zgodność z Optimizerem)
             df['m_sq'] = df['normalized_volume'] + df['normalized_news']
-
-            df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(H3_CALC_WINDOW).mean()) / df['institutional_sync'].rolling(H3_CALC_WINDOW).std()
-            df['mu_normalized'] = df['mu_normalized'].fillna(0)
-            df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+            df['nabla_sq'] = df['price_gravity']
+            
+            # H3 Full Calc (Percentile & Score)
+            # Używamy funkcji z utils do reszty (J, normalizacja), ale nadpisujemy m_sq naszym
+            # Wymaga triku: funkcja calculate_h3_metrics_v4 używa kolumn, jeśli istnieją.
+            # Ale musimy uważać, bo ona może nadpisać m_sq.
+            # Bezpieczniej: Użyjmy funkcji, a potem nadpiszmy m_sq_norm, jeśli trzeba.
+            # ALE funkcja w utils liczy m_sq wewnątrz.
+            # NAJLEPSZE: Przekażmy parametry do funkcji utils, żeby wiedziała o newsach? Nie, utils jest wspólne.
+            # ROZWIĄZANIE: Obliczamy score RĘCZNIE tutaj, żeby mieć pełną kontrolę.
+            
+            # J Calc
+            df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(100).mean()) / df['institutional_sync'].rolling(100).std().fillna(1)
+            df['retail_herding_capped'] = df['retail_herding'].clip(-1, 1)
             
             S = df['information_entropy']
             Q = df['retail_herding_capped']
             T = df['market_temperature']
-            mu_norm = df['mu_normalized']
+            mu = df['mu_normalized'].fillna(0)
             
-            df['J'] = (S - (Q / T.replace(0, np.nan)) + (mu_norm * 1.0)).fillna(0)
-
-            j_mean = df['J'].rolling(window=H3_CALC_WINDOW).mean()
-            j_std = df['J'].rolling(window=H3_CALC_WINDOW).std()
-            j_norm = ((df['J'] - j_mean) / j_std).fillna(0)
+            df['J'] = (S - (Q/T.replace(0, np.nan)) + (mu*1.0)).fillna(0)
             
-            nabla_mean = df['nabla_sq'].rolling(window=H3_CALC_WINDOW).mean()
-            nabla_std = df['nabla_sq'].rolling(window=H3_CALC_WINDOW).std()
-            nabla_norm = ((df['nabla_sq'] - nabla_mean) / nabla_std).fillna(0)
+            # Normalizacja (Window 100)
+            j_norm = ((df['J'] - df['J'].rolling(100).mean()) / df['J'].rolling(100).std()).fillna(0)
+            nabla_norm = ((df['nabla_sq'] - df['nabla_sq'].rolling(100).mean()) / df['nabla_sq'].rolling(100).std()).fillna(0)
             
-            m_mean = df['m_sq'].rolling(window=H3_CALC_WINDOW).mean()
-            m_std = df['m_sq'].rolling(window=H3_CALC_WINDOW).std()
+            # Nasze m_sq (bez newsów)
+            m_mean = df['m_sq'].rolling(100).mean()
+            m_std = df['m_sq'].rolling(100).std()
             m_norm = ((df['m_sq'] - m_mean) / m_std).fillna(0)
             
-            aqm_score_series = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
-            threshold_series = aqm_score_series.rolling(window=H3_CALC_WINDOW).quantile(h3_percentile)
-
-            last_candle = df.iloc[-1]
-            current_aqm = aqm_score_series.iloc[-1]
-            current_thresh = threshold_series.iloc[-1]
-            current_m = m_norm.iloc[-1]
-
-            is_score_good = (current_aqm > current_thresh) and (current_aqm > h3_min_score)
-            is_mass_good = (current_m < h3_m_sq_threshold)
+            aqm_score = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
+            thresh = aqm_score.rolling(100).quantile(h3_p)
             
-            if not is_score_good:
-                reject_stats['aqm_low'] += 1; append_scan_log(session, f"❌ {ticker}: AQM {current_aqm:.2f} < {current_thresh:.2f}"); continue
-            if not is_mass_good:
-                reject_stats['m_sq_high'] += 1; append_scan_log(session, f"❌ {ticker}: Masa {current_m:.2f} > {h3_m_sq_threshold:.2f}"); continue
-
-            sector_trend = _get_sector_trend_from_cache(session, ticker)
-            setup_score, score_details = _calculate_setup_score(current_aqm, current_thresh, current_m, df, market_pkg['spy_df'], sector_trend)
+            # Ocena ostatniej świecy
+            curr_aqm = aqm_score.iloc[-1]
+            curr_thr = thresh.iloc[-1]
+            curr_m = m_norm.iloc[-1]
             
-            surplus = current_aqm - current_thresh
-            ev_bucket = 'LOW' if surplus < 0.2 else ('MID' if surplus < 0.5 else 'HIGH')
-            ev_stats = ev_model.get(ev_bucket, {'ev': 0.0})
-            calculated_ev = ev_stats['ev'] if ev_model else (surplus * 2.0)
-
-            atr = last_candle['atr_14']
-            ref_price = last_candle['close']
-            take_profit = ref_price + (h3_tp_mult * atr)
-            stop_loss = ref_price - (h3_sl_mult * atr)
-            entry_price = ref_price
-
-            current_live_quote = api_client.get_global_quote(ticker)
-            current_live_price = safe_float(current_live_quote.get('05. price')) if current_live_quote else None
+            if curr_aqm <= curr_thr or curr_aqm <= h3_min:
+                rejects['aqm']+=1; append_scan_log(session, f"❌ {ticker}: AQM {curr_aqm:.2f} < {curr_thr:.2f}"); continue
+            if curr_m >= h3_m:
+                rejects['mass']+=1; append_scan_log(session, f"❌ {ticker}: Masa {curr_m:.2f} > {h3_m:.2f}"); continue
+                
+            # Score & EV
+            st = _get_sector_trend(session, ticker)
+            score, det = _calculate_setup_score(curr_aqm, curr_thr, curr_m, df, mkt['spy_df'], st)
+            surplus = curr_aqm - curr_thr
+            ev_b = 'LOW' if surplus < 0.2 else ('MID' if surplus < 0.5 else 'HIGH')
+            ev = ev_model.get(ev_b, {'ev': surplus*2})['ev']
             
-            valid_status = True
-            valid_reason = ""
-            if current_live_price:
-                # Teraz funkcja jest zdefiniowana i dostępna!
-                valid_status, valid_reason = _is_setup_still_valid(entry_price, stop_loss, take_profit, current_live_price)
-
-            if not valid_status:
-                reject_stats['validation'] += 1; append_scan_log(session, f"❌ {ticker}: Live Error: {valid_reason}"); continue
-
-            recommendation = "HOLD"
-            if setup_score >= 80: recommendation = "TOP_PICK 💎"
-            elif setup_score >= 60: recommendation = "STRONG_BUY ✅"
-            elif setup_score >= 40: recommendation = "MODERATE ⚠️"
-            else: recommendation = "WEAK ❌"
-
-            ranking_note = (
-                f"RANKING:\n"
-                f"EV: {calculated_ev:+.2f}% | SCORE: {setup_score}/100 | REKOMENDACJA: {recommendation}\n"
-                f"DETALE: Tech:{score_details['tech_score']} Mkt:{score_details['market_score']} "
-                f"RS:{score_details['rs_score']} Ctx:{score_details['context_score']}\n"
-                f"AQM:{current_aqm:.2f} (vs {current_thresh:.2f})"
-            )
-
-            existing = session.query(models.TradingSignal).filter(models.TradingSignal.ticker == ticker, models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])).first()
-            if not existing:
-                new_signal = models.TradingSignal(
+            # Live Check
+            last = df.iloc[-1]
+            entry = last['close'] # Zakładamy cenę zamknięcia jako bazę
+            tp = entry + (tp_mult * last['atr_14'])
+            sl = entry - (sl_mult * last['atr_14'])
+            
+            lq = client.get_global_quote(ticker)
+            lp = safe_float(lq.get('05. price')) if lq else None
+            
+            if lp:
+                valid, msg = _is_setup_still_valid(entry, sl, tp, lp)
+                if not valid:
+                    rejects['live']+=1; append_scan_log(session, f"❌ {ticker}: Live: {msg}"); continue
+            
+            # Success
+            rec = "HOLD"
+            if score >= 80: rec = "TOP 💎"
+            elif score >= 60: rec = "BUY ✅"
+            elif score >= 40: rec = "MOD ⚠️"
+            else: rec = "WEAK ❌"
+            
+            note = f"RANKING:\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{det['tech_score']} Mkt:{det['market_score']} RS:{det['rs_score']} Ctx:{det['context_score']}\nAQM:{curr_aqm:.2f} (vs {curr_thr:.2f})"
+            
+            ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
+            if not ex:
+                sig = models.TradingSignal(
                     ticker=ticker, status='PENDING', generation_date=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
-                    signal_candle_timestamp=last_candle.name, entry_price=float(entry_price), stop_loss=float(stop_loss), take_profit=float(take_profit),
-                    entry_zone_top=float(ref_price + (0.5 * atr)), entry_zone_bottom=float(ref_price - (0.5 * atr)), risk_reward_ratio=float(h3_tp_mult/h3_sl_mult),
-                    notes=ranking_note
+                    signal_candle_timestamp=last.name, entry_price=entry, stop_loss=sl, take_profit=tp,
+                    entry_zone_top=entry+(0.5*last['atr_14']), entry_zone_bottom=entry-(0.5*last['atr_14']),
+                    risk_reward_ratio=tp_mult/sl_mult, notes=note
                 )
-                session.add(new_signal)
-                session.commit()
-                signals_generated += 1
-                success_msg = (f"💎 SYGNAŁ: {ticker} | EV: {calculated_ev:+.1f}% | SCORE: {setup_score} | {recommendation}")
-                logger.info(success_msg)
-                append_scan_log(session, success_msg)
-                send_telegram_alert(f"⚛️ H3 SIGNAL: {ticker}\nCena: {ref_price:.2f}\nSCORE: {setup_score} ({recommendation})")
+                session.add(sig); session.commit()
+                signals+=1
+                msg = f"💎 SYGNAŁ: {ticker} | EV: {ev:.1f}% | SCORE: {score} | {rec}"
+                logger.info(msg); append_scan_log(session, msg)
+                send_telegram_alert(f"⚛️ H3: {ticker}\nCena: {entry:.2f}\nSCORE: {score}")
             else:
-                append_scan_log(session, f"ℹ️ {ticker}: Sygnał już aktywny.")
-
+                append_scan_log(session, f"ℹ️ {ticker}: Już aktywny.")
+                
         except Exception as e:
-            logger.error(f"Błąd H3 Live dla {ticker}: {e}", exc_info=True)
-            append_scan_log(session, f"⛔ BŁĄD dla {ticker}: {e}")
-            session.rollback()
+            logger.error(f"Error {ticker}: {e}")
             continue
-
-    update_scan_progress(session, total_candidates, total_candidates)
-    summary_msg = (f"🏁 Faza 3 zakończona. Sygnałów: {signals_generated}. "
-                   f"Odrzuty: AQM={reject_stats['aqm_low']}, Masa={reject_stats['m_sq_high']}, Live={reject_stats['validation']}")
-    append_scan_log(session, summary_msg)
-    logger.info(f"Faza 3 zakończona. Sygnałów: {signals_generated}")
+            
+    update_scan_progress(session, len(candidates), len(candidates))
+    sum_msg = f"🏁 Faza 3: Sygnałów: {signals}. Odrzuty: AQM={rejects['aqm']}, Masa={rejects['mass']}, Live={rejects['live']}"
+    append_scan_log(session, sum_msg)
