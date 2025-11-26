@@ -236,10 +236,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         logger.error(f"[Backtest Utils] Błąd transakcji: {e}")
         return None
 
-# ==================================================================
-# === NOWE FUNKCJE V4 - BEZPIECZNIE DODANE PONIŻEJ ISTNIEJĄCYCH ===
-# ==================================================================
-
 def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.Series:
     """
     BEZPIECZNA NOWA FUNKCJA: Normalizacja Institutional Sync (Z-Score) dla V4
@@ -252,6 +248,19 @@ def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.S
     except Exception as e:
         logger.error(f"Błąd normalizacji institutional_sync_v4: {e}")
         return pd.Series(0, index=df.index)
+
+# ==================================================================
+# === FIX IMPORT ERROR: Dodano brakującą funkcję ===
+# ==================================================================
+def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
+    """
+    BEZPIECZNA NOWA FUNKCJA: Capping wartości ekstremalnych Retail Herding
+    Importowana przez phase3_sniper.py
+    """
+    if retail_herding_series.empty:
+        return retail_herding_series
+    return retail_herding_series.clip(-1.0, 1.0)
+# ==================================================================
 
 def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     """
@@ -274,21 +283,20 @@ def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
         
         # 2. Cap wartości ekstremalnych dla Retail Herding
         if 'retail_herding' in df.columns:
-            df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+            df['retail_herding_capped'] = calculate_retail_herding_capped_v4(df['retail_herding'])
         else:
             df['retail_herding_capped'] = 0.0
         
         # 3. Obliczenie J
-        # Upewnij się, że kolumny wejściowe istnieją
         if 'information_entropy' not in df.columns: df['information_entropy'] = 0.0
-        if 'market_temperature' not in df.columns: df['market_temperature'] = 0.0001 # Unikamy dzielenia przez 0
+        if 'market_temperature' not in df.columns: df['market_temperature'] = 0.0001 
 
         S = df['information_entropy']
         Q = df['retail_herding_capped']
-        T = df['market_temperature'].replace(0, np.nan).fillna(0.0001) # Safety net
+        T = df['market_temperature'].replace(0, np.nan).fillna(0.0001) 
         mu_norm = df['mu_normalized']
         
-        # Formuła H3: J = S - (Q/T) + (mu * 1.0)
+        # Formuła H3
         df['J'] = S - (Q / T) + (mu_norm * 1.0)
         df['J'] = df['J'].replace([np.inf, -np.inf], 0).fillna(0)
         
@@ -322,25 +330,18 @@ def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
         
     except Exception as e:
         logger.error(f"Błąd calculate_h3_metrics_v4 (CRITICAL FIX): {e}", exc_info=True)
-        # Fallback: Zwróć DF z zerami w wymaganych kolumnach, aby nie wysypać Snipera
+        # Fallback
         for col in ['aqm_score_h3', 'aqm_percentile_95', 'm_sq_norm']:
             if col not in df.columns: df[col] = 0.0
         return df
 
 def get_optimized_periods_v4(target_year: int) -> list:
-    """
-    BEZPIECZNA NOWA FUNKCJA: Optymalizacja okresów dla przyspieszenia V4
-    Zwraca 2 okresy zamiast 4 (2x przyspieszenie)
-    """
     return [
         (f"{target_year}-01-01", f"{target_year}-06-30"),
         (f"{target_year}-07-01", f"{target_year}-12-31")
     ]
 
 def get_optimized_tickers_v4(session: Session, limit: int = 100) -> list:
-    """
-    PRZYSPIESZENIE: Zwraca tylko najbardziej płynne tickery
-    """
     try:
         result = session.execute(text("""
             SELECT DISTINCT ticker FROM (
@@ -358,14 +359,9 @@ def get_optimized_tickers_v4(session: Session, limit: int = 100) -> list:
         return [r[0] for r in result]
 
 def precompute_h3_metrics_v4(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    PRZYSPIESZENIE: Prekomputuje metryki H3
-    """
-    # Uproszczone obliczenia dla szybkości
     df['m_sq'] = df['volume'].rolling(10).mean() / df['volume'].rolling(200).mean() - 1
     df['nabla_sq'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
     
-    # Szybka normalizacja
     for col in ['m_sq', 'nabla_sq']:
         mean = df[col].rolling(100).mean()
         std = df[col].rolling(100).std()
