@@ -8,12 +8,12 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from sqlalchemy import text, select, func
 
-from .models import Base, OptimizationJob # Dodano OptimizationJob
+from .models import Base, OptimizationJob 
 from .database import get_db_session, engine
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
-    signal_monitor, apex_optimizer # <--- Dodano apex_optimizer
+    signal_monitor, apex_optimizer 
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -140,10 +140,8 @@ def handle_h3_deep_dive_request(session) -> str:
     elif req == 'PROCESSING': return 'BUSY'
     return 'IDLE'
 
-# === NOWA FUNKCJA: OBSŁUGA QUANTUM OPTIMIZER ===
 def handle_optimization_request(session) -> str:
-    """Obsługuje zlecenia optymalizacji Apex V4 (Optuna)."""
-    # W polu 'optimization_request' przechowujemy UUID zadania (Job ID)
+    """Obsługuje zlecenia optymalizacji Apex V4/V5/V6/V7 (Optuna)."""
     job_id = utils.get_system_control_value(session, 'optimization_request')
     
     if job_id and job_id not in ['NONE', 'PROCESSING']:
@@ -152,17 +150,16 @@ def handle_optimization_request(session) -> str:
         utils.update_system_control(session, 'optimization_request', 'PROCESSING')
         
         try:
-            # Pobierz szczegóły zadania z bazy
             job = session.query(OptimizationJob).filter(OptimizationJob.id == job_id).first()
             if not job:
                 logger.error(f"Optimization Job {job_id} not found in DB.")
                 return 'IDLE'
             
-            # Uruchom Quantum Optimizer
+            # Uruchom Quantum Optimizer (V7 Turbo)
             optimizer = apex_optimizer.QuantumOptimizer(session, job_id, job.target_year)
             optimizer.run(n_trials=job.total_trials)
             
-            utils.append_scan_log(session, f"Optymalizacja V4 zakończona. Wynik: {job.best_score}")
+            utils.append_scan_log(session, f"Optymalizacja V7 zakończona. Wynik: {job.best_score}")
 
         except Exception as e:
             logger.error(f"Critical Optimization Error: {e}", exc_info=True)
@@ -176,7 +173,6 @@ def handle_optimization_request(session) -> str:
         return 'BUSY'
         
     return 'IDLE'
-# ===============================================
 
 def main_loop():
     global current_state, api_client
@@ -185,24 +181,28 @@ def main_loop():
         Base.metadata.create_all(bind=engine)
         initialize_database_if_empty(session, api_client)
     
-    # Główne skanowanie raz dziennie
-    schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
+    # === MODYFIKACJA: TRYB MANUALNY ===
+    # Zakomentowano automatyczne skanowanie. 
+    # Użytkownik sam wywoła "Skanuj F1" z poziomu UI, kiedy będzie gotowy.
     
-    # Agent Newsowy co 2 minuty
+    # schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
+    
+    # Agenci pomocniczy i strażnicy POZOSTAJĄ AKTYWNI
+    # Agent Newsowy co 2 minuty (to jest bezpieczne, tylko nasłuchuje)
     schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
     
-    # Monitor Wirtualnego Agenta (stary, dobowy)
+    # Monitor Wirtualnego Agenta (zamykanie starych pozycji)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(lambda: virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client))
 
-    # === STRAŻNIK SYGNAŁÓW (H3 LIVE) ===
-    # Uruchamiamy co 1 minutę, aby monitorować Entry/TP/SL w tle
+    # Strażnik Sygnałów (H3 Live) - monitoruje SL/TP dla aktywnych sygnałów
     schedule.every(1).minutes.do(lambda: signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client))
-    # ============================================
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         utils.report_heartbeat(initial_session)
+        # Informacja w logach, że jesteśmy w trybie manualnym
+        utils.append_scan_log(initial_session, "SYSTEM: Tryb Manualny Aktywny. Automatyczne skanowanie nocne wyłączone.")
 
     while True:
         with get_db_session() as session:
@@ -218,7 +218,6 @@ def main_loop():
                 status = handle_backtest_request(session, api_client)
                 if status == 'IDLE': status = handle_ai_optimizer_request(session)
                 if status == 'IDLE': status = handle_h3_deep_dive_request(session)
-                # === NOWOŚĆ: Obsługa zadania optymalizacji ===
                 if status == 'IDLE': status = handle_optimization_request(session)
                 
                 worker_status = utils.get_system_control_value(session, 'worker_status')
