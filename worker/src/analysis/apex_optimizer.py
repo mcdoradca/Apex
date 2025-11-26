@@ -18,14 +18,67 @@ from .utils import (
     get_optimized_periods_v4,
     standardize_df_columns, 
     calculate_atr,
-    calculate_h3_metrics_v4  # Pełna logika V5
+    calculate_h3_metrics_v4,  # Pełna logika V5
+    get_raw_data_with_cache   # Potrzebne do ładowania danych w wątkach
 )
 from . import aqm_v3_metrics 
+from . import aqm_v3_h2_loader
 from .apex_audit import SensitivityAnalyzer
 from ..database import get_db_session 
 
 logger = logging.getLogger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+# ==============================================================================
+# === NOWA KLASA: AdaptiveExecutor (Brakujący element dla Phase 3 Sniper) ===
+# ==============================================================================
+class AdaptiveExecutor:
+    """
+    Moduł adaptacji parametrów w czasie rzeczywistym (Live).
+    Dostosowuje sztywne parametry strategii do bieżącego reżimu rynkowego (VIX, Trend).
+    """
+    def __init__(self, base_params: dict):
+        self.base_params = base_params
+
+    def get_adapted_params(self, market_context: dict) -> dict:
+        """
+        Zwraca zmodyfikowane parametry na podstawie kontekstu rynkowego.
+        market_context: {'vix': float, 'trend': 'BULL'/'BEAR'/'NEUTRAL'}
+        """
+        adapted = self.base_params.copy()
+        
+        vix = market_context.get('vix', 20.0)
+        trend = market_context.get('trend', 'NEUTRAL')
+        
+        # 1. Adaptacja do Zmienności (VIX)
+        # Jeśli VIX jest wysoki (>25), rynek jest "dziki".
+        # Reakcja: Zwiększamy SL (żeby nie wyrzuciło na szumie) i zwiększamy TP (większy potencjał).
+        if vix > 25.0:
+            # Zwiększamy mnożniki ATR
+            adapted['h3_sl_multiplier'] = adapted.get('h3_sl_multiplier', 2.0) * 1.5
+            adapted['h3_tp_multiplier'] = adapted.get('h3_tp_multiplier', 5.0) * 1.2
+            # Zaostrzamy kryteria wejścia (tylko pewne sygnały)
+            adapted['h3_percentile'] = min(0.99, adapted.get('h3_percentile', 0.95) + 0.02)
+            
+        # Jeśli VIX jest niski (<15), rynek jest "ospały".
+        # Reakcja: Zmniejszamy TP (mniejsze ruchy) i ewentualnie SL (mniejszy szum).
+        elif vix < 15.0:
+            adapted['h3_tp_multiplier'] = adapted.get('h3_tp_multiplier', 5.0) * 0.8
+            adapted['h3_sl_multiplier'] = max(1.5, adapted.get('h3_sl_multiplier', 2.0) * 0.8)
+
+        # 2. Adaptacja do Trendu (SPY)
+        # Jeśli trend jest spadkowy (BEAR), a my gramy LONG (domyślnie w H3):
+        if trend == 'BEAR':
+            # Bardzo rygorystyczne wejścia
+            adapted['h3_min_score'] = max(0.5, adapted.get('h3_min_score', 0.0))
+            # Szybsze realizowanie zysków
+            adapted['h3_tp_multiplier'] = adapted.get('h3_tp_multiplier', 5.0) * 0.7
+            
+        return adapted
+
+# ==============================================================================
+# === ISTNIEJĄCA KLASA: QuantumOptimizer (Bez zmian) ===
+# ==============================================================================
 
 class QuantumOptimizer:
     """
@@ -33,8 +86,6 @@ class QuantumOptimizer:
     - Równoległa optymalizacja bayesowska
     - Cache'owanie danych w pamięci RAM
     - UŻYWA PEŁNEJ LOGIKI H3 (J - m^2 - nabla^2) DLA ZGODNOŚCI Z FAZĄ 3
-    - FIX LOGÓW: Pełna transparentność procesu w UI
-    - FIX LOGIKI (V5.4): m_sq ignoruje newsy (normalized_news = 0.0), J uwzględnia newsy.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -132,7 +183,7 @@ class QuantumOptimizer:
             append_scan_log(self.session, msg_err)
             return
 
-        # Ograniczamy tickery dla wydajności, ale informujemy o tym
+        # Ograniczamy tickery dla wydajności
         tickers_to_load = tickers[:200] 
         append_scan_log(self.session, f"Znaleziono {len(tickers)} tickerów. Ładowanie {len(tickers_to_load)} najaktywniejszych do pamięci RAM...")
 
@@ -146,7 +197,6 @@ class QuantumOptimizer:
                 try:
                     future.result()
                     loaded_count += 1
-                    # Raportuj co 50 tickerów, żeby nie spamować, ale dawać znak życia
                     if loaded_count % 50 == 0:
                         append_scan_log(self.session, f"   ... załadowano {loaded_count}/{len(tickers_to_load)} tickerów")
                 except Exception as e:
@@ -158,12 +208,10 @@ class QuantumOptimizer:
 
     def _load_ticker_data(self, ticker):
         """Ładuje i PRZETWARZA PEŁNE DANE dla tickera"""
-        # Używamy osobnej sesji dla wątku
         with get_db_session() as thread_session:
             try:
                 api_client = backtest_engine.AlphaVantageClient()
                 
-                # 1. Pobierz dane surowe
                 daily_data = get_raw_data_with_cache(
                     thread_session, api_client, ticker, 
                     'DAILY_OHLCV', 'get_time_series_daily', outputsize='full'
@@ -171,9 +219,7 @@ class QuantumOptimizer:
                 h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, thread_session)
                 
                 if daily_data and h2_data:
-                    # 2. WSTĘPNE PRZETWARZANIE (Parsing + Full H3 Logic)
                     processed_df = self._preprocess_ticker_full_h3(daily_data, h2_data)
-                    
                     if not processed_df.empty:
                         self.data_cache[ticker] = processed_df
                         
@@ -200,10 +246,8 @@ class QuantumOptimizer:
     def _preprocess_ticker_full_h3(self, daily_data, h2_data) -> pd.DataFrame:
         """
         TWORZY PEŁNY DATAFRAME ZGODNY Z FAZĄ 3 (LIVE).
-        Używa calculate_h3_metrics_v4 z utils.py.
         """
         try:
-            # 1. Standardyzacja OHLC
             daily_df = standardize_df_columns(
                 pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index')
             )
@@ -212,18 +256,15 @@ class QuantumOptimizer:
             daily_df.index = pd.to_datetime(daily_df.index)
             daily_df.sort_index(inplace=True)
 
-            # 2. Podstawowe wskaźniki
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
             daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
             
-            # 3. Integracja danych H2
             insider_df = h2_data.get('insider_df')
             news_df = h2_data.get('news_df')
             
             daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
             daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
             
-            # 4. Metryki pośrednie
             daily_df['daily_returns'] = daily_df['close'].pct_change()
             daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std()
             
@@ -235,27 +276,21 @@ class QuantumOptimizer:
             else:
                 daily_df['information_entropy'] = 0.0
             
-            # Obliczanie m_sq (Zgodnie z Backtestem V4 Original - zerujemy normalized_news w m_sq)
             daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean()
             daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200).mean()
             daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200).std()
             daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
             
-            # KLUCZOWA ZMIANA: WYMUSZONE 0.0 dla NEWSÓW W MASIE
-            # To sprawia, że Optimizer "trenuje na czysto" i znajduje więcej okazji
             daily_df['normalized_news'] = 0.0 
             
             daily_df['m_sq'] = daily_df['normalized_volume'] + daily_df['normalized_news']
             daily_df['nabla_sq'] = daily_df['price_gravity']
 
-            # 5. FULL H3 CALCULATION (Importowana funkcja)
-            # Przekazujemy puste params, bo percentyl liczymy dynamicznie w _run_fast_simulation
             daily_df = calculate_h3_metrics_v4(daily_df, {}) 
             
             return daily_df.fillna(0)
             
         except Exception as e:
-            # logger.error(f"Błąd preprocessingu dla Optimzera: {e}") # Unikamy spamu w logach
             return pd.DataFrame()
 
     def _objective(self, trial):
@@ -281,10 +316,8 @@ class QuantumOptimizer:
             
             final_score = pf 
             
-            # Logowanie postępu do UI co 10 prób
             if trial.number % 10 == 0:
                 log_msg = f"🔸 Próba {trial.number}: PF={pf:.2f}, Trades={trades}"
-                # logger.info(log_msg)
                 append_scan_log(self.session, log_msg)
 
             if final_score > self.best_score_so_far:
@@ -299,7 +332,6 @@ class QuantumOptimizer:
 
     def _run_fast_simulation(self, params, start_date, end_date):
         trades_results = []
-        
         tickers = list(self.data_cache.keys())
         
         for ticker in tickers:
@@ -307,7 +339,6 @@ class QuantumOptimizer:
             if df.empty: continue
             
             try:
-                # DYNAMICZNE OBLICZANIE PROGU na podstawie prekomputowanego aqm_score_h3
                 current_thresholds = df['aqm_score_h3'].rolling(window=100).quantile(params['h3_percentile'])
                 
                 start_idx = df.index.searchsorted(pd.Timestamp(start_date))
@@ -315,7 +346,6 @@ class QuantumOptimizer:
                 
                 if start_idx >= end_idx: continue
                 
-                # Iteracja po dniach
                 for i in range(start_idx, min(end_idx, len(df) - 1)):
                     score = df.iloc[i]['aqm_score_h3']
                     threshold = current_thresholds.iloc[i]
@@ -350,7 +380,6 @@ class QuantumOptimizer:
                                 pnl = (candle['close'] - entry_price) / entry_price
                         
                         trades_results.append(pnl * 100)
-                        
             except Exception:
                 continue
 
