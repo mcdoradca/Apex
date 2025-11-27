@@ -87,6 +87,84 @@ export const showPortfolio = async () => {
     }
 };
 
+// === NOWOŚĆ: Kontroler Widoku Sygnałów H3 ===
+const _extractScore = (notes) => {
+    if (!notes) return 0;
+    const match = notes.match(/SCORE:\s*(\d+)/);
+    return match ? parseInt(match[1]) : 0;
+};
+
+const _renderH3ViewInternal = () => {
+    // 1. Sortowanie (w pamięci)
+    const sortedSignals = [...state.phase3].sort((a, b) => {
+        let valA, valB;
+        // Domyślny kierunek sortowania zależy od metryki (np. Score malejąco, Czas rosnąco)
+        // Możemy to sterować przez state.h3SortDirection jeśli UI na to pozwoli,
+        // na razie przyjmujemy "naturalne" sortowanie dla tradera (Najlepsze na górze).
+        
+        switch (state.h3SortBy) {
+            case 'score': // Malejąco (Najwyższy Score)
+                valA = _extractScore(a.notes);
+                valB = _extractScore(b.notes);
+                return valB - valA; 
+            case 'rr': // Malejąco (Najwyższy R:R)
+                valA = parseFloat(a.risk_reward_ratio || 0);
+                valB = parseFloat(b.risk_reward_ratio || 0);
+                return valB - valA;
+            case 'time': // Rosnąco (Najkrótszy czas do końca)
+                valA = a.expiration_date ? new Date(a.expiration_date).getTime() : Number.MAX_SAFE_INTEGER;
+                valB = b.expiration_date ? new Date(b.expiration_date).getTime() : Number.MAX_SAFE_INTEGER;
+                return valA - valB;
+            case 'ticker': // Rosnąco (A-Z)
+                return a.ticker.localeCompare(b.ticker);
+            default:
+                return 0;
+        }
+    });
+
+    // 2. Renderowanie HTML
+    UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals);
+
+    // 3. Podpięcie zdarzeń do nowego widoku
+    const sortSelect = document.getElementById('h3-sort-select');
+    const refreshBtn = document.getElementById('h3-refresh-btn');
+    const cards = document.querySelectorAll('.phase3-item'); // Karty w gridzie
+
+    if (sortSelect) {
+        sortSelect.value = state.h3SortBy;
+        sortSelect.addEventListener('change', (e) => {
+            state.h3SortBy = e.target.value;
+            _renderH3ViewInternal(); // Przerysuj posortowane
+        });
+    }
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', showH3Signals);
+    }
+
+    cards.forEach(card => {
+        card.addEventListener('click', () => {
+            const ticker = card.dataset.ticker;
+            if (ticker) showSignalDetails(ticker);
+        });
+    });
+
+    if (window.lucide) window.lucide.createIcons();
+};
+
+export const showH3Signals = async () => {
+    if (!UI) return;
+    showLoading();
+    try {
+        const signals = await api.getPhase3Signals();
+        state.phase3 = signals || [];
+        _renderH3ViewInternal();
+    } catch (e) {
+        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania sygnałów: ${e.message}</p>`;
+    }
+};
+// ============================================
+
 export const showTransactions = async () => {
     showLoading();
     try {
@@ -119,6 +197,7 @@ export const refreshSidebarData = async () => {
         updateElement(UI.phase1.count, state.phase1.length);
         updateElement(UI.phase1.list, renderers.phase1List(state.phase1), true);
 
+        // Sidebar Phase 3 (Mini-lista) też odświeżamy
         const phase3Data = await api.getPhase3Signals();
         state.phase3 = phase3Data || [];
         updateElement(UI.phase3.count, state.phase3.length);
@@ -410,14 +489,12 @@ export const handleRunH3LiveScan = async () => {
     }
 };
 
-// === ZAKTUALIZOWANA FUNKCJA WYŚWIETLANIA DETALI (Obsługa Rankingu) ===
 export const showSignalDetails = async (ticker) => {
     UI.signalDetails.backdrop.classList.remove('hidden');
     UI.signalDetails.ticker.textContent = ticker;
     UI.signalDetails.companyName.textContent = "Ładowanie...";
     UI.signalDetails.currentPrice.textContent = "---";
     
-    // Reset widoku (usuń stare dynamiczne elementy)
     const existingRanking = document.getElementById('dynamic-ranking-card');
     if (existingRanking) existingRanking.remove();
 
@@ -503,7 +580,6 @@ export const showSignalDetails = async (ticker) => {
                 UI.signalDetails.rr.textContent = data.setup.risk_reward ? data.setup.risk_reward.toFixed(2) : "---";
                 UI.signalDetails.generationDate.textContent = new Date(data.setup.generation_date).toLocaleString('pl-PL');
 
-                // === NOWOŚĆ: PARSOWANIE RANKINGU ===
                 if (data.setup.notes && data.setup.notes.includes("RANKING:")) {
                     _injectRankingCard(data.setup.notes);
                 }
@@ -538,11 +614,9 @@ export const showSignalDetails = async (ticker) => {
     signalDetailsInterval = setInterval(fetchData, 3000);
 };
 
-// === NOWA FUNKCJA POMOCNICZA: Renderowanie Karty Rankingu ===
 const _injectRankingCard = (notes) => {
-    if (document.getElementById('dynamic-ranking-card')) return; // Już dodano
+    if (document.getElementById('dynamic-ranking-card')) return; 
 
-    // Parsowanie danych z notatki
     const evMatch = notes.match(/EV:\s*([+\-]?\d+\.?\d*)%/i);
     const scoreMatch = notes.match(/SCORE:\s*(\d+)\/100/i);
     const recMatch = notes.match(/REKOMENDACJA:\s*(.*?)(?:\n|$)/i);
@@ -561,11 +635,9 @@ const _injectRankingCard = (notes) => {
         ctx: parseInt(detailsMatch[4])
     } : { tech: 0, mkt: 0, rs: 0, ctx: 0 };
 
-    // Kolory zależne od jakości
     const scoreColor = scoreVal >= 80 ? "text-purple-400" : (scoreVal >= 60 ? "text-green-400" : "text-yellow-400");
     const evColor = evVal > 2.0 ? "text-green-400" : (evVal > 0 ? "text-blue-300" : "text-gray-400");
 
-    // HTML Karty
     const html = `
         <div id="dynamic-ranking-card" class="bg-gradient-to-br from-gray-800 to-gray-900 p-5 rounded-lg border border-purple-500/30 shadow-lg shadow-purple-900/20 mb-6 relative overflow-hidden">
             <div class="absolute top-0 right-0 p-2 opacity-10 pointer-events-none">
@@ -609,15 +681,11 @@ const _injectRankingCard = (notes) => {
         </div>
     `;
 
-    // Znajdź punkt wstawienia (Prawa kolumna, przed Setup H3)
-    // Używamy bezpiecznego selektora opartego na strukturze modalu
     const entryEl = document.getElementById('sd-entry-price');
     if (entryEl) {
-        // Wspinamy się w górę drzewa DOM do kontenera prawej kolumny
         const rightCol = entryEl.closest('.space-y-6');
         if (rightCol) {
             rightCol.insertAdjacentHTML('afterbegin', html);
-            // Inicjalizacja ikon Lucide dla nowej zawartości
             if (window.lucide) window.lucide.createIcons();
         }
     }
@@ -630,8 +698,6 @@ export const hideSignalDetails = () => {
     signalDetailsInterval = null;
     signalDetailsClockInterval = null;
 };
-
-// === NOWOŚĆ: Logika Quantum Lab (V4) ===
 
 export const showQuantumModal = () => {
     UI.quantumModal.backdrop.classList.remove('hidden');
@@ -682,7 +748,6 @@ export const showOptimizationResults = async () => {
         const results = await api.getOptimizationResults();
         UI.optimizationResultsModal.content.innerHTML = renderers.optimizationResults(results);
         
-        // === OBSŁUGA KLIKNIĘCIA W 'UŻYJ' ===
         const useButtons = UI.optimizationResultsModal.content.querySelectorAll('.use-params-btn');
         useButtons.forEach(btn => {
             btn.addEventListener('click', (e) => {
