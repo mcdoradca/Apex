@@ -108,10 +108,9 @@ def _run_schema_and_index_migration(session: Session):
 def force_reset_simulation_data(session: Session):
     """
     !!! UWAGA: FUNKCJA DESTRUKCYJNA !!!
-    Usuwa wszystkie wyniki symulacji (Sygnały, Transakcje, Kandydaci). 
-    Zostawia tabelę 'companies' i 'system_control' (częściowo).
+    Usuwa wszystkie wyniki symulacji. Można ją wywołać ręcznie w razie potrzeby.
     """
-    logger.warning("⚠️⚠️⚠️ WYKONYWANIE TWARDEGO RESETU BAZY (FORCE CLEAN) ⚠️⚠️⚠️")
+    # logger.warning("⚠️⚠️⚠️ TWARDY RESET ZOSTAŁ WYWOŁANY ⚠️⚠️⚠️")
     try:
         tables_to_clear = [
             "optimization_trials", 
@@ -127,7 +126,6 @@ def force_reset_simulation_data(session: Session):
             engine = session.get_bind()
             inspector = inspect(engine)
             if table in inspector.get_table_names():
-                logger.warning(f"Czyszczenie tabeli: {table}...")
                 session.execute(text(f"TRUNCATE TABLE {table} CASCADE;"))
             
         session.execute(text("UPDATE system_control SET value='0' WHERE key LIKE 'scan_progress_%'"))
@@ -135,7 +133,6 @@ def force_reset_simulation_data(session: Session):
         session.execute(text("UPDATE system_control SET value='IDLE' WHERE key='worker_status'"))
         
         session.commit()
-        logger.warning("✅✅✅ RESET ZAKOŃCZONY SUKCESEM. BAZA JEST CZYSTA. ✅✅✅")
         
     except Exception as e:
         logger.error(f"Błąd podczas resetu bazy: {e}", exc_info=True)
@@ -145,16 +142,14 @@ def initialize_database_if_empty(session: Session, api_client):
     """
     Inicjalizuje bazę danych przy starcie Workera.
     """
-    # 1. Najpierw migracja schematu (żeby tabele istniały)
+    # 1. Migracja schematu
     _run_schema_and_index_migration(session)
 
-    # === TWARDY RESET (TYMCZASOWO WŁĄCZONY) ===
-    # Wywołujemy to ZAWSZE przy starcie, aby wyczyścić stare dane zgodnie z Twoim życzeniem.
-    # W następnym kroku będziemy musieli to usunąć!
-    force_reset_simulation_data(session)
-    # ==========================================
+    # === TWARDY RESET WYŁĄCZONY ===
+    # force_reset_simulation_data(session) # <--- Zakomentowane, aby nie czyścić danych przy każdym starcie!
+    # ==============================
 
-    # 2. Seedowanie firm (jeśli pusta tabela companies)
+    # 2. Seedowanie firm (jeśli pusta)
     try:
         engine = session.get_bind()
         inspector = inspect(engine)
