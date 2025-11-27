@@ -32,7 +32,6 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 class AdaptiveExecutor:
     """
     Moduł adaptacji parametrów w czasie rzeczywistym (Live).
-    Dostosowuje sztywne parametry strategii do bieżącego reżimu rynkowego (VIX, Trend).
     """
     def __init__(self, base_params: dict):
         self.base_params = base_params
@@ -58,10 +57,9 @@ class AdaptiveExecutor:
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V7 - TURBO MODE + HIGH PF CONFIG
-    - Pre-kalkulacja Rankingu Percentylowego (O(1) w pętli symulacji).
-    - WYMUSZONY BRAK WPŁYWU NEWSÓW NA M_SQ (normalized_news = 0.0).
-      To ustawienie historycznie generowało najwyższy PF (1.67).
+    SERCE SYSTEMU APEX V9 - PHASE 1 SYNCHRONIZED
+    - Logika: m_sq ignoruje newsy (normalized_news = 0.0).
+    - Zasięg: Ścisła synchronizacja z Faza 1 (phase1_candidates).
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -73,10 +71,10 @@ class QuantumOptimizer:
         self.data_cache = {}  
         self.tickers_count = 0
         
-        logger.info(f"QuantumOptimizer V7 (Turbo + High PF) initialized for Job {job_id}")
+        logger.info(f"QuantumOptimizer V9 (Phase 1 Sync) initialized for Job {job_id}")
 
     def run(self, n_trials: int = 1000):
-        start_msg = f"🚀 QUANTUM OPTIMIZER V7: Start {self.job_id} (Rok: {self.target_year}, Próby: {n_trials})"
+        start_msg = f"🚀 QUANTUM OPTIMIZER V9: Start {self.job_id} (Rok: {self.target_year}, Próby: {n_trials})"
         logger.info(start_msg)
         append_scan_log(self.session, start_msg)
         update_system_control(self.session, 'worker_status', 'OPTIMIZING_INIT')
@@ -90,10 +88,10 @@ class QuantumOptimizer:
             self._preload_data_to_cache()
             
             if not self.data_cache:
-                raise Exception("Brak danych w cache. Prerywam.")
+                raise Exception("Brak danych w cache. Upewnij się, że Faza 1 zwróciła wyniki!")
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
-            msg_calc = "✅ Dane w RAM (V7 Turbo). Uruchamianie Optuny..."
+            msg_calc = f"✅ Dane w RAM ({len(self.data_cache)} spółek z Fazy 1). Uruchamianie Optuny..."
             logger.info(msg_calc)
             append_scan_log(self.session, msg_calc)
 
@@ -123,7 +121,6 @@ class QuantumOptimizer:
             logger.info(end_msg)
             append_scan_log(self.session, end_msg)
             
-            # Konwersja parametrów na native float
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
             append_scan_log(self.session, f"🏆 Zwycięskie Parametry:\n{json.dumps(safe_params, indent=2)}")
 
@@ -134,23 +131,30 @@ class QuantumOptimizer:
 
         except Exception as e:
             self.session.rollback()
-            error_msg = f"❌ QUANTUM OPTIMIZER V7 AWARIA: {str(e)}"
+            error_msg = f"❌ QUANTUM OPTIMIZER V9 AWARIA: {str(e)}"
             logger.error(error_msg, exc_info=True)
             append_scan_log(self.session, error_msg)
             self._mark_job_failed()
             raise
 
     def _preload_data_to_cache(self):
-        """Ładuje dane i oblicza STATIC RANKINGI dla ultra-szybkiego backtestu."""
+        """
+        Ładuje dane TYLKO dla kandydatów z Fazy 1 (i portfela).
+        To gwarantuje, że optymalizujemy pod to, czym realnie handlujemy.
+        """
         update_system_control(self.session, 'worker_status', 'OPTIMIZING_DATA_LOAD')
-        msg = "🔄 V7 PRELOAD: Ładowanie danych i obliczanie rankingów statycznych..."
+        msg = "🔄 V9 PRELOAD: Pobieranie spółek z Fazy 1..."
         logger.info(msg)
         append_scan_log(self.session, msg)
         
         tickers = self._get_all_tickers()
-        tickers_to_load = tickers[:250] # Limit dla bezpieczeństwa pamięci
         
-        with ThreadPoolExecutor(max_workers=4) as executor: 
+        # Limit techniczny dla RAMu (1000), ale lista jest już posortowana priorytetowo (Faza 1)
+        tickers_to_load = tickers[:1000]
+        
+        append_scan_log(self.session, f"   ... wybrano {len(tickers_to_load)} spółek (Baza: Phase 1).")
+        
+        with ThreadPoolExecutor(max_workers=8) as executor: 
             futures = []
             for ticker in tickers_to_load:
                 futures.append(executor.submit(self._load_ticker_data, ticker))
@@ -160,8 +164,8 @@ class QuantumOptimizer:
                 try:
                     f.result()
                     count += 1
-                    if count % 50 == 0:
-                        append_scan_log(self.session, f"   ... przetworzono {count}/{len(tickers_to_load)}")
+                    if count % 100 == 0:
+                        append_scan_log(self.session, f"   ... załadowano {count}/{len(tickers_to_load)}")
                 except: pass
         
         self.tickers_count = len(self.data_cache)
@@ -186,9 +190,8 @@ class QuantumOptimizer:
 
     def _preprocess_ticker_turbo(self, daily_data, h2_data) -> pd.DataFrame:
         """
-        V7 TURBO PREPROCESSING:
-        Oblicza wszystko co statyczne (wskaźniki, AQM score, RANKINGI).
-        Dzięki temu w pętli Optuny nie liczymy żadnych średnich ani kwantyli.
+        V9 TURBO PREPROCESSING:
+        Wymuszone normalized_news = 0.0 (zgodność z logiką sukcesu Optimum).
         """
         try:
             daily_df = standardize_df_columns(
@@ -199,18 +202,15 @@ class QuantumOptimizer:
             daily_df.index = pd.to_datetime(daily_df.index)
             daily_df.sort_index(inplace=True)
 
-            # 1. Podstawy
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
             daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
             
-            # 2. H2 (News & Insider)
             insider_df = h2_data.get('insider_df')
             news_df = h2_data.get('news_df')
             
             daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
             daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
             
-            # 3. Metryki techniczne H3
             daily_df['daily_returns'] = daily_df['close'].pct_change()
             daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std()
             
@@ -222,27 +222,22 @@ class QuantumOptimizer:
             else:
                 daily_df['information_entropy'] = 0.0
             
-            # m_sq calculation
             daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean()
             daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200).mean()
             daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200).std()
             daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
             
-            # === ZMIANA DLA WYSOKIEGO PF: IGNOROWANIE NEWSÓW W M_SQ ===
-            # To ustawienie odfiltrowuje szum medialny i daje lepsze wyniki.
-            daily_df['normalized_news'] = 0.0
+            # === WYMUSZONY BRAK WPŁYWU NEWSÓW NA M_SQ ===
+            # To jest ta "magiczna" cecha Optimum V7, którą utrzymujemy.
+            daily_df['normalized_news'] = 0.0 
             
             daily_df['m_sq'] = daily_df['normalized_volume'] + daily_df['normalized_news']
             daily_df['nabla_sq'] = daily_df['price_gravity']
 
-            # 4. Pełne obliczenie AQM Score
             daily_df = calculate_h3_metrics_v4(daily_df, {})
             
-            # 5. === TURBO BOOST: PRE-KALKULACJA RANKINGU ===
-            # Liczymy percentylową rangę każdego punktu w jego oknie 100-dniowym.
             daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
             
-            # Czyścimy DF zostawiając tylko to co niezbędne do symulacji (oszczędność RAM)
             cols_needed = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']
             return daily_df[cols_needed].dropna()
             
@@ -252,14 +247,13 @@ class QuantumOptimizer:
     def _objective(self, trial):
         params = {
             'h3_percentile': trial.suggest_float('h3_percentile', 0.80, 0.99), 
-            'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -1.5, 0.0), # Zakres dla czystego wolumenu
+            'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -2.0, 0.0), 
             'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
             'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 8.0),
             'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 4.0),
             'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 10),
         }
 
-        # Daty symulacji
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
         end_ts = pd.Timestamp(f"{self.target_year}-12-31")
         
@@ -277,13 +271,10 @@ class QuantumOptimizer:
 
         self._save_trial(trial, params, pf, trades, pf)
         
-        if trades < 20: return 0.0
+        if trades < 20: return 0.0 # Obniżony próg minimalnych transakcji (skoro zawężamy uniwersum)
         return pf
 
     def _run_turbo_simulation(self, params, start_ts, end_ts):
-        """
-        Ultra-szybka pętla symulacyjna wykorzystująca pre-kalkulowane rankingi.
-        """
         trades_pnl = []
         
         h3_p = params['h3_percentile']
@@ -301,7 +292,6 @@ class QuantumOptimizer:
             
             if len(sim_df) < 2: continue
             
-            # === TURBO LOGIC: WEKTORYZACJA WARUNKÓW ===
             entry_mask = (
                 (sim_df['aqm_rank'] > h3_p) & 
                 (sim_df['m_sq_norm'] < h3_m) & 
@@ -367,16 +357,36 @@ class QuantumOptimizer:
 
     def _get_all_tickers(self):
         try:
-            query = text("(SELECT ticker FROM phase1_candidates) UNION (SELECT ticker FROM portfolio_holdings) UNION (SELECT ticker FROM companies LIMIT 300)")
-            result = self.session.execute(query)
-            return [r[0] for r in result]
-        except: return []
+            # === POPRAWKA UNIWERSUM ===
+            # Priorytet: Phase 1 Candidates + Portfolio.
+            # Jeśli to puste, dopiero wtedy companies.
+            
+            # 1. Sprawdź czy mamy kandydatów w Fazie 1
+            res_p1 = self.session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
+            tickers_p1 = [r[0] for r in res_p1]
+            
+            res_port = self.session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
+            tickers_port = [r[0] for r in res_port]
+            
+            combined = list(set(tickers_p1 + tickers_port))
+            
+            if len(combined) > 10:
+                logger.info(f"Optimizer: Wybrano {len(combined)} tickerów z Fazy 1/Portfela.")
+                return combined
+            
+            # Fallback (tylko gdy baza Fazy 1 jest pusta - np. przed pierwszym skanem)
+            logger.warning("Optimizer: Faza 1 pusta. Pobieram tickery z tabeli companies.")
+            res_all = self.session.execute(text("SELECT ticker FROM companies LIMIT 1500")).fetchall()
+            return [r[0] for r in res_all]
+            
+        except Exception as e: 
+            logger.error(f"Error getting tickers: {e}")
+            return []
 
     def _collect_trials_data(self):
         trials_data = []
         for t in self.study.trials:
             if t.state == optuna.trial.TrialState.COMPLETE:
-                # Konwersja na natywne typy float
                 safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in t.params.items()}
                 trials_data.append({'params': safe_params, 'profit_factor': float(t.value) if t.value is not None else 0.0})
         return trials_data
@@ -392,18 +402,16 @@ class QuantumOptimizer:
         try:
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job: 
-                job.best_score = float(score) # Konwersja na native float
+                job.best_score = float(score) 
                 self.session.commit()
         except: self.session.rollback()
 
     def _save_trial(self, trial, params, pf, trades, score):
         try:
-            # === FIX SQL ERROR: Rzutowanie typów numpy ===
             safe_pf = float(pf) if pf is not None and not np.isnan(pf) else 0.0
             safe_trades = int(trades) if trades is not None else 0
             safe_score = float(score) if score is not None and not np.isnan(score) else 0.0
             
-            # Rzutowanie parametrów w JSON
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
 
             trial_record = models.OptimizationTrial(
@@ -420,9 +428,8 @@ class QuantumOptimizer:
         if job:
             job.status = 'COMPLETED'
             job.best_score = float(best_trial.value)
-            # Konwersja parametrów w best_trial
             best_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
-            job.configuration = {'best_params': best_params, 'sensitivity_analysis': sensitivity_report, 'version': 'V7_TURBO_HIGH_PF'}
+            job.configuration = {'best_params': best_params, 'sensitivity_analysis': sensitivity_report, 'version': 'V9_PHASE1_SYNC'}
             self.session.commit()
 
     def _mark_job_failed(self):
