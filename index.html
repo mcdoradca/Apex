@@ -25,20 +25,10 @@
         .phase-1-text { color: #8b5cf6; }
         .watchlist-text { color: #10b981; }
 
-        #system-alert-container {
-            position: fixed;
-            top: 1.5rem;
-            right: 1.5rem;
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 0.5rem;
-        }
+        #system-alert-container { position: fixed; top: 1.5rem; right: 1.5rem; z-index: 1000; display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; }
         .alert-bar { max-width: 400px; width: 100%; }
         .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(2px); }
         .modal-content { background-color: #161B22; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); width: 90%; max-width: 400px; border: 1px solid #30363D; }
-        /* ZMIANA: Zwiększono max-width dla content-lg do 5xl (ok 1024px) dla lepszej czytelności */
         .modal-content-lg { max-width: 64rem; width: 95%; } 
         .modal-input { background-color: #0D1117; border: 1px solid #30363D; color: #f0f0f0; padding: 0.5rem; border-radius: 0.375rem; width: 100%; margin-bottom: 1rem; }
         .modal-input[type=number]::-webkit-inner-spin-button, 
@@ -88,6 +78,8 @@
                 </div>
                 <nav class="space-y-1">
                     <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
+                    <!-- NOWY LINK: Sygnały H3 Live -->
+                    <a href="#h3-signals-view" id="h3-signals-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer text-sky-300"><i data-lucide="target" class="mr-3 w-5 h-5"></i><span>Sygnały H3 Live</span></a>
                     <a href="#portfolio-view" id="portfolio-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="briefcase" class="mr-3 w-5 h-5"></i><span>Portfel</span></a>
                     <a href="#transactions-view" id="transactions-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="history" class="mr-3 w-5 h-5"></i><span>Transakcje</span></a>
                     <a href="#agent-report-view" id="agent-report-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="clipboard-check" class="mr-3 w-5 h-5"></i><span>Wydajność Agenta</span></a>
@@ -109,7 +101,7 @@
             </div>
 
             <div id="phases-container" class="flex-grow overflow-y-auto space-y-4 py-4 mt-4 border-t border-gray-800">
-                <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Wyniki Skanowania</h2>
+                <h2 class="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Szybki Podgląd</h2>
                 <div class="px-2">
                     <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
                         <p class="text-sm font-semibold text-gray-300">Faza 1: Kandydaci (<span id="phase-1-count">0</span>)</p>
@@ -117,13 +109,7 @@
                     </button>
                     <div id="phase-1-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
                 </div>
-                <div class="px-2">
-                    <button class="accordion-toggle flex justify-between items-center w-full text-left cursor-pointer">
-                        <p class="text-sm font-semibold text-green-400">Sygnały H3 (Live) (<span id="phase-3-count">0</span>)</p>
-                        <i data-lucide="chevron-down" class="accordion-icon w-5 h-5 transition-transform"></i>
-                    </button>
-                    <div id="phase-3-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
-                </div>
+                <!-- Lista "Phase 3" w sidebarze zostaje jako szybki podgląd, ale główny widok jest teraz osobny -->
             </div>
 
             <div class="mt-auto shrink-0 border-t border-gray-800 pt-4">
@@ -167,59 +153,29 @@
     <div id="ai-report-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Raport Mega Agenta AI</h3><button id="ai-report-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div id="ai-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[70vh] overflow-y-auto"></div></div></div>
     <div id="h3-deep-dive-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Analiza H3 Deep Dive</h3><button id="h3-deep-dive-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p><div class="flex items-start gap-3"><input type="number" id="h3-deep-dive-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="2100"><button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok</button></div><div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div></div><div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto"><p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p></div></div></div>
 
-    <!-- Konfiguracja H3 Live -->
     <div id="h3-live-modal" class="modal-backdrop hidden">
         <div class="modal-content">
-            <h3 class="text-xl font-bold mb-4 text-white flex items-center">
-                <i data-lucide="settings" class="w-5 h-5 mr-2 text-purple-400"></i>
-                Konfiguracja H3 (Live)
-            </h3>
+            <h3 class="text-xl font-bold mb-4 text-white flex items-center"><i data-lucide="settings" class="w-5 h-5 mr-2 text-purple-400"></i>Konfiguracja H3 (Live)</h3>
             <p class="text-sm text-gray-500 mb-4">Ustaw parametry dla skanera sygnałów H3.</p>
-            
             <div class="grid grid-cols-1 gap-3">
-                <div>
-                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Percentyl AQM</label>
-                    <input type="number" id="h3-live-percentile" class="modal-input" placeholder="0.95" step="0.01" value="0.95">
-                </div>
-                <div>
-                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Próg Masy m²</label>
-                    <input type="number" id="h3-live-mass" class="modal-input" placeholder="-0.5" step="0.1" value="-0.5">
-                </div>
-                <div>
-                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Min. AQM Score (Hard Floor)</label>
-                    <input type="number" id="h3-live-min-score" class="modal-input" placeholder="0.0" step="0.1" value="0.0">
-                </div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-live-percentile" class="modal-input" placeholder="0.95" step="0.01" value="0.95"></div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-live-mass" class="modal-input" placeholder="-0.5" step="0.1" value="-0.5"></div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Min. AQM Score (Hard Floor)</label><input type="number" id="h3-live-min-score" class="modal-input" placeholder="0.0" step="0.1" value="0.0"></div>
                 <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik TP (ATR)</label>
-                        <input type="number" id="h3-live-tp" class="modal-input" placeholder="5.0" step="0.5" value="5.0">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik SL (ATR)</label>
-                        <input type="number" id="h3-live-sl" class="modal-input" placeholder="2.0" step="0.5" value="2.0">
-                    </div>
+                    <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-live-tp" class="modal-input" placeholder="5.0" step="0.5" value="5.0"></div>
+                    <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-live-sl" class="modal-input" placeholder="2.0" step="0.5" value="2.0"></div>
                 </div>
-                <!-- DODANO: Nowy parametr V4 dla spójności -->
-                <div>
-                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Max Hold (Dni)</label>
-                    <input type="number" id="h3-live-hold" class="modal-input" placeholder="5" step="1" value="5">
-                    <p class="text-[10px] text-gray-600 mt-1">Używane przez wirtualnego agenta monitorującego.</p>
-                </div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-live-hold" class="modal-input" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Czas ważności sygnału.</p></div>
             </div>
-
             <div class="flex justify-end gap-3 mt-6">
                 <button id="h3-live-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
-                <button id="h3-live-start-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700">
-                    <i data-lucide="play" class="w-4 h-4 mr-2 inline"></i>Start Skanowania
-                </button>
+                <button id="h3-live-start-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700"><i data-lucide="play" class="w-4 h-4 mr-2 inline"></i>Start Skanowania</button>
             </div>
         </div>
     </div>
 
-    <!-- === ZMODYFIKOWANY MODAL: Signal Details (Detale Sygnału) === -->
     <div id="signal-details-modal" class="modal-backdrop hidden">
         <div class="modal-content modal-content-lg bg-[#161B22] border border-gray-700 shadow-2xl">
-            <!-- Nagłówek z przyciskiem Kup -->
             <div class="flex justify-between items-start mb-6 border-b border-gray-700 pb-4">
                 <div>
                     <h3 class="text-3xl font-bold text-white flex items-center gap-3">
@@ -229,198 +185,90 @@
                     <p id="sd-company-name" class="text-base text-gray-400 mt-1">Company Name</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <!-- NOWY PRZYCISK KUP -->
                     <button id="sd-buy-btn" class="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors shadow-lg shadow-green-900/20">
-                        <i data-lucide="shopping-cart" class="w-4 h-4"></i>
-                        Inwestuj (Kup)
+                        <i data-lucide="shopping-cart" class="w-4 h-4"></i>Inwestuj (Kup)
                     </button>
-                    <button id="sd-close-btn" class="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors">
-                        <i data-lucide="x" class="w-6 h-6"></i>
-                    </button>
+                    <button id="sd-close-btn" class="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
                 </div>
             </div>
-
-            <!-- Główny Grid -->
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                
-                <!-- Lewa kolumna: Dane Rynkowe Live -->
                 <div class="space-y-6">
                     <div class="bg-[#0D1117] p-5 rounded-lg border border-gray-700 relative overflow-hidden">
-                        <div class="absolute top-0 right-0 p-2 opacity-10 pointer-events-none">
-                            <i data-lucide="activity" class="w-24 h-24 text-sky-400"></i>
-                        </div>
-                        <h4 class="text-xs font-bold text-sky-500 uppercase mb-4 flex items-center tracking-wider">
-                            <i data-lucide="zap" class="w-3 h-3 mr-2"></i> Dane Rynkowe (Live)
-                        </h4>
-                        
-                        <div class="flex justify-between items-baseline mb-2">
-                            <span class="text-gray-400 text-sm">Cena Aktualna</span>
-                            <span id="sd-current-price" class="text-4xl font-mono font-bold text-white tracking-tight">---</span>
-                        </div>
-                        <div class="flex justify-between items-center mb-4">
-                            <span class="text-gray-500 text-xs uppercase">Zmiana 24h</span>
-                            <span id="sd-change-percent" class="font-mono text-lg font-bold">---</span>
-                        </div>
-
+                        <div class="absolute top-0 right-0 p-2 opacity-10 pointer-events-none"><i data-lucide="activity" class="w-24 h-24 text-sky-400"></i></div>
+                        <h4 class="text-xs font-bold text-sky-500 uppercase mb-4 flex items-center tracking-wider"><i data-lucide="zap" class="w-3 h-3 mr-2"></i> Dane Rynkowe (Live)</h4>
+                        <div class="flex justify-between items-baseline mb-2"><span class="text-gray-400 text-sm">Cena Aktualna</span><span id="sd-current-price" class="text-4xl font-mono font-bold text-white tracking-tight">---</span></div>
+                        <div class="flex justify-between items-center mb-4"><span class="text-gray-500 text-xs uppercase">Zmiana 24h</span><span id="sd-change-percent" class="font-mono text-lg font-bold">---</span></div>
                         <div class="border-t border-gray-800 pt-4 space-y-3">
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-gray-500">Status Rynku</span>
-                                <span id="sd-market-status" class="text-gray-300 font-mono bg-gray-800 px-2 py-0.5 rounded text-xs">---</span>
-                            </div>
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-gray-500">Czas (NY)</span>
-                                <span id="sd-ny-time" class="text-gray-300 font-mono">---</span>
-                            </div>
-                             <div class="flex justify-between items-center text-sm">
-                                <span class="text-gray-500">Do Otwarcia</span>
-                                <span id="sd-countdown" class="text-sky-400 font-mono font-bold">---</span>
-                            </div>
+                            <div class="flex justify-between items-center text-sm"><span class="text-gray-500">Status Rynku</span><span id="sd-market-status" class="text-gray-300 font-mono bg-gray-800 px-2 py-0.5 rounded text-xs">---</span></div>
+                            <div class="flex justify-between items-center text-sm"><span class="text-gray-500">Czas (NY)</span><span id="sd-ny-time" class="text-gray-300 font-mono">---</span></div>
+                             <div class="flex justify-between items-center text-sm"><span class="text-gray-500">Do Otwarcia</span><span id="sd-countdown" class="text-sky-400 font-mono font-bold">---</span></div>
                         </div>
                     </div>
-
-                    <!-- Metadane Sektor/Branża -->
                     <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
                          <h4 class="text-xs font-bold text-gray-500 uppercase mb-3 tracking-wider">Profil Spółki</h4>
                         <div class="space-y-2 text-sm">
-                            <div class="flex justify-between">
-                                <span class="text-gray-500">Sektor:</span>
-                                <span id="sd-sector" class="text-gray-300 font-medium text-right">---</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-500">Branża:</span>
-                                <span id="sd-industry" class="text-gray-300 font-medium text-right">---</span>
-                            </div>
+                            <div class="flex justify-between"><span class="text-gray-500">Sektor:</span><span id="sd-sector" class="text-gray-300 font-medium text-right">---</span></div>
+                            <div class="flex justify-between"><span class="text-gray-500">Branża:</span><span id="sd-industry" class="text-gray-300 font-medium text-right">---</span></div>
                         </div>
                     </div>
                 </div>
-
-                <!-- Prawa kolumna: Parametry Setupu H3 -->
                 <div class="space-y-6">
                     <div class="bg-[#0D1117] p-5 rounded-lg border border-gray-700 relative">
-                         <h4 class="text-xs font-bold text-purple-500 uppercase mb-4 flex items-center tracking-wider">
-                            <i data-lucide="crosshair" class="w-3 h-3 mr-2"></i> Setup H3 (Quantum)
-                        </h4>
-                        
+                         <h4 class="text-xs font-bold text-purple-500 uppercase mb-4 flex items-center tracking-wider"><i data-lucide="crosshair" class="w-3 h-3 mr-2"></i> Setup H3 (Quantum)</h4>
                         <div class="space-y-4">
-                            <div class="flex justify-between items-center p-3 bg-gray-800/40 rounded border border-gray-700/50">
-                                <span class="text-sm text-purple-300 font-semibold">Wejście (Entry)</span>
-                                <span id="sd-entry-price" class="font-mono text-xl text-white font-bold">---</span>
-                            </div>
-                            <div class="flex justify-between items-center p-3 bg-green-900/10 border border-green-500/20 rounded">
-                                <span class="text-sm text-green-400 font-semibold">Take Profit (TP)</span>
-                                <span id="sd-take-profit" class="font-mono text-xl text-green-400 font-bold">---</span>
-                            </div>
-                            <div class="flex justify-between items-center p-3 bg-red-900/10 border border-red-500/20 rounded">
-                                <span class="text-sm text-red-400 font-semibold">Stop Loss (SL)</span>
-                                <span id="sd-stop-loss" class="font-mono text-xl text-red-400 font-bold">---</span>
-                            </div>
-                             <div class="flex justify-between items-center pt-2 mt-2 border-t border-gray-800">
-                                <span class="text-xs text-gray-500 uppercase font-bold">R:R Ratio</span>
-                                <span id="sd-risk-reward" class="font-mono text-yellow-400 font-bold text-lg">---</span>
-                            </div>
+                            <div class="flex justify-between items-center p-3 bg-gray-800/40 rounded border border-gray-700/50"><span class="text-sm text-purple-300 font-semibold">Wejście (Entry)</span><span id="sd-entry-price" class="font-mono text-xl text-white font-bold">---</span></div>
+                            <div class="flex justify-between items-center p-3 bg-green-900/10 border border-green-500/20 rounded"><span class="text-sm text-green-400 font-semibold">Take Profit (TP)</span><span id="sd-take-profit" class="font-mono text-xl text-green-400 font-bold">---</span></div>
+                            <div class="flex justify-between items-center p-3 bg-red-900/10 border border-red-500/20 rounded"><span class="text-sm text-red-400 font-semibold">Stop Loss (SL)</span><span id="sd-stop-loss" class="font-mono text-xl text-red-400 font-bold">---</span></div>
+                             <div class="flex justify-between items-center pt-2 mt-2 border-t border-gray-800"><span class="text-xs text-gray-500 uppercase font-bold">R:R Ratio</span><span id="sd-risk-reward" class="font-mono text-yellow-400 font-bold text-lg">---</span></div>
                         </div>
                     </div>
-
-                    <!-- Sekcja Opisu Firmy (NOWOŚĆ) -->
                     <div class="bg-[#0D1117] p-4 rounded-lg border border-gray-700">
                         <h4 class="text-xs font-bold text-gray-500 uppercase mb-2 tracking-wider">O Firmie</h4>
-                        <p id="sd-description" class="text-sm text-gray-400 leading-relaxed text-justify max-h-32 overflow-y-auto pr-2 custom-scrollbar">
-                            Brak opisu.
-                        </p>
+                        <p id="sd-description" class="text-sm text-gray-400 leading-relaxed text-justify max-h-32 overflow-y-auto pr-2 custom-scrollbar">Brak opisu.</p>
                     </div>
                 </div>
             </div>
-
-            <!-- Sekcja Newsów AI -->
             <div id="sd-news-container" class="mt-6 p-4 bg-gray-800/30 rounded-lg border border-gray-700 hidden">
-                <h4 class="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center">
-                    <i data-lucide="bot" class="w-3 h-3 mr-1 text-pink-400"></i> Analiza Newsów (AI)
-                </h4>
+                <h4 class="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center"><i data-lucide="bot" class="w-3 h-3 mr-1 text-pink-400"></i> Analiza Newsów (AI)</h4>
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
-                        <div class="flex items-center gap-2 mb-1">
-                            <span id="sd-news-sentiment" class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300 font-bold">NEUTRAL</span>
-                            <span id="sd-news-time" class="text-xs text-gray-500 font-mono">---</span>
-                        </div>
+                        <div class="flex items-center gap-2 mb-1"><span id="sd-news-sentiment" class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300 font-bold">NEUTRAL</span><span id="sd-news-time" class="text-xs text-gray-500 font-mono">---</span></div>
                         <p id="sd-news-headline" class="text-sm text-white font-medium leading-snug">---</p>
                     </div>
-                    <a id="sd-news-link" href="#" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 hover:underline whitespace-nowrap flex-shrink-0 flex items-center">
-                        Źródło <i data-lucide="external-link" class="w-3 h-3 ml-1"></i>
-                    </a>
+                    <a id="sd-news-link" href="#" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 hover:underline whitespace-nowrap flex-shrink-0 flex items-center">Źródło <i data-lucide="external-link" class="w-3 h-3 ml-1"></i></a>
                 </div>
             </div>
-
-            <!-- Stopka -->
-            <div class="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center text-xs text-gray-600">
-                <div>
-                    APEX Quantum Model V3
-                </div>
-                <div class="text-right font-mono">
-                    Gen: <span id="sd-generation-date">---</span>
-                </div>
-            </div>
-            
-            <!-- Komunikat błedu -->
+            <div class="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center text-xs text-gray-600"><div>APEX Quantum Model V3</div><div class="text-right font-mono">Gen: <span id="sd-generation-date">---</span></div></div>
             <div id="sd-validity-message" class="mt-4 p-3 rounded bg-red-900/20 border border-red-500/30 text-center text-sm text-red-300 hidden animate-pulse font-bold"></div>
         </div>
     </div>
     
-    <!-- ========================================== -->
-    <!-- === NOWE MODALE DLA QUANTUM LAB (V4) === -->
-    
-    <!-- 1. Modal Konfiguracyjny -->
     <div id="quantum-optimization-modal" class="modal-backdrop hidden">
         <div class="modal-content">
-            <h3 class="text-xl font-bold mb-4 text-white flex items-center">
-                <i data-lucide="cpu" class="w-5 h-5 mr-2 text-purple-400"></i>
-                Quantum Optimizer
-            </h3>
+            <h3 class="text-xl font-bold mb-4 text-white flex items-center"><i data-lucide="cpu" class="w-5 h-5 mr-2 text-purple-400"></i>Quantum Optimizer</h3>
             <p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (TPE) dla wybranego okresu.</p>
-            
             <div class="space-y-3">
-                <div>
-                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Rok Analizy</label>
-                    <input type="number" id="qo-year-input" class="modal-input" placeholder="np. 2023" min="2000" max="2100" value="2024">
-                </div>
-                <div>
-                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Liczba Prób (Trials)</label>
-                    <input type="number" id="qo-trials-input" class="modal-input" placeholder="50" min="10" max="200" value="30">
-                    <p class="text-xs text-gray-500 mt-1">Więcej prób = lepszy wynik, ale dłuższy czas.</p>
-                </div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Rok Analizy</label><input type="number" id="qo-year-input" class="modal-input" placeholder="np. 2023" min="2000" max="2100" value="2024"></div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Liczba Prób (Trials)</label><input type="number" id="qo-trials-input" class="modal-input" placeholder="50" min="10" max="200" value="30"><p class="text-xs text-gray-500 mt-1">Więcej prób = lepszy wynik, ale dłuższy czas.</p></div>
             </div>
-
             <div id="qo-status-message" class="text-sm mt-3 h-4 text-center"></div>
-
             <div class="flex justify-end gap-3 mt-6">
                 <button id="qo-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
-                <button id="qo-start-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700">
-                    <i data-lucide="play" class="w-4 h-4 mr-2 inline"></i>Start
-                </button>
+                <button id="qo-start-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700"><i data-lucide="play" class="w-4 h-4 mr-2 inline"></i>Start</button>
             </div>
         </div>
     </div>
 
-    <!-- 2. Modal Wyników -->
     <div id="optimization-results-modal" class="modal-backdrop hidden">
         <div class="modal-content modal-content-lg bg-[#161B22] border border-gray-700 shadow-2xl">
             <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-                <h3 class="text-2xl font-bold text-white flex items-center">
-                    <i data-lucide="list" class="w-6 h-6 mr-2 text-green-400"></i>
-                    Wyniki Optymalizacji
-                </h3>
-                <button id="optimization-results-close-btn" class="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors">
-                    <i data-lucide="x" class="w-6 h-6"></i>
-                </button>
+                <h3 class="text-2xl font-bold text-white flex items-center"><i data-lucide="list" class="w-6 h-6 mr-2 text-green-400"></i>Wyniki Optymalizacji</h3>
+                <button id="optimization-results-close-btn" class="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-full transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
             </div>
-            
-            <div id="optimization-results-content" class="text-gray-300">
-                <p class="text-center py-10 text-gray-500">Ładowanie wyników...</p>
-            </div>
+            <div id="optimization-results-content" class="text-gray-300"><p class="text-center py-10 text-gray-500">Ładowanie wyników...</p></div>
         </div>
     </div>
-    <!-- ========================================== -->
 
-    <!-- UWAGA: Wczytujemy TYLKO app.js, który sam importuje pozostałe moduły. -->
     <script type="module" src="js/app.js"></script>
 </body>
 </html>
