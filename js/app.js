@@ -1,7 +1,6 @@
 import { ui, renderers } from './ui.js';
 import { api } from './api.js';
 import { logger, state } from './state.js';
-// ZMIANA: Używamy importów nazwanych, aby uniknąć błędów "is not a function"
 import { 
     setUI, 
     showDashboard, showPortfolio, showTransactions, showAgentReport,
@@ -14,9 +13,10 @@ import {
     handleRunAIOptimizer, handleViewAIOptimizerReport, hideAIReportModal,
     showH3LiveParamsModal, hideH3LiveParamsModal, handleRunH3LiveScan,
     showSignalDetails, hideSignalDetails,
-    // Quantum Lab (Apex V4)
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
-    showOptimizationResults, hideOptimizationResults
+    showOptimizationResults, hideOptimizationResults,
+    // === NOWOŚĆ: Import kontrolera widoku H3 ===
+    showH3Signals
 } from './logic.js';
 
 // Tworzymy lokalny obiekt Logic dla kompatybilności z resztą kodu
@@ -33,7 +33,9 @@ const Logic = {
     showH3LiveParamsModal, hideH3LiveParamsModal, handleRunH3LiveScan,
     showSignalDetails, hideSignalDetails,
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
-    showOptimizationResults, hideOptimizationResults
+    showOptimizationResults, hideOptimizationResults,
+    // Dodajemy nową funkcję do obiektu Logic
+    showH3Signals
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -77,10 +79,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // === OBSŁUGA PRZYCISKÓW (Delegacja Zdarzeń) ===
                 
-                // 1. Backtest i Konfiguracja (Przywrócone)
+                // 1. Backtest i Konfiguracja
                 if (target.closest('#run-backtest-year-btn')) Logic.handleYearBacktestRequest();
                 else if (target.closest('#toggle-h3-params')) {
-                     // Obsługa rozwijanego menu parametrów w Backteście
                      const container = document.getElementById('h3-params-container');
                      const icon = document.getElementById('h3-params-icon');
                      if (container) { container.classList.toggle('hidden'); icon.classList.toggle('rotate-180'); }
@@ -111,7 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (UI.sidebarPhasesContainer) {
             UI.sidebarPhasesContainer.addEventListener('click', (e) => {
                 const toggle = e.target.closest('.accordion-toggle');
-                const signalItem = e.target.closest('.phase3-item');
+                const signalItem = e.target.closest('.phase3-item'); // Obsługa kliknięć w małą listę w sidebarze
         
                 if (toggle) {
                     const content = toggle.nextElementSibling;
@@ -121,7 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (signalItem) {
                     const ticker = signalItem.dataset.ticker;
                     if (ticker) {
-                        logger.info(`Kliknięto sygnał H3: ${ticker}`);
+                        logger.info(`Kliknięto sygnał H3 (Sidebar): ${ticker}`);
                         Logic.showSignalDetails(ticker);
                     }
                 }
@@ -159,16 +160,24 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
-        // Quantum Lab Listeners (Modale)
+        // Quantum Lab Listeners
         if (UI.quantumModal.cancelBtn) UI.quantumModal.cancelBtn.addEventListener('click', Logic.hideQuantumModal);
         if (UI.quantumModal.startBtn) UI.quantumModal.startBtn.addEventListener('click', Logic.handleStartQuantumOptimization);
         if (UI.optimizationResultsModal.closeBtn) UI.optimizationResultsModal.closeBtn.addEventListener('click', Logic.hideOptimizationResults);
     
-        // Nawigacja
+        // === NAWIGACJA GŁÓWNA ===
         if (UI.dashboardLink) UI.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showDashboard(); });
         if (UI.portfolioLink) UI.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showPortfolio(); });
         if (UI.transactionsLink) UI.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showTransactions(); });
         if (UI.agentReportLink) UI.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showAgentReport(); });
+        
+        // NOWOŚĆ: Obsługa kliknięcia w link "Sygnały H3 Live"
+        if (UI.h3SignalsLink) {
+            UI.h3SignalsLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                Logic.showH3Signals();
+            });
+        }
     
         // Modale Kupna/Sprzedaży
         if(UI.buyModal.cancelBtn) UI.buyModal.cancelBtn.addEventListener('click', Logic.hideBuyModal);
