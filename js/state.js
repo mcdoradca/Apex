@@ -21,7 +21,11 @@ export const state = {
     snoozedAlerts: {},
     activeAIOptimizerPolling: null,
     currentReportPage: 1,
-    activeH3DeepDivePolling: null
+    activeH3DeepDivePolling: null,
+
+    // === NOWOŚĆ: Stan sortowania dla widoku Sygnały H3 ===
+    h3SortBy: 'score',      // Opcje: 'score', 'rr', 'time', 'ticker', 'price'
+    h3SortDirection: 'desc' // Opcje: 'asc', 'desc'
 };
 
 export const logger = {
