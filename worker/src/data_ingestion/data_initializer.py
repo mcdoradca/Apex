@@ -7,7 +7,6 @@ from sqlalchemy import text, inspect
 
 logger = logging.getLogger(__name__)
 
-# URL do oficjalnego pliku z listą instrumentów notowanych na NASDAQ
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 
 def _run_schema_and_index_migration(session: Session):
@@ -21,38 +20,34 @@ def _run_schema_and_index_migration(session: Session):
         engine = session.get_bind()
         inspector = inspect(engine)
         
-        # === MIGRACJA TABELI 1: trading_signals (V5 Update) ===
+        # === MIGRACJA TABELI 1: trading_signals (V6 Update - Expiration) ===
         if 'trading_signals' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('trading_signals')]
             
             # Apex V3 Columns
             if 'entry_zone_bottom' not in columns:
-                logger.warning("Migration needed: Adding column 'entry_zone_bottom'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS entry_zone_bottom NUMERIC(12, 2)"))
             if 'entry_zone_top' not in columns:
-                logger.warning("Migration needed: Adding column 'entry_zone_top'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS entry_zone_top NUMERIC(12, 2)"))
             if 'updated_at' not in columns:
-                logger.warning("Migration needed: Adding column 'updated_at'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
 
             # === APEX V5 NEW COLUMNS ===
             if 'highest_price_since_entry' not in columns:
-                logger.warning("Migration V5: Adding column 'highest_price_since_entry'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS highest_price_since_entry NUMERIC(12, 2)"))
-            
             if 'is_trailing_active' not in columns:
-                logger.warning("Migration V5: Adding column 'is_trailing_active'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS is_trailing_active BOOLEAN DEFAULT FALSE"))
-                
             if 'earnings_date' not in columns:
-                logger.warning("Migration V5: Adding column 'earnings_date'.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS earnings_date DATE"))
+            
+            # === APEX V6 NEW COLUMNS (TTL) ===
+            if 'expiration_date' not in columns:
+                logger.warning("Migration V6: Adding column 'expiration_date' to trading_signals.")
+                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMP WITH TIME ZONE"))
 
         # === MIGRACJA TABELI 2: companies (V5 Update) ===
         if 'companies' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('companies')]
-            
             if 'sector_etf' not in columns:
                 logger.warning("Migration V5: Adding column 'sector_etf' to companies.")
                 session.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS sector_etf VARCHAR(10)"))
@@ -60,7 +55,6 @@ def _run_schema_and_index_migration(session: Session):
         # === MIGRACJA TABELI 3: phase1_candidates (V5 Update) ===
         if 'phase1_candidates' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('phase1_candidates')]
-            
             if 'sector_ticker' not in columns:
                 session.execute(text("ALTER TABLE phase1_candidates ADD COLUMN IF NOT EXISTS sector_ticker VARCHAR(10)"))
             if 'sector_trend_score' not in columns:
@@ -96,7 +90,6 @@ def _run_schema_and_index_migration(session: Session):
                 ("metric_J", "NUMERIC(12, 6)"),
                 ("metric_J_threshold_2sigma", "NUMERIC(12, 6)")
             ]
-            
             for col_name, col_type in metric_columns_to_add:
                 try:
                     sql_command = f'ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS "{col_name}" {col_type}'
@@ -105,20 +98,21 @@ def _run_schema_and_index_migration(session: Session):
                     pass 
 
         session.commit()
-        logger.info("Database schema migration (V5 included) completed successfully.")
+        logger.info("Database schema migration (V6 included) completed successfully.")
 
     except Exception as e:
         logger.critical(f"FATAL: Error during database schema/index migration: {e}", exc_info=True)
         session.rollback()
-        # Nie podnosimy wyjątku dalej, żeby nie zabić workera, ale logujemy krytyczny błąd
         pass
 
 def force_reset_simulation_data(session: Session):
     """
     !!! UWAGA: FUNKCJA DESTRUKCYJNA !!!
-    Usuwa wszystkie wyniki symulacji. Używać ostrożnie.
+    Usuwa wszystkie wyniki symulacji (Sygnały, Transakcje, Kandydaci). 
+    Zostawia tabelę 'companies' i 'system_control' (częściowo).
+    Używać ostrożnie do czyszczenia środowiska przed nowym testem.
     """
-    logger.warning("⚠️⚠️⚠️ ROZPOCZYNANIE RESETU DANYCH SYMULACYJNYCH ⚠️⚠️⚠️")
+    logger.warning("⚠️⚠️⚠️ ROZPOCZYNANIE RESETU DANYCH SYMULACYJNYCH (CLEAN SLATE) ⚠️⚠️⚠️")
     try:
         tables_to_clear = [
             "optimization_trials", 
@@ -126,24 +120,24 @@ def force_reset_simulation_data(session: Session):
             "virtual_trades",      
             "trading_signals",     
             "phase1_candidates",   
-            "phase2_results"
+            "phase2_results",
+            "processed_news"       # Czyścimy też historię newsów, by nie blokowały nowych sygnałów
         ]
         
         for table in tables_to_clear:
-            # Sprawdzamy czy tabela istnieje przed czyszczeniem
             engine = session.get_bind()
             inspector = inspect(engine)
             if table in inspector.get_table_names():
                 logger.warning(f"Czyszczenie tabeli: {table}...")
                 session.execute(text(f"TRUNCATE TABLE {table} CASCADE;"))
             
-        # Reset liczników
+        # Reset liczników w system_control
         session.execute(text("UPDATE system_control SET value='0' WHERE key LIKE 'scan_progress_%'"))
-        session.execute(text("UPDATE system_control SET value='NONE' WHERE key IN ('worker_command', 'optimization_request', 'backtest_request')"))
+        session.execute(text("UPDATE system_control SET value='NONE' WHERE key IN ('worker_command', 'optimization_request', 'backtest_request', 'h3_deep_dive_request')"))
         session.execute(text("UPDATE system_control SET value='IDLE' WHERE key='worker_status'"))
         
         session.commit()
-        logger.warning("✅✅✅ RESET ZAKOŃCZONY SUKCESEM. BAZA GOTOWA DO TESTÓW. ✅✅✅")
+        logger.warning("✅✅✅ RESET ZAKOŃCZONY SUKCESEM. BAZA JEST CZYSTA I GOTOWA DO NOWYCH TESTÓW. ✅✅✅")
         
     except Exception as e:
         logger.error(f"Błąd podczas resetu bazy: {e}", exc_info=True)
@@ -153,12 +147,11 @@ def initialize_database_if_empty(session: Session, api_client):
     """
     Inicjalizuje bazę danych.
     """
-    # 1. Migracja schematu (V5 - dodanie nowych kolumn)
+    # 1. Migracja schematu (V6 - dodanie nowych kolumn Expiration)
     _run_schema_and_index_migration(session)
 
     # 2. Seedowanie firm (jeśli pusta)
     try:
-        # Sprawdzamy czy tabela istnieje
         engine = session.get_bind()
         inspector = inspect(engine)
         if 'companies' not in inspector.get_table_names():
