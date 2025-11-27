@@ -110,9 +110,8 @@ def force_reset_simulation_data(session: Session):
     !!! UWAGA: FUNKCJA DESTRUKCYJNA !!!
     Usuwa wszystkie wyniki symulacji (Sygnały, Transakcje, Kandydaci). 
     Zostawia tabelę 'companies' i 'system_control' (częściowo).
-    Używać ostrożnie do czyszczenia środowiska przed nowym testem.
     """
-    logger.warning("⚠️⚠️⚠️ ROZPOCZYNANIE RESETU DANYCH SYMULACYJNYCH (CLEAN SLATE) ⚠️⚠️⚠️")
+    logger.warning("⚠️⚠️⚠️ WYKONYWANIE TWARDEGO RESETU BAZY (FORCE CLEAN) ⚠️⚠️⚠️")
     try:
         tables_to_clear = [
             "optimization_trials", 
@@ -121,7 +120,7 @@ def force_reset_simulation_data(session: Session):
             "trading_signals",     
             "phase1_candidates",   
             "phase2_results",
-            "processed_news"       # Czyścimy też historię newsów, by nie blokowały nowych sygnałów
+            "processed_news"       
         ]
         
         for table in tables_to_clear:
@@ -131,13 +130,12 @@ def force_reset_simulation_data(session: Session):
                 logger.warning(f"Czyszczenie tabeli: {table}...")
                 session.execute(text(f"TRUNCATE TABLE {table} CASCADE;"))
             
-        # Reset liczników w system_control
         session.execute(text("UPDATE system_control SET value='0' WHERE key LIKE 'scan_progress_%'"))
         session.execute(text("UPDATE system_control SET value='NONE' WHERE key IN ('worker_command', 'optimization_request', 'backtest_request', 'h3_deep_dive_request')"))
         session.execute(text("UPDATE system_control SET value='IDLE' WHERE key='worker_status'"))
         
         session.commit()
-        logger.warning("✅✅✅ RESET ZAKOŃCZONY SUKCESEM. BAZA JEST CZYSTA I GOTOWA DO NOWYCH TESTÓW. ✅✅✅")
+        logger.warning("✅✅✅ RESET ZAKOŃCZONY SUKCESEM. BAZA JEST CZYSTA. ✅✅✅")
         
     except Exception as e:
         logger.error(f"Błąd podczas resetu bazy: {e}", exc_info=True)
@@ -145,12 +143,18 @@ def force_reset_simulation_data(session: Session):
 
 def initialize_database_if_empty(session: Session, api_client):
     """
-    Inicjalizuje bazę danych.
+    Inicjalizuje bazę danych przy starcie Workera.
     """
-    # 1. Migracja schematu (V6 - dodanie nowych kolumn Expiration)
+    # 1. Najpierw migracja schematu (żeby tabele istniały)
     _run_schema_and_index_migration(session)
 
-    # 2. Seedowanie firm (jeśli pusta)
+    # === TWARDY RESET (TYMCZASOWO WŁĄCZONY) ===
+    # Wywołujemy to ZAWSZE przy starcie, aby wyczyścić stare dane zgodnie z Twoim życzeniem.
+    # W następnym kroku będziemy musieli to usunąć!
+    force_reset_simulation_data(session)
+    # ==========================================
+
+    # 2. Seedowanie firm (jeśli pusta tabela companies)
     try:
         engine = session.get_bind()
         inspector = inspect(engine)
