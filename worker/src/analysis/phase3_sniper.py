@@ -19,7 +19,7 @@ from .utils import (
     safe_float,
     get_system_control_value,
     calculate_h3_metrics_v4, 
-    calculate_retail_herding_capped_v4 # === TERAZ TO ZADZIAŁA ===
+    calculate_retail_herding_capped_v4
 )
 from . import aqm_v3_metrics
 from . import aqm_v3_h2_loader
@@ -34,7 +34,8 @@ DEFAULT_PARAMS = {
     'h3_m_sq_threshold': -0.5,
     'h3_min_score': 0.0,
     'h3_tp_multiplier': 5.0,
-    'h3_sl_multiplier': 2.0
+    'h3_sl_multiplier': 2.0,
+    'h3_max_hold': 5 # Domyślny czas życia (dni robocze)
 }
 
 H3_CALC_WINDOW = 100 
@@ -149,11 +150,14 @@ def _get_sector_trend(session, ticker):
     except: return 0.0
 
 def run_h3_live_scan(session, candidates, client, parameters=None):
-    logger.info("Start H3 Live Sniper (V5 Logic)...")
+    logger.info("Start H3 Live Sniper (V6 TTL Logic)...")
     base_params = DEFAULT_PARAMS.copy()
     if parameters:
         for k,v in parameters.items(): 
             if v is not None: base_params[k] = float(v)
+    
+    # Pobranie Max Hold do obliczenia daty wygaśnięcia
+    max_hold_days = int(base_params.get('h3_max_hold', 5))
             
     mkt = _get_market_pkg(session, client)
     ev_model = _get_historical_ev_stats(session)
@@ -224,7 +228,6 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             
             df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(100).mean()) / df['institutional_sync'].rolling(100).std().fillna(1)
             
-            # === UŻYCIE IMPORTOWANEJ FUNKCJI ===
             df['retail_herding_capped'] = calculate_retail_herding_capped_v4(df['retail_herding'])
             
             S = df['information_entropy']
@@ -282,11 +285,15 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             
             ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
             if not ex:
+                # === OBLICZANIE DATY WYGAŚNIĘCIA (TTL) ===
+                expiration_dt = datetime.now(timezone.utc) + timedelta(days=max_hold_days)
+                
                 sig = models.TradingSignal(
                     ticker=ticker, status='PENDING', generation_date=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
                     signal_candle_timestamp=last.name, entry_price=entry, stop_loss=sl, take_profit=tp,
                     entry_zone_top=entry+(0.5*last['atr_14']), entry_zone_bottom=entry-(0.5*last['atr_14']),
-                    risk_reward_ratio=tp_mult/sl_mult, notes=note
+                    risk_reward_ratio=tp_mult/sl_mult, notes=note,
+                    expiration_date=expiration_dt # Zapisz datę wygaśnięcia
                 )
                 session.add(sig); session.commit()
                 signals+=1
