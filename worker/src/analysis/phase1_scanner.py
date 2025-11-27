@@ -132,9 +132,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 append_scan_log(session, f"❌ {ticker}: Cena {current_price:.2f}$ (Wymagane 1-20$)")
                 continue
             
-            # 2. Płynność (Vol > 300k)
+            # 2. Płynność (Vol > 600k)
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if pd.isna(avg_volume) or avg_volume < 300000: 
+            if pd.isna(avg_volume) or avg_volume < 600000: 
                 reject_stats['volume'] += 1
                 vol_display = f"{int(avg_volume/1000)}k" if not pd.isna(avg_volume) else "NaN"
                 append_scan_log(session, f"❌ {ticker}: Wolumen {vol_display} (Wymagane >300k)")
