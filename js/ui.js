@@ -13,7 +13,6 @@ export const ui = {
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
             
-            // Modal H3 Live (Phase 3) - referencje do inputów
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
                 percentile: get('h3-live-percentile'),
@@ -21,7 +20,7 @@ export const ui = {
                 minScore: get('h3-live-min-score'),
                 tp: get('h3-live-tp'),
                 sl: get('h3-live-sl'),
-                maxHold: get('h3-live-hold'), // V4 Parameter
+                maxHold: get('h3-live-hold'),
                 cancelBtn: get('h3-live-cancel-btn'),
                 startBtn: get('h3-live-start-btn')
             },
@@ -52,7 +51,6 @@ export const ui = {
                 buyBtn: get('sd-buy-btn') 
             },
 
-            // Modale Quantum Lab
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 yearInput: get('qo-year-input'),
@@ -73,13 +71,20 @@ export const ui = {
             apiStatus: get('api-status'),
             workerStatusText: get('worker-status-text'),
             dashboardLink: get('dashboard-link'),
+            
+            // NOWY LINK DO WIDOKU
+            h3SignalsLink: get('h3-signals-link'),
+            
             portfolioLink: get('portfolio-link'),
             transactionsLink: get('transactions-link'),
             agentReportLink: get('agent-report-link'),
             heartbeatStatus: get('heartbeat-status'),
             alertContainer: get('system-alert-container'),
             phase1: { list: get('phase-1-list'), count: get('phase-1-count') },
+            
+            // Lista w sidebarze (nadal tam jest jako szybki podgląd)
             phase3: { list: get('phase-3-list'), count: get('phase-3-count') },
+            
             buyModal: { 
                 backdrop: get('buy-modal'), tickerSpan: get('buy-modal-ticker'), 
                 quantityInput: get('buy-quantity'), priceInput: get('buy-price'),
@@ -116,7 +121,6 @@ export const renderers = {
     phase3List: (signals) => signals.map(s => {
         let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
-        
         let scoreDisplay = "";
         if (s.notes && s.notes.includes("Score:")) {
             try {
@@ -127,13 +131,7 @@ export const renderers = {
                 }
             } catch(e) {}
         }
-
-        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
-                    <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
-                    <span class="font-bold">${s.ticker}</span>
-                    ${scoreDisplay}
-                    <span class="ml-auto text-gray-500">${s.status}</span>
-                </div>`;
+        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
     dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
@@ -151,18 +149,149 @@ export const renderers = {
                             </div>
                             <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
                                 <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="target" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały H3</h3>
-                                <div class="mt-2">
-                                    <p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p>
-                                    <p class="text-sm text-gray-500 mt-1">Aktywne / Oczekujące</p>
-                                </div>
+                                <div class="mt-2"><p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Aktywne / Oczekujące</p></div>
                             </div>
                         </div>
                         <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
-                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700">
-                            <pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre>
-                        </div>
+                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div>
                     </div>`,
-        
+    
+    // === NOWOŚĆ: Panel Sygnałów H3 (Pełny Widok) ===
+    h3SignalsPanel: (signals) => {
+        const activeCount = signals.filter(s => s.status === 'ACTIVE').length;
+        const pendingCount = signals.filter(s => s.status === 'PENDING').length;
+
+        // Generowanie kart sygnałów
+        const cardsHtml = signals.length > 0 ? signals.map(s => {
+            // Parsowanie danych z notatki (Score, EV)
+            let score = "N/A";
+            if (s.notes && s.notes.includes("SCORE:")) {
+                const match = s.notes.match(/SCORE:\s*(\d+)/);
+                if (match) score = match[1];
+            }
+            
+            // Kolorowanie R:R
+            const rr = s.risk_reward_ratio || 0;
+            let rrClass = "text-gray-400";
+            if (rr >= 3.0) rrClass = "text-green-400 font-bold";
+            else if (rr >= 2.0) rrClass = "text-yellow-400 font-semibold";
+            else if (rr < 1.5) rrClass = "text-red-400";
+
+            // Wyliczanie czasu do wygaśnięcia
+            let timeRemaining = "---";
+            let timeBarWidth = 100;
+            if (s.expiration_date) {
+                const now = new Date();
+                const exp = new Date(s.expiration_date);
+                const gen = new Date(s.generation_date);
+                const totalLife = exp - gen;
+                const timeLeft = exp - now;
+                
+                if (timeLeft > 0) {
+                    const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
+                    timeRemaining = `${hoursLeft}h`;
+                    timeBarWidth = (timeLeft / totalLife) * 100;
+                } else {
+                    timeRemaining = "Expired";
+                    timeBarWidth = 0;
+                }
+            }
+
+            // Wizualizacja Paska Ceny (SL ---|--- TP)
+            // Uproszczenie: Pasek pokazuje statyczny zakres setupu.
+            // Aby pokazać live price, musielibyśmy pobierać quote.
+            // Zostawiamy placeholder "Price Bar" do późniejszej implementacji z live data.
+            
+            const statusColor = s.status === 'ACTIVE' ? 'border-green-500' : 'border-yellow-500';
+            const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
+
+            return `
+            <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} shadow-lg hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
+                
+                <!-- Pasek czasu życia (TTL) na dole -->
+                <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full">
+                    <div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div>
+                </div>
+
+                <div class="flex justify-between items-start mb-3">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4>
+                            <i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1 font-mono">
+                            Wejście: <span class="text-gray-300">${s.entry_price ? s.entry_price.toFixed(2) : (s.entry_zone_top ? '~'+s.entry_zone_top.toFixed(2) : '---')}</span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="flex flex-col items-end">
+                            <span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1">AQM: ${score}</span>
+                            <span class="text-xs ${rrClass}">R:R ${rr.toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Wizualizacja Zakresu (Uproszczona) -->
+                <div class="flex justify-between text-[10px] font-mono text-gray-500 mb-1 mt-2">
+                    <span class="text-red-400">SL: ${s.stop_loss ? s.stop_loss.toFixed(2) : '---'}</span>
+                    <span class="text-green-400">TP: ${s.take_profit ? s.take_profit.toFixed(2) : '---'}</span>
+                </div>
+                <div class="w-full h-1.5 bg-gray-800 rounded-full relative overflow-hidden">
+                    <!-- Marker Wejścia -->
+                    <div class="absolute top-0 bottom-0 w-0.5 bg-white z-10" style="left: 30%"></div>
+                    <!-- Tutaj w przyszłości dodamy marker aktualnej ceny -->
+                </div>
+
+                <div class="mt-3 flex justify-between items-center">
+                    <span class="text-[10px] text-gray-600">TTL: ${timeRemaining}</span>
+                    <button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">
+                        Szczegóły >
+                    </button>
+                </div>
+            </div>`;
+        }).join('') : `<p class="text-center text-gray-500 col-span-full py-20">Brak aktywnych sygnałów H3. Uruchom skaner.</p>`;
+
+        return `
+        <div id="h3-signals-view" class="max-w-7xl mx-auto">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-gray-700 pb-4 gap-4">
+                <div>
+                    <h2 class="text-2xl font-bold text-white flex items-center">
+                        <i data-lucide="target" class="w-6 h-6 mr-3 text-purple-500"></i>
+                        Sygnały H3 Live
+                    </h2>
+                    <p class="text-sm text-gray-500 mt-1">
+                        Aktywne: <span class="text-green-400 font-bold">${activeCount}</span> | 
+                        Oczekujące: <span class="text-yellow-400 font-bold">${pendingCount}</span>
+                    </p>
+                </div>
+
+                <!-- Pasek Narzędzi (Sortowanie) -->
+                <div class="flex items-center gap-3">
+                    <div class="relative">
+                        <select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-gray-300 text-sm rounded-md focus:ring-sky-500 focus:border-sky-500 block w-full p-2 pl-3 pr-8 appearance-none cursor-pointer hover:bg-gray-800 transition-colors">
+                            <option value="score">Wg AQM Score</option>
+                            <option value="rr">Wg R:R Ratio</option>
+                            <option value="time">Wg Czasu Wygaśnięcia</option>
+                            <option value="ticker">Wg Ticker (A-Z)</option>
+                        </select>
+                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400">
+                            <i data-lucide="arrow-up-down" class="w-4 h-4"></i>
+                        </div>
+                    </div>
+                    
+                    <button id="h3-refresh-btn" class="p-2 bg-gray-800 hover:bg-gray-700 rounded-md border border-gray-700 text-gray-300 transition-colors" title="Odśwież">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Grid Kart -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                ${cardsHtml}
+            </div>
+        </div>`;
+    },
+
     portfolio: (holdings, quotes) => {
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
@@ -170,7 +299,6 @@ export const renderers = {
             const quote = quotes[h.ticker];
             let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
             let priceClass = 'text-gray-400';
-            
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
@@ -185,44 +313,11 @@ export const renderers = {
             }
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
             const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
-            
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
-                        <td class="p-3 font-bold text-sky-400">${h.ticker}</td>
-                        <td class="p-3 text-right">${h.quantity}</td>
-                        <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
-                        <td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td>
-                        <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
-                        <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
-                        <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
-                    </tr>`;
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400">${h.ticker}</td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td><td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
         }).join('');
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
-        
-        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
-                                <tr>
-                                    <th scope="col" class="p-3">Ticker</th>
-                                    <th scope="col" class="p-3 text-right">Ilość</th>
-                                    <th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th>
-                                    <th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th>
-                                    <th scope="col" class="p-3 text-right">Cena Docelowa (USD)</th>
-                                    <th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th>
-                                    <th scope="col" class="p-3 text-right">Akcja</th>
-                                </tr>
-                             </thead>`;
-                             
-        return `<div id="portfolio-view" class="max-w-6xl mx-auto">
-                    <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">
-                        Portfel Inwestycyjny
-                        <span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span>
-                    </h2>
-                    ${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : 
-                    `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
-                        <table class="w-full text-sm text-left text-gray-300">
-                            ${tableHeader}
-                            <tbody>${rows}</tbody>
-                        </table>
-                     </div>` }
-                </div>`;
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th><th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th><th scope="col" class="p-3 text-right">Cena Docelowa (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th><th scope="col" class="p-3 text-right">Akcja</th></tr></thead>`;
+        return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>` }</div>`;
     },
     
     transactions: (transactions) => {
@@ -239,359 +334,44 @@ export const renderers = {
         const stats = report.stats;
         const trades = report.trades;
         const total_trades_count = report.total_trades_count;
-        
         const formatMetric = (val) => (typeof val !== 'number' || isNaN(val)) ? `<span class="text-gray-600">---</span>` : val.toFixed(3);
-        const formatPercent = (val) => {
-            if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`;
-            const color = val >= 0 ? 'text-green-500' : 'text-red-500';
-            return `<span class="${color}">${val.toFixed(2)}%</span>`;
-        };
-        const formatProfitFactor = (val) => {
-             if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`;
-             const color = val >= 1 ? 'text-green-500' : 'text-red-500';
-             return `<span class="${color}">${val.toFixed(2)}</span>`;
-        };
+        const formatPercent = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 0 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}%</span>`; };
+        const formatProfitFactor = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 1 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}</span>`; };
         const formatNumber = (val) => (typeof val !== 'number' || isNaN(val)) ? `<span class="text-gray-500">---</span>` : val.toFixed(2);
-
-        const createStatCard = (label, value, icon) => {
-            return `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                        <h3 class="font-semibold text-gray-400 flex items-center text-sm">
-                            <i data-lucide="${icon}" class="w-4 h-4 mr-2 text-sky-400"></i>${label}
-                        </h3>
-                        <p class="text-3xl font-extrabold mt-2 text-white">${value}</p>
-                    </div>`;
-        };
-        
-        const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => {
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
-                        <td class="p-3 font-semibold text-sky-400">${setupName}</td>
-                        <td class="p-3 text-right">${setupStats.total_trades}</td>
-                        <td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td>
-                        <td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td>
-                        <td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td>
-                    </tr>`;
-        }).join('');
-        
-        const setupTable = setupRows.length > 0 ? 
-            `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700">
-                <table class="w-full text-sm text-left text-gray-300">
-                    <thead class="text-xs text-gray-400 uppercase bg-[#0D1117]">
-                        <tr>
-                            <th scope="col" class="p-3">Strategia</th>
-                            <th scope="col" class="p-3 text-right">Ilość Transakcji</th>
-                            <th scope="col" class="p-3 text-right">Win Rate (%)</th>
-                            <th scope="col" class="p-3 text-right">Całkowity P/L (%)</th>
-                            <th scope="col" class="p-3 text-right">Profit Factor</th>
-                        </tr>
-                    </thead>
-                    <tbody>${setupRows}</tbody>
-                </table>
-             </div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
-
-        const tradeHeaders = [
-            'Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)',
-            'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile',
-            'Inst. Sync', 'Retail Herd.',
-            'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)',
-            'J (H4)', 'J Thresh.'
-        ];
-        
-        const headerClasses = [
-            'sticky left-0', 'sticky left-[90px]', 'sticky left-[160px]', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right'
-        ];
-
+        const createStatCard = (label, value, icon) => `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center text-sm"><i data-lucide="${icon}" class="w-4 h-4 mr-2 text-sky-400"></i>${label}</h3><p class="text-3xl font-extrabold mt-2 text-white">${value}</p></div>`;
+        const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-semibold text-sky-400">${setupName}</td><td class="p-3 text-right">${setupStats.total_trades}</td><td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td><td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td><td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td></tr>`).join('');
+        const setupTable = setupRows.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Strategia</th><th scope="col" class="p-3 text-right">Ilość Transakcji</th><th scope="col" class="p-3 text-right">Win Rate (%)</th><th scope="col" class="p-3 text-right">Całkowity P/L (%)</th><th scope="col" class="p-3 text-right">Profit Factor</th></tr></thead><tbody>${setupRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
+        const tradeHeaders = ['Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)', 'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile', 'Inst. Sync', 'Retail Herd.', 'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)', 'J (H4)', 'J Thresh.'];
+        const headerClasses = ['sticky left-0', 'sticky left-[90px]', 'sticky left-[160px]', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right'];
         const tradeRows = trades.map(t => {
             const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
             const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
-            
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono">
-                        <td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
-                        <td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td>
-                        <td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td>
-                        
-                        <td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td>
-                        <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td>
-                        <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td>
-                        <td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td>
-                        
-                        <td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td>
-                        <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td>
-                    </tr>`;
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono"><td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td><td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td><td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td><td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td><td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td><td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td><td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td></tr>`;
         }).join('');
-
-        const tradeTable = trades.length > 0 ?
-             `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto">
-                <table class="w-full text-sm text-left text-gray-300 min-w-[2400px]">
-                    <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10">
-                        <tr>
-                            ${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}
-                        </tr>
-                    </thead>
-                    <tbody>${tradeRows}</tbody>
-                </table>
-             </div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
-        
-        const backtestSection = `
-            <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
-                <h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4>
-                <p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p>
-                <div class="flex items-start gap-3 mb-4">
-                    <input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}">
-                    <button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700">
-                        <i data-lucide="play" class="w-4 h-4 mr-2"></i>
-                        Uruchom Test
-                    </button>
-                </div>
-
-                <button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]">
-                    <span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span>
-                    <i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i>
-                </button>
-
-                <div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label>
-                        <input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95">
-                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label>
-                        <input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5">
-                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label>
-                        <input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0">
-                        <p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p>
-                    </div>
-                    
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label>
-                        <input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0">
-                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label>
-                        <input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0">
-                        <p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label>
-                        <input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5">
-                        <p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p>
-                    </div>
-
-                    <div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1">
-                        <label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label>
-                        <input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1">
-                        <p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p>
-                    </div>
-                </div>
-
-                <div id="backtest-status-message" class="text-sm mt-3 h-4"></div>
-            </div>
-        `;
-        
-        const quantumLabSection = `
-            <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden">
-                <div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none">
-                    <i data-lucide="atom" class="w-32 h-32 text-purple-500"></i>
-                </div>
-                <h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center">
-                    <i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i> Quantum Lab (Apex V4)
-                </h4>
-                <p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p>
-                
-                <div class="flex flex-wrap gap-3">
-                    <button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0">
-                        <i data-lucide="cpu" class="w-4 h-4 mr-2"></i>
-                        Konfiguruj Optymalizację
-                    </button>
-                    <button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0">
-                        <i data-lucide="list" class="w-4 h-4 mr-2"></i>
-                        Wyniki
-                    </button>
-                </div>
-                <div id="quantum-lab-status" class="text-sm mt-3 h-4"></div>
-            </div>
-        `;
-
-        const aiOptimizerSection = `
-            <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
-                <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4>
-                <p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane i zasugerował optymalizacje strategii.</p>
-                <div class="flex items-start gap-3">
-                    <button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
-                        <i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>
-                        Analiza AI
-                    </button>
-                    <button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0">
-                        <i data-lucide="eye" class="w-4 h-4 mr-2"></i>
-                        Raport
-                    </button>
-                </div>
-                <div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div>
-            </div>
-        `;
-
-        const exportSection = `
-            <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
-                <h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4>
-                <p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje jako CSV.</p>
-                <div class="flex items-start gap-3">
-                    <button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
-                        <i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>
-                        Eksport CSV
-                    </button>
-                </div>
-                <div id="csv-export-status-message" class="text-sm mt-3 h-4"></div>
-            </div>
-        `;
-        
-        const h3DeepDiveSection = `
-            <div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700">
-                <h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3</h4>
-                <p class="text-sm text-gray-500 mb-4">Analiza "słabego roku" (Deep Dive).</p>
-                <div class="flex items-start gap-3">
-                    <button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0">
-                        <i data-lucide="search-check" class="w-4 h-4 mr-2"></i>
-                        Analiza Deep Dive
-                    </button>
-                </div>
-                <div id="h3-deep-dive-main-status" class="text-sm mt-3 h-4"></div>
-            </div>
-        `;
-
+        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
+        const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="flex items-start gap-3 mb-4"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
+        const quantumLabSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden"><div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none"><i data-lucide="atom" class="w-32 h-32 text-purple-500"></i></div><h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center"><i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i>Quantum Lab (Apex V4)</h4><p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p><div class="flex flex-wrap gap-3"><button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0"><i data-lucide="cpu" class="w-4 h-4 mr-2"></i>Konfiguruj Optymalizację</button><button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="list" class="w-4 h-4 mr-2"></i>Wyniki</button></div><div id="quantum-lab-status" class="text-sm mt-3 h-4"></div></div>`;
+        const aiOptimizerSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4><p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane i zasugerował optymalizacje strategii.</p><div class="flex items-start gap-3"><button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>Analiza AI</button><button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="eye" class="w-4 h-4 mr-2"></i>Raport</button></div><div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div></div>`;
+        const exportSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4><p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje jako CSV.</p><div class="flex items-start gap-3"><button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>Eksport CSV</button></div><div id="csv-export-status-message" class="text-sm mt-3 h-4"></div></div>`;
+        const h3DeepDiveSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Analiza "słabego roku" (Deep Dive).</p><div class="flex items-start gap-3"><button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i>Analiza Deep Dive</button></div><div id="h3-deep-dive-main-status" class="text-sm mt-3 h-4"></div></div>`;
         const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
         const startTrade = (state.currentReportPage - 1) * REPORT_PAGE_SIZE + 1;
         const endTrade = Math.min(state.currentReportPage * REPORT_PAGE_SIZE, total_trades_count);
-
-        const paginationControls = totalPages > 1 ? `
-            <div class="flex justify-between items-center mt-4">
-                <span class="text-sm text-gray-400">
-                    Wyświetlanie ${startTrade}-${endTrade} z ${total_trades_count} transakcji
-                </span>
-                <div class="flex gap-2">
-                    <button id="report-prev-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === 1 ? 'disabled' : ''}>
-                        <i data-lucide="arrow-left" class="w-4 h-4"></i>
-                    </button>
-                    <span class="text-sm text-gray-400 p-2">Strona ${state.currentReportPage} / ${totalPages}</span>
-                    <button id="report-next-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === totalPages ? 'disabled' : ''}>
-                        <i data-lucide="arrow-right" class="w-4 h-4"></i>
-                    </button>
-                </div>
-            </div>
-        ` : '';
-
-        return `<div id="agent-report-view" class="max-w-6xl mx-auto">
-                    <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2>
-                    
-                    <h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie ${stats.total_trades} Transakcji)</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                        ${createStatCard('Całkowity P/L (%)', formatPercent(stats.total_p_l_percent), 'percent')}
-                        ${createStatCard('Win Rate (%)', formatPercent(stats.win_rate_percent), 'target')}
-                        ${createStatCard('Profit Factor', formatProfitFactor(stats.profit_factor), 'ratio')}
-                        ${createStatCard('Ilość Transakcji', stats.total_trades, 'bar-chart-2')}
-                    </div>
-                    
-                    <h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>
-                    ${setupTable}
-                    
-                    <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
-                        ${backtestSection}
-                        ${quantumLabSection}
-                        ${aiOptimizerSection}
-                        ${h3DeepDiveSection}
-                        ${exportSection}
-                    </div>
-
-                    <h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji</h3>
-                    ${paginationControls}
-                    ${tradeTable}
-                    ${paginationControls} </div>`;
+        const paginationControls = totalPages > 1 ? `<div class="flex justify-between items-center mt-4"><span class="text-sm text-gray-400">Wyświetlanie ${startTrade}-${endTrade} z ${total_trades_count} transakcji</span><div class="flex gap-2"><button id="report-prev-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === 1 ? 'disabled' : ''}><i data-lucide="arrow-left" class="w-4 h-4"></i></button><span class="text-sm text-gray-400 p-2">Strona ${state.currentReportPage} / ${totalPages}</span><button id="report-next-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === totalPages ? 'disabled' : ''}><i data-lucide="arrow-right" class="w-4 h-4"></i></button></div></div>` : '';
+        return `<div id="agent-report-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2><h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie ${stats.total_trades} Transakcji)</h3><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">${createStatCard('Całkowity P/L (%)', formatPercent(stats.total_p_l_percent), 'percent')}${createStatCard('Win Rate (%)', formatPercent(stats.win_rate_percent), 'target')}${createStatCard('Profit Factor', formatProfitFactor(stats.profit_factor), 'ratio')}${createStatCard('Ilość Transakcji', stats.total_trades, 'bar-chart-2')}</div><h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>${setupTable}<h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">${backtestSection}${quantumLabSection}${aiOptimizerSection}${h3DeepDiveSection}${exportSection}</div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji</h3>${paginationControls}${tradeTable}${paginationControls}</div>`;
     },
 
-    // === NOWOŚĆ: Renderowanie wyników optymalizacji Z PRZYCISKIEM UŻYJ ===
     optimizationResults: (job) => {
         if (!job) return `<p class="text-gray-500">Brak danych o optymalizacji.</p>`;
-        
         const trials = job.trials || [];
-        // Sortowanie: Najlepsze wyniki na górze (Profit Factor)
         trials.sort((a, b) => (b.profit_factor || 0) - (a.profit_factor || 0));
-        
         const trialsRows = trials.map(t => {
             const isBest = t.id === job.best_trial_id;
             const rowClass = isBest ? "bg-green-900/20 border-l-4 border-green-500" : "border-b border-gray-800 hover:bg-[#1f2937]";
-            
-            // Formatowanie parametrów do czytelnego stringa
-            const paramsStr = Object.entries(t.params)
-                .map(([k, v]) => `<span class="text-gray-400">${k}:</span> <span class="text-sky-300">${typeof v === 'number' ? v.toFixed(2) : v}</span>`)
-                .join(', ');
-            
-            // Zakoduj parametry do atrybutu data, aby łatwo je pobrać w JS
+            const paramsStr = Object.entries(t.params).map(([k, v]) => `<span class="text-gray-400">${k}:</span> <span class="text-sky-300">${typeof v === 'number' ? v.toFixed(2) : v}</span>`).join(', ');
             const paramsJson = JSON.stringify(t.params).replace(/"/g, '&quot;');
-
-            return `<tr class="${rowClass}">
-                <td class="p-2 text-center font-mono text-gray-500">#${t.trial_number}</td>
-                <td class="p-2 text-right font-bold ${t.profit_factor >= 1.5 ? 'text-green-400' : 'text-gray-300'}">${t.profit_factor ? t.profit_factor.toFixed(2) : '0.00'}</td>
-                <td class="p-2 text-right">${t.win_rate ? t.win_rate.toFixed(1) : '0.0'}%</td>
-                <td class="p-2 text-right">${t.total_trades || 0}</td>
-                <td class="p-2 text-xs font-mono">${paramsStr}</td>
-                <td class="p-2 text-right">
-                    <button class="use-params-btn bg-purple-600 hover:bg-purple-700 text-white text-xs px-2 py-1 rounded flex items-center ml-auto" data-params="${paramsJson}">
-                        <i data-lucide="play-circle" class="w-3 h-3 mr-1"></i> Użyj
-                    </button>
-                </td>
-            </tr>`;
+            return `<tr class="${rowClass}"><td class="p-2 text-center font-mono text-gray-500">#${t.trial_number}</td><td class="p-2 text-right font-bold ${t.profit_factor >= 1.5 ? 'text-green-400' : 'text-gray-300'}">${t.profit_factor ? t.profit_factor.toFixed(2) : '0.00'}</td><td class="p-2 text-right">${t.win_rate ? t.win_rate.toFixed(1) : '0.0'}%</td><td class="p-2 text-right">${t.total_trades || 0}</td><td class="p-2 text-xs font-mono">${paramsStr}</td><td class="p-2 text-right"><button class="use-params-btn bg-purple-600 hover:bg-purple-700 text-white text-xs px-2 py-1 rounded flex items-center ml-auto" data-params="${paramsJson}"><i data-lucide="play-circle" class="w-3 h-3 mr-1"></i> Użyj</button></td></tr>`;
         }).join('');
-
-        return `
-            <div class="space-y-6">
-                <div class="flex justify-between items-center bg-[#0D1117] p-4 rounded border border-gray-700">
-                    <div>
-                        <h4 class="text-sm text-gray-400 uppercase font-bold">Zadanie: ${job.target_year}</h4>
-                        <p class="text-xs text-gray-500">ID: ${job.id}</p>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-2xl font-bold ${job.best_score >= 2.0 ? 'text-green-400' : 'text-yellow-400'}">
-                            Best Score: ${job.best_score ? job.best_score.toFixed(4) : '---'}
-                        </div>
-                        <div class="text-xs text-gray-500">Status: ${job.status}</div>
-                    </div>
-                </div>
-
-                <h4 class="text-sm text-gray-400 uppercase font-bold border-b border-gray-700 pb-1">Ranking Prób (Top Wyniki)</h4>
-                <div class="overflow-x-auto max-h-64 border border-gray-700 rounded">
-                    <table class="w-full text-sm text-left text-gray-300">
-                        <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0">
-                            <tr>
-                                <th class="p-2 text-center">#</th>
-                                <th class="p-2 text-right">PF</th>
-                                <th class="p-2 text-right">Win Rate</th>
-                                <th class="p-2 text-right">Trades</th>
-                                <th class="p-2">Parametry</th>
-                                <th class="p-2 text-right">Akcja</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${trialsRows}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        `;
+        return `<div class="space-y-6"><div class="flex justify-between items-center bg-[#0D1117] p-4 rounded border border-gray-700"><div><h4 class="text-sm text-gray-400 uppercase font-bold">Zadanie: ${job.target_year}</h4><p class="text-xs text-gray-500">ID: ${job.id}</p></div><div class="text-right"><div class="text-2xl font-bold ${job.best_score >= 2.0 ? 'text-green-400' : 'text-yellow-400'}">Best Score: ${job.best_score ? job.best_score.toFixed(4) : '---'}</div><div class="text-xs text-gray-500">Status: ${job.status}</div></div></div><h4 class="text-sm text-gray-400 uppercase font-bold border-b border-gray-700 pb-1">Ranking Prób (Top Wyniki)</h4><div class="overflow-x-auto max-h-64 border border-gray-700 rounded"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr><th class="p-2 text-center">#</th><th class="p-2 text-right">PF</th><th class="p-2 text-right">Win Rate</th><th class="p-2 text-right">Trades</th><th class="p-2">Parametry</th><th class="p-2 text-right">Akcja</th></tr></thead><tbody>${trialsRows}</tbody></table></div></div>`;
     }
 };
