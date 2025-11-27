@@ -2,8 +2,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime, date
 from typing import List, Optional, Any, Dict
 
-# === Schematy dla danych wejściowych transakcji ===
-
 class TransactionBase(BaseModel):
     ticker: str = Field(..., description="Ticker spółki")
     quantity: int = Field(..., gt=0, description="Liczba akcji (musi być > 0)")
@@ -14,9 +12,6 @@ class BuyRequest(TransactionBase):
 
 class SellRequest(TransactionBase):
     pass
-
-
-# === Schematy dla Portfela (PortfolioHolding) ===
 
 class PortfolioHoldingBase(BaseModel):
     ticker: str
@@ -30,26 +25,18 @@ class PortfolioHolding(PortfolioHoldingBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-
-# === Schematy dla Historii Transakcji (TransactionHistory) ===
-
 class TransactionHistoryBase(BaseModel):
     ticker: str
-    transaction_type: str # BUY lub SELL
+    transaction_type: str 
     quantity: int
     price_per_share: float
 
 class TransactionHistory(TransactionHistoryBase):
     id: int
     transaction_date: datetime
-    profit_loss_usd: Optional[float] = None # Zysk/strata tylko dla SELL
+    profit_loss_usd: Optional[float] = None 
 
     model_config = ConfigDict(from_attributes=True)
-
-
-# ==========================================================
-# === Pozostałe, istniejące schematy ===
-# ==========================================================
 
 class Progress(BaseModel):
     processed: int
@@ -64,8 +51,6 @@ class WorkerStatus(BaseModel):
 
 class SystemAlert(BaseModel):
     message: str
-
-# --- Schematy Wyników Analiz ---
 
 class Phase1Candidate(BaseModel):
     ticker: str
@@ -101,13 +86,11 @@ class TradingSignal(BaseModel):
     entry_zone_bottom: Optional[float] = None
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
+    
+    # === NOWOŚĆ: Pole przesyłane do UI ===
+    expiration_date: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
-
-
-# ==========================================================
-# KROK 5 (Wirtualny Agent): Schematy Raportu
-# ==========================================================
 
 class VirtualTrade(BaseModel):
     id: int
@@ -122,7 +105,6 @@ class VirtualTrade(BaseModel):
     close_price: Optional[float] = None
     final_profit_loss_percent: Optional[float] = None
     
-    # Metryki (Głębokie Logowanie)
     metric_atr_14: Optional[float] = None
     metric_time_dilation: Optional[float] = None
     metric_price_gravity: Optional[float] = None
@@ -140,8 +122,6 @@ class VirtualTrade(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-# NOWOŚĆ: Ścisły model dla statystyk pojedynczego setupu
-# To zapobiega wyciekom Decimal do JSON
 class VirtualAgentSetupStats(BaseModel):
     total_trades: int
     win_rate_percent: float
@@ -153,7 +133,6 @@ class VirtualAgentStats(BaseModel):
     win_rate_percent: float
     total_p_l_percent: float
     profit_factor: float
-    # ZMIANA: Zamiast Dict[str, Any] używamy konkretnego modelu
     by_setup: Dict[str, VirtualAgentSetupStats]
 
 class VirtualAgentReport(BaseModel):
@@ -161,17 +140,9 @@ class VirtualAgentReport(BaseModel):
     trades: List[VirtualTrade] 
     total_trades_count: int 
 
-# ==========================================================
-# ZMIANA (Dynamiczne Parametry): Schemat Zlecenia Backtestu
-# ==========================================================
 class BacktestRequest(BaseModel):
     year: str = Field(..., description="Rok do przetestowania, np. '2010'")
-    # NOWOŚĆ: Opcjonalny słownik parametrów
-    parameters: Optional[Dict[str, Any]] = Field(default=None, description="Dynamiczne parametry strategii (np. progi H3)")
-
-# ==========================================================
-# === SCHEMATY (Mega Agent) ===
-# ==========================================================
+    parameters: Optional[Dict[str, Any]] = Field(default=None, description="Dynamiczne parametry strategii")
 
 class AIOptimizerRequest(BaseModel):
     pass
@@ -181,10 +152,6 @@ class AIOptimizerReport(BaseModel):
     report_text: Optional[str] = None
     last_updated: Optional[datetime] = None
 
-# ==========================================================
-# === SCHEMATY (H3 Deep Dive) ===
-# ==========================================================
-
 class H3DeepDiveRequest(BaseModel):
     year: int = Field(..., description="Rok do analizy, np. 2023", ge=2000, le=2100)
 
@@ -193,15 +160,9 @@ class H3DeepDiveReport(BaseModel):
     report_text: Optional[str] = None
     last_updated: Optional[datetime] = None
 
-# ==========================================================
-# === NOWOŚĆ: SCHEMATY DLA APEX V4 (Quantum Optimization) ===
-# ==========================================================
-
 class OptimizationRequest(BaseModel):
-    target_year: int = Field(..., description="Rok, na którym ma być przeprowadzona optymalizacja (np. 2023)", ge=2000, le=2100)
-    # ZMIANA: Zwiększono limit le=500 na le=5000 dla planu Standard
-    n_trials: int = Field(default=50, description="Liczba prób algorytmu Optuna", ge=10, le=5000)
-    # Opcjonalnie można nadpisać domyślną przestrzeń poszukiwań
+    target_year: int = Field(..., description="Rok optymalizacji", ge=2000, le=2100)
+    n_trials: int = Field(default=50, description="Liczba prób", ge=10, le=5000)
     parameter_space: Optional[Dict[str, Any]] = None
 
 class OptimizationTrial(BaseModel):
@@ -224,11 +185,9 @@ class OptimizationJob(BaseModel):
     total_trials: int
     best_score: Optional[float] = None
     created_at: datetime
-    # Dodano pole configuration, aby przekazać wyniki analizy wrażliwości do frontendu
     configuration: Optional[Dict[str, Any]] = None 
 
     model_config = ConfigDict(from_attributes=True)
 
 class OptimizationJobDetail(OptimizationJob):
-    """Pełny widok zadania wraz z listą wszystkich prób"""
     trials: List[OptimizationTrial] = []
