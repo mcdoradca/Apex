@@ -209,15 +209,32 @@ class QuantumOptimizer:
 
             # 2. Ścieżka H3 (Stara)
             if self.strategy_mode == 'H3':
-                # ... (Kod H3 - skrócony dla czytelności, identyczny jak w V11) ...
-                # (Wklejam kluczowe elementy H3, aby zachować ciągłość)
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
                 daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
                 daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
                 
-                # ... (reszta obliczeń H3: Entropy, Volume Norm, AQM Score H3) ...
+                daily_df['daily_returns'] = daily_df['close'].pct_change()
+                daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std()
+                
+                if not news_df.empty:
+                    nc = news_df.groupby(news_df.index.date).size()
+                    nc.index = pd.to_datetime(nc.index)
+                    nc = nc.reindex(daily_df.index, fill_value=0)
+                    daily_df['information_entropy'] = nc.rolling(window=10).sum()
+                else:
+                    daily_df['information_entropy'] = 0.0
+                
+                daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean()
+                daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200).mean()
+                daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200).std()
+                daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
+                
+                daily_df['normalized_news'] = 0.0 
+                daily_df['m_sq'] = daily_df['normalized_volume'] + daily_df['normalized_news']
+                daily_df['nabla_sq'] = daily_df['price_gravity']
+
                 daily_df = calculate_h3_metrics_v4(daily_df, {}) # Używamy funkcji pomocniczej
                 daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
                 
@@ -236,7 +253,8 @@ class QuantumOptimizer:
                     earnings_days_to=None
                 )
                 # Musimy dodać atr_14 (jest w aqm_df jako 'atr')
-                aqm_df['atr_14'] = aqm_df['atr']
+                if 'atr' in aqm_df.columns:
+                    aqm_df['atr_14'] = aqm_df['atr']
                 return aqm_df # Zawiera kolumny: aqm_score, qps, ves, mrs, tcs
 
             return pd.DataFrame()
@@ -392,9 +410,6 @@ class QuantumOptimizer:
 
         return self._calculate_stats(trades_pnl)
 
-    # ... (Reszta metod bez zmian: _calculate_stats, _get_all_tickers, _collect_trials_data, _update_best_score, _save_trial, _finalize_job, _mark_job_failed) ...
-    # (Dla skrócenia pliku w odpowiedzi, ale w pełnym pliku muszą one być)
-    
     def _calculate_stats(self, trades):
         if not trades: return {'profit_factor': 0.0, 'total_trades': 0, 'win_rate': 0.0}
         wins = [t for t in trades if t > 0]
@@ -413,10 +428,14 @@ class QuantumOptimizer:
             tickers_port = [r[0] for r in res_port]
             combined = list(set(tickers_p1 + tickers_port))
             if len(combined) > 10:
+                logger.info(f"Optimizer: Wybrano {len(combined)} tickerów z Fazy 1/Portfela.")
                 return combined
+            logger.warning("Optimizer: Faza 1 pusta. Pobieram tickery z tabeli companies.")
             res_all = self.session.execute(text("SELECT ticker FROM companies LIMIT 1500")).fetchall()
             return [r[0] for r in res_all]
-        except: return []
+        except Exception as e: 
+            logger.error(f"Error getting tickers: {e}")
+            return []
 
     def _collect_trials_data(self):
         trials_data = []
@@ -447,6 +466,7 @@ class QuantumOptimizer:
             safe_trades = int(trades) if trades is not None else 0
             safe_score = float(score) if score is not None and not np.isnan(score) else 0.0
             safe_win_rate = float(win_rate) if win_rate is not None and not np.isnan(win_rate) else 0.0
+            
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
 
             trial_record = models.OptimizationTrial(
@@ -464,12 +484,7 @@ class QuantumOptimizer:
             job.status = 'COMPLETED'
             job.best_score = float(best_trial.value)
             best_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
-            job.configuration = {
-                'best_params': best_params, 
-                'sensitivity_analysis': sensitivity_report, 
-                'version': 'V12_HYBRID',
-                'strategy': self.strategy_mode # Zapisujemy, jaka strategia wygrała
-            }
+            job.configuration = {'best_params': best_params, 'sensitivity_analysis': sensitivity_report, 'version': 'V12_HYBRID', 'strategy': self.strategy_mode}
             self.session.commit()
 
     def _mark_job_failed(self):
