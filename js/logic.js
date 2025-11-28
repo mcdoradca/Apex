@@ -87,7 +87,6 @@ export const showPortfolio = async () => {
     }
 };
 
-// === NOWOŚĆ: Kontroler Widoku Sygnałów H3 ===
 const _extractScore = (notes) => {
     if (!notes) return 0;
     const match = notes.match(/SCORE:\s*(\d+)/);
@@ -95,46 +94,40 @@ const _extractScore = (notes) => {
 };
 
 const _renderH3ViewInternal = () => {
-    // 1. Sortowanie (w pamięci)
     const sortedSignals = [...state.phase3].sort((a, b) => {
         let valA, valB;
-        // Domyślny kierunek sortowania zależy od metryki (np. Score malejąco, Czas rosnąco)
-        // Możemy to sterować przez state.h3SortDirection jeśli UI na to pozwoli,
-        // na razie przyjmujemy "naturalne" sortowanie dla tradera (Najlepsze na górze).
         
         switch (state.h3SortBy) {
-            case 'score': // Malejąco (Najwyższy Score)
+            case 'score': 
                 valA = _extractScore(a.notes);
                 valB = _extractScore(b.notes);
                 return valB - valA; 
-            case 'rr': // Malejąco (Najwyższy R:R)
+            case 'rr': 
                 valA = parseFloat(a.risk_reward_ratio || 0);
                 valB = parseFloat(b.risk_reward_ratio || 0);
                 return valB - valA;
-            case 'time': // Rosnąco (Najkrótszy czas do końca)
+            case 'time': 
                 valA = a.expiration_date ? new Date(a.expiration_date).getTime() : Number.MAX_SAFE_INTEGER;
                 valB = b.expiration_date ? new Date(b.expiration_date).getTime() : Number.MAX_SAFE_INTEGER;
                 return valA - valB;
-            case 'ticker': // Rosnąco (A-Z)
+            case 'ticker': 
                 return a.ticker.localeCompare(b.ticker);
             default:
                 return 0;
         }
     });
 
-    // 2. Renderowanie HTML
     UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals);
 
-    // 3. Podpięcie zdarzeń do nowego widoku
     const sortSelect = document.getElementById('h3-sort-select');
     const refreshBtn = document.getElementById('h3-refresh-btn');
-    const cards = document.querySelectorAll('.phase3-item'); // Karty w gridzie
+    const cards = document.querySelectorAll('.phase3-item'); 
 
     if (sortSelect) {
         sortSelect.value = state.h3SortBy;
         sortSelect.addEventListener('change', (e) => {
             state.h3SortBy = e.target.value;
-            _renderH3ViewInternal(); // Przerysuj posortowane
+            _renderH3ViewInternal(); 
         });
     }
 
@@ -163,7 +156,6 @@ export const showH3Signals = async () => {
         UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania sygnałów: ${e.message}</p>`;
     }
 };
-// ============================================
 
 export const showTransactions = async () => {
     showLoading();
@@ -197,7 +189,6 @@ export const refreshSidebarData = async () => {
         updateElement(UI.phase1.count, state.phase1.length);
         updateElement(UI.phase1.list, renderers.phase1List(state.phase1), true);
 
-        // Sidebar Phase 3 (Mini-lista) też odświeżamy
         const phase3Data = await api.getPhase3Signals();
         state.phase3 = phase3Data || [];
         updateElement(UI.phase3.count, state.phase3.length);
@@ -359,8 +350,14 @@ export const handleSellConfirm = async () => {
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
+    // Pobierz wybraną strategię
+    const strategySelect = document.getElementById('backtest-strategy-select');
+    const strategyMode = strategySelect ? strategySelect.value : 'H3';
+
     if (!input || !input.value) return;
+    
     const params = {
+        strategy_mode: strategyMode, // Dodano wybór strategii
         h3_percentile: document.getElementById('h3-param-percentile')?.value || 0.95,
         h3_m_sq_threshold: document.getElementById('h3-param-mass')?.value || -0.5,
         h3_min_score: document.getElementById('h3-param-min-score')?.value || 0.0,
@@ -370,7 +367,7 @@ export const handleYearBacktestRequest = async () => {
         setup_name: document.getElementById('h3-param-name')?.value || ""
     };
     try {
-        status.textContent = "Wysyłanie zlecenia...";
+        status.textContent = `Wysyłanie zlecenia (${strategyMode})...`;
         status.className = "text-yellow-400 text-sm mt-3 h-4";
         await api.requestBacktest(input.value, params);
         status.textContent = "Zlecenie przyjęte. Sprawdź status Workera.";
@@ -600,7 +597,6 @@ export const showSignalDetails = async (ticker) => {
 
             if (data.news_context && newsContainer) {
                 newsContainer.classList.remove('hidden');
-                // ... (obsługa newsów bez zmian) ...
             }
             
         } catch (e) {
@@ -711,6 +707,7 @@ export const hideQuantumModal = () => {
 export const handleStartQuantumOptimization = async () => {
     const year = parseInt(UI.quantumModal.yearInput.value);
     const trials = parseInt(UI.quantumModal.trialsInput.value);
+    const strategy = UI.quantumModal.strategySelect.value;
     
     if (!year || !trials || trials < 10) {
         UI.quantumModal.statusMessage.textContent = "Podaj poprawny rok i min. 10 prób.";
@@ -720,10 +717,14 @@ export const handleStartQuantumOptimization = async () => {
 
     try {
         UI.quantumModal.startBtn.disabled = true;
-        UI.quantumModal.statusMessage.textContent = "Uruchamianie silnika...";
+        UI.quantumModal.statusMessage.textContent = `Uruchamianie silnika (${strategy})...`;
         UI.quantumModal.statusMessage.className = "text-yellow-400 text-sm mt-3 h-4 text-center";
         
-        await api.startOptimization({ target_year: year, n_trials: trials });
+        await api.startOptimization({ 
+            target_year: year, 
+            n_trials: trials,
+            parameter_space: { strategy: strategy } 
+        });
         
         UI.quantumModal.statusMessage.textContent = "Zlecenie przyjęte! Sprawdź wyniki.";
         UI.quantumModal.statusMessage.className = "text-green-400 text-sm mt-3 h-4 text-center";
@@ -757,12 +758,12 @@ export const showOptimizationResults = async () => {
                     hideOptimizationResults();
                     showH3LiveParamsModal();
                     setTimeout(() => {
-                        if (UI.h3LiveModal.percentile) UI.h3LiveModal.percentile.value = params.h3_percentile;
-                        if (UI.h3LiveModal.mass) UI.h3LiveModal.mass.value = params.h3_m_sq_threshold;
-                        if (UI.h3LiveModal.minScore) UI.h3LiveModal.minScore.value = params.h3_min_score;
-                        if (UI.h3LiveModal.tp) UI.h3LiveModal.tp.value = params.h3_tp_multiplier;
-                        if (UI.h3LiveModal.sl) UI.h3LiveModal.sl.value = params.h3_sl_multiplier;
-                        if (UI.h3LiveModal.maxHold) UI.h3LiveModal.maxHold.value = params.h3_max_hold;
+                        if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = params.h3_percentile;
+                        if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = params.h3_m_sq_threshold;
+                        if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = params.h3_min_score;
+                        if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = params.h3_tp_multiplier;
+                        if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = params.h3_sl_multiplier;
+                        if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = params.h3_max_hold;
                     }, 100);
                 } catch(err) {
                     console.error("Błąd parsowania parametrów:", err);
