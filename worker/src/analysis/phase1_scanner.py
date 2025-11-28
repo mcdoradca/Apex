@@ -122,14 +122,14 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             
             if pd.isna(current_price): continue
                 
-            # === 1. Cena (0.5$ - 40.0$) ===
-            if not (0.5 <= current_price <= 40.0): 
+            # === 1. Cena (0.5$ - 50.0$) ===
+            if not (0.5 <= current_price <= 50.0): 
                 reject_stats['price'] += 1
                 continue
             
-            # === 2. Płynność (Vol > 400k) ===
+            # === 2. Płynność (Vol > 300k) ===
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if pd.isna(avg_volume) or avg_volume < 400000: 
+            if pd.isna(avg_volume) or avg_volume < 300000: 
                 reject_stats['volume'] += 1
                 continue
             
