@@ -126,21 +126,21 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 
             # === FILTRY V5 (Z PEŁNYM LOGOWANIEM) ===
 
-            # 1. Cena (0.5-30$)
-            if not (0.5 <= current_price <= 30.0): 
+            # 1. Cena (0.7-30$)
+            if not (0.7 <= current_price <= 30.0): 
                 reject_stats['price'] += 1
-                append_scan_log(session, f"❌ {ticker}: Cena {current_price:.2f}$ (Wymagane 0.5-30$)")
+                append_scan_log(session, f"❌ {ticker}: Cena {current_price:.2f}$ (Wymagane 0.7-30$)")
                 continue
             
-            # 2. Płynność (Vol > 300k)
+            # 2. Płynność (Vol > 400k)
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if pd.isna(avg_volume) or avg_volume < 300000: 
+            if pd.isna(avg_volume) or avg_volume < 400000: 
                 reject_stats['volume'] += 1
                 vol_display = f"{int(avg_volume/1000)}k" if not pd.isna(avg_volume) else "NaN"
-                append_scan_log(session, f"❌ {ticker}: Wolumen {vol_display} (Wymagane >300k)")
+                append_scan_log(session, f"❌ {ticker}: Wolumen {vol_display} (Wymagane >400k)")
                 continue
             
-            # 3. Zmienność (ATR > 2%)
+            # 3. Zmienność (ATR > 2.5%)
             atr_series = calculate_atr(daily_df, period=14)
             if atr_series.empty: 
                 append_scan_log(session, f"❌ {ticker}: Błąd obliczania ATR.")
@@ -148,9 +148,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             
             current_atr = atr_series.iloc[-1]
             atr_percent = (current_atr / current_price)
-            if atr_percent < 0.02: 
+            if atr_percent < 0.025: 
                 reject_stats['atr'] += 1
-                append_scan_log(session, f"❌ {ticker}: Niska zmienność ATR {atr_percent:.2%} (Wymagane >3%)")
+                append_scan_log(session, f"❌ {ticker}: Niska zmienność ATR {atr_percent:1.0%} (Wymagane >2.5%)")
                 continue 
             
             # 4. Dane Intraday (Wstępna weryfikacja dostępności)
