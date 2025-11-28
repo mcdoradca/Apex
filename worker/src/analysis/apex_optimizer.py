@@ -29,31 +29,8 @@ from ..database import get_db_session
 logger = logging.getLogger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-class AdaptiveExecutor:
-    """
-    Moduł adaptacji parametrów w czasie rzeczywistym (Live).
-    """
-    def __init__(self, base_params: dict):
-        self.base_params = base_params
-
-    def get_adapted_params(self, market_context: dict) -> dict:
-        adapted = self.base_params.copy()
-        vix = market_context.get('vix', 20.0)
-        trend = market_context.get('trend', 'NEUTRAL')
-        
-        if vix > 25.0:
-            adapted['h3_sl_multiplier'] = adapted.get('h3_sl_multiplier', 2.0) * 1.5
-            adapted['h3_tp_multiplier'] = adapted.get('h3_tp_multiplier', 5.0) * 1.2
-            adapted['h3_percentile'] = min(0.99, adapted.get('h3_percentile', 0.95) + 0.02)
-        elif vix < 15.0:
-            adapted['h3_tp_multiplier'] = adapted.get('h3_tp_multiplier', 5.0) * 0.8
-            adapted['h3_sl_multiplier'] = max(1.5, adapted.get('h3_sl_multiplier', 2.0) * 0.8)
-
-        if trend == 'BEAR':
-            adapted['h3_min_score'] = max(0.5, adapted.get('h3_min_score', 0.0))
-            adapted['h3_tp_multiplier'] = adapted.get('h3_tp_multiplier', 5.0) * 0.7
-            
-        return adapted
+# === USUNIĘTO KLASĘ AdaptiveExecutor ===
+# Adaptacja VIX została wyłączona, aby nie zmieniać zwycięskich parametrów w locie.
 
 class QuantumOptimizer:
     """
@@ -261,15 +238,16 @@ class QuantumOptimizer:
         
         pf = result['profit_factor']
         trades = result['total_trades']
+        win_rate = result['win_rate'] # Teraz pobieramy win_rate
         
         if trial.number % 20 == 0:
-            append_scan_log(self.session, f"⚡ Próba {trial.number}: PF={pf:.2f} (Trades: {trades})")
+            append_scan_log(self.session, f"⚡ Próba {trial.number}: PF={pf:.2f} (Trades: {trades}, WR: {win_rate:.1f}%)")
 
         if pf > self.best_score_so_far:
             self.best_score_so_far = pf
             self._update_best_score(pf)
 
-        self._save_trial(trial, params, pf, trades, pf)
+        self._save_trial(trial, params, pf, trades, pf, win_rate)
         
         if trades < 20: return 0.0 # Obniżony próg minimalnych transakcji (skoro zawężamy uniwersum)
         return pf
@@ -347,13 +325,17 @@ class QuantumOptimizer:
         return self._calculate_stats(trades_pnl)
 
     def _calculate_stats(self, trades):
-        if not trades: return {'profit_factor': 0.0, 'total_trades': 0}
+        if not trades: return {'profit_factor': 0.0, 'total_trades': 0, 'win_rate': 0.0}
         wins = [t for t in trades if t > 0]
         losses = [t for t in trades if t <= 0]
         total_win = sum(wins)
         total_loss = abs(sum(losses))
         pf = total_win / total_loss if total_loss > 0 else 0.0
-        return {'profit_factor': pf, 'total_trades': len(trades)}
+        
+        # === NAPRAWA WIN RATE ===
+        win_rate = (len(wins) / len(trades)) * 100 if len(trades) > 0 else 0.0
+        
+        return {'profit_factor': pf, 'total_trades': len(trades), 'win_rate': win_rate}
 
     def _get_all_tickers(self):
         try:
@@ -406,17 +388,20 @@ class QuantumOptimizer:
                 self.session.commit()
         except: self.session.rollback()
 
-    def _save_trial(self, trial, params, pf, trades, score):
+    def _save_trial(self, trial, params, pf, trades, score, win_rate):
         try:
             safe_pf = float(pf) if pf is not None and not np.isnan(pf) else 0.0
             safe_trades = int(trades) if trades is not None else 0
             safe_score = float(score) if score is not None and not np.isnan(score) else 0.0
+            safe_win_rate = float(win_rate) if win_rate is not None and not np.isnan(win_rate) else 0.0
             
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
 
             trial_record = models.OptimizationTrial(
                 job_id=self.job_id, trial_number=trial.number, params=safe_params,
-                profit_factor=safe_pf, total_trades=safe_trades, win_rate=0.0, net_profit=0.0,
+                profit_factor=safe_pf, total_trades=safe_trades, 
+                win_rate=safe_win_rate, # === PRZEKAZANIE WIN RATE ===
+                net_profit=0.0,
                 state='COMPLETE', created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
