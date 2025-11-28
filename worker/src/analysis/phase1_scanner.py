@@ -127,9 +127,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 reject_stats['price'] += 1
                 continue
             
-            # === 2. Płynność (Vol > 150k) ===
+            # === 2. Płynność (Vol > 400k) ===
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if pd.isna(avg_volume) or avg_volume < 150000: 
+            if pd.isna(avg_volume) or avg_volume < 400000: 
                 reject_stats['volume'] += 1
                 continue
             
