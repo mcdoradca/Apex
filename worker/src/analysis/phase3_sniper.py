@@ -24,7 +24,7 @@ from .utils import (
 from . import aqm_v3_metrics
 from . import aqm_v3_h2_loader
 from .aqm_v3_h3_loader import _parse_bbands
-from .apex_optimizer import AdaptiveExecutor
+# from .apex_optimizer import AdaptiveExecutor # USUNIĘTO - Brak zależności
 from ..config import SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ DEFAULT_PARAMS = {
     'h3_min_score': 0.0,
     'h3_tp_multiplier': 5.0,
     'h3_sl_multiplier': 2.0,
-    'h3_max_hold': 5 # Domyślny czas życia (dni robocze)
+    'h3_max_hold': 5 
 }
 
 H3_CALC_WINDOW = 100 
@@ -150,29 +150,32 @@ def _get_sector_trend(session, ticker):
     except: return 0.0
 
 def run_h3_live_scan(session, candidates, client, parameters=None):
-    logger.info("Start H3 Live Sniper (V6 TTL Logic)...")
-    base_params = DEFAULT_PARAMS.copy()
+    logger.info("Start H3 Live Sniper (No-Adaptation)...")
+    
+    # 1. Wczytanie parametrów (bez adaptacji)
+    params = DEFAULT_PARAMS.copy()
     if parameters:
         for k,v in parameters.items(): 
-            if v is not None: base_params[k] = float(v)
+            if v is not None: params[k] = float(v)
     
     # Pobranie Max Hold do obliczenia daty wygaśnięcia
-    max_hold_days = int(base_params.get('h3_max_hold', 5))
+    max_hold_days = int(params.get('h3_max_hold', 5))
             
     mkt = _get_market_pkg(session, client)
     ev_model = _get_historical_ev_stats(session)
     
-    executor = AdaptiveExecutor(base_params)
-    adapted = executor.get_adapted_params({'vix': mkt['vix'], 'trend': mkt['trend']})
+    # === USUNIĘTO ADAPTACJĘ ===
+    # Nie modyfikujemy parametrów na podstawie VIX. 
+    # Używamy dokładnie tego, co użytkownik wybrał w wynikach Optymalizacji.
     
-    h3_p = float(adapted['h3_percentile'])
-    h3_m = float(adapted['h3_m_sq_threshold'])
-    h3_min = float(adapted['h3_min_score'])
-    tp_mult = float(adapted['h3_tp_multiplier'])
-    sl_mult = float(adapted['h3_sl_multiplier'])
+    h3_p = float(params['h3_percentile'])
+    h3_m = float(params['h3_m_sq_threshold'])
+    h3_min = float(params['h3_min_score'])
+    tp_mult = float(params['h3_tp_multiplier'])
+    sl_mult = float(params['h3_sl_multiplier'])
     
-    chg = [f"{k}: {base_params.get(k)}->{v:.3f}" for k,v in adapted.items() if base_params.get(k)!=v]
-    if chg: append_scan_log(session, f"ADAPTACJA (VIX {mkt['vix']:.1f}): {', '.join(chg)}")
+    # Logujemy, że używamy parametrów "na sztywno"
+    append_scan_log(session, f"PARAMETRY (FIXED): MinScore={h3_min:.2f}, Perc={h3_p:.2f}, Masa={h3_m:.2f}")
     
     signals = 0
     rejects = {'aqm':0, 'mass':0, 'data':0, 'live':0}
@@ -252,7 +255,7 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             curr_m = m_norm.iloc[-1]
             
             if curr_aqm <= curr_thr or curr_aqm <= h3_min:
-                rejects['aqm']+=1; append_scan_log(session, f"❌ {ticker}: AQM {curr_aqm:.2f} < {curr_thr:.2f}"); continue
+                rejects['aqm']+=1; append_scan_log(session, f"❌ {ticker}: AQM {curr_aqm:.2f} < {curr_thr:.2f} (lub min {h3_min:.2f})"); continue
             if curr_m >= h3_m:
                 rejects['mass']+=1; append_scan_log(session, f"❌ {ticker}: Masa {curr_m:.2f} > {h3_m:.2f}"); continue
                 
@@ -293,7 +296,7 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     signal_candle_timestamp=last.name, entry_price=entry, stop_loss=sl, take_profit=tp,
                     entry_zone_top=entry+(0.5*last['atr_14']), entry_zone_bottom=entry-(0.5*last['atr_14']),
                     risk_reward_ratio=tp_mult/sl_mult, notes=note,
-                    expiration_date=expiration_dt # Zapisz datę wygaśnięcia
+                    expiration_date=expiration_dt 
                 )
                 session.add(sig); session.commit()
                 signals+=1
