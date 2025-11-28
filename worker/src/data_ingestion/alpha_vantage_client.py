@@ -133,12 +133,16 @@ class AlphaVantageClient:
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
 
-    # === FIX: DODANO BRAKUJĄCĄ METODĘ ===
     def get_time_series_daily(self, symbol: str, outputsize: str = 'full'):
-        """Pobiera nieskorygowane dane dzienne (OHLC). Wymagane przez Fazę 3."""
+        """Pobiera nieskorygowane dane dzienne (OHLC)."""
         params = {"function": "TIME_SERIES_DAILY", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
-    # =====================================
+    
+    # === NOWOŚĆ DO AQM: DANE TYGODNIOWE ===
+    def get_weekly_adjusted(self, symbol: str):
+        """Pobiera dane tygodniowe (potrzebne do Quantum Prime Score)."""
+        params = {"function": "TIME_SERIES_WEEKLY_ADJUSTED", "symbol": symbol}
+        return self._make_request(params)
         
     def get_intraday(self, symbol: str, interval: str = '60min', outputsize: str = 'compact', extended_hours: bool = True, month: str = None):
         params = {
@@ -158,7 +162,7 @@ class AlphaVantageClient:
         params = {"function": "ATR", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
         return self._make_request(params)
 
-    def get_rsi(self, symbol: str, time_period: int = 9, interval: str = 'daily', series_type: str = 'close'):
+    def get_rsi(self, symbol: str, time_period: int = 14, interval: str = 'daily', series_type: str = 'close'):
         params = {"function": "RSI", "symbol": symbol, "interval": "daily", "time_period": str(time_period), "series_type": series_type}
         return self._make_request(params)
         
@@ -186,6 +190,12 @@ class AlphaVantageClient:
         }
         return self._make_request(params)
     
+    # === NOWOŚĆ DO AQM: ON BALANCE VOLUME (OBV) ===
+    def get_obv(self, symbol: str, interval: str = 'daily'):
+        """Pobiera wskaźnik OBV (Kluczowy dla Volume Entropy Score)."""
+        params = {"function": "OBV", "symbol": symbol, "interval": interval}
+        return self._make_request(params)
+
     # === SENTYMENT I NEWSY ===
 
     def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None):
