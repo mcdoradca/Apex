@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import asyncio
+import time
 
 # Importy wewnętrzne
 from .. import models
@@ -15,15 +15,14 @@ from . import backtest_engine
 from .utils import (
     update_system_control, 
     append_scan_log, 
-    get_optimized_periods_v4,
-    standardize_df_columns, 
     calculate_atr,
     calculate_h3_metrics_v4,
-    get_raw_data_with_cache
+    get_raw_data_with_cache,
+    standardize_df_columns
 )
 from . import aqm_v3_metrics 
 from . import aqm_v3_h2_loader
-# NOWOŚĆ: Import logiki V4 (AQM)
+# Import logiki V4 (AQM)
 from . import aqm_v4_logic
 from .apex_audit import SensitivityAnalyzer
 from ..database import get_db_session 
@@ -33,9 +32,10 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V12 - HYBRID MODE (H3 + AQM V4)
-    - Obsługuje klasyczną strategię H3 (Elite Sniper).
-    - Obsługuje nową strategię AQM (Adaptive Quantum Momentum).
+    SERCE SYSTEMU APEX V13 - HYBRID MODE (H3 + AQM V4)
+    - Pełna integracja AQM Logic zgodnie z PDF.
+    - Pobieranie rzeczywistych danych Makro (Yields, Inflation) dla MRS.
+    - Zoptymalizowany loader danych (unikający rate-limitów).
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -47,7 +47,7 @@ class QuantumOptimizer:
         self.data_cache = {}  
         self.tickers_count = 0
         
-        # Pobierz konfigurację zadania (aby sprawdzić czy wymuszamy AQM)
+        # Pobierz konfigurację zadania
         self.job_config = {}
         try:
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
@@ -55,13 +55,12 @@ class QuantumOptimizer:
                 self.job_config = job.configuration
         except: pass
         
-        # Domyślnie używamy H3, chyba że w configu jest 'strategy': 'AQM'
         self.strategy_mode = self.job_config.get('strategy', 'H3') 
         
-        logger.info(f"QuantumOptimizer V12 initialized for Job {job_id} (Mode: {self.strategy_mode})")
+        logger.info(f"QuantumOptimizer V13 initialized for Job {job_id} (Mode: {self.strategy_mode})")
 
-    def run(self, n_trials: int = 1000):
-        start_msg = f"🚀 OPTIMIZER V12 ({self.strategy_mode}): Start {self.job_id} (Rok: {self.target_year}, Próby: {n_trials})"
+    def run(self, n_trials: int = 50):
+        start_msg = f"🚀 OPTIMIZER V13 ({self.strategy_mode}): Start {self.job_id} (Rok: {self.target_year}, Próby: {n_trials})"
         logger.info(start_msg)
         append_scan_log(self.session, start_msg)
         update_system_control(self.session, 'worker_status', 'OPTIMIZING_INIT')
@@ -72,10 +71,14 @@ class QuantumOptimizer:
             self.session.commit()
         
         try:
+            # 1. Pobierz kontekst makro (dla AQM)
+            self.macro_data = self._load_macro_context()
+            
+            # 2. Załaduj dane spółek do RAM
             self._preload_data_to_cache()
             
             if not self.data_cache:
-                raise Exception("Brak danych w cache. Upewnij się, że Faza 1 zwróciła wyniki!")
+                raise Exception("Brak danych w cache. Sprawdź, czy Faza 1 zwróciła wyniki lub czy API działa.")
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
             msg_calc = f"✅ Dane w RAM ({len(self.data_cache)} spółek). Uruchamianie Optuny ({self.strategy_mode})..."
@@ -85,7 +88,7 @@ class QuantumOptimizer:
             self.study = optuna.create_study(
                 direction='maximize',
                 sampler=optuna.samplers.TPESampler(
-                    n_startup_trials=min(20, max(5, int(n_trials/5))), 
+                    n_startup_trials=min(10, max(5, int(n_trials/5))), 
                     multivariate=True,
                     group=True
                 )
@@ -109,7 +112,6 @@ class QuantumOptimizer:
             append_scan_log(self.session, end_msg)
             
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
-            # Dodajemy informację o strategii do wyników
             safe_params['strategy_mode'] = self.strategy_mode
             
             append_scan_log(self.session, f"🏆 Zwycięskie Parametry:\n{json.dumps(safe_params, indent=2)}")
@@ -121,93 +123,150 @@ class QuantumOptimizer:
 
         except Exception as e:
             self.session.rollback()
-            error_msg = f"❌ OPTIMIZER V12 AWARIA: {str(e)}"
+            error_msg = f"❌ OPTIMIZER V13 AWARIA: {str(e)}"
             logger.error(error_msg, exc_info=True)
             append_scan_log(self.session, error_msg)
             self._mark_job_failed()
             raise
 
+    def _load_macro_context(self):
+        """
+        Pobiera PEŁNE dane makroekonomiczne wymagane przez AQM MRS Score.
+        """
+        append_scan_log(self.session, "📊 Pobieranie danych Makro (SPY, Yields, Inflation)...")
+        macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
+        
+        with get_db_session() as session:
+            client = backtest_engine.AlphaVantageClient()
+            
+            # 1. SPY Data (Trend Rynkowy)
+            spy_raw = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+            if spy_raw:
+                macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
+                macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
+                macro['spy_df'].sort_index(inplace=True)
+            
+            # 2. Treasury Yield 10Y (Koszt kapitału) - Tylko dla AQM
+            if self.strategy_mode == 'AQM':
+                yield_raw = get_raw_data_with_cache(session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
+                if yield_raw and 'data' in yield_raw:
+                    try:
+                        latest = float(yield_raw['data'][0]['value'])
+                        macro['yield_10y'] = latest
+                        logger.info(f"Macro: Treasury Yield 10Y = {latest}%")
+                    except: pass
+
+                # 3. Inflation (Inflacja) - Tylko dla AQM
+                inf_raw = get_raw_data_with_cache(session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
+                if inf_raw and 'data' in inf_raw:
+                    try:
+                        latest = float(inf_raw['data'][0]['value'])
+                        macro['inflation'] = latest
+                        logger.info(f"Macro: Inflation = {latest}%")
+                    except: pass
+                    
+        return macro
+
     def _preload_data_to_cache(self):
         update_system_control(self.session, 'worker_status', 'OPTIMIZING_DATA_LOAD')
-        msg = "🔄 V12 PRELOAD: Pobieranie danych (z obsługą AQM)..."
+        msg = f"🔄 V13 PRELOAD: Pobieranie danych dla trybu {self.strategy_mode}..."
         logger.info(msg)
         append_scan_log(self.session, msg)
         
         tickers = self._get_all_tickers()
-        tickers_to_load = tickers[:1000] # Limit dla wydajności
+        # USUNIĘTO SZTYWNY LIMIT [:1000] - teraz bierzemy wszystko co dała Faza 1
+        tickers_to_load = tickers 
         
-        # Pobieramy dane Makro (VIX, SPY) raz dla całego procesu (jeśli AQM)
-        self.macro_data = {}
-        if self.strategy_mode == 'AQM':
-            self.macro_data = self._load_macro_context()
+        total_tickers = len(tickers_to_load)
+        if total_tickers == 0:
+            append_scan_log(self.session, "⚠️ OSTRZEŻENIE: Brak tickerów do załadowania. Uruchom najpierw Skaner Fazy 1.")
+            return
 
-        with ThreadPoolExecutor(max_workers=8) as executor: 
-            futures = []
-            for ticker in tickers_to_load:
-                futures.append(executor.submit(self._load_ticker_data, ticker))
+        # Zmniejszamy liczbę workerów do 4, aby uniknąć Rate Limitów przy ciężkim AQM (4 requesty na ticker)
+        max_workers = 4 
+        
+        processed = 0
+        loaded = 0
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor: 
+            futures = {executor.submit(self._load_ticker_data, ticker): ticker for ticker in tickers_to_load}
             
-            count = 0
             for f in as_completed(futures):
+                processed += 1
+                ticker = futures[f]
                 try:
-                    f.result()
-                    count += 1
-                    if count % 100 == 0:
-                        append_scan_log(self.session, f"   ... załadowano {count}/{len(tickers_to_load)}")
-                except: pass
+                    result = f.result()
+                    if result:
+                        loaded += 1
+                except Exception as e:
+                    logger.error(f"Błąd ładowania {ticker}: {e}")
+                
+                if processed % 10 == 0:
+                    update_system_control(self.session, 'scan_progress_processed', str(processed))
+                    update_system_control(self.session, 'scan_progress_total', str(total_tickers))
         
         self.tickers_count = len(self.data_cache)
-        append_scan_log(self.session, f"✅ Cache gotowy: {self.tickers_count} instrumentów.")
-
-    def _load_macro_context(self):
-        # Proste ładowanie SPY i VIX dla AQM
-        with get_db_session() as session:
-            client = backtest_engine.AlphaVantageClient()
-            spy_raw = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
-            # (Tutaj upraszczamy: VIX jako stała lub pobrana ostatnia wartość, w pełnej wersji time-series)
-            spy_df = pd.DataFrame()
-            if spy_raw:
-                spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
-                spy_df.index = pd.to_datetime(spy_df.index)
-            return {'spy_df': spy_df, 'vix': 20.0, 'sector_trend': 0.0}
+        append_scan_log(self.session, f"✅ Cache gotowy: {self.tickers_count} / {total_tickers} spółek załadowanych poprawnie.")
 
     def _load_ticker_data(self, ticker):
+        """
+        Ładuje dane dla pojedynczego tickera w osobnym wątku.
+        """
         with get_db_session() as thread_session:
             try:
+                # Delikatny sleep, żeby rozłożyć zapytania w czasie (unikanie kolizji rate limit)
+                time.sleep(0.1) 
+                
                 api_client = backtest_engine.AlphaVantageClient()
+                
+                # 1. Daily OHLCV (Baza)
                 daily_data = get_raw_data_with_cache(thread_session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
+                if not daily_data: return False
+
+                # 2. H2 Data (Insider/News) - Wspólne
                 h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, thread_session)
                 
-                # Dane specyficzne dla AQM
+                # 3. Dane specyficzne dla AQM (Weekly, OBV)
                 weekly_df = pd.DataFrame()
                 obv_df = pd.DataFrame()
+                
                 if self.strategy_mode == 'AQM':
+                    # Weekly
                     w_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
                     if w_raw: 
                         weekly_df = standardize_df_columns(pd.DataFrame.from_dict(w_raw.get('Weekly Adjusted Time Series', {}), orient='index'))
                     
+                    # OBV (Kluczowe dla VES)
                     obv_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'OBV', 'get_obv')
                     if obv_raw:
                         obv_df = pd.DataFrame.from_dict(obv_raw.get('Technical Analysis: OBV', {}), orient='index')
                         obv_df.index = pd.to_datetime(obv_df.index)
-                        obv_df.rename(columns={'OBV': 'OBV'}, inplace=True) # Standaryzacja
+                        obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
 
-                if daily_data and h2_data:
-                    # Wywołujemy odpowiedni preprocesor w zależności od strategii
-                    processed_df = self._preprocess_ticker_unified(daily_data, h2_data, weekly_df, obv_df)
-                    if not processed_df.empty:
-                        self.data_cache[ticker] = processed_df
-            except: pass
+                # Przetwarzanie
+                processed_df = self._preprocess_ticker_unified(daily_data, h2_data, weekly_df, obv_df)
+                
+                if not processed_df.empty:
+                    self.data_cache[ticker] = processed_df
+                    return True
+                return False
+                
+            except Exception as e:
+                # logger.error(f"Error loading {ticker}: {e}")
+                return False
 
     def _preprocess_ticker_unified(self, daily_data, h2_data, weekly_df, obv_df) -> pd.DataFrame:
         try:
             # 1. Podstawa (OHLCV)
             daily_df = standardize_df_columns(pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index'))
+            # Potrzebujemy minimum historii
             if len(daily_df) < 100: return pd.DataFrame()
+            
             daily_df.index = pd.to_datetime(daily_df.index)
             daily_df.sort_index(inplace=True)
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
-            # 2. Ścieżka H3 (Stara)
+            # 2. Ścieżka H3 (Stara logika - dla kompatybilności)
             if self.strategy_mode == 'H3':
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
@@ -232,30 +291,32 @@ class QuantumOptimizer:
                 daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 
                 daily_df['normalized_news'] = 0.0 
-                daily_df['m_sq'] = daily_df['normalized_volume'] + daily_df['normalized_news']
+                daily_df['m_sq'] = daily_df['normalized_volume'] 
                 daily_df['nabla_sq'] = daily_df['price_gravity']
 
-                daily_df = calculate_h3_metrics_v4(daily_df, {}) # Używamy funkcji pomocniczej
+                daily_df = calculate_h3_metrics_v4(daily_df, {}) 
                 daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
                 
                 return daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].dropna()
 
-            # 3. Ścieżka AQM (Nowa - V4 Logic)
+            # 3. Ścieżka AQM (V4 Logic - Pełna zgodność z PDF)
             elif self.strategy_mode == 'AQM':
-                # Używamy nowego modułu logicznego
-                # Intraday 60m jest opcjonalny w tej wersji EOD, dajemy pusty DF
+                # Wywołujemy logikę AQM, przekazując PRAWDZIWE dane makro
                 aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
                     daily_df=daily_df,
                     weekly_df=weekly_df,
-                    intraday_60m_df=pd.DataFrame(),
+                    intraday_60m_df=pd.DataFrame(), # Intraday opcjonalne (PDF: "użyj daily jeśli brak intraday")
                     obv_df=obv_df,
                     macro_data=self.macro_data,
                     earnings_days_to=None
                 )
-                # Musimy dodać atr_14 (jest w aqm_df jako 'atr')
+                
                 if 'atr' in aqm_df.columns:
                     aqm_df['atr_14'] = aqm_df['atr']
-                return aqm_df # Zawiera kolumny: aqm_score, qps, ves, mrs, tcs
+                
+                # Zwracamy kolumny potrzebne do symulacji
+                req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
+                return aqm_df[req_cols].dropna()
 
             return pd.DataFrame()
             
@@ -265,35 +326,29 @@ class QuantumOptimizer:
     def _objective(self, trial):
         params = {}
         
-        # === DEFINICJA PRZESTRZENI PARAMETRÓW (ZALEŻNA OD STRATEGII) ===
+        # === DEFINICJA PRZESTRZENI PARAMETRÓW ===
         
         if self.strategy_mode == 'H3':
-            # Parametry dla H3 (Elite Sniper)
             params = {
                 'h3_percentile': trial.suggest_float('h3_percentile', 0.90, 0.99, step=0.01), 
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -2.0, 0.0, step=0.05), 
-                'h3_min_score': trial.suggest_float('h3_min_score', 0.2, 1.5, step=0.05),
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 8.0, step=0.1),
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 4.0, step=0.05),
+                'h3_min_score': trial.suggest_float('h3_min_score', 0.0, 1.0, step=0.05),
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 8.0, step=0.5),
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 4.0, step=0.25),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 10),
             }
             
         elif self.strategy_mode == 'AQM':
-            # Parametry dla AQM (Adaptive Quantum Momentum)
-            # Tutaj optymalizujemy PROGI WEJŚCIA i WAGI (jeśli chcemy je dostroić)
+            # Parametry z PDF
             params = {
-                # Próg wejścia (AQM Score > X)
-                # PDF sugeruje: 0.65 (Bull), 0.75 (Volatile), 0.85 (Bear)
-                # Optimizer znajdzie jeden uniwersalny lub najlepszy średni próg
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.60, 0.95, step=0.05),
+                # Progi wejścia dla AQM
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.60, 0.90, step=0.05),
+                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.3, 0.7, step=0.1),
                 
-                # Dodatkowe filtry (Z PDF: "Wszystkie komponenty > 0.6")
-                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.0, 0.7, step=0.1),
-                
-                # TP/SL (Takie same jak w H3)
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 8.0, step=0.5), # Luźniejszy krok
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0, step=0.5),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 10), # PDF sugeruje 3-7 dni
+                # Zarządzanie pozycją
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 8.0, step=0.5),
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0, step=0.25),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 10),
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
@@ -303,18 +358,19 @@ class QuantumOptimizer:
         
         pf = result['profit_factor']
         trades = result['total_trades']
-        win_rate = result['win_rate'] 
         
-        if trial.number % 20 == 0:
-            append_scan_log(self.session, f"⚡ [{self.strategy_mode}] Próba {trial.number}: PF={pf:.2f} (Trades: {trades}, WR: {win_rate:.1f}%)")
+        # Logowanie postępów (co 5 prób)
+        if trial.number % 5 == 0:
+            logger.info(f"⚡ Trial {trial.number}: PF={pf:.2f} (Trades: {trades})")
 
         if pf > self.best_score_so_far:
             self.best_score_so_far = pf
             self._update_best_score(pf)
 
-        self._save_trial(trial, params, pf, trades, pf, win_rate)
+        self._save_trial(trial, params, pf, trades, pf, result['win_rate'])
         
-        if trades < 10: return 0.0 
+        # Kara za brak transakcji (żeby nie optymalizował pustych strategii)
+        if trades < 5: return 0.0 
         return pf
 
     def _run_simulation_unified(self, params, start_ts, end_ts):
@@ -349,19 +405,16 @@ class QuantumOptimizer:
                 min_score = params['aqm_min_score']
                 comp_min = params['aqm_component_min']
                 
-                # Warunek główny: AQM Score > próg
                 cond_main = (sim_df['aqm_score'] > min_score)
-                
-                # Warunek dodatkowy: Komponenty (QPS, VES, MRS) > próg
+                # PDF: "Wszystkie komponenty > 0.6" (tu parametryzowane)
                 cond_comps = (
                     (sim_df['qps'] > comp_min) &
                     (sim_df['ves'] > comp_min) &
                     (sim_df['mrs'] > comp_min)
                 )
-                
                 entry_mask = cond_main & cond_comps
 
-            # === SYMULACJA TRANSAKCJI (WSPÓLNA) ===
+            # === SYMULACJA ===
             entry_indices = np.where(entry_mask)[0]
             last_exit_idx = -1
             
@@ -421,18 +474,23 @@ class QuantumOptimizer:
         return {'profit_factor': pf, 'total_trades': len(trades), 'win_rate': win_rate}
 
     def _get_all_tickers(self):
+        """
+        Pobiera tickery priorytetowo z wyników Fazy 1.
+        """
         try:
+            # 1. Priorytet: Kandydaci Fazy 1 (To jest lejek!)
             res_p1 = self.session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
             tickers_p1 = [r[0] for r in res_p1]
-            res_port = self.session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
-            tickers_port = [r[0] for r in res_port]
-            combined = list(set(tickers_p1 + tickers_port))
-            if len(combined) > 10:
-                logger.info(f"Optimizer: Wybrano {len(combined)} tickerów z Fazy 1/Portfela.")
-                return combined
-            logger.warning("Optimizer: Faza 1 pusta. Pobieram tickery z tabeli companies.")
-            res_all = self.session.execute(text("SELECT ticker FROM companies LIMIT 1500")).fetchall()
+            
+            if len(tickers_p1) > 0:
+                logger.info(f"Optimizer: Wybrano {len(tickers_p1)} tickerów z Fazy 1 (Skaner).")
+                return tickers_p1
+            
+            # 2. Fallback: Jeśli Faza 1 pusta, weź 100 z bazy (do testów)
+            logger.warning("Optimizer: Faza 1 pusta. Pobieram próbkę 100 tickerów z bazy.")
+            res_all = self.session.execute(text("SELECT ticker FROM companies LIMIT 100")).fetchall()
             return [r[0] for r in res_all]
+            
         except Exception as e: 
             logger.error(f"Error getting tickers: {e}")
             return []
@@ -475,7 +533,7 @@ class QuantumOptimizer:
                 net_profit=0.0, state='COMPLETE', created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
-            if trial.number % 20 == 0: self.session.commit()
+            if trial.number % 10 == 0: self.session.commit()
         except: self.session.rollback()
 
     def _finalize_job(self, best_trial, sensitivity_report):
@@ -484,7 +542,13 @@ class QuantumOptimizer:
             job.status = 'COMPLETED'
             job.best_score = float(best_trial.value)
             best_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
-            job.configuration = {'best_params': best_params, 'sensitivity_analysis': sensitivity_report, 'version': 'V12_HYBRID', 'strategy': self.strategy_mode}
+            job.configuration = {
+                'best_params': best_params, 
+                'sensitivity_analysis': sensitivity_report, 
+                'version': 'V13_HYBRID', 
+                'strategy': self.strategy_mode,
+                'tickers_analyzed': self.tickers_count
+            }
             self.session.commit()
 
     def _mark_job_failed(self):
