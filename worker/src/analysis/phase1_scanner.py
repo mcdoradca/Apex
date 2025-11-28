@@ -52,14 +52,14 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
-    Skaner Fazy 1 (V5.3 - Ultra Verbose Logging).
+    Skaner Fazy 1 (V6.0 - TREND GUARD & PF 2.0).
     
-    ZMIANY:
-    - Logowanie KAŻDEGO sprawdzanego tickera z wynikiem weryfikacji.
-    - Pełna transparentność odrzuceń (Cena, Vol, ATR).
+    ZMIANY KLUCZOWE DLA PF 2.0:
+    1. Dodano filtr SMA 200 (Trend Guard). Odrzuca spółki w trendzie spadkowym.
+    2. Utrzymano szeroki lejek cenowy, ale dodano wymóg trendu wzrostowego.
     """
-    logger.info("Running Phase 1: EOD Scan (V5.3 Ultra Verbose)...")
-    append_scan_log(session, "Faza 1 (V5.3): Start skanowania. Tryb pełnego raportowania (każdy ticker).")
+    logger.info("Running Phase 1: EOD Scan (V6.0 Trend Guard)...")
+    append_scan_log(session, "Faza 1 (V6.0): Start. Aktywacja filtru SMA 200 (Trend Guard) w celu podniesienia PF.")
 
     try:
         session.execute(text("DELETE FROM phase1_candidates"))
@@ -78,7 +78,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         return []
 
     final_candidate_tickers = []
-    reject_stats = {'price': 0, 'volume': 0, 'atr': 0, 'intraday': 0, 'sector': 0, 'data': 0}
+    reject_stats = {'price': 0, 'volume': 0, 'atr': 0, 'intraday': 0, 'sector': 0, 'data': 0, 'trend': 0}
     
     start_time = time.time()
 
@@ -86,92 +86,81 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         ticker = row[0]
         sector = row[1]
         
-        # Obsługa pauzy
         if get_current_state() == 'PAUSED':
-            append_scan_log(session, "Skaner wstrzymany (PAUZA)...")
             while get_current_state() == 'PAUSED': time.sleep(1)
-            append_scan_log(session, "Skaner wznowiony.")
 
-        # Pasek postępu (dla UI)
         if processed_count % 10 == 0: 
             update_scan_progress(session, processed_count, total_tickers)
 
-        # Logowanie "Heartbeat" do konsoli (żeby nie spamować, ale wiedzieć że działa)
         if processed_count > 0 and processed_count % 100 == 0:
             elapsed = time.time() - start_time
             rate = processed_count / elapsed if elapsed > 0 else 0
             logger.info(f"F1 Heartbeat: {processed_count}/{total_tickers} ({rate:.1f} t/s)")
 
         try:
-            price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='compact')
+            # Pobieramy FULL outputsize, aby mieć 200 dni historii do SMA
+            price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
+            
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 reject_stats['data'] += 1
-                append_scan_log(session, f"❌ {ticker}: Brak danych dziennych (API).")
                 continue
             
             daily_df_raw = pd.DataFrame.from_dict(price_data_raw['Time Series (Daily)'], orient='index')
             daily_df = standardize_df_columns(daily_df_raw)
+            
+            # Sortujemy chronologicznie
+            daily_df.index = pd.to_datetime(daily_df.index)
+            daily_df.sort_index(inplace=True)
 
-            if len(daily_df) < 50: 
+            # Potrzebujemy min. 200 dni do SMA 200
+            if len(daily_df) < 200: 
                 reject_stats['data'] += 1
-                append_scan_log(session, f"❌ {ticker}: Za krótka historia ({len(daily_df)} dni).")
                 continue
 
             latest_candle = daily_df.iloc[-1]
             current_price = latest_candle['close']
             
-            if pd.isna(current_price): 
-                append_scan_log(session, f"❌ {ticker}: Błąd ceny (NaN).")
-                continue
+            if pd.isna(current_price): continue
                 
-            # === FILTRY V5 (Z PEŁNYM LOGOWANIEM) ===
-
-            # 1. Cena (0.7-30$)
-            if not (0.7 <= current_price <= 30.0): 
+            # === 1. Cena (0.5$ - 40.0$) ===
+            if not (0.5 <= current_price <= 40.0): 
                 reject_stats['price'] += 1
-                append_scan_log(session, f"❌ {ticker}: Cena {current_price:.2f}$ (Wymagane 0.7-30$)")
                 continue
             
-            # 2. Płynność (Vol > 400k)
+            # === 2. Płynność (Vol > 150k) ===
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
-            if pd.isna(avg_volume) or avg_volume < 400000: 
+            if pd.isna(avg_volume) or avg_volume < 150000: 
                 reject_stats['volume'] += 1
-                vol_display = f"{int(avg_volume/1000)}k" if not pd.isna(avg_volume) else "NaN"
-                append_scan_log(session, f"❌ {ticker}: Wolumen {vol_display} (Wymagane >400k)")
                 continue
             
-            # 3. Zmienność (ATR > 2.5%)
+            # === 3. Zmienność (ATR > 2%) ===
             atr_series = calculate_atr(daily_df, period=14)
-            if atr_series.empty: 
-                append_scan_log(session, f"❌ {ticker}: Błąd obliczania ATR.")
-                continue
+            if atr_series.empty: continue
             
             current_atr = atr_series.iloc[-1]
             atr_percent = (current_atr / current_price)
-            if atr_percent < 0.025: 
+            if atr_percent < 0.02: 
                 reject_stats['atr'] += 1
-                append_scan_log(session, f"❌ {ticker}: Niska zmienność ATR {atr_percent:1.0%} (Wymagane >2.5%)")
                 continue 
-            
-            # 4. Dane Intraday (Wstępna weryfikacja dostępności)
-            try:
-                intraday_test = api_client.get_intraday(ticker, interval='60min', outputsize='compact')
-                if intraday_test and 'Time Series (60min)' not in intraday_test and 'Information' not in intraday_test:
-                     reject_stats['intraday'] += 1
-                     append_scan_log(session, f"❌ {ticker}: Brak danych Intraday (wymagane w F3).")
-                     continue
-            except: pass
 
-            # 5. Strażnik Sektora (Logujący)
+            # === 4. NOWOŚĆ: TREND GUARD (SMA 200) ===
+            # Obliczamy SMA 200 lokalnie na podstawie pobranych danych
+            sma_200 = daily_df['close'].rolling(window=200).mean().iloc[-1]
+            
+            if pd.isna(sma_200) or current_price < sma_200:
+                reject_stats['trend'] += 1
+                # Odrzucamy, bo trend długoterminowy jest spadkowy
+                continue
+
+            # 5. Strażnik Sektora
             is_sector_healthy, sector_trend, etf_symbol = _check_sector_health(session, api_client, sector)
-            sector_msg = f"Sektor {etf_symbol} OK" if is_sector_healthy else f"⚠️ Sektor {etf_symbol} słaby"
             if not is_sector_healthy:
                 reject_stats['sector'] += 1
-                # Uwaga: Faza 1 przepuszcza słaby sektor, ale logujemy to jako ostrzeżenie w sukcesie
             
-            # === KWALIFIKACJA SUKCES ===
-            log_msg = (f"✅ KANDYDAT: {ticker} | Cena: {current_price:.2f}$ | "
-                       f"Vol: {int(avg_volume/1000)}k | ATR: {atr_percent:.1%} | {sector_msg}")
+            sector_msg = f"Sektor {etf_symbol} {'OK' if is_sector_healthy else 'SŁABY'}"
+
+            # === SUKCES ===
+            log_msg = (f"✅ DODANO: {ticker} | Cena: {current_price:.2f} | > SMA200 ({sma_200:.2f}) | {sector_msg}")
             logger.info(log_msg)
             append_scan_log(session, log_msg)
             
@@ -193,14 +182,12 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
         except Exception as e:
             logger.error(f"Error F1 for {ticker}: {e}")
-            append_scan_log(session, f"⛔ BŁĄD SYSTEMU dla {ticker}: {e}")
             session.rollback()
     
     update_scan_progress(session, total_tickers, total_tickers)
     
-    summary_msg = (f"🏁 Faza 1 zakończona. Kandydatów: {len(final_candidate_tickers)}. "
-                   f"Statystyki odrzuceń: Cena={reject_stats['price']}, Vol={reject_stats['volume']}, "
-                   f"ATR={reject_stats['atr']}, Dane={reject_stats['data']}")
+    summary_msg = (f"🏁 Faza 1 (Trend Guard) zakończona. Kandydatów: {len(final_candidate_tickers)}. "
+                   f"Odrzuty: Trend(SMA200)={reject_stats['trend']}, Cena={reject_stats['price']}, Vol={reject_stats['volume']}")
     
     logger.info(summary_msg)
     append_scan_log(session, summary_msg)
