@@ -78,7 +78,6 @@
                 </div>
                 <nav class="space-y-1">
                     <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
-                    <!-- NOWY LINK: Sygnały H3 Live -->
                     <a href="#h3-signals-view" id="h3-signals-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer text-sky-300"><i data-lucide="target" class="mr-3 w-5 h-5"></i><span>Sygnały H3 Live</span></a>
                     <a href="#portfolio-view" id="portfolio-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="briefcase" class="mr-3 w-5 h-5"></i><span>Portfel</span></a>
                     <a href="#transactions-view" id="transactions-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="history" class="mr-3 w-5 h-5"></i><span>Transakcje</span></a>
@@ -109,7 +108,6 @@
                     </button>
                     <div id="phase-1-list" class="accordion-content mt-2 pl-2 border-l border-gray-700 space-y-1 hidden"></div>
                 </div>
-                <!-- Lista "Phase 3" w sidebarze zostaje jako szybki podgląd, ale główny widok jest teraz osobny -->
             </div>
 
             <div class="mt-auto shrink-0 border-t border-gray-800 pt-4">
@@ -248,6 +246,13 @@
             <h3 class="text-xl font-bold mb-4 text-white flex items-center"><i data-lucide="cpu" class="w-5 h-5 mr-2 text-purple-400"></i>Quantum Optimizer</h3>
             <p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (TPE) dla wybranego okresu.</p>
             <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Optymalizacji</label>
+                    <select id="qo-strategy-select" class="modal-input cursor-pointer hover:bg-gray-800 transition-colors">
+                        <option value="H3">H3 (Elite Sniper)</option>
+                        <option value="AQM">AQM (Adaptive Quantum)</option>
+                    </select>
+                </div>
                 <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Rok Analizy</label><input type="number" id="qo-year-input" class="modal-input" placeholder="np. 2023" min="2000" max="2100" value="2024"></div>
                 <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Liczba Prób (Trials)</label><input type="number" id="qo-trials-input" class="modal-input" placeholder="50" min="10" max="200" value="30"><p class="text-xs text-gray-500 mt-1">Więcej prób = lepszy wynik, ale dłuższy czas.</p></div>
             </div>
