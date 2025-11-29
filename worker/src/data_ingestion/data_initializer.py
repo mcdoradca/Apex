@@ -4,6 +4,7 @@ from io import StringIO
 import requests
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
+import os # Wymagany do odczytu zmiennych środowiskowych
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ def _run_schema_and_index_migration(session: Session):
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
     Ta funkcja jest BEZPIECZNA i nie usuwa danych.
     """
+    # ... (kod migracji pozostaje bez zmian) ...
     try:
         logger.info("Starting database schema and index migration...")
         
@@ -108,9 +110,15 @@ def _run_schema_and_index_migration(session: Session):
 def force_reset_simulation_data(session: Session):
     """
     !!! UWAGA: FUNKCJA DESTRUKCYJNA !!!
-    Usuwa wszystkie wyniki symulacji. Można ją wywołać ręcznie w razie potrzeby.
+    Usuwa wszystkie wyniki symulacji. Teraz wymaga zmiennej środowiskowej
+    'APEX_ALLOW_DATA_RESET' ustawionej na 'TRUE'.
     """
-    # logger.warning("⚠️⚠️⚠️ TWARDY RESET ZOSTAŁ WYWOŁANY ⚠️⚠️⚠️")
+    if os.getenv("APEX_ALLOW_DATA_RESET") != "TRUE":
+        logger.critical("❌❌❌ TWARDY RESET ODRZUCONY! Ustaw APEX_ALLOW_DATA_RESET=TRUE, aby kontynuować. ❌❌❌")
+        return
+        
+    logger.warning("⚠️⚠️⚠️ TWARDY RESET ZOSTAŁ WYWOŁANY PRZEZ UŻYTKOWNIKA ⚠️⚠️⚠️")
+    
     try:
         tables_to_clear = [
             "optimization_trials", 
@@ -133,6 +141,7 @@ def force_reset_simulation_data(session: Session):
         session.execute(text("UPDATE system_control SET value='IDLE' WHERE key='worker_status'"))
         
         session.commit()
+        logger.warning("✅✅✅ TWARDY RESET ZAKOŃCZONY PRAWIDŁOWO. ✅✅✅")
         
     except Exception as e:
         logger.error(f"Błąd podczas resetu bazy: {e}", exc_info=True)
