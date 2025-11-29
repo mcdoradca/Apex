@@ -37,13 +37,37 @@ DEFAULT_PARAMS = {
     'h3_tp_multiplier': 5.0,
     'h3_sl_multiplier': 2.0,
     'h3_max_hold': 5,
-    # Parametry specyficzne dla AQM (domyślnie wyłączone/neutralne)
     'aqm_component_min': None, 
-    'strategy_mode': 'AUTO' # AUTO wykryje tryb na podstawie parametrów
+    'strategy_mode': 'AUTO' 
 }
 
 H3_CALC_WINDOW = 100 
 REQUIRED_HISTORY_SIZE = 201 
+
+def _verify_data_freshness(df: pd.DataFrame, ticker: str) -> bool:
+    """
+    STRAŻNIK ŚWIEŻOŚCI (ANTI-DATA LAG)
+    Sprawdza, czy ostatnia świeca w danych nie jest przestarzała.
+    """
+    if df.empty: return False
+    
+    last_date = df.index[-1]
+    now = datetime.now()
+    
+    # Obliczamy różnicę w dniach
+    delta = (now - last_date).days
+    
+    # Logika weekendowa:
+    # Jeśli dzisiaj jest poniedziałek (0), dane z piątku są OK (delta ok. 3)
+    # Jeśli dzisiaj wtorek-piątek, delta powinna być <= 1 (lub max 2 jeśli rano)
+    
+    threshold = 4 if now.weekday() <= 1 else 2
+    
+    if delta > threshold:
+        logger.warning(f"⚠️ DATA LAG wykryty dla {ticker}: Ostatnia świeca z {last_date.date()} (Delta: {delta} dni). Odrzucanie.")
+        return False
+    
+    return True
 
 def _is_setup_still_valid(entry_price: float, stop_loss: float, take_profit: float, current_price: float) -> Tuple[bool, str]:
     try:
@@ -154,36 +178,30 @@ def _get_sector_trend(session, ticker):
     except: return 0.0
 
 def _get_macro_context_for_aqm(session, client):
-    """Pobiera pełne dane makro wymagane przez strategię AQM (V4)."""
     macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
     try:
-        # SPY
         spy_raw = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         if spy_raw:
             macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
             macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
             macro['spy_df'].sort_index(inplace=True)
         
-        # Yields
         yield_raw = get_raw_data_with_cache(session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
         if yield_raw and 'data' in yield_raw:
             try: macro['yield_10y'] = float(yield_raw['data'][0]['value'])
             except: pass
             
-        # Inflation
         inf_raw = get_raw_data_with_cache(session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
         if inf_raw and 'data' in inf_raw:
             try: macro['inflation'] = float(inf_raw['data'][0]['value'])
             except: pass
-            
     except Exception as e:
         logger.error(f"Błąd pobierania makro dla AQM: {e}")
     return macro
 
 def run_h3_live_scan(session, candidates, client, parameters=None):
-    logger.info("Start Phase 3 Live Sniper (Dual-Core: H3/AQM)...")
+    logger.info("Start Phase 3 Live Sniper (V7 Secure Core)...")
     
-    # 1. Wczytanie i normalizacja parametrów
     params = DEFAULT_PARAMS.copy()
     if parameters:
         for k,v in parameters.items(): 
@@ -191,41 +209,36 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                 try:
                     params[k] = float(v)
                 except:
-                    params[k] = v # Zachowaj stringi jak 'strategy_mode'
+                    params[k] = v 
 
-    # Detekcja trybu strategii
     strategy_mode = 'H3'
     if params.get('strategy_mode') == 'AQM':
         strategy_mode = 'AQM'
     elif params.get('aqm_component_min') is not None and float(params['aqm_component_min']) > 0:
-        # Heurystyka: Jeśli przekazano parametry specyficzne dla AQM, przełącz na AQM
         strategy_mode = 'AQM'
     
-    # Parametry wyjścia (wspólne)
     tp_mult = float(params['h3_tp_multiplier'])
     sl_mult = float(params['h3_sl_multiplier'])
     max_hold_days = int(params['h3_max_hold'])
-    min_score = float(params['h3_min_score']) # Używane jako min_score dla H3 lub AQM
+    min_score = float(params['h3_min_score']) 
 
-    append_scan_log(session, f"⚙️ FAZA 3: Tryb Strategii = {strategy_mode}")
+    append_scan_log(session, f"⚙️ FAZA 3: Tryb Strategii = {strategy_mode} (Precision+)")
     append_scan_log(session, f"   Parametry: MinScore={min_score}, TP={tp_mult}x, SL={sl_mult}x, Hold={max_hold_days}d")
 
     mkt = _get_market_pkg(session, client)
     ev_model = _get_historical_ev_stats(session)
     
-    # Jeśli AQM, pobierz dodatkowe dane makro
     macro_data_aqm = {}
     if strategy_mode == 'AQM':
         macro_data_aqm = _get_macro_context_for_aqm(session, client)
 
     signals = 0
-    rejects = {'aqm':0, 'mass':0, 'data':0, 'live':0, 'components': 0}
+    rejects = {'aqm':0, 'mass':0, 'data':0, 'live':0, 'components': 0, 'data_lag': 0}
     
     for i, ticker in enumerate(candidates):
         if i%5==0: update_scan_progress(session, i, len(candidates))
         
         try:
-            # === POBIERANIE DANYCH WSPÓLNYCH ===
             d_raw = get_raw_data_with_cache(session, client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', expiry_hours=12)
             da_raw = get_raw_data_with_cache(session, client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=12)
             
@@ -239,6 +252,12 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             if len(adj) < REQUIRED_HISTORY_SIZE:
                 rejects['data']+=1; append_scan_log(session, f"❌ {ticker}: Krótka historia"); continue
                 
+            # === SECURITY CHECK 1: DATA LAG GUARD ===
+            if not _verify_data_freshness(adj, ticker):
+                rejects['data_lag'] += 1
+                continue
+            # ========================================
+
             ohlcv['vwap_proxy'] = (ohlcv['high']+ohlcv['low']+ohlcv['close'])/3.0
             df = adj.join(ohlcv[['open','high','low','vwap_proxy']], rsuffix='_ohlcv')
             close_col = 'close_ohlcv' if 'close_ohlcv' in df.columns else 'close'
@@ -250,15 +269,11 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             tp = entry + (tp_mult * last['atr_14'])
             sl = entry - (sl_mult * last['atr_14'])
             
-            # Zmienne do oceny sygnału
             is_signal = False
             score = 0
             metric_details = {}
             rec = "HOLD"
             
-            # =================================================================
-            # ŚCIEŻKA 1: Strategia H3 (Oryginalna)
-            # =================================================================
             if strategy_mode == 'H3':
                 h2 = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, client, session)
                 df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
@@ -319,7 +334,6 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     'threshold': curr_thr
                 }
 
-                # Walidacja H3
                 if curr_aqm > curr_thr and curr_aqm > min_score and curr_m < h3_m:
                     is_signal = True
                     st = _get_sector_trend(session, ticker)
@@ -334,11 +348,7 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     if curr_aqm <= curr_thr: rejects['aqm']+=1
                     if curr_m >= h3_m: rejects['mass']+=1
 
-            # =================================================================
-            # ŚCIEŻKA 2: Strategia AQM (Adaptive Quantum Momentum - V4)
-            # =================================================================
             elif strategy_mode == 'AQM':
-                # Pobranie danych Weekly i OBV (wymagane dla AQM)
                 w_raw = get_raw_data_with_cache(session, client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
                 weekly_df = pd.DataFrame()
                 if w_raw: 
@@ -352,11 +362,20 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     obv_df.index = pd.to_datetime(obv_df.index)
                     obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
 
-                # Obliczenie pełnego wektora AQM
+                # === SECURITY CHECK 2: INTRADAY BLIND SPOT FIX ===
+                # Pobieramy REALNE dane intraday 60min dla precyzyjnego QPS
+                # (Wymaga 1 dodatkowego zapytania na ticker, co jest OK dla kandydatów Fazy 1)
+                i_raw = client.get_intraday(ticker, interval='60min', outputsize='compact')
+                intraday_df = pd.DataFrame()
+                if i_raw:
+                    intraday_df = standardize_df_columns(pd.DataFrame.from_dict(i_raw.get('Time Series (60min)', {}), orient='index'))
+                    intraday_df.index = pd.to_datetime(intraday_df.index)
+                # ==================================================
+
                 aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
                     daily_df=df,
                     weekly_df=weekly_df,
-                    intraday_60m_df=pd.DataFrame(), # Brak intraday w live scan dla szybkości, używamy proxy w logice
+                    intraday_60m_df=intraday_df, # Używamy teraz prawdziwych danych
                     obv_df=obv_df,
                     macro_data=macro_data_aqm,
                     earnings_days_to=None
@@ -373,50 +392,41 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                         'mrs': last_aqm['mrs'], 'tcs': last_aqm['tcs']
                     }
                     
-                    # Walidacja AQM
-                    # Warunek 1: Główny wynik > min_score
-                    # Warunek 2: Wszystkie komponenty > comp_min (Spójność kwantowa)
                     if (curr_score > min_score and
                         last_aqm['qps'] > comp_min and
                         last_aqm['ves'] > comp_min and
                         last_aqm['mrs'] > comp_min):
                         
                         is_signal = True
-                        # Skalowanie wyniku do 0-100 dla UI
                         score = int(curr_score * 100) 
                         if score > 100: score = 99
-                        
                         rec = "TOP 💎" if score >= 80 else ("BUY ✅" if score >= 60 else "MOD ⚠️")
-                        ev = score * 0.05 # Proste proxy EV dla AQM
+                        ev = score * 0.05 
                     else:
                         if curr_score <= min_score: rejects['aqm']+=1
                         else: rejects['components']+=1
                 else:
                     rejects['data']+=1
 
-            # =================================================================
-            # FINALIZACJA SYGNAŁU (Wspólna)
-            # =================================================================
+            # === FINALIZACJA Z WERYFIKACJĄ LIVE ===
             if is_signal:
                 lq = client.get_global_quote(ticker)
                 lp = safe_float(lq.get('05. price')) if lq else None
                 
                 if lp:
+                    # SECURITY CHECK 3: LIVE VALIDATION
                     valid, msg = _is_setup_still_valid(entry, sl, tp, lp)
                     if not valid:
-                        rejects['live']+=1; append_scan_log(session, f"❌ {ticker}: Live: {msg}"); continue
+                        rejects['live']+=1; append_scan_log(session, f"❌ {ticker}: Live Reject: {msg}"); continue
                 
-                # Budowa notatki w zależności od strategii
                 if strategy_mode == 'H3':
                     note = f"STRATEGIA: H3\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{metric_details.get('tech_score',0)} Mkt:{metric_details.get('market_score',0)} RS:{metric_details.get('rs_score',0)}\nAQM H3:{metric_details['aqm_score']:.2f} (vs {metric_details['threshold']:.2f})"
                 else:
                     note = f"STRATEGIA: AQM (V4)\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details['qps']:.2f} VES:{metric_details['ves']:.2f} MRS:{metric_details['mrs']:.2f} TCS:{metric_details['tcs']:.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
 
-                # Sprawdzenie duplikatów
                 ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
                 if not ex:
                     expiration_dt = datetime.now(timezone.utc) + timedelta(days=max_hold_days)
-                    
                     sig = models.TradingSignal(
                         ticker=ticker, status='PENDING', generation_date=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
                         signal_candle_timestamp=last.name, entry_price=entry, stop_loss=sl, take_profit=tp,
@@ -426,7 +436,6 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     )
                     session.add(sig); session.commit()
                     signals+=1
-                    
                     msg = f"💎 SYGNAŁ ({strategy_mode}): {ticker} | SCORE: {score} | {rec}"
                     logger.info(msg); append_scan_log(session, msg)
                     send_telegram_alert(f"⚛️ {strategy_mode}: {ticker}\nCena: {entry:.2f}\nSCORE: {score}")
@@ -438,5 +447,5 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             continue
             
     update_scan_progress(session, len(candidates), len(candidates))
-    sum_msg = f"🏁 Faza 3 ({strategy_mode}): Sygnałów: {signals}. Odrzuty: AQM={rejects['aqm']}, Masa={rejects['mass']}, Komponenty={rejects['components']}, Live={rejects['live']}"
+    sum_msg = f"🏁 Faza 3 ({strategy_mode}): Sygnałów: {signals}. Odrzuty: Lag={rejects['data_lag']}, AQM={rejects['aqm']}, Live={rejects['live']}"
     append_scan_log(session, sum_msg)
