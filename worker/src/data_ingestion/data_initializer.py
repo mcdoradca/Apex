@@ -15,7 +15,6 @@ def _run_schema_and_index_migration(session: Session):
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
     Ta funkcja jest BEZPIECZNA i nie usuwa danych.
     """
-    # ... (kod migracji pozostaje bez zmian) ...
     try:
         logger.info("Starting database schema and index migration...")
         
