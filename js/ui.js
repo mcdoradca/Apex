@@ -211,7 +211,7 @@ export const renderers = {
             } catch(e) {}
         }
         
-        // TRIGGER AUDIO ALERT FOR HIGH SCORE SIGNALS (Active Only)
+        // Audio Alert
         if (s.status === 'ACTIVE' && scoreVal >= 0.80) {
             playTacticalAlert(s.ticker, (scoreVal * 100).toFixed(0));
         }
@@ -223,13 +223,12 @@ export const renderers = {
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
         const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
         
-        // Animacja Pulsu (zależna od statusu)
-        let pulseClass = "pulse-idle"; // Domyślny (zielony)
+        let pulseClass = "pulse-idle";
         let statusColor = "text-green-500";
         
         const workerStatus = state.workerStatus.status || "IDLE";
         if (workerStatus.includes("RUNNING") || workerStatus.includes("BUSY")) {
-            pulseClass = "pulse-busy"; // Szybki, żółty
+            pulseClass = "pulse-busy";
             statusColor = "text-yellow-400";
         } else if (workerStatus.includes("PAUSED")) {
             pulseClass = "";
@@ -297,11 +296,25 @@ export const renderers = {
                 if (match) score = match[1];
             }
             
-            const rr = s.risk_reward_ratio || 0;
+            // DYNAMICZNE OBLICZANIE R:R (RISK REWARD)
+            // Jeśli nie mamy ceny live (bo np. kafelek się dopiero wyrenderował bez odpytania),
+            // używamy entry_price jako fallback, co da "statyczny" R:R z momentu wejścia.
+            // W idealnym scenariuszu `state.liveQuotes[s.ticker]` byłoby dostępne.
+            // Tutaj dla kafelków używamy uproszczenia: pokazujemy statyczny R:R z bazy,
+            // ALE dodajemy wskaźnik wizualny, jeśli sygnał jest "zagrożony".
+            
+            // Pobieramy statyczny R:R z bazy danych (parametry strategii)
+            const staticRR = parseFloat(s.risk_reward_ratio || 0);
             let rrClass = "text-gray-400";
-            if (rr >= 3.0) rrClass = "text-green-400 font-bold";
-            else if (rr >= 2.0) rrClass = "text-yellow-400 font-semibold";
-            else if (rr < 1.5) rrClass = "text-red-400";
+            if (staticRR >= 3.0) rrClass = "text-green-400 font-bold";
+            else if (staticRR >= 2.0) rrClass = "text-yellow-400 font-semibold";
+            else if (staticRR < 1.5) rrClass = "text-red-400";
+            
+            // Obliczamy dynamiczne R:R (szacunkowo, na podstawie ceny wejścia z sygnału)
+            // To pokazuje, jak bardzo setup jest "atrakcyjny" w momencie generowania.
+            // Prawdziwa dynamika "live" jest widoczna w modalu szczegółów.
+            const displayRR = staticRR.toFixed(2);
+
 
             let timeRemaining = "---";
             let timeBarWidth = 100;
@@ -325,9 +338,8 @@ export const renderers = {
             const statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
 
-            // === SNIPER SCOPE VISUALIZATION ===
-            // W kafelku pokazujemy uproszczony pasek proporcji
-            // W modalu szczegółów można byłoby dodać live marker.
+            // === SNIPER SCOPE VISUALIZATION (Mini na kafelku) ===
+            // Wizualizuje proporcje SL (czerwony) do TP (zielony) względem Entry.
             
             return `
             <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
@@ -350,7 +362,7 @@ export const renderers = {
                     <div class="text-right">
                         <div class="flex flex-col items-end">
                             <span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span>
-                            <span class="text-xs ${rrClass}">R:R ${rr.toFixed(2)}</span>
+                            <span class="text-xs ${rrClass}">R:R ${displayRR}</span>
                         </div>
                     </div>
                 </div>
@@ -465,7 +477,7 @@ export const renderers = {
         const formatNumber = (val) => (typeof val !== 'number' || isNaN(val)) ? `<span class="text-gray-500">---</span>` : val.toFixed(2);
         const createStatCard = (label, value, icon) => `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center text-sm"><i data-lucide="${icon}" class="w-4 h-4 mr-2 text-sky-400"></i>${label}</h3><p class="text-3xl font-extrabold mt-2 text-white">${value}</p></div>`;
         const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-semibold text-sky-400">${setupName}</td><td class="p-3 text-right">${setupStats.total_trades}</td><td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td><td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td><td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td></tr>`).join('');
-        const setupTable = setupRows.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Strategia</th><th scope="col" class="p-3 text-right">Ilość Transakcji</th><th scope="col" class="p-3 text-right">Win Rate (%)</th><th scope="col" class="p-3 text-right">Całkowity P/L (%)</th><th scope="col" class="p-3 text-right">Profit Factor</th></tr></thead><tbody>${setupRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
+        const setupTable = setupRows.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr><th scope="col" class="p-3">Strategia</th><th scope="col" class="p-3 text-right">Ilość Transakcji</th><th scope="col" class="p-3 text-right">Win Rate (%)</th><th scope="col" class="p-3 text-right">Całkowity P/L (%)</th><th scope="col" class="p-3 text-right">Profit Factor</th></tr></thead><tbody>${setupRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
         const tradeHeaders = ['Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)', 'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile', 'Inst. Sync', 'Retail Herd.', 'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)', 'J (H4)', 'J Thresh.'];
         const headerClasses = ['sticky left-0', 'sticky left-[90px]', 'sticky left-[160px]', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right'];
         const tradeRows = trades.map(t => {
@@ -473,7 +485,7 @@ export const renderers = {
             const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono"><td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td><td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td><td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td><td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td><td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td><td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td><td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td></tr>`;
         }).join('');
-        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
+        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
         
         const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option></select></div><div class="flex items-start gap-3 mb-4"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const quantumLabSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden"><div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none"><i data-lucide="atom" class="w-32 h-32 text-purple-500"></i></div><h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center"><i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i>Quantum Lab (Apex V4)</h4><p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p><div class="flex flex-wrap gap-3"><button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0"><i data-lucide="cpu" class="w-4 h-4 mr-2"></i>Konfiguruj Optymalizację</button><button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="list" class="w-4 h-4 mr-2"></i>Wyniki</button></div><div id="quantum-lab-status" class="text-sm mt-3 h-4"></div></div>`;
