@@ -24,7 +24,8 @@ from .utils import (
 from . import aqm_v3_metrics
 from . import aqm_v3_h2_loader
 from .aqm_v3_h3_loader import _parse_bbands
-# from .apex_optimizer import AdaptiveExecutor # USUNIĘTO - Brak zależności
+# Importujemy logikę V4 dla strategii AQM
+from . import aqm_v4_logic
 from ..config import SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,10 @@ DEFAULT_PARAMS = {
     'h3_min_score': 0.0,
     'h3_tp_multiplier': 5.0,
     'h3_sl_multiplier': 2.0,
-    'h3_max_hold': 5 
+    'h3_max_hold': 5,
+    # Parametry specyficzne dla AQM (domyślnie wyłączone/neutralne)
+    'aqm_component_min': None, 
+    'strategy_mode': 'AUTO' # AUTO wykryje tryb na podstawie parametrów
 }
 
 H3_CALC_WINDOW = 100 
@@ -149,47 +153,84 @@ def _get_sector_trend(session, ticker):
         return float(res[0]) if res and res[0] is not None else 0.0
     except: return 0.0
 
+def _get_macro_context_for_aqm(session, client):
+    """Pobiera pełne dane makro wymagane przez strategię AQM (V4)."""
+    macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
+    try:
+        # SPY
+        spy_raw = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+        if spy_raw:
+            macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
+            macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
+            macro['spy_df'].sort_index(inplace=True)
+        
+        # Yields
+        yield_raw = get_raw_data_with_cache(session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
+        if yield_raw and 'data' in yield_raw:
+            try: macro['yield_10y'] = float(yield_raw['data'][0]['value'])
+            except: pass
+            
+        # Inflation
+        inf_raw = get_raw_data_with_cache(session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
+        if inf_raw and 'data' in inf_raw:
+            try: macro['inflation'] = float(inf_raw['data'][0]['value'])
+            except: pass
+            
+    except Exception as e:
+        logger.error(f"Błąd pobierania makro dla AQM: {e}")
+    return macro
+
 def run_h3_live_scan(session, candidates, client, parameters=None):
-    logger.info("Start H3 Live Sniper (No-Adaptation)...")
+    logger.info("Start Phase 3 Live Sniper (Dual-Core: H3/AQM)...")
     
-    # 1. Wczytanie parametrów (bez adaptacji)
+    # 1. Wczytanie i normalizacja parametrów
     params = DEFAULT_PARAMS.copy()
     if parameters:
         for k,v in parameters.items(): 
-            if v is not None: params[k] = float(v)
+            if v is not None: 
+                try:
+                    params[k] = float(v)
+                except:
+                    params[k] = v # Zachowaj stringi jak 'strategy_mode'
+
+    # Detekcja trybu strategii
+    strategy_mode = 'H3'
+    if params.get('strategy_mode') == 'AQM':
+        strategy_mode = 'AQM'
+    elif params.get('aqm_component_min') is not None and float(params['aqm_component_min']) > 0:
+        # Heurystyka: Jeśli przekazano parametry specyficzne dla AQM, przełącz na AQM
+        strategy_mode = 'AQM'
     
-    # Pobranie Max Hold do obliczenia daty wygaśnięcia
-    max_hold_days = int(params.get('h3_max_hold', 5))
-            
+    # Parametry wyjścia (wspólne)
+    tp_mult = float(params['h3_tp_multiplier'])
+    sl_mult = float(params['h3_sl_multiplier'])
+    max_hold_days = int(params['h3_max_hold'])
+    min_score = float(params['h3_min_score']) # Używane jako min_score dla H3 lub AQM
+
+    append_scan_log(session, f"⚙️ FAZA 3: Tryb Strategii = {strategy_mode}")
+    append_scan_log(session, f"   Parametry: MinScore={min_score}, TP={tp_mult}x, SL={sl_mult}x, Hold={max_hold_days}d")
+
     mkt = _get_market_pkg(session, client)
     ev_model = _get_historical_ev_stats(session)
     
-    # === USUNIĘTO ADAPTACJĘ ===
-    # Nie modyfikujemy parametrów na podstawie VIX. 
-    # Używamy dokładnie tego, co użytkownik wybrał w wynikach Optymalizacji.
-    
-    h3_p = float(params['h3_percentile'])
-    h3_m = float(params['h3_m_sq_threshold'])
-    h3_min = float(params['h3_min_score'])
-    tp_mult = float(params['h3_tp_multiplier'])
-    sl_mult = float(params['h3_sl_multiplier'])
-    
-    # Logujemy, że używamy parametrów "na sztywno"
-    append_scan_log(session, f"PARAMETRY (FIXED): MinScore={h3_min:.2f}, Perc={h3_p:.2f}, Masa={h3_m:.2f}")
-    
+    # Jeśli AQM, pobierz dodatkowe dane makro
+    macro_data_aqm = {}
+    if strategy_mode == 'AQM':
+        macro_data_aqm = _get_macro_context_for_aqm(session, client)
+
     signals = 0
-    rejects = {'aqm':0, 'mass':0, 'data':0, 'live':0}
+    rejects = {'aqm':0, 'mass':0, 'data':0, 'live':0, 'components': 0}
     
     for i, ticker in enumerate(candidates):
         if i%5==0: update_scan_progress(session, i, len(candidates))
         
         try:
+            # === POBIERANIE DANYCH WSPÓLNYCH ===
             d_raw = get_raw_data_with_cache(session, client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', expiry_hours=12)
             da_raw = get_raw_data_with_cache(session, client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=12)
+            
             if not d_raw or not da_raw:
                 rejects['data']+=1; append_scan_log(session, f"❌ {ticker}: Brak danych"); continue
-                
-            h2 = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, client, session)
             
             ohlcv = standardize_df_columns(pd.DataFrame.from_dict(d_raw.get('Time Series (Daily)', {}), orient='index'))
             adj = standardize_df_columns(pd.DataFrame.from_dict(da_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -201,115 +242,201 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             ohlcv['vwap_proxy'] = (ohlcv['high']+ohlcv['low']+ohlcv['close'])/3.0
             df = adj.join(ohlcv[['open','high','low','vwap_proxy']], rsuffix='_ohlcv')
             close_col = 'close_ohlcv' if 'close_ohlcv' in df.columns else 'close'
-            df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
             df['atr_14'] = calculate_atr(df).ffill().fillna(0)
             df['close'] = df[close_col]
             
-            insider = h2.get('insider_df')
-            news = h2.get('news_df')
-            df['institutional_sync'] = df.apply(lambda r: aqm_v3_metrics.calculate_institutional_sync_from_data(insider, r.name), axis=1)
-            df['retail_herding'] = df.apply(lambda r: aqm_v3_metrics.calculate_retail_herding_from_data(news, r.name), axis=1)
-            
-            df['daily_returns'] = df['close'].pct_change()
-            df['market_temperature'] = df['daily_returns'].rolling(30).std()
-            
-            if not news.empty:
-                nc = news.groupby(news.index.date).size()
-                nc.index = pd.to_datetime(nc.index)
-                nc = nc.reindex(df.index, fill_value=0)
-                df['information_entropy'] = nc.rolling(10).sum()
-            else: df['information_entropy'] = 0.0
-            
-            df['avg_volume_10d'] = df['volume'].rolling(10).mean()
-            df['vol_mean_200d'] = df['avg_volume_10d'].rolling(200).mean()
-            df['vol_std_200d'] = df['avg_volume_10d'].rolling(200).std()
-            df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).fillna(0)
-            
-            df['normalized_news'] = 0.0 
-            df['m_sq'] = df['normalized_volume'] + df['normalized_news']
-            df['nabla_sq'] = df['price_gravity']
-            
-            df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(100).mean()) / df['institutional_sync'].rolling(100).std().fillna(1)
-            
-            df['retail_herding_capped'] = calculate_retail_herding_capped_v4(df['retail_herding'])
-            
-            S = df['information_entropy']
-            Q = df['retail_herding_capped']
-            T = df['market_temperature']
-            mu = df['mu_normalized'].fillna(0)
-            
-            df['J'] = (S - (Q/T.replace(0, np.nan)) + (mu*1.0)).fillna(0)
-            
-            j_norm = ((df['J'] - df['J'].rolling(100).mean()) / df['J'].rolling(100).std()).fillna(0)
-            nabla_norm = ((df['nabla_sq'] - df['nabla_sq'].rolling(100).mean()) / df['nabla_sq'].rolling(100).std()).fillna(0)
-            
-            m_mean = df['m_sq'].rolling(100).mean()
-            m_std = df['m_sq'].rolling(100).std()
-            m_norm = ((df['m_sq'] - m_mean) / m_std).fillna(0)
-            
-            aqm_score = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
-            thresh = aqm_score.rolling(100).quantile(h3_p)
-            
-            curr_aqm = aqm_score.iloc[-1]
-            curr_thr = thresh.iloc[-1]
-            curr_m = m_norm.iloc[-1]
-            
-            if curr_aqm <= curr_thr or curr_aqm <= h3_min:
-                rejects['aqm']+=1; append_scan_log(session, f"❌ {ticker}: AQM {curr_aqm:.2f} < {curr_thr:.2f} (lub min {h3_min:.2f})"); continue
-            if curr_m >= h3_m:
-                rejects['mass']+=1; append_scan_log(session, f"❌ {ticker}: Masa {curr_m:.2f} > {h3_m:.2f}"); continue
-                
-            st = _get_sector_trend(session, ticker)
-            score, det = _calculate_setup_score(curr_aqm, curr_thr, curr_m, df, mkt['spy_df'], st)
-            surplus = curr_aqm - curr_thr
-            ev_b = 'LOW' if surplus < 0.2 else ('MID' if surplus < 0.5 else 'HIGH')
-            ev = ev_model.get(ev_b, {'ev': surplus*2})['ev']
-            
             last = df.iloc[-1]
-            entry = last['close'] 
+            entry = last['close']
             tp = entry + (tp_mult * last['atr_14'])
             sl = entry - (sl_mult * last['atr_14'])
             
-            lq = client.get_global_quote(ticker)
-            lp = safe_float(lq.get('05. price')) if lq else None
-            
-            if lp:
-                valid, msg = _is_setup_still_valid(entry, sl, tp, lp)
-                if not valid:
-                    rejects['live']+=1; append_scan_log(session, f"❌ {ticker}: Live: {msg}"); continue
-            
+            # Zmienne do oceny sygnału
+            is_signal = False
+            score = 0
+            metric_details = {}
             rec = "HOLD"
-            if score >= 80: rec = "TOP 💎"
-            elif score >= 60: rec = "BUY ✅"
-            elif score >= 40: rec = "MOD ⚠️"
-            else: rec = "WEAK ❌"
             
-            note = f"RANKING:\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{det['tech_score']} Mkt:{det['market_score']} RS:{det['rs_score']} Ctx:{det['context_score']}\nAQM:{curr_aqm:.2f} (vs {curr_thr:.2f})"
-            
-            ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
-            if not ex:
-                # === OBLICZANIE DATY WYGAŚNIĘCIA (TTL) ===
-                expiration_dt = datetime.now(timezone.utc) + timedelta(days=max_hold_days)
+            # =================================================================
+            # ŚCIEŻKA 1: Strategia H3 (Oryginalna)
+            # =================================================================
+            if strategy_mode == 'H3':
+                h2 = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, client, session)
+                df['price_gravity'] = (df['vwap_proxy'] - df[close_col]) / df[close_col]
                 
-                sig = models.TradingSignal(
-                    ticker=ticker, status='PENDING', generation_date=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
-                    signal_candle_timestamp=last.name, entry_price=entry, stop_loss=sl, take_profit=tp,
-                    entry_zone_top=entry+(0.5*last['atr_14']), entry_zone_bottom=entry-(0.5*last['atr_14']),
-                    risk_reward_ratio=tp_mult/sl_mult, notes=note,
-                    expiration_date=expiration_dt 
+                insider = h2.get('insider_df')
+                news = h2.get('news_df')
+                df['institutional_sync'] = df.apply(lambda r: aqm_v3_metrics.calculate_institutional_sync_from_data(insider, r.name), axis=1)
+                df['retail_herding'] = df.apply(lambda r: aqm_v3_metrics.calculate_retail_herding_from_data(news, r.name), axis=1)
+                
+                df['daily_returns'] = df['close'].pct_change()
+                df['market_temperature'] = df['daily_returns'].rolling(30).std()
+                
+                if not news.empty:
+                    nc = news.groupby(news.index.date).size()
+                    nc.index = pd.to_datetime(nc.index)
+                    nc = nc.reindex(df.index, fill_value=0)
+                    df['information_entropy'] = nc.rolling(10).sum()
+                else: df['information_entropy'] = 0.0
+                
+                df['avg_volume_10d'] = df['volume'].rolling(10).mean()
+                df['vol_mean_200d'] = df['avg_volume_10d'].rolling(200).mean()
+                df['vol_std_200d'] = df['avg_volume_10d'].rolling(200).std()
+                df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).fillna(0)
+                
+                df['normalized_news'] = 0.0 
+                df['m_sq'] = df['normalized_volume'] + df['normalized_news']
+                df['nabla_sq'] = df['price_gravity']
+                
+                df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(100).mean()) / df['institutional_sync'].rolling(100).std().fillna(1)
+                df['retail_herding_capped'] = calculate_retail_herding_capped_v4(df['retail_herding'])
+                
+                S = df['information_entropy']
+                Q = df['retail_herding_capped']
+                T = df['market_temperature']
+                mu = df['mu_normalized'].fillna(0)
+                
+                df['J'] = (S - (Q/T.replace(0, np.nan)) + (mu*1.0)).fillna(0)
+                
+                j_norm = ((df['J'] - df['J'].rolling(100).mean()) / df['J'].rolling(100).std()).fillna(0)
+                nabla_norm = ((df['nabla_sq'] - df['nabla_sq'].rolling(100).mean()) / df['nabla_sq'].rolling(100).std()).fillna(0)
+                m_mean = df['m_sq'].rolling(100).mean()
+                m_std = df['m_sq'].rolling(100).std()
+                m_norm = ((df['m_sq'] - m_mean) / m_std).fillna(0)
+                
+                aqm_score = (1.0 * j_norm) - (1.0 * nabla_norm) - (1.0 * m_norm)
+                
+                h3_p = float(params.get('h3_percentile', 0.95))
+                h3_m = float(params.get('h3_m_sq_threshold', -0.5))
+                thresh = aqm_score.rolling(100).quantile(h3_p)
+                
+                curr_aqm = aqm_score.iloc[-1]
+                curr_thr = thresh.iloc[-1]
+                curr_m = m_norm.iloc[-1]
+                
+                metric_details = {
+                    'aqm_score': curr_aqm, 'J_norm': j_norm.iloc[-1], 
+                    'nabla_sq_norm': nabla_norm.iloc[-1], 'm_sq_norm': curr_m,
+                    'threshold': curr_thr
+                }
+
+                # Walidacja H3
+                if curr_aqm > curr_thr and curr_aqm > min_score and curr_m < h3_m:
+                    is_signal = True
+                    st = _get_sector_trend(session, ticker)
+                    score_int, det = _calculate_setup_score(curr_aqm, curr_thr, curr_m, df, mkt['spy_df'], st)
+                    score = score_int
+                    
+                    surplus = curr_aqm - curr_thr
+                    ev_b = 'LOW' if surplus < 0.2 else ('MID' if surplus < 0.5 else 'HIGH')
+                    ev = ev_model.get(ev_b, {'ev': surplus*2})['ev']
+                    rec = "TOP 💎" if score >= 80 else ("BUY ✅" if score >= 60 else "MOD ⚠️")
+                else:
+                    if curr_aqm <= curr_thr: rejects['aqm']+=1
+                    if curr_m >= h3_m: rejects['mass']+=1
+
+            # =================================================================
+            # ŚCIEŻKA 2: Strategia AQM (Adaptive Quantum Momentum - V4)
+            # =================================================================
+            elif strategy_mode == 'AQM':
+                # Pobranie danych Weekly i OBV (wymagane dla AQM)
+                w_raw = get_raw_data_with_cache(session, client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
+                weekly_df = pd.DataFrame()
+                if w_raw: 
+                    weekly_df = standardize_df_columns(pd.DataFrame.from_dict(w_raw.get('Weekly Adjusted Time Series', {}), orient='index'))
+                    weekly_df.index = pd.to_datetime(weekly_df.index)
+                
+                obv_raw = get_raw_data_with_cache(session, client, ticker, 'OBV', 'get_obv')
+                obv_df = pd.DataFrame()
+                if obv_raw: 
+                    obv_df = pd.DataFrame.from_dict(obv_raw.get('Technical Analysis: OBV', {}), orient='index')
+                    obv_df.index = pd.to_datetime(obv_df.index)
+                    obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
+
+                # Obliczenie pełnego wektora AQM
+                aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
+                    daily_df=df,
+                    weekly_df=weekly_df,
+                    intraday_60m_df=pd.DataFrame(), # Brak intraday w live scan dla szybkości, używamy proxy w logice
+                    obv_df=obv_df,
+                    macro_data=macro_data_aqm,
+                    earnings_days_to=None
                 )
-                session.add(sig); session.commit()
-                signals+=1
-                msg = f"💎 SYGNAŁ: {ticker} | EV: {ev:.1f}% | SCORE: {score} | {rec}"
-                logger.info(msg); append_scan_log(session, msg)
-                send_telegram_alert(f"⚛️ H3: {ticker}\nCena: {entry:.2f}\nSCORE: {score}")
-            else:
-                append_scan_log(session, f"ℹ️ {ticker}: Już aktywny.")
+                
+                if not aqm_df.empty:
+                    last_aqm = aqm_df.iloc[-1]
+                    curr_score = last_aqm['aqm_score']
+                    comp_min = float(params.get('aqm_component_min', 0.5))
+                    
+                    metric_details = {
+                        'aqm_score': curr_score,
+                        'qps': last_aqm['qps'], 'ves': last_aqm['ves'],
+                        'mrs': last_aqm['mrs'], 'tcs': last_aqm['tcs']
+                    }
+                    
+                    # Walidacja AQM
+                    # Warunek 1: Główny wynik > min_score
+                    # Warunek 2: Wszystkie komponenty > comp_min (Spójność kwantowa)
+                    if (curr_score > min_score and
+                        last_aqm['qps'] > comp_min and
+                        last_aqm['ves'] > comp_min and
+                        last_aqm['mrs'] > comp_min):
+                        
+                        is_signal = True
+                        # Skalowanie wyniku do 0-100 dla UI
+                        score = int(curr_score * 100) 
+                        if score > 100: score = 99
+                        
+                        rec = "TOP 💎" if score >= 80 else ("BUY ✅" if score >= 60 else "MOD ⚠️")
+                        ev = score * 0.05 # Proste proxy EV dla AQM
+                    else:
+                        if curr_score <= min_score: rejects['aqm']+=1
+                        else: rejects['components']+=1
+                else:
+                    rejects['data']+=1
+
+            # =================================================================
+            # FINALIZACJA SYGNAŁU (Wspólna)
+            # =================================================================
+            if is_signal:
+                lq = client.get_global_quote(ticker)
+                lp = safe_float(lq.get('05. price')) if lq else None
+                
+                if lp:
+                    valid, msg = _is_setup_still_valid(entry, sl, tp, lp)
+                    if not valid:
+                        rejects['live']+=1; append_scan_log(session, f"❌ {ticker}: Live: {msg}"); continue
+                
+                # Budowa notatki w zależności od strategii
+                if strategy_mode == 'H3':
+                    note = f"STRATEGIA: H3\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{metric_details.get('tech_score',0)} Mkt:{metric_details.get('market_score',0)} RS:{metric_details.get('rs_score',0)}\nAQM H3:{metric_details['aqm_score']:.2f} (vs {metric_details['threshold']:.2f})"
+                else:
+                    note = f"STRATEGIA: AQM (V4)\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details['qps']:.2f} VES:{metric_details['ves']:.2f} MRS:{metric_details['mrs']:.2f} TCS:{metric_details['tcs']:.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
+
+                # Sprawdzenie duplikatów
+                ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
+                if not ex:
+                    expiration_dt = datetime.now(timezone.utc) + timedelta(days=max_hold_days)
+                    
+                    sig = models.TradingSignal(
+                        ticker=ticker, status='PENDING', generation_date=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+                        signal_candle_timestamp=last.name, entry_price=entry, stop_loss=sl, take_profit=tp,
+                        entry_zone_top=entry+(0.5*last['atr_14']), entry_zone_bottom=entry-(0.5*last['atr_14']),
+                        risk_reward_ratio=tp_mult/sl_mult, notes=note,
+                        expiration_date=expiration_dt
+                    )
+                    session.add(sig); session.commit()
+                    signals+=1
+                    
+                    msg = f"💎 SYGNAŁ ({strategy_mode}): {ticker} | SCORE: {score} | {rec}"
+                    logger.info(msg); append_scan_log(session, msg)
+                    send_telegram_alert(f"⚛️ {strategy_mode}: {ticker}\nCena: {entry:.2f}\nSCORE: {score}")
+                else:
+                    append_scan_log(session, f"ℹ️ {ticker}: Już aktywny.")
                 
         except Exception as e:
             logger.error(f"Error {ticker}: {e}")
             continue
             
     update_scan_progress(session, len(candidates), len(candidates))
-    sum_msg = f"🏁 Faza 3: Sygnałów: {signals}. Odrzuty: AQM={rejects['aqm']}, Masa={rejects['mass']}, Live={rejects['live']}"
+    sum_msg = f"🏁 Faza 3 ({strategy_mode}): Sygnałów: {signals}. Odrzuty: AQM={rejects['aqm']}, Masa={rejects['mass']}, Komponenty={rejects['components']}, Live={rejects['live']}"
     append_scan_log(session, sum_msg)
