@@ -33,15 +33,20 @@ def run_phase_1_cycle(session):
         logger.info("Starting Phase 1 Cycle (Macro + Scan)...")
         utils.append_scan_log(session, ">>> Rozpoczynanie Fazy 1 (Skanowanie rynku)...") 
         utils.update_system_control(session, 'worker_status', 'RUNNING')
+        
+        # === FAZA 0: Kontrola Makro ===
         utils.update_system_control(session, 'current_phase', 'PHASE_0')
         macro_sentiment = phase0_macro_agent.run_macro_analysis(session, api_client)
         if macro_sentiment == 'RISK_OFF':
             utils.append_scan_log(session, "Faza 0: RISK_OFF. Skanowanie przerwane.")
             return
 
+        # === CZYSZCZENIE PRZED SKANOWANIEM ===
+        # Czyścimy starą listę kandydatów, aby uniknąć duplikatów i nieaktualnych danych
         session.execute(text("DELETE FROM phase1_candidates")) 
         session.commit()
         
+        # === FAZA 1: Skanowanie ===
         utils.update_system_control(session, 'current_phase', 'PHASE_1')
         candidates = phase1_scanner.run_scan(session, lambda: "RUNNING", api_client)
         
@@ -91,6 +96,7 @@ def run_phase_3_cycle(session):
         utils.update_system_control(session, 'current_phase', 'NONE')
 
 def run_full_analysis_cycle():
+    # Funkcja utrzymana dla kompatybilności, ale wywoływana tylko na żądanie 'FULL_RUN'
     with get_db_session() as session:
         run_phase_1_cycle(session)
         run_phase_3_cycle(session)
@@ -182,26 +188,17 @@ def main_loop():
         initialize_database_if_empty(session, api_client)
     
     # === MODYFIKACJA: TRYB MANUALNY ===
-    # Zakomentowano automatyczne skanowanie. 
-    # Użytkownik sam wywoła "Skanuj F1" z poziomu UI, kiedy będzie gotowy.
+    # Usunięto: schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
     
-    # schedule.every().day.at(ANALYSIS_SCHEDULE_TIME_CET, "Europe/Warsaw").do(run_full_analysis_cycle)
-    
-    # Agenci pomocniczy i strażnicy POZOSTAJĄ AKTYWNI
-    # Agent Newsowy co 2 minuty (to jest bezpieczne, tylko nasłuchuje)
+    # Agenci pomocniczy i strażnicy POZOSTAJĄ AKTYWNI (to jest prawidłowe)
     schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
-    
-    # Monitor Wirtualnego Agenta (zamykanie starych pozycji)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(lambda: virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client))
-
-    # Strażnik Sygnałów (H3 Live) - monitoruje SL/TP dla aktywnych sygnałów
     schedule.every(1).minutes.do(lambda: signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client))
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         utils.report_heartbeat(initial_session)
-        # Informacja w logach, że jesteśmy w trybie manualnym
         utils.append_scan_log(initial_session, "SYSTEM: Tryb Manualny Aktywny. Automatyczne skanowanie nocne wyłączone.")
 
     while True:
@@ -210,6 +207,7 @@ def main_loop():
                 run_action, new_state = utils.check_for_commands(session, current_state)
                 current_state = new_state
 
+                # Wywołanie Fazy 1/3 w zależności od komendy
                 if run_action == "FULL_RUN": run_full_analysis_cycle()
                 elif run_action == "PHASE_1_RUN": run_phase_1_cycle(session)
                 elif run_action == "PHASE_3_RUN": run_phase_3_cycle(session)
