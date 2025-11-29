@@ -1,5 +1,55 @@
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
+// === EXTRA: CSS INJECTION FOR HUD & ANIMATIONS ===
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes heartbeat-idle {
+        0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); transform: scale(1); }
+        70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); transform: scale(1.02); }
+        100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); transform: scale(1); }
+    }
+    @keyframes heartbeat-busy {
+        0% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); transform: scale(1); }
+        25% { transform: scale(1.03); }
+        50% { box-shadow: 0 0 0 15px rgba(234, 179, 8, 0); transform: scale(1); }
+        100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); transform: scale(1); }
+    }
+    .pulse-idle { animation: heartbeat-idle 3s infinite ease-in-out; }
+    .pulse-busy { animation: heartbeat-busy 0.8s infinite ease-in-out; }
+    
+    .glass-panel {
+        background: rgba(22, 27, 34, 0.7);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(48, 54, 61, 0.6);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    }
+`;
+document.head.appendChild(style);
+
+// === TACTICAL AUDIO SYSTEM ===
+const synth = window.speechSynthesis;
+let lastSpokenSignal = "";
+
+const playTacticalAlert = (ticker, score) => {
+    if (!synth || state.h3SortBy !== 'score') return; // Mów tylko w trybie domyślnym
+    if (lastSpokenSignal === ticker) return; // Nie powtarzaj się
+    
+    const text = `Commander. Target acquired: ${ticker}. Score: ${score}.`;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.1;
+    utterance.pitch = 0.9; // Niższy, bardziej "taktyczny" głos
+    utterance.volume = 0.8;
+    
+    // Próba wyboru głosu angielskiego
+    const voices = synth.getVoices();
+    const enVoice = voices.find(v => v.lang.includes('en-US') && v.name.includes('Google')) || voices[0];
+    if (enVoice) utterance.voice = enVoice;
+    
+    synth.speak(utterance);
+    lastSpokenSignal = ticker;
+};
+
 export const ui = {
     init: () => {
         const get = (id) => document.getElementById(id);
@@ -121,69 +171,90 @@ export const renderers = {
         let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
         let scoreDisplay = "";
+        let scoreVal = 0;
         if (s.notes && s.notes.includes("Score:")) {
             try {
                 const parts = s.notes.split("Score:");
                 if (parts.length > 1) {
                     const scorePart = parts[1].trim().split(" ")[0].replace(",", "").replace(".", ".");
-                    scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${parseFloat(scorePart).toFixed(2)}</span>`;
+                    scoreVal = parseFloat(scorePart);
+                    scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${scoreVal.toFixed(2)}</span>`;
                 }
             } catch(e) {}
         }
+        
+        // TRIGGER AUDIO ALERT FOR HIGH SCORE SIGNALS
+        if (s.status === 'ACTIVE' && scoreVal >= 0.80) {
+            playTacticalAlert(s.ticker, (scoreVal * 100).toFixed(0));
+        }
+
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
     dashboard: () => {
-        // Obliczanie statystyk sygnałów (tylko widocznych na dashboardzie)
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
         const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
         
+        // Logika wyboru animacji pulsu w zależności od statusu
+        let pulseClass = "pulse-idle"; // Domyślny (zielony, wolny)
+        let statusColor = "text-green-500";
+        
+        const workerStatus = state.workerStatus.status || "IDLE";
+        if (workerStatus.includes("RUNNING") || workerStatus.includes("BUSY")) {
+            pulseClass = "pulse-busy"; // Szybki, żółty
+            statusColor = "text-yellow-400";
+        } else if (workerStatus.includes("PAUSED")) {
+            pulseClass = "";
+            statusColor = "text-red-500";
+        }
+
         return `<div id="dashboard-view" class="max-w-6xl mx-auto">
-                        <div class="mb-4 relative">
-                            <i data-lucide="search" class="absolute left-3 top-2.5 w-5 h-5 text-gray-500"></i>
-                            <input type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 text-gray-300 rounded-lg pl-10 pr-4 py-2 focus:ring-sky-500 focus:border-sky-500 outline-none">
+                        <div class="mb-6 relative">
+                            <i data-lucide="search" class="absolute left-3 top-3 w-5 h-5 text-gray-500"></i>
+                            <input type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 text-gray-300 rounded-lg pl-10 pr-4 py-3 focus:ring-sky-500 focus:border-sky-500 outline-none shadow-lg placeholder-gray-600">
                         </div>
 
-                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex items-center"><i data-lucide="activity" class="w-6 h-6 mr-3"></i>Centrum Dowodzenia</h2>
                         
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <!-- Karta 1: Status Silnika -->
-                            <div class="bg-[#161B22] p-5 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden">
-                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
-                                <p id="dashboard-worker-status" class="text-5xl font-extrabold text-green-500 tracking-tight">IDLE</p>
-                                <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-2 font-mono">Faza: NONE</p>
+                            <!-- Karta 1: Status Silnika (PULSUJĄCA) -->
+                            <div class="glass-panel p-6 rounded-xl relative overflow-hidden ${pulseClass} transition-all duration-500">
+                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
+                                <p id="dashboard-worker-status" class="text-5xl font-black ${statusColor} tracking-tighter drop-shadow-lg">${workerStatus}</p>
+                                <p id="dashboard-current-phase" class="text-xs text-gray-500 mt-2 font-mono bg-black/30 inline-block px-2 py-1 rounded">Faza: ${state.workerStatus.phase || 'NONE'}</p>
                             </div>
 
                             <!-- Karta 2: Postęp Skanowania -->
-                            <div class="bg-[#161B22] p-5 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
+                            <div class="glass-panel p-6 rounded-xl">
+                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
                                 <div class="mt-2 flex items-baseline gap-2">
                                     <span id="progress-text" class="text-3xl font-extrabold text-white">0 / 0</span>
-                                    <span class="text-gray-500 text-sm">tickery</span>
+                                    <span class="text-gray-500 text-sm">analiz</span>
                                 </div>
-                                <div class="w-full bg-gray-700 rounded-full h-2 mt-4 overflow-hidden">
-                                    <div id="progress-bar" class="bg-sky-600 h-full rounded-full transition-all duration-500" style="width: 0%"></div>
+                                <div class="w-full bg-gray-800 rounded-full h-3 mt-4 overflow-hidden border border-gray-700">
+                                    <div id="progress-bar" class="bg-gradient-to-r from-sky-600 to-blue-500 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(14,165,233,0.5)]" style="width: 0%"></div>
                                 </div>
                             </div>
 
-                            <!-- Karta 3: Statystyki Sygnałów (ZMODYFIKOWANA) -->
-                            <div class="bg-[#161B22] p-5 rounded-lg shadow-lg border border-gray-700 relative">
-                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-4"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały (Aktywne / Wyrzucone)</h3>
+                            <!-- Karta 3: Statystyki Sygnałów -->
+                            <div class="glass-panel p-6 rounded-xl relative">
+                                <div class="absolute top-0 right-0 p-3 opacity-10"><i data-lucide="crosshair" class="w-16 h-16 text-white"></i></div>
+                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-4 uppercase tracking-wider"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały</h3>
                                 <div class="flex justify-between items-center">
-                                    <div class="text-center pr-6 border-r border-gray-700">
-                                        <p id="dashboard-active-signals" class="text-5xl font-extrabold text-red-400">${activeSignalsCount + pendingSignalsCount}</p>
-                                        <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Sygnały Aktywne</p>
+                                    <div class="text-center pr-6 border-r border-gray-700 z-10">
+                                        <p id="dashboard-active-signals" class="text-5xl font-black text-white">${activeSignalsCount + pendingSignalsCount}</p>
+                                        <p class="text-[10px] text-gray-500 mt-1 uppercase font-bold tracking-widest text-green-400">Aktywne</p>
                                     </div>
-                                    <div class="text-center pl-4 flex-grow">
-                                        <p id="dashboard-discarded-signals" class="text-5xl font-extrabold text-gray-500">${state.discardedSignalCount || 0}</p>
-                                        <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Wyrzucone (24h)</p>
+                                    <div class="text-center pl-4 flex-grow z-10">
+                                        <p id="dashboard-discarded-signals" class="text-5xl font-black text-gray-500">${state.discardedSignalCount || 0}</p>
+                                        <p class="text-[10px] text-gray-600 mt-1 uppercase font-bold tracking-widest">Odrzucone</p>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
-                        <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
-                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700 custom-scrollbar"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">Czekam na rozpoczęcie skanowania...</pre></div>
+                        <h3 class="text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider flex items-center"><i data-lucide="terminal" class="w-4 h-4 mr-2"></i>Dziennik Operacyjny</h3>
+                        <div id="scan-log-container" class="bg-[#0d1117] p-4 rounded-lg inner-shadow h-96 overflow-y-scroll border border-gray-800 custom-scrollbar font-mono text-xs text-gray-400 leading-relaxed shadow-inner"><pre id="scan-log">Inicjalizacja systemu...</pre></div>
                     </div>`;
     },
     
@@ -223,11 +294,11 @@ export const renderers = {
                 }
             }
 
-            const statusColor = s.status === 'ACTIVE' ? 'border-green-500' : 'border-yellow-500';
+            const statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
 
             return `
-            <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} shadow-lg hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
+            <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
                 
                 <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full">
                     <div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div>
@@ -245,7 +316,7 @@ export const renderers = {
                     </div>
                     <div class="text-right">
                         <div class="flex flex-col items-end">
-                            <span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1">AQM: ${score}</span>
+                            <span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span>
                             <span class="text-xs ${rrClass}">R:R ${rr.toFixed(2)}</span>
                         </div>
                     </div>
