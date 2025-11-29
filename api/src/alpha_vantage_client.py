@@ -20,11 +20,13 @@ class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
     # === OPTYMALIZACJA: Limit 150 zapytań/minuta (Premium) ===
-    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3):
+    # === DODANO: backoff_factor dla synchronizacji z Workerem ===
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             logger.warning("API key is missing for AlphaVantageClient instance in API.")
         self.api_key = api_key
         self.retries = retries
+        self.backoff_factor = backoff_factor # Dodano backoff_factor
         self.requests_per_minute = requests_per_minute
         
         # Rate Limiting (Rolling Window)
@@ -51,9 +53,9 @@ class AlphaVantageClient:
 
         # 2. Sprawdź "Twardy Limit" ilościowy w bieżącym oknie
         if len(self.request_timestamps) >= self.requests_per_minute:
+            # Dodatkowy bufor 0.05s, aby uniknąć przekroczenia limitu z marginesem
             time_to_wait = 60 - (now - self.request_timestamps[0]) + 0.05
             if time_to_wait > 0:
-                # logger.warning(f"API Rate limit reached. Sleeping for {time_to_wait:.2f} seconds.")
                 time.sleep(time_to_wait)
                 now = time.monotonic()
 
@@ -70,13 +72,15 @@ class AlphaVantageClient:
             logger.error("Cannot make Alpha Vantage request: API key is missing.")
             return None
 
-        self._rate_limiter()
-        params['apikey'] = self.api_key
+        params_copy = params.copy()
+        params_copy['apikey'] = self.api_key
 
         for attempt in range(self.retries):
+            self._rate_limiter()
+            
             try:
                 # Użycie self.session
-                response = self.session.get(self.BASE_URL, params=params, timeout=10) # Krótszy timeout dla API (UI nie może wisieć)
+                response = self.session.get(self.BASE_URL, params=params_copy, timeout=10) # Krótszy timeout dla API (UI nie może wisieć)
                 
                 # Obsługa specyficznych typów odpowiedzi (np. CSV vs JSON)
                 try:
@@ -100,8 +104,9 @@ class AlphaVantageClient:
                 is_error_msg = isinstance(data, dict) and "Error Message" in data
 
                 if is_rate_limit_json:
-                    wait_time = 2 * (attempt + 1)
-                    logger.warning(f"API Rate Limit Hint. Sleeping {wait_time}s...")
+                    # Użycie backoff_factor dla progresywnego opóźnienia
+                    wait_time = (self.backoff_factor * (2 ** attempt)) + 1.0 # Min. 1.5s
+                    logger.warning(f"API Rate Limit Hint. Sleeping {wait_time:.2f}s...")
                     time.sleep(wait_time)
                     continue 
 
@@ -113,6 +118,7 @@ class AlphaVantageClient:
 
             except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
                 if attempt < self.retries - 1:
+                    # Mniejsze opóźnienie dla błędów innych niż 429
                     time.sleep(0.5 * (attempt + 1))
                 else:
                     logger.error(f"API Request failed after retries: {e}")
@@ -165,7 +171,6 @@ class AlphaVantageClient:
             "symbol": ",".join(symbols),
             "datatype": "csv"
         }
-        # Tutaj nie musimy ustawiać API Key ręcznie, zrobi to _make_request
         text_response = self._make_request(params)
         if isinstance(text_response, str) and "symbol" in text_response:
              return text_response
@@ -174,7 +179,6 @@ class AlphaVantageClient:
     def get_global_quote(self, symbol: str):
         """
         Pobiera najnowsze dane cenowe (Optymalizacja: używa REALTIME_BULK_QUOTES CSV).
-        Jest to znacznie szybsze i lżejsze niż standardowy endpoint JSON GLOBAL_QUOTE.
         """
         # Optymalizacja: Używamy Bulk Quotes jako głównego źródła
         bulk_csv = self.get_bulk_quotes([symbol])
