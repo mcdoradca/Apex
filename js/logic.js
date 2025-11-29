@@ -205,6 +205,7 @@ export const pollWorkerStatus = () => {
             const status = await api.getWorkerStatus();
             state.workerStatus = status;
             
+            // 1. Aktualizacja Sidebaru (Mały status)
             if (UI.workerStatusText) {
                 UI.workerStatusText.textContent = status.status;
                 UI.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${
@@ -217,36 +218,65 @@ export const pollWorkerStatus = () => {
                 UI.heartbeatStatus.textContent = hb.toLocaleTimeString();
             }
             
+            // 2. Aktualizacja Dashboardu (Duże karty) - DODANA LOGIKA
             const progressBar = document.getElementById('progress-bar');
             const progressText = document.getElementById('progress-text');
             const scanLog = document.getElementById('scan-log');
             const currentPhaseTxt = document.getElementById('dashboard-current-phase');
+            const dashboardWorkerStatus = document.getElementById('dashboard-worker-status');
 
+            // Aktualizacja Dużego Statusu Silnika
+            if (dashboardWorkerStatus) {
+                dashboardWorkerStatus.textContent = status.status;
+                
+                let statusClass = "text-5xl font-extrabold tracking-tight ";
+                if (status.status.includes('RUNNING') || status.status.includes('BUSY')) {
+                    statusClass += "text-yellow-400 animate-pulse";
+                } else if (status.status === 'PAUSED') {
+                    statusClass += "text-red-500";
+                } else {
+                    statusClass += "text-green-500"; // IDLE
+                }
+                dashboardWorkerStatus.className = statusClass;
+            }
+
+            // Aktualizacja Fazy
+            if (currentPhaseTxt) {
+                currentPhaseTxt.textContent = `Faza: ${status.phase}`;
+            }
+
+            // Aktualizacja Paska Postępu
             if (progressBar && status.progress.total > 0) {
                 const pct = Math.round((status.progress.processed / status.progress.total) * 100);
                 progressBar.style.width = `${pct}%`;
                 progressText.textContent = `${status.progress.processed} / ${status.progress.total}`;
             }
             
+            // Aktualizacja Logów
             if (scanLog && scanLog.textContent !== status.log) {
                 const container = document.getElementById('scan-log-container');
                 const isAtTop = container ? container.scrollTop < 50 : true;
-                
                 scanLog.textContent = status.log;
-                
-                if (container && isAtTop) {
-                    container.scrollTop = 0;
-                }
-            }
-
-            if (currentPhaseTxt) {
-                currentPhaseTxt.textContent = `Faza: ${status.phase}`;
+                if (container && isAtTop) container.scrollTop = 0;
             }
             
+            // Aktualizacja Licznika Aktywnych (w karcie sygnałów)
             const dashboardSignals = document.getElementById('dashboard-active-signals');
-            if (dashboardSignals) dashboardSignals.textContent = state.phase3.length;
+            if (dashboardSignals) {
+                const activeCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
+                const pendingCount = state.phase3.filter(s => s.status === 'PENDING').length;
+                dashboardSignals.textContent = activeCount + pendingCount;
+            }
+            
+            // Aktualizacja Licznika Wyrzuconych (jeśli dostępny)
+            const discardedSignals = document.getElementById('dashboard-discarded-signals');
+            if (discardedSignals && state.discardedSignalCount !== undefined) {
+                discardedSignals.textContent = state.discardedSignalCount;
+            }
 
-        } catch (e) {}
+        } catch (e) {
+            // logger.error("Błąd pollWorkerStatus:", e);
+        }
     };
     
     check();
@@ -760,18 +790,14 @@ export const showOptimizationResults = async () => {
                     
                     // === AUTOMATYCZNE MAPOWANIE PARAMETRÓW (H3 & AQM) ===
                     setTimeout(() => {
-                        // 1. Parametry H3 Standard (Strategia H3)
                         if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = params.h3_percentile;
                         if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = params.h3_m_sq_threshold;
                         if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = params.h3_min_score;
                         
-                        // 2. Parametry AQM (Strategia AQM - NOWOŚĆ)
-                        // Mapujemy 'aqm_min_score' na input 'minScore', który jest używany przez F3 jako próg wejścia
                         if (UI.h3LiveModal.minScore && params.aqm_min_score) {
                             UI.h3LiveModal.minScore.value = params.aqm_min_score;
                         }
 
-                        // 3. Parametry Wyjścia (Wspólne dla obu strategii)
                         if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = params.h3_tp_multiplier;
                         if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = params.h3_sl_multiplier;
                         if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = params.h3_max_hold;
