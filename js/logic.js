@@ -61,7 +61,6 @@ export const showDashboard = async () => {
         const countData = await api.getDiscardedCount();
         if (countData && countData.discarded_count_24h !== undefined) {
             state.discardedSignalCount = countData.discarded_count_24h;
-            // Odśwież widok, jeśli licznik się zmienił
             const discardedEl = document.getElementById('dashboard-discarded-signals');
             if (discardedEl) discardedEl.textContent = state.discardedSignalCount;
         }
@@ -211,7 +210,6 @@ export const pollWorkerStatus = () => {
             const status = await api.getWorkerStatus();
             state.workerStatus = status;
             
-            // 1. Aktualizacja Sidebaru (Mały status)
             if (UI.workerStatusText) {
                 UI.workerStatusText.textContent = status.status;
                 UI.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${
@@ -224,41 +222,35 @@ export const pollWorkerStatus = () => {
                 UI.heartbeatStatus.textContent = hb.toLocaleTimeString();
             }
             
-            // 2. Aktualizacja Dashboardu (Duże karty)
             const progressBar = document.getElementById('progress-bar');
             const progressText = document.getElementById('progress-text');
             const scanLog = document.getElementById('scan-log');
             const currentPhaseTxt = document.getElementById('dashboard-current-phase');
             const dashboardWorkerStatus = document.getElementById('dashboard-worker-status');
 
-            // Aktualizacja Dużego Statusu Silnika
             if (dashboardWorkerStatus) {
                 dashboardWorkerStatus.textContent = status.status;
-                
-                let statusClass = "text-5xl font-extrabold tracking-tight ";
+                let statusClass = "text-5xl font-black tracking-tighter drop-shadow-lg ";
                 if (status.status.includes('RUNNING') || status.status.includes('BUSY')) {
                     statusClass += "text-yellow-400 animate-pulse";
                 } else if (status.status === 'PAUSED') {
                     statusClass += "text-red-500";
                 } else {
-                    statusClass += "text-green-500"; // IDLE
+                    statusClass += "text-green-500";
                 }
                 dashboardWorkerStatus.className = statusClass;
             }
 
-            // Aktualizacja Fazy
             if (currentPhaseTxt) {
                 currentPhaseTxt.textContent = `Faza: ${status.phase}`;
             }
 
-            // Aktualizacja Paska Postępu
             if (progressBar && status.progress.total > 0) {
                 const pct = Math.round((status.progress.processed / status.progress.total) * 100);
                 progressBar.style.width = `${pct}%`;
                 progressText.textContent = `${status.progress.processed} / ${status.progress.total}`;
             }
             
-            // Aktualizacja Logów
             if (scanLog && scanLog.textContent !== status.log) {
                 const container = document.getElementById('scan-log-container');
                 const isAtTop = container ? container.scrollTop < 50 : true;
@@ -266,7 +258,6 @@ export const pollWorkerStatus = () => {
                 if (container && isAtTop) container.scrollTop = 0;
             }
             
-            // Aktualizacja Licznika Aktywnych (w karcie sygnałów)
             const dashboardSignals = document.getElementById('dashboard-active-signals');
             if (dashboardSignals) {
                 const activeCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
@@ -274,15 +265,12 @@ export const pollWorkerStatus = () => {
                 dashboardSignals.textContent = activeCount + pendingCount;
             }
             
-            // Aktualizacja Licznika Wyrzuconych (jeśli dostępny)
             const discardedSignals = document.getElementById('dashboard-discarded-signals');
             if (discardedSignals && state.discardedSignalCount !== undefined) {
                 discardedSignals.textContent = state.discardedSignalCount;
             }
 
-        } catch (e) {
-            // logger.error("Błąd pollWorkerStatus:", e);
-        }
+        } catch (e) {}
     };
     
     check();
@@ -347,6 +335,20 @@ export const handleBuyConfirm = async () => {
     }
 };
 
+// === GHOST MODE HANDLER ===
+export const handleGhostBuy = async (ticker) => {
+    try {
+        // Symulacja: Dodajemy do watchlisty z adnotacją "GHOST_TRADE"
+        // W przyszłości można to rozwinąć o osobny endpoint
+        await api.addToWatchlist(ticker);
+        showSystemAlert(`👻 Ghost Protocol: Otwarto wirtualną pozycję dla ${ticker}.`);
+        // Opcjonalnie: Zamknij modal
+        hideSignalDetails();
+    } catch (e) {
+        alert("Ghost Mode Error: " + e.message);
+    }
+};
+
 export const showSellModal = (ticker, maxQty) => {
     UI.sellModal.tickerSpan.textContent = ticker;
     UI.sellModal.maxQuantitySpan.textContent = maxQty;
@@ -386,14 +388,13 @@ export const handleSellConfirm = async () => {
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
-    // Pobierz wybraną strategię
     const strategySelect = document.getElementById('backtest-strategy-select');
     const strategyMode = strategySelect ? strategySelect.value : 'H3';
 
     if (!input || !input.value) return;
     
     const params = {
-        strategy_mode: strategyMode, // Dodano wybór strategii
+        strategy_mode: strategyMode,
         h3_percentile: document.getElementById('h3-param-percentile')?.value || 0.95,
         h3_m_sq_threshold: document.getElementById('h3-param-mass')?.value || -0.5,
         h3_min_score: document.getElementById('h3-param-min-score')?.value || 0.0,
@@ -547,11 +548,26 @@ export const showSignalDetails = async (ticker) => {
     const newsContainer = document.getElementById('sd-news-container');
     if (newsContainer) newsContainer.classList.add('hidden');
 
+    // === UPDATE BUTTONS ===
     if (UI.signalDetails.buyBtn) {
+        UI.signalDetails.buyBtn.textContent = "Inwestuj (Kup)";
         UI.signalDetails.buyBtn.onclick = () => {
             hideSignalDetails();
             showBuyModal(ticker);
         };
+        
+        // Dodaj przycisk GHOST, jeśli go nie ma
+        let ghostBtn = document.getElementById('sd-ghost-btn');
+        if (!ghostBtn) {
+            ghostBtn = document.createElement('button');
+            ghostBtn.id = 'sd-ghost-btn';
+            ghostBtn.className = 'flex items-center gap-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 font-bold py-2 px-4 rounded-md transition-colors border border-purple-500/30 mr-3';
+            ghostBtn.innerHTML = '<i data-lucide="ghost" class="w-4 h-4"></i>Ghost Buy';
+            // Wstaw przed przyciskiem Buy
+            UI.signalDetails.buyBtn.parentNode.insertBefore(ghostBtn, UI.signalDetails.buyBtn);
+        }
+        ghostBtn.onclick = () => handleGhostBuy(ticker);
+        if (window.lucide) window.lucide.createIcons();
     }
 
     updateMarketTimeDisplay();
