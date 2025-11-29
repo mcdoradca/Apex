@@ -757,14 +757,26 @@ export const showOptimizationResults = async () => {
                     const params = JSON.parse(paramsData);
                     hideOptimizationResults();
                     showH3LiveParamsModal();
+                    
+                    // === AUTOMATYCZNE MAPOWANIE PARAMETRÓW (H3 & AQM) ===
                     setTimeout(() => {
+                        // 1. Parametry H3 Standard (Strategia H3)
                         if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = params.h3_percentile;
                         if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = params.h3_m_sq_threshold;
                         if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = params.h3_min_score;
+                        
+                        // 2. Parametry AQM (Strategia AQM - NOWOŚĆ)
+                        // Mapujemy 'aqm_min_score' na input 'minScore', który jest używany przez F3 jako próg wejścia
+                        if (UI.h3LiveModal.minScore && params.aqm_min_score) {
+                            UI.h3LiveModal.minScore.value = params.aqm_min_score;
+                        }
+
+                        // 3. Parametry Wyjścia (Wspólne dla obu strategii)
                         if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = params.h3_tp_multiplier;
                         if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = params.h3_sl_multiplier;
                         if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = params.h3_max_hold;
                     }, 100);
+                    
                 } catch(err) {
                     console.error("Błąd parsowania parametrów:", err);
                 }
