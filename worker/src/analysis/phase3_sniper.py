@@ -44,6 +44,18 @@ DEFAULT_PARAMS = {
 H3_CALC_WINDOW = 100 
 REQUIRED_HISTORY_SIZE = 201 
 
+def _to_py_float(value: Any) -> float:
+    """
+    Krytyczna funkcja konwertująca typy NumPy (np.float64) na natywny Python float.
+    Zapobiega błędom SQL 'schema np does not exist'.
+    """
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
 def _verify_data_freshness(df: pd.DataFrame, ticker: str) -> bool:
     """
     STRAŻNIK ŚWIEŻOŚCI (ANTI-DATA LAG)
@@ -200,7 +212,7 @@ def _get_macro_context_for_aqm(session, client):
     return macro
 
 def run_h3_live_scan(session, candidates, client, parameters=None):
-    logger.info("Start Phase 3 Live Sniper (V7 Secure Core)...")
+    logger.info("Start Phase 3 Live Sniper (V7 Secure Core + TypeFix)...")
     
     params = DEFAULT_PARAMS.copy()
     if parameters:
@@ -265,9 +277,13 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             df['close'] = df[close_col]
             
             last = df.iloc[-1]
-            entry = last['close']
-            tp = entry + (tp_mult * last['atr_14'])
-            sl = entry - (sl_mult * last['atr_14'])
+            
+            # === TYPE FIX: KONWERSJA NA PY FLOAT PRZED OBLICZENIAMI ===
+            entry = _to_py_float(last['close'])
+            atr_val = _to_py_float(last['atr_14'])
+            
+            tp = entry + (tp_mult * atr_val)
+            sl = entry - (sl_mult * atr_val)
             
             is_signal = False
             score = 0
@@ -362,20 +378,16 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     obv_df.index = pd.to_datetime(obv_df.index)
                     obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
 
-                # === SECURITY CHECK 2: INTRADAY BLIND SPOT FIX ===
-                # Pobieramy REALNE dane intraday 60min dla precyzyjnego QPS
-                # (Wymaga 1 dodatkowego zapytania na ticker, co jest OK dla kandydatów Fazy 1)
                 i_raw = client.get_intraday(ticker, interval='60min', outputsize='compact')
                 intraday_df = pd.DataFrame()
                 if i_raw:
                     intraday_df = standardize_df_columns(pd.DataFrame.from_dict(i_raw.get('Time Series (60min)', {}), orient='index'))
                     intraday_df.index = pd.to_datetime(intraday_df.index)
-                # ==================================================
 
                 aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
                     daily_df=df,
                     weekly_df=weekly_df,
-                    intraday_60m_df=intraday_df, # Używamy teraz prawdziwych danych
+                    intraday_60m_df=intraday_df, 
                     obv_df=obv_df,
                     macro_data=macro_data_aqm,
                     earnings_days_to=None
@@ -408,30 +420,38 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                 else:
                     rejects['data']+=1
 
-            # === FINALIZACJA Z WERYFIKACJĄ LIVE ===
             if is_signal:
                 lq = client.get_global_quote(ticker)
                 lp = safe_float(lq.get('05. price')) if lq else None
                 
                 if lp:
-                    # SECURITY CHECK 3: LIVE VALIDATION
                     valid, msg = _is_setup_still_valid(entry, sl, tp, lp)
                     if not valid:
                         rejects['live']+=1; append_scan_log(session, f"❌ {ticker}: Live Reject: {msg}"); continue
                 
                 if strategy_mode == 'H3':
-                    note = f"STRATEGIA: H3\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{metric_details.get('tech_score',0)} Mkt:{metric_details.get('market_score',0)} RS:{metric_details.get('rs_score',0)}\nAQM H3:{metric_details['aqm_score']:.2f} (vs {metric_details['threshold']:.2f})"
+                    note = f"STRATEGIA: H3\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{metric_details.get('tech_score',0)} Mkt:{metric_details.get('market_score',0)} RS:{metric_details.get('rs_score',0)}\nAQM H3:{metric_details['aqm_score']:.2f} (vs {metric_details['threshold']:.2f})"
                 else:
-                    note = f"STRATEGIA: AQM (V4)\nEV: {ev:.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details['qps']:.2f} VES:{metric_details['ves']:.2f} MRS:{metric_details['mrs']:.2f} TCS:{metric_details['tcs']:.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
+                    note = f"STRATEGIA: AQM (V4)\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details['qps']:.2f} VES:{metric_details['ves']:.2f} MRS:{metric_details['mrs']:.2f} TCS:{metric_details['tcs']:.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
 
                 ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
                 if not ex:
                     expiration_dt = datetime.now(timezone.utc) + timedelta(days=max_hold_days)
+                    
+                    # === TYPE FIX: WRAPPING ALL NUMBERS IN _to_py_float ===
                     sig = models.TradingSignal(
-                        ticker=ticker, status='PENDING', generation_date=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
-                        signal_candle_timestamp=last.name, entry_price=entry, stop_loss=sl, take_profit=tp,
-                        entry_zone_top=entry+(0.5*last['atr_14']), entry_zone_bottom=entry-(0.5*last['atr_14']),
-                        risk_reward_ratio=tp_mult/sl_mult, notes=note,
+                        ticker=ticker, 
+                        status='PENDING', 
+                        generation_date=datetime.now(timezone.utc), 
+                        updated_at=datetime.now(timezone.utc),
+                        signal_candle_timestamp=last.name, 
+                        entry_price=_to_py_float(entry), 
+                        stop_loss=_to_py_float(sl), 
+                        take_profit=_to_py_float(tp),
+                        entry_zone_top=_to_py_float(entry + (0.5 * atr_val)), 
+                        entry_zone_bottom=_to_py_float(entry - (0.5 * atr_val)),
+                        risk_reward_ratio=_to_py_float(tp_mult / sl_mult), 
+                        notes=note,
                         expiration_date=expiration_dt
                     )
                     session.add(sig); session.commit()
