@@ -133,27 +133,59 @@ export const renderers = {
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
-    dashboard: () => `<div id="dashboard-view" class="max-w-4xl mx-auto">
+    dashboard: () => {
+        // Obliczanie statystyk sygnałów (tylko widocznych na dashboardzie)
+        const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
+        const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
+        
+        return `<div id="dashboard-view" class="max-w-6xl mx-auto">
+                        <div class="mb-4 relative">
+                            <i data-lucide="search" class="absolute left-3 top-2.5 w-5 h-5 text-gray-500"></i>
+                            <input type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 text-gray-300 rounded-lg pl-10 pr-4 py-2 focus:ring-sky-500 focus:border-sky-500 outline-none">
+                        </div>
+
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Panel Kontrolny Systemu</h2>
+                        
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
-                                <p id="dashboard-worker-status" class="text-4xl font-extrabold mt-2 text-green-500">IDLE</p>
-                                <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-1">Faza: NONE</p>
+                            <!-- Karta 1: Status Silnika -->
+                            <div class="bg-[#161B22] p-5 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden">
+                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
+                                <p id="dashboard-worker-status" class="text-5xl font-extrabold text-green-500 tracking-tight">IDLE</p>
+                                <p id="dashboard-current-phase" class="text-sm text-gray-500 mt-2 font-mono">Faza: NONE</p>
                             </div>
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanera (F1)</h3>
-                                <div class="mt-2"><span id="progress-text" class="text-2xl font-extrabold">0 / 0</span><span class="text-gray-500 text-sm"> tickery</span></div>
-                                <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2"><div id="progress-bar" class="bg-sky-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div></div>
+
+                            <!-- Karta 2: Postęp Skanowania -->
+                            <div class="bg-[#161B22] p-5 rounded-lg shadow-lg border border-gray-700">
+                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
+                                <div class="mt-2 flex items-baseline gap-2">
+                                    <span id="progress-text" class="text-3xl font-extrabold text-white">0 / 0</span>
+                                    <span class="text-gray-500 text-sm">tickery</span>
+                                </div>
+                                <div class="w-full bg-gray-700 rounded-full h-2 mt-4 overflow-hidden">
+                                    <div id="progress-bar" class="bg-sky-600 h-full rounded-full transition-all duration-500" style="width: 0%"></div>
+                                </div>
                             </div>
-                            <div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700">
-                                <h3 class="font-semibold text-gray-400 flex items-center"><i data-lucide="target" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały H3</h3>
-                                <div class="mt-2"><p id="dashboard-active-signals" class="text-4xl font-extrabold text-red-400">0</p><p class="text-sm text-gray-500 mt-1">Aktywne / Oczekujące</p></div>
+
+                            <!-- Karta 3: Statystyki Sygnałów (ZMODYFIKOWANA) -->
+                            <div class="bg-[#161B22] p-5 rounded-lg shadow-lg border border-gray-700 relative">
+                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-4"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały (Aktywne / Wyrzucone)</h3>
+                                <div class="flex justify-between items-center">
+                                    <div class="text-center pr-6 border-r border-gray-700">
+                                        <p id="dashboard-active-signals" class="text-5xl font-extrabold text-red-400">${activeSignalsCount + pendingSignalsCount}</p>
+                                        <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Sygnały Aktywne</p>
+                                    </div>
+                                    <div class="text-center pl-4 flex-grow">
+                                        <p id="dashboard-discarded-signals" class="text-5xl font-extrabold text-gray-500">${state.discardedSignalCount || 0}</p>
+                                        <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Wyrzucone (24h)</p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
+
                         <h3 class="text-xl font-bold text-gray-300 mb-4 border-b border-gray-700 pb-1">Logi Silnika</h3>
-                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono">Czekam na rozpoczęcie skanowania...</pre></div>
-                    </div>`,
+                        <div id="scan-log-container" class="bg-[#161B22] p-4 rounded-lg shadow-inner h-96 overflow-y-scroll border border-gray-700 custom-scrollbar"><pre id="scan-log" class="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">Czekam na rozpoczęcie skanowania...</pre></div>
+                    </div>`;
+    },
     
     h3SignalsPanel: (signals) => {
         const activeCount = signals.filter(s => s.status === 'ACTIVE').length;
