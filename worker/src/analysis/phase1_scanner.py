@@ -54,16 +54,19 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
     Skaner Fazy 1 (V6.0 - TREND GUARD & PF 2.0).
     
-    ZMIANY KLUCZOWE DLA PF 2.0:
-    1. Dodano filtr SMA 200 (Trend Guard). Odrzuca spółki w trendzie spadkowym.
-    2. Utrzymano szeroki lejek cenowy, ale dodano wymóg trendu wzrostowego.
+    UWAGA: Wersja ta zakłada, że czyszczenie tabeli 'phase1_candidates'
+    zostało wykonane przez funkcję nadrzędną (run_phase_1_cycle w main.py)
+    przed wywołaniem tej funkcji.
     """
     logger.info("Running Phase 1: EOD Scan (V6.0 Trend Guard)...")
     append_scan_log(session, "Faza 1 (V6.0): Start. Aktywacja filtru SMA 200 (Trend Guard) w celu podniesienia PF.")
 
     try:
-        session.execute(text("DELETE FROM phase1_candidates"))
-        session.commit()
+        # Ten fragment jest teraz zbędny, ponieważ Worker czyści tabelę
+        # przed wywołaniem tej funkcji w trybie manualnym.
+        # session.execute(text("DELETE FROM phase1_candidates"))
+        # session.commit()
+        pass
     except Exception as e:
         logger.error(f"Failed to clear Phase 1 table: {e}", exc_info=True)
         session.rollback()
@@ -99,7 +102,12 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
 
         try:
             # Pobieramy FULL outputsize, aby mieć 200 dni historii do SMA
-            price_data_raw = api_client.get_daily_adjusted(ticker, outputsize='full')
+            # Używamy cache z agresywnym czasem wygaśnięcia (12 godzin)
+            price_data_raw = get_raw_data_with_cache(
+                session, api_client, ticker, 
+                'DAILY_ADJUSTED', 'get_daily_adjusted', 
+                expiry_hours=12, outputsize='full'
+            )
             
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 reject_stats['data'] += 1
@@ -127,13 +135,14 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 reject_stats['price'] += 1
                 continue
             
-            # === 2. Płynność (Vol > 300k) ===
+            # === 2. Płynność (Vol > 300k, średnia z ostatnich 20 dni) ===
+            # Używamy iloc[-21:-1] aby wykluczyć dzisiejszy (często niepełny) wolumen
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
             if pd.isna(avg_volume) or avg_volume < 300000: 
                 reject_stats['volume'] += 1
                 continue
             
-            # === 3. Zmienność (ATR > 2%) ===
+            # === 3. Zmienność (ATR > 2% ceny) ===
             atr_series = calculate_atr(daily_df, period=14)
             if atr_series.empty: continue
             
@@ -152,10 +161,9 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 # Odrzucamy, bo trend długoterminowy jest spadkowy
                 continue
 
-            # 5. Strażnik Sektora
+            # 5. Strażnik Sektora (Wynik jest zapisywany, ale nie używany jako twardy filtr)
             is_sector_healthy, sector_trend, etf_symbol = _check_sector_health(session, api_client, sector)
-            if not is_sector_healthy:
-                reject_stats['sector'] += 1
+            # Jeśli sektor jest słaby, to spółka musi polegać na sile własnego trendu (co sprawdziliśmy SMA 200)
             
             sector_msg = f"Sektor {etf_symbol} {'OK' if is_sector_healthy else 'SŁABY'}"
 
