@@ -1,6 +1,6 @@
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
-// === CSS INJECTION: HUD, ANIMACJE, SNIPER SCOPE ===
+// === EXTRA: CSS INJECTION FOR HUD & ANIMATIONS ===
 const style = document.createElement('style');
 style.textContent = `
     @keyframes heartbeat-idle {
@@ -51,16 +51,6 @@ style.textContent = `
         transform: translateX(-50%);
         z-index: 10;
         transition: left 1s ease-out;
-    }
-    .sniper-marker::after { /* Celownik */
-        content: '';
-        position: absolute;
-        top: -2px;
-        bottom: -2px;
-        left: -1px;
-        right: -1px;
-        border: 1px solid white;
-        border-radius: 2px;
     }
 `;
 document.head.appendChild(style);
@@ -335,15 +325,8 @@ export const renderers = {
 
             // === THE SNIPER SCOPE LOGIC ===
             // Obliczamy pozycję ceny na pasku (0% = SL, 100% = TP)
-            let scopePercent = 0;
-            let currentPrice = 0; 
-            // (W UI nie mamy ceny LIVE dla każdego kafelka w pętli, chyba że dodamy to do stanu.
-            // Uproszczenie: Używamy entry_price jako punktu odniesienia, ale dla 'ACTIVE'
-            // przydałoby się live. Tutaj zrobimy wizualizację statyczną R:R,
-            // a dynamiczną dodamy w modalu szczegółów).
-            
-            // Pasek wygaśnięcia (istniejący) + Sniper Scope (placeholder w kafelku, full w detalu)
-            // W kafelku pokażemy po prostu R:R bar.
+            // W UI nie mamy ceny LIVE dla każdego kafelka w pętli.
+            // Tutaj zrobimy wizualizację statyczną R:R jako "Mini Scope".
 
             return `
             <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
@@ -377,7 +360,7 @@ export const renderers = {
                 </div>
                 
                 <!-- Wizualizacja R:R (Mini Scope) -->
-                <div class="w-full h-1.5 bg-gray-800 rounded-full relative overflow-hidden flex">
+                <div class="w-full h-1.5 bg-gray-800 rounded-full relative overflow-hidden flex mt-2">
                     <div class="bg-red-500/30 h-full" style="width: 25%"></div> <!-- SL Zone -->
                     <div class="bg-yellow-500/30 h-full" style="width: 15%"></div> <!-- Entry Zone -->
                     <div class="bg-green-500/30 h-full flex-grow"></div> <!-- Profit Zone -->
