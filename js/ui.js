@@ -1,8 +1,9 @@
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
-// === EXTRA: CSS INJECTION FOR HUD & ANIMATIONS ===
+// === CSS INJECTION: HUD, ANIMACJE, SNIPER SCOPE, GLASSMORPHISM ===
 const style = document.createElement('style');
 style.textContent = `
+    /* Animacje Pulsu */
     @keyframes heartbeat-idle {
         0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); transform: scale(1); }
         70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); transform: scale(1.02); }
@@ -17,6 +18,7 @@ style.textContent = `
     .pulse-idle { animation: heartbeat-idle 3s infinite ease-in-out; }
     .pulse-busy { animation: heartbeat-busy 0.8s infinite ease-in-out; }
     
+    /* Efekt Szkła (HUD) */
     .glass-panel {
         background: rgba(22, 27, 34, 0.85);
         backdrop-filter: blur(12px);
@@ -25,50 +27,49 @@ style.textContent = `
         box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
     }
 
-    /* Sniper Scope Bar */
+    /* Sniper Scope Bar (Pasek R:R) */
     .sniper-scope-container {
-        height: 8px;
-        background: #1f2937;
-        border-radius: 4px;
+        height: 6px;
+        background: #111827;
+        border-radius: 3px;
         position: relative;
         overflow: hidden;
-        margin-top: 8px;
+        margin-top: 10px;
         border: 1px solid #374151;
+        display: flex;
     }
-    .sniper-scope-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #ef4444 0%, #eab308 50%, #22c55e 100%);
-        opacity: 0.3;
-        width: 100%;
-    }
-    .sniper-marker {
+    .scope-zone-sl { background-color: rgba(239, 68, 68, 0.4); height: 100%; } /* Czerwony */
+    .scope-zone-entry { background-color: rgba(234, 179, 8, 0.4); height: 100%; } /* Żółty */
+    .scope-zone-tp { background-color: rgba(34, 197, 94, 0.4); height: 100%; flex-grow: 1; } /* Zielony */
+    
+    .scope-marker {
         position: absolute;
         top: 0;
         bottom: 0;
-        width: 4px;
+        width: 2px;
         background: #fff;
-        box-shadow: 0 0 8px #fff;
-        transform: translateX(-50%);
+        box-shadow: 0 0 6px #fff;
         z-index: 10;
-        transition: left 1s ease-out;
     }
 `;
 document.head.appendChild(style);
 
-// === TACTICAL AUDIO SYSTEM ===
+// === TACTICAL AUDIO SYSTEM (Głosowy Asystent) ===
 const synth = window.speechSynthesis;
-let lastSpokenSignal = "";
+let lastSpokenSignal = ""; // Zapobiega powtarzaniu tego samego komunikatu
 
 const playTacticalAlert = (ticker, score) => {
+    // Mów tylko w trybie sortowania domyślnego i jeśli głos jest dostępny
     if (!synth || state.h3SortBy !== 'score') return;
     if (lastSpokenSignal === ticker) return;
     
     const text = `Commander. Target acquired: ${ticker}. Score: ${score}.`;
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.1;
-    utterance.pitch = 0.9;
+    utterance.rate = 1.1; // Nieco szybciej, bardziej wojskowo
+    utterance.pitch = 0.9; // Niższy ton
     utterance.volume = 0.8;
     
+    // Próba znalezienia dobrego głosu angielskiego (Google US English)
     const voices = synth.getVoices();
     const enVoice = voices.find(v => v.lang.includes('en-US') && v.name.includes('Google')) || voices[0];
     if (enVoice) utterance.voice = enVoice;
@@ -210,7 +211,7 @@ export const renderers = {
             } catch(e) {}
         }
         
-        // Audio Alert
+        // TRIGGER AUDIO ALERT FOR HIGH SCORE SIGNALS (Active Only)
         if (s.status === 'ACTIVE' && scoreVal >= 0.80) {
             playTacticalAlert(s.ticker, (scoreVal * 100).toFixed(0));
         }
@@ -222,12 +223,13 @@ export const renderers = {
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
         const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
         
-        let pulseClass = "pulse-idle";
+        // Animacja Pulsu (zależna od statusu)
+        let pulseClass = "pulse-idle"; // Domyślny (zielony)
         let statusColor = "text-green-500";
         
         const workerStatus = state.workerStatus.status || "IDLE";
         if (workerStatus.includes("RUNNING") || workerStatus.includes("BUSY")) {
-            pulseClass = "pulse-busy";
+            pulseClass = "pulse-busy"; // Szybki, żółty
             statusColor = "text-yellow-400";
         } else if (workerStatus.includes("PAUSED")) {
             pulseClass = "";
@@ -323,11 +325,10 @@ export const renderers = {
             const statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
 
-            // === THE SNIPER SCOPE LOGIC ===
-            // Obliczamy pozycję ceny na pasku (0% = SL, 100% = TP)
-            // W UI nie mamy ceny LIVE dla każdego kafelka w pętli.
-            // Tutaj zrobimy wizualizację statyczną R:R jako "Mini Scope".
-
+            // === SNIPER SCOPE VISUALIZATION ===
+            // W kafelku pokazujemy uproszczony pasek proporcji
+            // W modalu szczegółów można byłoby dodać live marker.
+            
             return `
             <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
                 
@@ -359,13 +360,13 @@ export const renderers = {
                     <span class="text-green-400">TP: ${s.take_profit ? s.take_profit.toFixed(2) : '---'}</span>
                 </div>
                 
-                <!-- Wizualizacja R:R (Mini Scope) -->
-                <div class="w-full h-1.5 bg-gray-800 rounded-full relative overflow-hidden flex mt-2">
-                    <div class="bg-red-500/30 h-full" style="width: 25%"></div> <!-- SL Zone -->
-                    <div class="bg-yellow-500/30 h-full" style="width: 15%"></div> <!-- Entry Zone -->
-                    <div class="bg-green-500/30 h-full flex-grow"></div> <!-- Profit Zone -->
-                    <!-- Znacznik Entry -->
-                    <div class="absolute top-0 bottom-0 w-0.5 bg-white z-10" style="left: 25%"></div>
+                <!-- SNIPER SCOPE BAR (Mini) -->
+                <div class="sniper-scope-container">
+                    <div class="scope-zone-sl" style="width: 20%"></div>
+                    <div class="scope-zone-entry" style="width: 10%"></div>
+                    <div class="scope-zone-tp"></div>
+                    <!-- Statyczny marker wejścia -->
+                    <div class="scope-marker" style="left: 20%"></div>
                 </div>
 
                 <div class="mt-3 flex justify-between items-center">
@@ -472,7 +473,7 @@ export const renderers = {
             const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono"><td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td><td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td><td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td><td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td><td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td><td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td><td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td></tr>`;
         }).join('');
-        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
+        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
         
         const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option></select></div><div class="flex items-start gap-3 mb-4"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const quantumLabSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden"><div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none"><i data-lucide="atom" class="w-32 h-32 text-purple-500"></i></div><h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center"><i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i>Quantum Lab (Apex V4)</h4><p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p><div class="flex flex-wrap gap-3"><button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0"><i data-lucide="cpu" class="w-4 h-4 mr-2"></i>Konfiguruj Optymalizację</button><button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="list" class="w-4 h-4 mr-2"></i>Wyniki</button></div><div id="quantum-lab-status" class="text-sm mt-3 h-4"></div></div>`;
