@@ -1,16 +1,17 @@
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text, desc, func, update, delete, Row
 from . import models, schemas
 from typing import Optional, Any, Dict, List
 from datetime import date, datetime, timezone, timedelta 
-import logging
 from decimal import Decimal, ROUND_HALF_UP
 from collections import defaultdict
 import io
 import csv
 from typing import Generator
-import uuid # Do generowania ID zadań
-import math # === DODANO IMPORT MATH DO SPRAWDZANIA INF/NAN ===
+import uuid 
+import math 
+import os # Dodano import os do logowania
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,6 @@ def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
     except Exception:
         logger.error(f"Nie można przekonwertować {value} na Decimal.")
         return None
-
-# === NOWE FUNKCJE POMOCNICZE DO SANITYZACJI (Fix JSON Error) ===
 
 def _safe_float_stat(val) -> float:
     """
@@ -42,14 +41,11 @@ def _safe_float_stat(val) -> float:
 
 def _sanitize_trade_metrics(trade: models.VirtualTrade):
     """
-    Czyści obiekt VirtualTrade z wartości NaN/Infinity w metrykach I POLACH CENOWYCH (in-place).
-    Postgres pozwala na NaN/Inf, ale JSON nie.
+    Czyści obiekt VirtualTrade z wartości None, NaN/Infinity w kluczowych polach 
+    finansowych, zanim trafią do Pydantic (in-place).
     """
-    # === POPRAWKA KRYTYCZNA: Dodano podstawowe pola finansowe do czyszczenia ===
     fields_to_clean = [
-        # Pola podstawowe (tutaj najczęściej ukrywa się NaN w P/L)
         'entry_price', 'stop_loss', 'take_profit', 'close_price', 'final_profit_loss_percent',
-        # Pola metryk
         'metric_atr_14', 'metric_time_dilation', 'metric_price_gravity',
         'metric_td_percentile_90', 'metric_pg_percentile_90',
         'metric_inst_sync', 'metric_retail_herding',
@@ -64,7 +60,7 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
             try:
                 f_val = float(val)
                 if math.isinf(f_val) or math.isnan(f_val):
-                    setattr(trade, field, None) # JSON null jest bezpieczny i poprawny dla frontend'u
+                    setattr(trade, field, None)
             except Exception:
                 setattr(trade, field, None)
 
@@ -73,20 +69,15 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
 # ==========================================================
 
 def create_optimization_job(db: Session, request: schemas.OptimizationRequest) -> models.OptimizationJob:
-    """
-    Tworzy nowe zadanie optymalizacji w bazie danych.
-    """
     job_id = str(uuid.uuid4())
-    
     new_job = models.OptimizationJob(
         id=job_id,
         target_year=request.target_year,
         total_trials=request.n_trials,
         status='PENDING',
-        configuration=request.parameter_space, # Zapisujemy niestandardową przestrzeń jako JSON
+        configuration=request.parameter_space,
         created_at=datetime.now(timezone.utc)
     )
-    
     db.add(new_job)
     try:
         db.commit()
@@ -99,21 +90,18 @@ def create_optimization_job(db: Session, request: schemas.OptimizationRequest) -
         raise
 
 def get_optimization_job(db: Session, job_id: str) -> Optional[models.OptimizationJob]:
-    """Pobiera zadanie optymalizacji po ID."""
     return db.query(models.OptimizationJob).filter(models.OptimizationJob.id == job_id).first()
 
 def get_latest_optimization_job(db: Session) -> Optional[models.OptimizationJob]:
-    """Pobiera najnowsze zadanie optymalizacji."""
     return db.query(models.OptimizationJob).order_by(desc(models.OptimizationJob.created_at)).first()
 
 def get_optimization_trials(db: Session, job_id: str) -> List[models.OptimizationTrial]:
-    """Pobiera listę prób dla danego zadania."""
     return db.query(models.OptimizationTrial).filter(
         models.OptimizationTrial.job_id == job_id
     ).order_by(models.OptimizationTrial.trial_number).all()
 
 # ==========================================================
-# === POZOSTAŁE FUNKCJE CRUD (Bez zmian) ===
+# === POZOSTAŁE FUNKCJE CRUD ===
 # ==========================================================
 
 def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
@@ -305,7 +293,7 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
             "ticker": signal.ticker,
             "generation_date": signal.generation_date.isoformat() if signal.generation_date else None,
             "status": signal.status,
-            "entry_price": _safe_float_stat(signal.entry_price), # Bezpieczne floatowanie
+            "entry_price": _safe_float_stat(signal.entry_price), 
             "stop_loss": _safe_float_stat(signal.stop_loss),
             "take_profit": _safe_float_stat(signal.take_profit),
             "risk_reward_ratio": _safe_float_stat(signal.risk_reward_ratio),
@@ -396,7 +384,6 @@ def _calculate_stats_from_rows(trades_rows: List[Row]) -> schemas.VirtualAgentSt
         valid_trades_count += 1
         p_l = Decimal(trade.final_profit_loss_percent)
         
-        # Jeśli P/L jest NaN w bazie, Decimal(NaN) zatruje sumy
         if p_l.is_nan() or p_l.is_infinite():
              p_l = Decimal(0)
 
@@ -415,8 +402,6 @@ def _calculate_stats_from_rows(trades_rows: List[Row]) -> schemas.VirtualAgentSt
             total_loss_p_l += p_l 
             setup_stats[setup_type]['total_loss_p_l'] += p_l
 
-    # --- SANITYZACJA STATYSTYK (Fix JSON Error) ---
-    
     raw_win_rate = (wins / valid_trades_count) * 100 if valid_trades_count > 0 else 0
     raw_pf = float(abs(total_win_p_l / total_loss_p_l)) if total_loss_p_l != 0 else 0.0
     
@@ -462,9 +447,7 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
             models.VirtualTrade.status != 'OPEN'
         ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
         
-        # --- SANITYZACJA TRANSAKCJI (Fix JSON Error) ---
-        # Czyścimy wyniki zapytania "w locie", zanim trafią do Pydantic -> JSON
-        # Dzięki temu nawet jeśli w bazie są "toksyczne" dane (NaN), raport zadziała
+        # --- KRYTYCZNA SANITYZACJA TRANSAKCJI (Zapobiega błędom Pydantic) ---
         for trade in paged_trades:
             _sanitize_trade_metrics(trade)
         
