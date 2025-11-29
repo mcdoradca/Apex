@@ -34,7 +34,6 @@ def _calculate_time_dilation_series(ticker_df: pd.DataFrame, spy_df: pd.DataFram
         if not isinstance(ticker_df.index, pd.DatetimeIndex): ticker_df.index = pd.to_datetime(ticker_df.index)
         if not isinstance(spy_df.index, pd.DatetimeIndex): spy_df.index = pd.to_datetime(spy_df.index)
         
-        # Wyrównanie indeksów (ffill dla SPY)
         spy_aligned = spy_df['close'].reindex(ticker_df.index, method='ffill').fillna(0)
         
         ticker_returns = ticker_df['close'].pct_change()
@@ -66,9 +65,15 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
     Kompletny, ujednolicony silnik backtestu zawierający PEŁNĄ logikę H3 oraz AQM V4.
     """
     try:
-        # ==============================================================================
+        # === BEZPIECZNE CZYSZCZENIE DANYCH ===
+        # Usuwamy tylko stare wpisy Backtestu, aby uniknąć kolizji z nowymi.
+        # NIE USUWAJEMY sygnałów aktywnych (trading_signals) ani danych Optuny.
+        session.execute(text("DELETE FROM virtual_trades WHERE setup_type LIKE 'BACKTEST_%'"))
+        session.commit()
+        # ====================================
+
         # 1. SELEKCJA UNIWERSUM
-        # ==============================================================================
+        # ... (Reszta kodu jest poprawna i pozostaje bez zmian) ...
         phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
         tickers = [r[0] for r in phase1_rows]
         
@@ -83,9 +88,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         
         logger.info(f"[Backtest] Wybrano {len(tickers)} tickerów do analizy.")
         
-        # ==============================================================================
         # 2. PARAMETRY I DANE MAKRO (PEŁNE DLA AQM)
-        # ==============================================================================
         params = parameters or {}
         
         # Wspólne parametry wyjścia
@@ -111,37 +114,28 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         # B. Przygotowanie Kontekstu Makro (V13 Update: Real Data)
         macro_data = {
             'spy_df': spy_df, 
-            'vix': 20.0, # Fallback, jeśli nie ma serii czasowej
+            'vix': 20.0, 
             'sector_trend': 0.0,
-            'yield_10y': 4.0, # Domyślne
-            'inflation': 3.0  # Domyślne
+            'yield_10y': 4.0, 
+            'inflation': 3.0  
         }
 
-        # Jeśli tryb AQM, pobieramy dokładne dane makro
         if strategy_mode == 'AQM':
-            # Treasury Yield 10Y
             yield_raw = get_raw_data_with_cache(session, api_client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
             if yield_raw and 'data' in yield_raw:
-                try:
-                    macro_data['yield_10y'] = float(yield_raw['data'][0]['value'])
-                    logger.info(f"[Backtest] Załadowano Yield 10Y: {macro_data['yield_10y']}%")
+                try: macro_data['yield_10y'] = float(yield_raw['data'][0]['value'])
                 except: pass
 
-            # Inflation Rate
             inf_raw = get_raw_data_with_cache(session, api_client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
             if inf_raw and 'data' in inf_raw:
-                try:
-                    macro_data['inflation'] = float(inf_raw['data'][0]['value'])
-                    logger.info(f"[Backtest] Załadowano Inflację: {macro_data['inflation']}%")
+                try: macro_data['inflation'] = float(inf_raw['data'][0]['value'])
                 except: pass
 
         total_tickers = len(tickers)
         processed_count = 0
         trades_generated = 0
         
-        # ==============================================================================
         # 3. GŁÓWNA PĘTLA PRZETWARZANIA
-        # ==============================================================================
         for ticker in tickers:
             try:
                 # A. POBIERANIE DANYCH PODSTAWOWYCH (OHLCV)
@@ -172,30 +166,24 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     trade_open_col, trade_high_col, trade_low_col, trade_close_col = 'open', 'high', 'low', 'close'
 
                 df.sort_index(inplace=True)
-                if len(df) < 201: continue # Wymagany bufor
+                if len(df) < 201: continue 
                 
                 df['atr_14'] = calculate_atr(df).ffill().fillna(0)
 
                 signal_df = pd.DataFrame()
 
-                # ==========================================================
                 # ŚCIEŻKA 1: STRATEGIA H3 (Elite Sniper Logic)
-                # ==========================================================
                 if strategy_mode == 'H3':
-                    # 1. Dane Wymiaru 2 (H2)
                     h2_data = load_h2_data_into_cache(ticker, api_client, session)
                     insider_df = h2_data.get('insider_df')
                     news_df = h2_data.get('news_df')
                     
-                    # 2. Metryki H2
                     df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
                     df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
                     
-                    # 3. Metryki H1
                     df['price_gravity'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
                     df['time_dilation'] = _calculate_time_dilation_series(df, spy_df)
                     
-                    # 4. Fizyka H3
                     df['daily_returns'] = df['close'].pct_change()
                     df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
                     
@@ -208,7 +196,6 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     else:
                         df['information_entropy'] = 0.0
                     
-                    # 5. Score H3
                     df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
                     df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
                     df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
@@ -217,14 +204,12 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df['m_sq'] = df['normalized_volume'] 
                     df['nabla_sq'] = df['price_gravity']
 
-                    # Obliczenia znormalizowane (z utils)
                     df = calculate_h3_metrics_v4(df, {}) 
                     df['aqm_rank'] = df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
                     
-                    # Filtrowanie sygnałów H3
-                    h3_p = float(params.get('h3_percentile', 0.95))
-                    h3_m = float(params.get('h3_m_sq_threshold', -0.5))
-                    h3_min = float(params.get('h3_min_score', 0.0))
+                    h3_p = float(parameters.get('h3_percentile', 0.95))
+                    h3_m = float(parameters.get('h3_m_sq_threshold', -0.5))
+                    h3_min = float(parameters.get('h3_min_score', 0.0))
                     
                     df['is_signal'] = (
                         (df['aqm_rank'] > h3_p) & 
@@ -233,11 +218,8 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     )
                     signal_df = df
 
-                # ==========================================================
                 # ŚCIEŻKA 2: STRATEGIA AQM (Adaptive Quantum Momentum) - V4
-                # ==========================================================
                 elif strategy_mode == 'AQM':
-                    # 1. Dane specyficzne dla AQM (Weekly, OBV)
                     w_raw = get_raw_data_with_cache(session, api_client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
                     weekly_df = pd.DataFrame()
                     if w_raw: 
@@ -251,23 +233,20 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                         obv_df.index = pd.to_datetime(obv_df.index).tz_localize(None)
                         obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
 
-                    # 2. Obliczanie AQM V4 z PEŁNYM CONTEXTEM MAKRO
                     aqm_metrics_df = aqm_v4_logic.calculate_aqm_full_vector(
                         daily_df=df,
                         weekly_df=weekly_df,
-                        intraday_60m_df=pd.DataFrame(), # EOD Backtest używa Daily
+                        intraday_60m_df=pd.DataFrame(), 
                         obv_df=obv_df,
-                        macro_data=macro_data, # Teraz zawiera yield_10y i inflation!
+                        macro_data=macro_data, 
                         earnings_days_to=None
                     )
                     
                     if not aqm_metrics_df.empty:
-                        # Łączymy wyniki
                         df = df.join(aqm_metrics_df[['aqm_score', 'qps', 'ves', 'mrs', 'tcs']], rsuffix='_dupl')
                         
-                        # Parametry wejścia dla AQM
-                        min_score = float(params.get('aqm_min_score', 0.8))
-                        comp_min = float(params.get('aqm_component_min', 0.5))
+                        min_score = float(parameters.get('aqm_min_score', 0.8))
+                        comp_min = float(parameters.get('aqm_component_min', 0.5))
                         
                         df['is_signal'] = (
                             (df['aqm_score'] > min_score) &
@@ -279,9 +258,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     else:
                         signal_df = pd.DataFrame()
 
-                # ==============================================================================
                 # 4. PĘTLA SYMULACYJNA
-                # ==============================================================================
                 if not signal_df.empty and 'is_signal' in signal_df.columns:
                     sim_start_idx = signal_df.index.searchsorted(start_date_ts)
                     i = sim_start_idx
