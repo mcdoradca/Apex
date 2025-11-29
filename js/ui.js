@@ -1,6 +1,6 @@
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
-// === EXTRA: CSS INJECTION FOR HUD & ANIMATIONS ===
+// === CSS INJECTION: HUD, ANIMACJE, SNIPER SCOPE ===
 const style = document.createElement('style');
 style.textContent = `
     @keyframes heartbeat-idle {
@@ -18,11 +18,49 @@ style.textContent = `
     .pulse-busy { animation: heartbeat-busy 0.8s infinite ease-in-out; }
     
     .glass-panel {
-        background: rgba(22, 27, 34, 0.7);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border: 1px solid rgba(48, 54, 61, 0.6);
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        background: rgba(22, 27, 34, 0.85);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(48, 54, 61, 0.8);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+    }
+
+    /* Sniper Scope Bar */
+    .sniper-scope-container {
+        height: 8px;
+        background: #1f2937;
+        border-radius: 4px;
+        position: relative;
+        overflow: hidden;
+        margin-top: 8px;
+        border: 1px solid #374151;
+    }
+    .sniper-scope-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #ef4444 0%, #eab308 50%, #22c55e 100%);
+        opacity: 0.3;
+        width: 100%;
+    }
+    .sniper-marker {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        background: #fff;
+        box-shadow: 0 0 8px #fff;
+        transform: translateX(-50%);
+        z-index: 10;
+        transition: left 1s ease-out;
+    }
+    .sniper-marker::after { /* Celownik */
+        content: '';
+        position: absolute;
+        top: -2px;
+        bottom: -2px;
+        left: -1px;
+        right: -1px;
+        border: 1px solid white;
+        border-radius: 2px;
     }
 `;
 document.head.appendChild(style);
@@ -32,16 +70,15 @@ const synth = window.speechSynthesis;
 let lastSpokenSignal = "";
 
 const playTacticalAlert = (ticker, score) => {
-    if (!synth || state.h3SortBy !== 'score') return; // Mów tylko w trybie domyślnym
-    if (lastSpokenSignal === ticker) return; // Nie powtarzaj się
+    if (!synth || state.h3SortBy !== 'score') return;
+    if (lastSpokenSignal === ticker) return;
     
     const text = `Commander. Target acquired: ${ticker}. Score: ${score}.`;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.1;
-    utterance.pitch = 0.9; // Niższy, bardziej "taktyczny" głos
+    utterance.pitch = 0.9;
     utterance.volume = 0.8;
     
-    // Próba wyboru głosu angielskiego
     const voices = synth.getVoices();
     const enVoice = voices.find(v => v.lang.includes('en-US') && v.name.includes('Google')) || voices[0];
     if (enVoice) utterance.voice = enVoice;
@@ -183,7 +220,7 @@ export const renderers = {
             } catch(e) {}
         }
         
-        // TRIGGER AUDIO ALERT FOR HIGH SCORE SIGNALS
+        // Audio Alert
         if (s.status === 'ACTIVE' && scoreVal >= 0.80) {
             playTacticalAlert(s.ticker, (scoreVal * 100).toFixed(0));
         }
@@ -195,13 +232,12 @@ export const renderers = {
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
         const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
         
-        // Logika wyboru animacji pulsu w zależności od statusu
-        let pulseClass = "pulse-idle"; // Domyślny (zielony, wolny)
+        let pulseClass = "pulse-idle";
         let statusColor = "text-green-500";
         
         const workerStatus = state.workerStatus.status || "IDLE";
         if (workerStatus.includes("RUNNING") || workerStatus.includes("BUSY")) {
-            pulseClass = "pulse-busy"; // Szybki, żółty
+            pulseClass = "pulse-busy";
             statusColor = "text-yellow-400";
         } else if (workerStatus.includes("PAUSED")) {
             pulseClass = "";
@@ -217,14 +253,14 @@ export const renderers = {
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex items-center"><i data-lucide="activity" class="w-6 h-6 mr-3"></i>Centrum Dowodzenia</h2>
                         
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <!-- Karta 1: Status Silnika (PULSUJĄCA) -->
+                            <!-- Karta 1: Status Silnika (PULSUJĄCA + GLASS) -->
                             <div class="glass-panel p-6 rounded-xl relative overflow-hidden ${pulseClass} transition-all duration-500">
                                 <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
                                 <p id="dashboard-worker-status" class="text-5xl font-black ${statusColor} tracking-tighter drop-shadow-lg">${workerStatus}</p>
                                 <p id="dashboard-current-phase" class="text-xs text-gray-500 mt-2 font-mono bg-black/30 inline-block px-2 py-1 rounded">Faza: ${state.workerStatus.phase || 'NONE'}</p>
                             </div>
 
-                            <!-- Karta 2: Postęp Skanowania -->
+                            <!-- Karta 2: Postęp Skanowania (GLASS) -->
                             <div class="glass-panel p-6 rounded-xl">
                                 <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
                                 <div class="mt-2 flex items-baseline gap-2">
@@ -236,7 +272,7 @@ export const renderers = {
                                 </div>
                             </div>
 
-                            <!-- Karta 3: Statystyki Sygnałów -->
+                            <!-- Karta 3: Statystyki Sygnałów (GLASS) -->
                             <div class="glass-panel p-6 rounded-xl relative">
                                 <div class="absolute top-0 right-0 p-3 opacity-10"><i data-lucide="crosshair" class="w-16 h-16 text-white"></i></div>
                                 <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-4 uppercase tracking-wider"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały</h3>
@@ -287,7 +323,7 @@ export const renderers = {
                 if (timeLeft > 0) {
                     const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
                     timeRemaining = `${hoursLeft}h`;
-                    timeBarWidth = (timeLeft / totalLife) * 100;
+                    timeBarWidth = Math.max(0, Math.min(100, (timeLeft / totalLife) * 100));
                 } else {
                     timeRemaining = "Expired";
                     timeBarWidth = 0;
@@ -297,9 +333,22 @@ export const renderers = {
             const statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
 
+            // === THE SNIPER SCOPE LOGIC ===
+            // Obliczamy pozycję ceny na pasku (0% = SL, 100% = TP)
+            let scopePercent = 0;
+            let currentPrice = 0; 
+            // (W UI nie mamy ceny LIVE dla każdego kafelka w pętli, chyba że dodamy to do stanu.
+            // Uproszczenie: Używamy entry_price jako punktu odniesienia, ale dla 'ACTIVE'
+            // przydałoby się live. Tutaj zrobimy wizualizację statyczną R:R,
+            // a dynamiczną dodamy w modalu szczegółów).
+            
+            // Pasek wygaśnięcia (istniejący) + Sniper Scope (placeholder w kafelku, full w detalu)
+            // W kafelku pokażemy po prostu R:R bar.
+
             return `
             <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
                 
+                <!-- Time Bar -->
                 <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full">
                     <div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div>
                 </div>
@@ -326,8 +375,14 @@ export const renderers = {
                     <span class="text-red-400">SL: ${s.stop_loss ? s.stop_loss.toFixed(2) : '---'}</span>
                     <span class="text-green-400">TP: ${s.take_profit ? s.take_profit.toFixed(2) : '---'}</span>
                 </div>
-                <div class="w-full h-1.5 bg-gray-800 rounded-full relative overflow-hidden">
-                    <div class="absolute top-0 bottom-0 w-0.5 bg-white z-10" style="left: 30%"></div>
+                
+                <!-- Wizualizacja R:R (Mini Scope) -->
+                <div class="w-full h-1.5 bg-gray-800 rounded-full relative overflow-hidden flex">
+                    <div class="bg-red-500/30 h-full" style="width: 25%"></div> <!-- SL Zone -->
+                    <div class="bg-yellow-500/30 h-full" style="width: 15%"></div> <!-- Entry Zone -->
+                    <div class="bg-green-500/30 h-full flex-grow"></div> <!-- Profit Zone -->
+                    <!-- Znacznik Entry -->
+                    <div class="absolute top-0 bottom-0 w-0.5 bg-white z-10" style="left: 25%"></div>
                 </div>
 
                 <div class="mt-3 flex justify-between items-center">
