@@ -43,9 +43,29 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
     """
     Czyści obiekt VirtualTrade z wartości None, NaN/Infinity w kluczowych polach 
     finansowych, zanim trafią do Pydantic (in-place).
+
+    KRYTYCZNA ZMIANA: Wymuszamy, aby obowiązkowe pola (entry, SL, TP) miały 0.0
+    zamiast None/NaN, aby Pydantic nie zgłaszał błędu walidacji float.
     """
-    fields_to_clean = [
-        'entry_price', 'stop_loss', 'take_profit', 'close_price', 'final_profit_loss_percent',
+    
+    # === 1. OBSŁUGA OBOWIĄZKOWYCH PÓL (entry, SL, TP) ===
+    # Te pola MUSZĄ być float, nawet jeśli są 0.0
+    required_float_fields = ['entry_price', 'stop_loss', 'take_profit']
+    
+    for field in required_float_fields:
+        val = getattr(trade, field)
+        try:
+            f_val = float(val) if val is not None else 0.0
+            if math.isinf(f_val) or math.isnan(f_val):
+                setattr(trade, field, 0.0) # Ustaw na 0.0, jeśli NaN/Inf
+            else:
+                 setattr(trade, field, f_val) # Ustaw na czysty float
+        except Exception:
+            setattr(trade, field, 0.0) # Ustaw na 0.0 w przypadku błędu konwersji
+
+    # === 2. OBSŁUGA OPCJONALNYCH PÓL METRYCZNYCH ===
+    optional_fields_to_clean = [
+        'close_price', 'final_profit_loss_percent',
         'metric_atr_14', 'metric_time_dilation', 'metric_price_gravity',
         'metric_td_percentile_90', 'metric_pg_percentile_90',
         'metric_inst_sync', 'metric_retail_herding',
@@ -54,13 +74,15 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         'metric_J', 'metric_J_threshold_2sigma'
     ]
     
-    for field in fields_to_clean:
+    for field in optional_fields_to_clean:
         val = getattr(trade, field)
         if val is not None:
             try:
                 f_val = float(val)
                 if math.isinf(f_val) or math.isnan(f_val):
-                    setattr(trade, field, None)
+                    setattr(trade, field, None) # Zezwól na None w Pydantic
+                else:
+                    setattr(trade, field, f_val) # Ustaw na czysty float
             except Exception:
                 setattr(trade, field, None)
 
@@ -449,7 +471,7 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         
         # --- KRYTYCZNA SANITYZACJA TRANSAKCJI (Zapobiega błędom Pydantic) ---
         for trade in paged_trades:
-            _sanitize_trade_metrics(trade)
+            _sanitize_trade_metrics(trade) 
         
         return schemas.VirtualAgentReport(
             stats=stats,
