@@ -24,7 +24,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.8.0") # Version bump for Quantum V4
+app = FastAPI(title="APEX Predator API", version="2.8.0") 
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +34,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Klient API używany przez endpointy
 api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
@@ -63,7 +62,6 @@ async def startup_event():
             'h3_deep_dive_report': 'NONE',
             'h3_live_parameters': '{}',
             'macro_sentiment': 'UNKNOWN',
-            # === NOWE KLUCZE DLA OPTYMALIZACJI (APEX V4) ===
             'optimization_request': 'NONE' 
         }
         for key, value in initial_values.items():
@@ -304,12 +302,17 @@ def get_h3_deep_dive_report_endpoint(db: Session = Depends(get_db)):
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
 def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
     try:
+        # === FIX: ZACHOWANIE ISTNIEJĄCYCH NOTATEK (APPEND MODE) ===
+        # Zamiast nadpisywać notatkę, dopisujemy "GHOST: Śledzony".
+        # To kluczowa zmiana, która zapobiega utracie wyniku AQM i spadaniu na dół listy.
+        
         stmt = text("""
             INSERT INTO trading_signals (ticker, generation_date, status, notes)
-            VALUES (:ticker, NOW(), 'PENDING', 'Ręcznie dodany do obserwowanych')
+            VALUES (:ticker, NOW(), 'PENDING', 'GHOST: Rozpoczęto śledzenie')
             ON CONFLICT (ticker) WHERE status IN ('ACTIVE', 'PENDING')
             DO UPDATE SET
-                notes = 'Ręcznie dodany do obserwowanych (ponownie)'
+                notes = trading_signals.notes || '\n[GHOST] Śledzenie aktywowane',
+                updated_at = NOW()
             RETURNING *;
         """)
         result_proxy = db.execute(stmt, [{'ticker': ticker.strip().upper()}])
@@ -345,25 +348,15 @@ def get_live_quote(ticker: str):
     except Exception:
         raise HTTPException(status_code=503, detail="Błąd AV.")
 
-# === NOWE ENDPOINTY DLA APEX V4 (QUANTUM OPTIMIZATION) ===
-
 @app.post("/api/v1/optimization/start", status_code=202, response_model=schemas.OptimizationJob)
 def start_optimization(request: schemas.OptimizationRequest, db: Session = Depends(get_db)):
-    """
-    Uruchamia nowy proces optymalizacji bayesowskiej (QuantumOptimizer).
-    """
     worker_status = crud.get_system_control_value(db, "worker_status")
     if worker_status.startswith('BUSY') or worker_status == 'RUNNING':
-        # Sprawdź, czy to nie stare zadanie optymalizacji (można dodać logikę czyszczenia)
         raise HTTPException(status_code=409, detail="Worker jest obecnie zajęty.")
 
     try:
-        # 1. Utwórz zadanie w bazie
         new_job = crud.create_optimization_job(db, request)
-        
-        # 2. Przekaż ID zadania do Workera przez system_control
         crud.set_system_control_value(db, "optimization_request", new_job.id)
-        
         return new_job
     except Exception as e:
         logger.error(f"Błąd podczas startu optymalizacji: {e}", exc_info=True)
@@ -371,22 +364,13 @@ def start_optimization(request: schemas.OptimizationRequest, db: Session = Depen
 
 @app.get("/api/v1/optimization/results", response_model=Optional[schemas.OptimizationJobDetail])
 def get_latest_optimization_results(db: Session = Depends(get_db)):
-    """
-    Pobiera szczegóły najnowszego zadania optymalizacji (wraz z próbami).
-    Teraz zwraca również 'configuration' zawierające 'sensitivity_analysis'.
-    """
     try:
         job = crud.get_latest_optimization_job(db)
         if not job:
             return None
-            
-        # Pobierz próby
         trials = crud.get_optimization_trials(db, job.id)
-        
-        # Konwersja do schematu (Pydantic handles mapping)
         job_detail = schemas.OptimizationJobDetail.model_validate(job)
         job_detail.trials = [schemas.OptimizationTrial.model_validate(t) for t in trials]
-        
         return job_detail
     except Exception as e:
         logger.error(f"Błąd pobierania wyników optymalizacji: {e}", exc_info=True)
@@ -394,7 +378,6 @@ def get_latest_optimization_results(db: Session = Depends(get_db)):
 
 # =========================================================
 
-# --- ENDPOINTY KONTROLI ---
 @app.post("/api/v1/worker/control/{action}", status_code=202)
 def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db: Session = Depends(get_db)):
     allowed_actions = {
