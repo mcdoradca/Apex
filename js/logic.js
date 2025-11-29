@@ -59,6 +59,12 @@ export const showDashboard = async () => {
     UI.mainContent.innerHTML = renderers.dashboard();
     try {
         const countData = await api.getDiscardedCount();
+        if (countData && countData.discarded_count_24h !== undefined) {
+            state.discardedSignalCount = countData.discarded_count_24h;
+            // Odśwież widok, jeśli licznik się zmienił
+            const discardedEl = document.getElementById('dashboard-discarded-signals');
+            if (discardedEl) discardedEl.textContent = state.discardedSignalCount;
+        }
     } catch (e) {
         logger.error("Błąd dashboardu:", e);
     }
@@ -218,7 +224,7 @@ export const pollWorkerStatus = () => {
                 UI.heartbeatStatus.textContent = hb.toLocaleTimeString();
             }
             
-            // 2. Aktualizacja Dashboardu (Duże karty) - DODANA LOGIKA
+            // 2. Aktualizacja Dashboardu (Duże karty)
             const progressBar = document.getElementById('progress-bar');
             const progressText = document.getElementById('progress-text');
             const scanLog = document.getElementById('scan-log');
@@ -788,19 +794,28 @@ export const showOptimizationResults = async () => {
                     hideOptimizationResults();
                     showH3LiveParamsModal();
                     
-                    // === AUTOMATYCZNE MAPOWANIE PARAMETRÓW (H3 & AQM) ===
+                    // Helper helper to clean up values (Krok 7: Auto-Rounding)
+                    const _fmt = (val, prec=2) => {
+                        if (typeof val === 'number') return parseFloat(val.toFixed(prec));
+                        return val;
+                    };
+
+                    // === AUTOMATYCZNE MAPOWANIE I ZAOKRĄGLANIE PARAMETRÓW ===
                     setTimeout(() => {
-                        if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = params.h3_percentile;
-                        if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = params.h3_m_sq_threshold;
-                        if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = params.h3_min_score;
+                        // 1. Parametry H3 (2 miejsca po przecinku dla mnożników)
+                        if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = _fmt(params.h3_percentile, 2);
+                        if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = _fmt(params.h3_m_sq_threshold, 2);
+                        if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = _fmt(params.h3_min_score, 4); // Score: 4 miejsca
                         
+                        // 2. Parametry AQM (Score: 4 miejsca)
                         if (UI.h3LiveModal.minScore && params.aqm_min_score) {
-                            UI.h3LiveModal.minScore.value = params.aqm_min_score;
+                            UI.h3LiveModal.minScore.value = _fmt(params.aqm_min_score, 4);
                         }
 
-                        if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = params.h3_tp_multiplier;
-                        if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = params.h3_sl_multiplier;
-                        if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = params.h3_max_hold;
+                        // 3. Wyjścia (2 miejsca po przecinku)
+                        if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = _fmt(params.h3_tp_multiplier, 2);
+                        if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = _fmt(params.h3_sl_multiplier, 2);
+                        if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = parseInt(params.h3_max_hold);
                     }, 100);
                     
                 } catch(err) {
