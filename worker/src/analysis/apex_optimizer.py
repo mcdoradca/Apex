@@ -8,9 +8,9 @@ from sqlalchemy import text
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-import os # Dodano do obsługi zmiennych środowiskowych
+import os 
 
-# Importy wewnętrzne - zachowane bez zmian
+# Importy wewnętrzne
 from .. import models
 from . import backtest_engine
 from .utils import (
@@ -35,8 +35,7 @@ class QuantumOptimizer:
     SERCE SYSTEMU APEX V14 - PERSISTENT MEMORY MODE (SAFE)
     - Zapisywanie wyników Optuny do bazy danych PostgreSQL.
     - Osobna historia nauki dla każdego roku (study_name).
-    - BRAK agresywnego Prunera.
-    - BRAK zmian w zakresach parametrów (Max Hold, TP).
+    - Obsługa trybów okresowych: FULL, Q1, Q2, Q3, Q4.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -48,7 +47,6 @@ class QuantumOptimizer:
         self.data_cache = {}  
         self.tickers_count = 0
         
-        # Pobierz DATABASE_URL ze zmiennych środowiskowych
         self.storage_url = os.getenv("DATABASE_URL")
         if not self.storage_url:
             logger.warning("Brak DATABASE_URL. Optuna będzie działać w trybie ulotnym (bez zapisu).")
@@ -61,12 +59,14 @@ class QuantumOptimizer:
                 self.job_config = job.configuration
         except: pass
         
-        self.strategy_mode = self.job_config.get('strategy', 'H3') 
+        self.strategy_mode = self.job_config.get('strategy', 'H3')
+        # Domyślny okres to cały rok, jeśli nie podano inaczej
+        self.scan_period = self.job_config.get('scan_period', 'FULL') 
         
-        logger.info(f"QuantumOptimizer V14 initialized for Job {job_id} (Mode: {self.strategy_mode})")
+        logger.info(f"QuantumOptimizer V14 initialized for Job {job_id} (Mode: {self.strategy_mode}, Period: {self.scan_period})")
 
     def run(self, n_trials: int = 50):
-        start_msg = f"🚀 OPTIMIZER V14 ({self.strategy_mode}): Start {self.job_id} (Rok: {self.target_year}, Próby: {n_trials})"
+        start_msg = f"🚀 OPTIMIZER V14 ({self.strategy_mode}): Start {self.job_id} (Rok: {self.target_year}, Okres: {self.scan_period}, Próby: {n_trials})"
         logger.info(start_msg)
         append_scan_log(self.session, start_msg)
         
@@ -84,14 +84,11 @@ class QuantumOptimizer:
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
             
-            # --- KONFIGURACJA OPTUNY Z BAZĄ DANYCH ---
-            
-            # Unikalna nazwa badania dla danego roku i strategii
-            study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}"
+            # Unikalna nazwa badania uwzględniająca teraz też okres (np. apex_opt_H3_2023_Q1)
+            study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}_{self.scan_period}"
             
             logger.info(f"Podłączanie do badania Optuny: {study_name} w bazie danych...")
 
-            # Standardowy sampler TPE (bez zmian)
             sampler = optuna.samplers.TPESampler(
                 n_startup_trials=min(10, max(5, int(n_trials/5))), 
                 multivariate=True,
@@ -100,11 +97,10 @@ class QuantumOptimizer:
             
             self.study = optuna.create_study(
                 study_name=study_name,
-                storage=self.storage_url, # <-- ZAPIS DO BAZY (JEDYNA ZMIANA)
-                load_if_exists=True,      # <-- WCZYTAJ HISTORIĘ JEŚLI ISTNIEJE
+                storage=self.storage_url,
+                load_if_exists=True,
                 direction='maximize',
                 sampler=sampler
-                # BRAK Prunera (usunięto zgodnie z życzeniem)
             )
             
             logger.info(f"Optuna załadowana. Liczba dotychczasowych prób w historii: {len(self.study.trials)}")
@@ -122,14 +118,15 @@ class QuantumOptimizer:
             best_trial = self.study.best_trial
             best_value = float(best_trial.value)
             
-            end_msg = f"🏁 ZAKOŃCZONO! Najlepszy PF ({self.strategy_mode}): {best_value:.4f}"
+            end_msg = f"🏁 ZAKOŃCZONO! Najlepszy PF ({self.strategy_mode}/{self.scan_period}): {best_value:.4f}"
             logger.info(end_msg)
             append_scan_log(self.session, end_msg)
             
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
             safe_params['strategy_mode'] = self.strategy_mode
+            safe_params['scan_period'] = self.scan_period
             
-            append_scan_log(self.session, f"🏆 Zwycięskie Parametry (z historii {len(self.study.trials)} prób):\n{json.dumps(safe_params, indent=2)}")
+            append_scan_log(self.session, f"🏆 Zwycięskie Parametry:\n{json.dumps(safe_params, indent=2)}")
 
             trials_data = self._collect_trials_data()
             sensitivity_report = self._run_sensitivity_analysis(trials_data)
@@ -144,7 +141,7 @@ class QuantumOptimizer:
             self._mark_job_failed()
             raise
 
-    # ... Metody pomocnicze (bez zmian) ...
+    # ... Metody pomocnicze ...
     def _load_macro_context(self):
         append_scan_log(self.session, "📊 Pobieranie danych Makro...")
         macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
@@ -169,31 +166,41 @@ class QuantumOptimizer:
     def _objective(self, trial):
         params = {}
         
-        # === PRZYWRÓCONA ORYGINALNA PRZESTRZEŃ PARAMETRÓW ===
-        # Zakresy są takie jak w poprzedniej wersji (z `step` usuniętym wcześniej na Twoje życzenie, 
-        # ale bez wydłużania Max Hold i TP ponad standard).
-        
         if self.strategy_mode == 'H3':
             params = {
                 'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 0.5), 
                 'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), # Stary limit 10.0
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 5.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 15), # Stary limit 15 dni
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 15), 
             }
             
         elif self.strategy_mode == 'AQM':
             params = {
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.50, 0.95),
                 'aqm_component_min': trial.suggest_float('aqm_component_min', 0.2, 0.8),
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), # Stary limit 10.0
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 5.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15), # Stary limit 15 dni
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15), 
             }
 
-        start_ts = pd.Timestamp(f"{self.target_year}-01-01")
-        end_ts = pd.Timestamp(f"{self.target_year}-12-31")
+        # === OBSŁUGA OKRESÓW CZASOWYCH ===
+        if self.scan_period == 'Q1':
+            start_ts = pd.Timestamp(f"{self.target_year}-01-01")
+            end_ts = pd.Timestamp(f"{self.target_year}-03-31")
+        elif self.scan_period == 'Q2':
+            start_ts = pd.Timestamp(f"{self.target_year}-04-01")
+            end_ts = pd.Timestamp(f"{self.target_year}-06-30")
+        elif self.scan_period == 'Q3':
+            start_ts = pd.Timestamp(f"{self.target_year}-07-01")
+            end_ts = pd.Timestamp(f"{self.target_year}-09-30")
+        elif self.scan_period == 'Q4':
+            start_ts = pd.Timestamp(f"{self.target_year}-10-01")
+            end_ts = pd.Timestamp(f"{self.target_year}-12-31")
+        else: # FULL YEAR
+            start_ts = pd.Timestamp(f"{self.target_year}-01-01")
+            end_ts = pd.Timestamp(f"{self.target_year}-12-31")
         
         result = self._run_simulation_unified(params, start_ts, end_ts)
         
@@ -201,7 +208,7 @@ class QuantumOptimizer:
         trades = result['total_trades']
         
         if trial.number % 5 == 0:
-            logger.info(f"⚡ Trial {trial.number}: PF={pf:.2f} (Trades: {trades})")
+            logger.info(f"⚡ Trial {trial.number} ({self.scan_period}): PF={pf:.2f} (Trades: {trades})")
 
         if pf > self.best_score_so_far:
             self.best_score_so_far = pf
@@ -209,10 +216,10 @@ class QuantumOptimizer:
 
         self._save_trial(trial, params, pf, trades, pf, result['win_rate'])
         
-        if trades < 5: return 0.0 
+        if trades < 3: return 0.0 # Zmniejszony próg dla kwartałów
         return pf
 
-    # ... Reszta metod klasy (bez zmian) ...
+    # ... Reszta metod klasy ...
     def _run_simulation_unified(self, params, start_ts, end_ts):
         trades_pnl = []
         tp_mult = params['h3_tp_multiplier']
@@ -340,6 +347,7 @@ class QuantumOptimizer:
                 'sensitivity_analysis': sensitivity_report, 
                 'version': 'V14_PERSISTENT', 
                 'strategy': self.strategy_mode,
+                'scan_period': self.scan_period, # Dodajemy info o okresie do wyniku
                 'tickers_analyzed': self.tickers_count
             }
             self.session.commit()
@@ -435,8 +443,12 @@ class QuantumOptimizer:
 
             elif self.strategy_mode == 'AQM':
                 aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
-                    daily_df=daily_df, weekly_df=weekly_df, intraday_60m_df=pd.DataFrame(),
-                    obv_df=obv_df, macro_data=self.macro_data, earnings_days_to=None
+                    daily_df=daily_df,
+                    weekly_df=weekly_df,
+                    intraday_60m_df=pd.DataFrame(),
+                    obv_df=obv_df,
+                    macro_data=self.macro_data,
+                    earnings_days_to=None
                 )
                 if 'atr' in aqm_df.columns: aqm_df['atr_14'] = aqm_df['atr']
                 req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
