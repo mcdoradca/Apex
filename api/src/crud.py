@@ -11,7 +11,7 @@ import csv
 from typing import Generator
 import uuid 
 import math 
-import os # Dodano import os do logowania
+import os 
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +43,7 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
     """
     Czyści obiekt VirtualTrade z wartości None, NaN/Infinity w kluczowych polach 
     finansowych, zanim trafią do Pydantic (in-place).
-
-    KRYTYCZNA ZMIANA: Wymuszamy, aby obowiązkowe pola (entry, SL, TP) miały 0.0
-    zamiast None/NaN, aby Pydantic nie zgłaszał błędu walidacji float.
     """
-    
-    # === 1. OBSŁUGA OBOWIĄZKOWYCH PÓL (entry, SL, TP) ===
-    # Te pola MUSZĄ być float, nawet jeśli są 0.0
     required_float_fields = ['entry_price', 'stop_loss', 'take_profit']
     
     for field in required_float_fields:
@@ -57,13 +51,12 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         try:
             f_val = float(val) if val is not None else 0.0
             if math.isinf(f_val) or math.isnan(f_val):
-                setattr(trade, field, 0.0) # Ustaw na 0.0, jeśli NaN/Inf
+                setattr(trade, field, 0.0) 
             else:
-                 setattr(trade, field, f_val) # Ustaw na czysty float
+                 setattr(trade, field, f_val) 
         except Exception:
-            setattr(trade, field, 0.0) # Ustaw na 0.0 w przypadku błędu konwersji
+            setattr(trade, field, 0.0) 
 
-    # === 2. OBSŁUGA OPCJONALNYCH PÓL METRYCZNYCH ===
     optional_fields_to_clean = [
         'close_price', 'final_profit_loss_percent',
         'metric_atr_14', 'metric_time_dilation', 'metric_price_gravity',
@@ -80,9 +73,9 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
             try:
                 f_val = float(val)
                 if math.isinf(f_val) or math.isnan(f_val):
-                    setattr(trade, field, None) # Zezwól na None w Pydantic
+                    setattr(trade, field, None)
                 else:
-                    setattr(trade, field, f_val) # Ustaw na czysty float
+                    setattr(trade, field, f_val)
             except Exception:
                 setattr(trade, field, None)
 
@@ -278,6 +271,8 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
             "change_percent": float(c.change_percent) if c.change_percent is not None else None,
             "volume": c.volume,
             "score": c.score,
+            "sector_ticker": c.sector_ticker, # ADDED
+            "sector_trend_score": float(c.sector_trend_score) if c.sector_trend_score is not None else None, # ADDED
             "analysis_date": c.analysis_date.isoformat() if c.analysis_date else None
         } for c in candidates_from_db
     ]
@@ -322,7 +317,9 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
             "signal_candle_timestamp": signal.signal_candle_timestamp.isoformat() if signal.signal_candle_timestamp else None,
             "entry_zone_bottom": _safe_float_stat(signal.entry_zone_bottom),
             "entry_zone_top": _safe_float_stat(signal.entry_zone_top),
-            "notes": signal.notes
+            "notes": signal.notes,
+            # === POPRAWKA TTL: Dodano pole expiration_date ===
+            "expiration_date": signal.expiration_date.isoformat() if signal.expiration_date else None
         } for signal in signals_from_db
     ]
 
@@ -469,7 +466,6 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
             models.VirtualTrade.status != 'OPEN'
         ).order_by(desc(models.VirtualTrade.close_date)).offset(offset).limit(page_size).all()
         
-        # --- KRYTYCZNA SANITYZACJA TRANSAKCJI (Zapobiega błędom Pydantic) ---
         for trade in paged_trades:
             _sanitize_trade_metrics(trade) 
         
@@ -480,7 +476,6 @@ def get_virtual_agent_report(db: Session, page: int = 1, page_size: int = 200) -
         )
     except Exception as e:
         logger.error(f"Nie można wygenerować raportu Wirtualnego Agenta: {e}", exc_info=True)
-        # Zwracamy pusty raport zamiast błędu 500, jeśli coś poszło nie tak
         empty_stats = schemas.VirtualAgentStats(
             total_trades=0, win_rate_percent=0.0, total_p_l_percent=0.0,
             profit_factor=0.0, by_setup={}
