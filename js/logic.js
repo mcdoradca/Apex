@@ -171,7 +171,8 @@ const _renderH3ViewInternal = () => {
         }
     });
 
-    UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals);
+    // Przekazujemy również quotes do renderera!
+    UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals, state.liveQuotes);
 
     const sortSelect = document.getElementById('h3-sort-select');
     const refreshBtn = document.getElementById('h3-refresh-btn');
@@ -206,8 +207,31 @@ export const showH3Signals = async (silent = false) => {
 
     const runCycle = async () => {
         try {
+            // 1. Pobierz sygnały
             const signals = await api.getPhase3Signals();
             state.phase3 = signals || [];
+            
+            // 2. Pobierz Ceny LIVE dla sygnałów (BULK) - TO JEST KLUCZOWE
+            const tickers = signals.map(s => s.ticker);
+            if (tickers.length > 0) {
+                try {
+                    const bulkData = await api.getBulkQuotes(tickers);
+                    const newQuotes = {};
+                    if (bulkData && Array.isArray(bulkData)) {
+                        bulkData.forEach(q => {
+                            if (q['01. symbol']) {
+                                newQuotes[q['01. symbol']] = q;
+                            }
+                        });
+                    }
+                    // Aktualizujemy globalny stan cen
+                    state.liveQuotes = { ...state.liveQuotes, ...newQuotes };
+                } catch(e) {
+                    logger.warn("Błąd pobierania cen H3 Bulk:", e);
+                }
+            }
+
+            // 3. Renderuj (teraz UI.js będzie miało dostęp do cen)
             _renderH3ViewInternal();
             
             if (UI && UI.phase3 && UI.phase3.count) {
@@ -888,12 +912,6 @@ export const showOptimizationResults = async () => {
                         if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = _fmt(params.h3_tp_multiplier, 2);
                         if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = _fmt(params.h3_sl_multiplier, 2);
                         if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = parseInt(params.h3_max_hold);
-                        
-                        // Ustawienie nowego parametru (jeśli input istnieje)
-                        const aqmInput = document.getElementById('h3-live-aqm-min');
-                        if (aqmInput && params.aqm_component_min) {
-                            aqmInput.value = _fmt(params.aqm_component_min, 2);
-                        }
                     }, 100);
                     
                 } catch(err) {
