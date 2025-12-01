@@ -6,8 +6,20 @@ let UI = null;
 let signalDetailsInterval = null;
 let signalDetailsClockInterval = null;
 
+// === KONFIGURACJA ODŚWIEŻANIA (Frontend Heartbeat) ===
+const VIEW_POLL_INTERVAL_MS = 3500; // 3.5 sekundy dla wszystkich widoków LIVE
+
 export const setUI = (uiInstance) => {
     UI = uiInstance;
+};
+
+// === GLOBALNY ZARZĄDCA ODŚWIEŻANIA ===
+// Zatrzymuje wszelkie aktywne pętle odświeżania widoków
+const stopViewPolling = () => {
+    if (state.activeViewPolling) {
+        clearInterval(state.activeViewPolling);
+        state.activeViewPolling = null;
+    }
 };
 
 const updateElement = (el, content, isHtml = false) => {
@@ -55,6 +67,7 @@ const updateMarketTimeDisplay = () => {
 };
 
 export const showDashboard = async () => {
+    stopViewPolling(); // Dashboard nie wymaga szybkiego odświeżania treści głównej
     if (!UI) return;
     UI.mainContent.innerHTML = renderers.dashboard();
     try {
@@ -70,26 +83,49 @@ export const showDashboard = async () => {
     refreshSidebarData();
 };
 
-export const showPortfolio = async () => {
-    showLoading();
-    try {
-        const holdings = await api.getPortfolio();
-        state.portfolio = holdings;
-        const tickers = holdings.map(h => h.ticker);
-        const quotes = {};
-        
-        if (tickers.length > 0) {
-            for (const t of tickers) {
+export const showPortfolio = async (silent = false) => {
+    stopViewPolling(); // Czyścimy poprzednie pętle
+    
+    if (!silent) showLoading();
+
+    const runCycle = async () => {
+        try {
+            // 1. Pobierz stan portfela
+            const holdings = await api.getPortfolio();
+            state.portfolio = holdings;
+            
+            // 2. Pobierz aktualne ceny (BULK MODE)
+            const tickers = holdings.map(h => h.ticker);
+            const quotes = {};
+            
+            if (tickers.length > 0) {
                 try {
-                    const q = await api.getLiveQuote(t);
-                    if (q) quotes[t] = q;
-                } catch(e) {}
+                    // Używamy nowego endpointu BULK, aby oszczędzać API
+                    const bulkData = await api.getBulkQuotes(tickers);
+                    if (bulkData && Array.isArray(bulkData)) {
+                        bulkData.forEach(q => {
+                            if (q['01. symbol']) {
+                                quotes[q['01. symbol']] = q;
+                            }
+                        });
+                    }
+                } catch(e) {
+                    logger.warn("Błąd pobierania cen Bulk dla portfela:", e);
+                }
             }
+            
+            // 3. Renderuj
+            // (Tutaj w przyszłości można dodać mechanizm diffowania DOM, aby nie migotało przy zaznaczaniu tekstu)
+            UI.mainContent.innerHTML = renderers.portfolio(holdings, quotes);
+            
+        } catch (error) {
+            if (!silent) UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania portfela: ${error.message}</p>`;
         }
-        UI.mainContent.innerHTML = renderers.portfolio(holdings, quotes);
-    } catch (error) {
-        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania portfela: ${error.message}</p>`;
-    }
+    };
+
+    // Uruchom natychmiast, potem w pętli
+    await runCycle();
+    state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
 };
 
 const _extractScore = (notes) => {
@@ -137,7 +173,7 @@ const _renderH3ViewInternal = () => {
     }
 
     if (refreshBtn) {
-        refreshBtn.addEventListener('click', showH3Signals);
+        refreshBtn.addEventListener('click', () => showH3Signals(false));
     }
 
     cards.forEach(card => {
@@ -150,29 +186,49 @@ const _renderH3ViewInternal = () => {
     if (window.lucide) window.lucide.createIcons();
 };
 
-export const showH3Signals = async () => {
-    if (!UI) return;
-    showLoading();
-    try {
-        const signals = await api.getPhase3Signals();
-        state.phase3 = signals || [];
-        _renderH3ViewInternal();
-    } catch (e) {
-        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania sygnałów: ${e.message}</p>`;
-    }
+export const showH3Signals = async (silent = false) => {
+    stopViewPolling();
+    
+    if (!silent && UI) showLoading();
+
+    const runCycle = async () => {
+        try {
+            const signals = await api.getPhase3Signals();
+            state.phase3 = signals || [];
+            _renderH3ViewInternal();
+            
+            // Opcjonalna aktualizacja licznika w sidebarze
+            if (UI && UI.phase3 && UI.phase3.count) {
+                updateElement(UI.phase3.count, state.phase3.length);
+            }
+        } catch (e) {
+            if (!silent && UI) UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania sygnałów: ${e.message}</p>`;
+        }
+    };
+
+    await runCycle();
+    state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
 };
 
-export const showTransactions = async () => {
-    showLoading();
-    try {
-        const history = await api.getTransactionHistory();
-        UI.mainContent.innerHTML = renderers.transactions(history);
-    } catch (error) {
-        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania historii: ${error.message}</p>`;
-    }
+export const showTransactions = async (silent = false) => {
+    stopViewPolling();
+    if (!silent) showLoading();
+    
+    const runCycle = async () => {
+        try {
+            const history = await api.getTransactionHistory();
+            UI.mainContent.innerHTML = renderers.transactions(history);
+        } catch (error) {
+            if (!silent) UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania historii: ${error.message}</p>`;
+        }
+    };
+
+    await runCycle();
+    state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
 };
 
 export const showAgentReport = async () => {
+    stopViewPolling();
     loadAgentReportPage(1);
 };
 
@@ -325,7 +381,7 @@ export const handleBuyConfirm = async () => {
         UI.buyModal.confirmBtn.textContent = "Przetwarzanie...";
         await api.buyStock({ ticker, quantity: qty, price_per_share: price });
         hideBuyModal();
-        showPortfolio();
+        showPortfolio(); // Tu od razu odświeży się lista i zacznie polling
         showSystemAlert(`Kupiono ${qty} akcji ${ticker}.`);
     } catch (e) {
         alert(e.message);
@@ -338,11 +394,8 @@ export const handleBuyConfirm = async () => {
 // === GHOST MODE HANDLER ===
 export const handleGhostBuy = async (ticker) => {
     try {
-        // Symulacja: Dodajemy do watchlisty z adnotacją "GHOST_TRADE"
-        // W przyszłości można to rozwinąć o osobny endpoint
         await api.addToWatchlist(ticker);
         showSystemAlert(`👻 Ghost Protocol: Otwarto wirtualną pozycję dla ${ticker}.`);
-        // Opcjonalnie: Zamknij modal
         hideSignalDetails();
     } catch (e) {
         alert("Ghost Mode Error: " + e.message);
