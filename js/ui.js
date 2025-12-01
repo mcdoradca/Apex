@@ -115,6 +115,27 @@ export const ui = {
             h3ModalContent.appendChild(newDiv);
         }
 
+        // === PUNKT 2: INIEKCJA POLA OKRESU DO MODALU QUANTUM ===
+        const quantumModalContent = document.querySelector('#quantum-optimization-modal .space-y-3');
+        // Wstrzykujemy pole okresu, jeśli go nie ma
+        if (quantumModalContent && !document.getElementById('qo-period-select')) {
+            const periodDiv = document.createElement('div');
+            periodDiv.innerHTML = `
+                <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Okres Analizy</label>
+                <select id="qo-period-select" class="modal-input cursor-pointer hover:bg-gray-800 transition-colors">
+                    <option value="FULL">Pełny Rok (Standard)</option>
+                    <option value="Q1">Q1 (Styczeń - Marzec)</option>
+                    <option value="Q2">Q2 (Kwiecień - Czerwiec)</option>
+                    <option value="Q3">Q3 (Lipiec - Wrzesień)</option>
+                    <option value="Q4">Q4 (Październik - Grudzień)</option>
+                </select>
+                <p class="text-xs text-gray-500 mt-1">Wybierz sezonowość.</p>
+            `;
+            // Wstawiamy jako drugi element (po strategii, przed rokiem)
+            quantumModalContent.insertBefore(periodDiv, quantumModalContent.children[1]);
+        }
+        // =======================================================
+
         return {
             loginScreen: get('login-screen'),
             dashboardScreen: get('dashboard'),
@@ -167,6 +188,7 @@ export const ui = {
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 strategySelect: get('qo-strategy-select'),
+                periodSelect: get('qo-period-select'), // Dodajemy referencję do obiektu UI
                 yearInput: get('qo-year-input'),
                 trialsInput: get('qo-trials-input'),
                 cancelBtn: get('qo-cancel-btn'),
@@ -328,7 +350,7 @@ export const renderers = {
                     </div>`;
     },
     
-    // === NOWOŚĆ: PANEL SYGNAŁÓW Z APEX R-FACTOR (Brutalna Prawda) ===
+    // === PANEL SYGNAŁÓW Z APEX R-FACTOR (Brutalna Prawda) ===
     h3SignalsPanel: (signals, quotes = {}) => {
         const activeCount = signals.filter(s => s.status === 'ACTIVE').length;
         const pendingCount = signals.filter(s => s.status === 'PENDING').length;
@@ -549,7 +571,7 @@ export const renderers = {
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
-                    priceSource = quote['_price_source'] || 'close'; 
+                    priceSource = quote['_price_source'] || 'close'; // Sprawdzamy źródło ceny
                     dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                     priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                     currentValue = h.quantity * currentPrice;
@@ -558,6 +580,7 @@ export const renderers = {
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
                     
+                    // Obliczanie % zmiany pozycji (Cena - Zakup / Zakup)
                     if (h.average_buy_price > 0) {
                         const pctChange = ((currentPrice - h.average_buy_price) / h.average_buy_price) * 100;
                         changePercentDisplay = `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(2)}%`;
@@ -567,8 +590,9 @@ export const renderers = {
                 } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
             
+            // Obsługa wizualna Extended Hours (Pre/Post Market)
             if (priceSource === 'extended_hours') {
-                priceClass = 'extended-hours-text'; 
+                priceClass = 'extended-hours-text'; // Używamy nowej klasy CSS
             }
 
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
@@ -580,7 +604,7 @@ export const renderers = {
                 <td class="p-3 text-right">${h.quantity}</td>
                 <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
                 <td class="p-3 text-right ${priceClass}">${priceDisplay}</td>
-                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td>
+                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td> <!-- Nowa kolumna % -->
                 <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
                 <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
                 <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
@@ -588,13 +612,13 @@ export const renderers = {
         }).join('');
         
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
-        
+        // Zaktualizowany nagłówek tabeli
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr>
             <th scope="col" class="p-3">Ticker</th>
             <th scope="col" class="p-3 text-right">Ilość</th>
             <th scope="col" class="p-3 text-right">Cena Zakupu</th>
             <th scope="col" class="p-3 text-right">Kurs (USD)</th>
-            <th scope="col" class="p-3 text-right">Zmiana %</th>
+            <th scope="col" class="p-3 text-right">Zmiana %</th> <!-- Nowy nagłówek -->
             <th scope="col" class="p-3 text-right">Cel (TP)</th>
             <th scope="col" class="p-3 text-right">Zysk / Strata</th>
             <th scope="col" class="p-3 text-right">Akcja</th>
