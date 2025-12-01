@@ -26,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.9.0") 
+app = FastAPI(title="APEX Predator API", version="2.9.1") # Bump version
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API is running (V4 Quantum Ready + Bulk Support)"}
+    return {"status": "APEX Predator API is running (V4 Quantum Ready + Bulk Support + Universal Search)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -117,19 +117,28 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     return crud.get_active_and_pending_signals(db)
 
+# === NAPRAWIONY ENDPOINT: OBSŁUGA DOWOLNEGO TICKERA ===
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     ticker = ticker.upper().strip()
+    
+    # 1. Próbujemy znaleźć aktywny sygnał (ale nie wymuszamy go)
     signal = db.query(models.TradingSignal).filter(
         models.TradingSignal.ticker == ticker,
         models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
     ).first()
 
-    if not signal:
-        raise HTTPException(status_code=404, detail="Sygnał nieaktywny lub nie istnieje.")
-
+    # 2. Pobieramy dane fundamentalne (jeśli są)
     company = db.query(models.Company).filter(models.Company.ticker == ticker).first()
+    
+    # 3. ZAWSZE pobieramy dane LIVE (Wyszukiwarka musi działać dla każdego tickera)
     live_quote = api_av_client.get_global_quote(ticker)
+    
+    # 4. Dopiero jeśli kompletnie nic nie znaleźliśmy (ani w bazie, ani w API), rzucamy 404
+    # To obsłuży przypadek błędnego tickera np. "XYZ123"
+    if not signal and not company and not live_quote:
+        raise HTTPException(status_code=404, detail=f"Nie znaleziono danych dla tickera {ticker}. Sprawdź poprawność symbolu.")
+
     market_status_raw = api_av_client.get_market_status()
     
     latest_news = db.query(models.ProcessedNews).filter(
@@ -165,45 +174,59 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
                  market_state = m.get("current_status", "Closed")
                  break
 
-    validation_msg = "Setup Aktywny"
-    is_valid = True
+    # === KONSTRUKCJA ODPOWIEDZI (DWA TRYBY) ===
     
-    if current_price > 0 and signal.stop_loss and signal.take_profit:
-        sl = float(signal.stop_loss)
-        tp = float(signal.take_profit)
-        entry = float(signal.entry_price) if signal.entry_price else 0.0
+    setup_obj = {
+        "entry_price": None, "stop_loss": None, "take_profit": None, 
+        "risk_reward": None, "notes": None, "generation_date": None
+    }
+    
+    # Domyślny status (Gdy brak sygnału - Tryb Podglądu)
+    validation_msg = "Tryb Podglądu (Brak Sygnału)"
+    status_code = "WATCH_ONLY"
+    is_valid_signal = False
+
+    # TRYB 1: ISTNIEJE SYGNAŁ (Pełna analityka)
+    if signal:
+        status_code = "VALID"
+        is_valid_signal = True
+        validation_msg = "Setup Aktywny"
         
-        if current_price <= sl:
-            is_valid = False
-            validation_msg = f"SPALONY (Live): Cena {current_price} przebiła SL {sl}."
-        elif current_price >= tp:
-            is_valid = False
-            validation_msg = f"ZREALIZOWANY (Live): Cena {current_price} osiągnęła TP {tp}."
-        elif entry > 0:
-             potential_profit = tp - current_price
-             potential_risk = current_price - sl
-             if potential_risk > 0:
-                 live_rr = potential_profit / potential_risk
-                 if live_rr < 1.2:
-                     is_valid = False
-                     validation_msg = f"NIEOPŁACALNY: Cena uciekła. RR spadł do {live_rr:.2f}."
-
-    if not is_valid:
-        signal.status = 'INVALIDATED'
-        signal.notes = (signal.notes or "") + f" [AUTO-REMOVED by API Live Check: {validation_msg}]"
-        signal.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        return {
-            "status": "INVALIDATED",
-            "reason": validation_msg,
-            "ticker": ticker
+        setup_obj = {
+            "entry_price": float(signal.entry_price) if signal.entry_price else None,
+            "stop_loss": float(signal.stop_loss) if signal.stop_loss else None,
+            "take_profit": float(signal.take_profit) if signal.take_profit else None,
+            "risk_reward": float(signal.risk_reward_ratio) if signal.risk_reward_ratio else None,
+            "notes": signal.notes,
+            "generation_date": signal.generation_date.isoformat()
         }
+        
+        # Walidacja Live dla istniejącego sygnału
+        if current_price > 0 and signal.stop_loss and signal.take_profit:
+            sl = float(signal.stop_loss)
+            tp = float(signal.take_profit)
+            
+            if current_price <= sl:
+                is_valid_signal = False
+                status_code = "INVALIDATED"
+                validation_msg = f"SPALONY (Live): Cena {current_price} przebiła SL {sl}."
+                # Auto-update statusu w bazie
+                signal.status = 'INVALIDATED'
+                signal.notes = (signal.notes or "") + f" [AUTO-REMOVED by API Live Check]"
+                signal.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                
+            elif current_price >= tp:
+                is_valid_signal = False
+                status_code = "COMPLETED"
+                validation_msg = f"ZREALIZOWANY (Live): Cena {current_price} osiągnęła TP {tp}."
 
+    # Konstrukcja finalnej odpowiedzi (dla obu trybów)
     response_data = {
-        "status": "VALID",
+        "status": status_code,
         "ticker": ticker,
         "company": {
-            "name": company.company_name if company else "N/A",
+            "name": company.company_name if company else ticker, # Fallback name
             "sector": company.sector if company else "N/A",
             "industry": company.industry if company else "N/A"
         },
@@ -215,17 +238,10 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "price_source": price_source,
             "server_check_time": datetime.now(timezone.utc).isoformat()
         },
-        "setup": {
-            "entry_price": float(signal.entry_price) if signal.entry_price else None,
-            "stop_loss": float(signal.stop_loss) if signal.stop_loss else None,
-            "take_profit": float(signal.take_profit) if signal.take_profit else None,
-            "risk_reward": float(signal.risk_reward_ratio) if signal.risk_reward_ratio else None,
-            "notes": signal.notes,
-            "generation_date": signal.generation_date.isoformat()
-        },
+        "setup": setup_obj,
         "news_context": news_context,
         "validity": {
-            "is_valid": is_valid,
+            "is_valid": is_valid_signal,
             "message": validation_msg
         }
     }
@@ -339,30 +355,17 @@ def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
              raise HTTPException(status_code=400, detail=f"Ticker {ticker} nie istnieje w bazie danych 'companies'.")
         raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
 
-# === NOWY ENDPOINT DLA ZAPYTAŃ BLOKOWYCH (BULK) ===
 @app.get("/api/v1/quotes/bulk", response_model=List[Dict[str, Any]])
 def get_bulk_quotes_endpoint(tickers: str = Query(..., description="Tickery oddzielone przecinkami (np. AAPL,MSFT)"), db: Session = Depends(get_db)):
-    """
-    Publiczny endpoint do pobierania wielu wycen na raz.
-    Używa wewnętrznej metody batchowej (REALTIME_BULK_QUOTES).
-    Oszczędza limity API (1 zapytanie = 100 tickerów).
-    """
     ticker_list = [t.strip().upper() for t in tickers.split(',') if t.strip()]
     if not ticker_list:
         return []
-    
     try:
-        # 1. Pobierz surowy CSV z klienta
         csv_data = api_av_client.get_bulk_quotes(ticker_list)
-        if not csv_data:
-            return []
-        
+        if not csv_data: return []
         results = []
-        # 2. Parsuj CSV
         reader = csv.DictReader(StringIO(csv_data))
         for row in reader:
-            # 3. Mapuj do formatu zgodnego z frontendem (jak get_global_quote)
-            # Dzięki temu UI nie wymaga drastycznych zmian w renderowaniu.
             formatted = {
                 "01. symbol": row.get("symbol"),
                 "02. open": row.get("open"),
@@ -374,20 +377,13 @@ def get_bulk_quotes_endpoint(tickers: str = Query(..., description="Tickery oddz
                 "09. change": row.get("change"),
                 "10. change percent": f'{row.get("change_percent")}%'
             }
-            
-            # Obsługa Extended Hours (jeśli są w CSV)
-            # CSV Alpha Vantage w BULK często ma inne nagłówki niż JSON GLOBAL_QUOTE
-            # Sprawdzamy czy są kolumny extended
             if row.get("extended_hours_quote"):
                  formatted["05. price"] = row.get("extended_hours_quote")
                  formatted["09. change"] = row.get("extended_hours_change")
                  formatted["10. change percent"] = f'{row.get("extended_hours_change_percent")}%'
                  formatted["_price_source"] = "extended_hours"
-
             results.append(formatted)
-            
         return results
-
     except Exception as e:
         logger.error(f"Błąd w endpointcie Bulk Quotes: {e}", exc_info=True)
         return []
