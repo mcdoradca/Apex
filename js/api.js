@@ -56,6 +56,11 @@ export const api = {
 
     getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
     getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
+    
+    // === NOWOŚĆ: Bulk Quotes (dla wydajnego Portfela Live) ===
+    getBulkQuotes: (tickers) => apiRequest(`api/v1/quotes/bulk?tickers=${tickers.join(',')}`),
+    // ==========================================================
+
     addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
     getSystemAlert: () => apiRequest('api/v1/system/alert'),
     getPortfolio: () => apiRequest('api/v1/portfolio'),
