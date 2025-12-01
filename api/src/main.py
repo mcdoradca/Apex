@@ -1,6 +1,8 @@
 import logging
 import sys
 import json
+import csv
+from io import StringIO
 from fastapi import FastAPI, Depends, HTTPException, Response, Query, Body
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.8.0") 
+app = FastAPI(title="APEX Predator API", version="2.9.0") 
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,7 +40,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API is running (V4 Quantum Ready)"}
+    return {"status": "APEX Predator API is running (V4 Quantum Ready + Bulk Support)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -302,10 +304,6 @@ def get_h3_deep_dive_report_endpoint(db: Session = Depends(get_db)):
 @app.post("/api/v1/watchlist/{ticker}", status_code=201, response_model=schemas.TradingSignal)
 def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
     try:
-        # === FIX: ZACHOWANIE ISTNIEJĄCYCH NOTATEK (APPEND MODE) ===
-        # Zamiast nadpisywać notatkę, dopisujemy "GHOST: Śledzony".
-        # To kluczowa zmiana, która zapobiega utracie wyniku AQM i spadaniu na dół listy.
-        
         stmt = text("""
             INSERT INTO trading_signals (ticker, generation_date, status, notes)
             VALUES (:ticker, NOW(), 'PENDING', 'GHOST: Rozpoczęto śledzenie')
@@ -341,6 +339,59 @@ def add_to_watchlist(ticker: str, db: Session = Depends(get_db)):
              raise HTTPException(status_code=400, detail=f"Ticker {ticker} nie istnieje w bazie danych 'companies'.")
         raise HTTPException(status_code=500, detail=f"Błąd serwera: {str(e)}")
 
+# === NOWY ENDPOINT DLA ZAPYTAŃ BLOKOWYCH (BULK) ===
+@app.get("/api/v1/quotes/bulk", response_model=List[Dict[str, Any]])
+def get_bulk_quotes_endpoint(tickers: str = Query(..., description="Tickery oddzielone przecinkami (np. AAPL,MSFT)"), db: Session = Depends(get_db)):
+    """
+    Publiczny endpoint do pobierania wielu wycen na raz.
+    Używa wewnętrznej metody batchowej (REALTIME_BULK_QUOTES).
+    Oszczędza limity API (1 zapytanie = 100 tickerów).
+    """
+    ticker_list = [t.strip().upper() for t in tickers.split(',') if t.strip()]
+    if not ticker_list:
+        return []
+    
+    try:
+        # 1. Pobierz surowy CSV z klienta
+        csv_data = api_av_client.get_bulk_quotes(ticker_list)
+        if not csv_data:
+            return []
+        
+        results = []
+        # 2. Parsuj CSV
+        reader = csv.DictReader(StringIO(csv_data))
+        for row in reader:
+            # 3. Mapuj do formatu zgodnego z frontendem (jak get_global_quote)
+            # Dzięki temu UI nie wymaga drastycznych zmian w renderowaniu.
+            formatted = {
+                "01. symbol": row.get("symbol"),
+                "02. open": row.get("open"),
+                "03. high": row.get("high"),
+                "04. low": row.get("low"),
+                "05. price": row.get("close"),
+                "06. volume": row.get("volume"),
+                "08. previous close": row.get("previous_close"),
+                "09. change": row.get("change"),
+                "10. change percent": f'{row.get("change_percent")}%'
+            }
+            
+            # Obsługa Extended Hours (jeśli są w CSV)
+            # CSV Alpha Vantage w BULK często ma inne nagłówki niż JSON GLOBAL_QUOTE
+            # Sprawdzamy czy są kolumny extended
+            if row.get("extended_hours_quote"):
+                 formatted["05. price"] = row.get("extended_hours_quote")
+                 formatted["09. change"] = row.get("extended_hours_change")
+                 formatted["10. change percent"] = f'{row.get("extended_hours_change_percent")}%'
+                 formatted["_price_source"] = "extended_hours"
+
+            results.append(formatted)
+            
+        return results
+
+    except Exception as e:
+        logger.error(f"Błąd w endpointcie Bulk Quotes: {e}", exc_info=True)
+        return []
+
 @app.get("/api/v1/quote/{ticker}")
 def get_live_quote(ticker: str):
     try:
@@ -375,8 +426,6 @@ def get_latest_optimization_results(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Błąd pobierania wyników optymalizacji: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Błąd serwera.")
-
-# =========================================================
 
 @app.post("/api/v1/worker/control/{action}", status_code=202)
 def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db: Session = Depends(get_db)):
