@@ -63,6 +63,11 @@ style.textContent = `
         z-index: 5;
         border-left: 1px dashed rgba(250, 204, 21, 0.8);
     }
+    
+    /* Nowe style dla badgy sektorowych i extended hours */
+    .sector-badge-up { background-color: rgba(6, 78, 59, 0.6); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .sector-badge-down { background-color: rgba(127, 29, 29, 0.6); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .extended-hours-text { color: #c084fc; font-weight: bold; text-shadow: 0 0 5px rgba(192, 132, 252, 0.3); }
 `;
 document.head.appendChild(style);
 
@@ -91,6 +96,18 @@ const playTacticalAlert = (ticker, score) => {
 export const ui = {
     init: () => {
         const get = (id) => document.getElementById(id);
+        
+        // === PUNKT 4: INIEKCJA POLA AQM DO MODALU (Naprawa braku w HTML) ===
+        // Sprawdzamy, czy pole już istnieje, jeśli nie - wstrzykujemy je
+        const h3ModalContent = document.querySelector('#h3-live-modal .grid');
+        if (h3ModalContent && !document.getElementById('h3-live-aqm-min')) {
+            const newDiv = document.createElement('div');
+            newDiv.innerHTML = `<label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Min. Component Score (AQM)</label><input type="number" id="h3-live-aqm-min" class="modal-input" placeholder="0.5" step="0.1" value="0.5"><p class="text-[10px] text-gray-600 mt-1">Próg dla QPS, VES, MRS.</p>`;
+            // Wstawiamy przed przyciskami (czyli na końcu grida)
+            h3ModalContent.appendChild(newDiv);
+        }
+        // ===================================================================
+
         return {
             loginScreen: get('login-screen'),
             dashboardScreen: get('dashboard'),
@@ -109,6 +126,8 @@ export const ui = {
                 tp: get('h3-live-tp'),
                 sl: get('h3-live-sl'),
                 maxHold: get('h3-live-hold'),
+                // Nowe pole, które wstrzyknęliśmy wyżej
+                // aqmMin będzie pobierane dynamicznie w logic.js przez getElementById
                 cancelBtn: get('h3-live-cancel-btn'),
                 startBtn: get('h3-live-start-btn')
             },
@@ -137,7 +156,7 @@ export const ui = {
                 validityMessage: get('sd-validity-message'),
                 closeBtn: get('sd-close-btn'),
                 buyBtn: get('sd-buy-btn'),
-                ghostBtn: null 
+                ghostBtn: null // Ghost Mode usunięty
             },
 
             quantumModal: {
@@ -204,7 +223,17 @@ export const ui = {
 export const renderers = {
     loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
     
-    phase1List: (candidates) => candidates.map(c => `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text"><span class="font-bold">${c.ticker}</span></div>`).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
+    // === PUNKT 5: BADGE SEKTOROWE W SIDEBARZE ===
+    phase1List: (candidates) => candidates.map(c => {
+        let sectorBadge = "";
+        if (c.sector_ticker) {
+            const isTrendUp = parseFloat(c.sector_trend_score || 0) > 0;
+            const badgeClass = isTrendUp ? "sector-badge-up" : "sector-badge-down";
+            const icon = isTrendUp ? "↗" : "↘";
+            sectorBadge = `<span class="text-[9px] ml-2 px-1.5 py-0.5 rounded ${badgeClass} font-mono tracking-tighter" title="Kondycja Sektora">${c.sector_ticker} ${icon}</span>`;
+        }
+        return `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text border-b border-gray-800 last:border-0 hover:bg-gray-800"><div><span class="font-bold text-sky-400">${c.ticker}</span>${sectorBadge}</div><span class="text-gray-500 font-mono">${c.price ? c.price.toFixed(2) : '-'}</span></div>`;
+    }).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
     
     phase3List: (signals) => signals.map(s => {
         let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
@@ -479,16 +508,23 @@ export const renderers = {
         </div>`;
     },
 
+    // === PUNKT 7: PORTFEL Z OBSŁUGĄ EXTENDED HOURS I PROCENTOWĄ ZMIANĄ ===
     portfolio: (holdings, quotes) => {
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
+        
         const rows = holdings.map(h => {
             const quote = quotes[h.ticker];
             let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
             let priceClass = 'text-gray-400';
+            let changePercentDisplay = '---';
+            let changePercentClass = 'text-gray-500';
+            let priceSource = 'close';
+
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
+                    priceSource = quote['_price_source'] || 'close'; // Sprawdzamy źródło ceny
                     dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                     priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                     currentValue = h.quantity * currentPrice;
@@ -496,14 +532,51 @@ export const renderers = {
                     profitLoss = currentValue - costBasis;
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
+                    
+                    // Obliczanie % zmiany pozycji (Cena - Zakup / Zakup)
+                    if (h.average_buy_price > 0) {
+                        const pctChange = ((currentPrice - h.average_buy_price) / h.average_buy_price) * 100;
+                        changePercentDisplay = `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(2)}%`;
+                        changePercentClass = pctChange >= 0 ? 'text-green-400 font-bold' : 'text-red-400 font-bold';
+                    }
+
                 } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
+            
+            // Obsługa wizualna Extended Hours (Pre/Post Market)
+            if (priceSource === 'extended_hours') {
+                priceClass = 'extended-hours-text'; // Używamy nowej klasy CSS
+            }
+
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
             const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400">${h.ticker}</td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${currentPrice ? currentPrice.toFixed(2) : '---'}</td><td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
+            const priceDisplay = (priceSource === 'extended_hours') ? `🌙 ${currentPrice.toFixed(2)}` : (currentPrice ? currentPrice.toFixed(2) : '---');
+
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
+                <td class="p-3 font-bold text-sky-400">${h.ticker}</td>
+                <td class="p-3 text-right">${h.quantity}</td>
+                <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
+                <td class="p-3 text-right ${priceClass}">${priceDisplay}</td>
+                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td> <!-- Nowa kolumna % -->
+                <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
+                <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
+                <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
+            </tr>`;
         }).join('');
+        
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
-        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Śr. Cena Zakupu (USD)</th><th scope="col" class="p-3 text-right">Bieżąca Cena (USD)</th><th scope="col" class="p-3 text-right">Cena Docelowa (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th><th scope="col" class="p-3 text-right">Akcja</th></tr></thead>`;
+        // Zaktualizowany nagłówek tabeli
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr>
+            <th scope="col" class="p-3">Ticker</th>
+            <th scope="col" class="p-3 text-right">Ilość</th>
+            <th scope="col" class="p-3 text-right">Cena Zakupu</th>
+            <th scope="col" class="p-3 text-right">Kurs (USD)</th>
+            <th scope="col" class="p-3 text-right">Zmiana %</th> <!-- Nowy nagłówek -->
+            <th scope="col" class="p-3 text-right">Cel (TP)</th>
+            <th scope="col" class="p-3 text-right">Zysk / Strata</th>
+            <th scope="col" class="p-3 text-right">Akcja</th>
+        </tr></thead>`;
+        
         return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>` }</div>`;
     },
     
