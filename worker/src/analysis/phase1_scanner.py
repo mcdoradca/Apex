@@ -22,6 +22,7 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
     etf_ticker = SECTOR_TO_ETF_MAP.get(sector_name, DEFAULT_MARKET_ETF)
     
     try:
+        # Używamy cache z długim czasem wygaśnięcia, aby nie męczyć API
         raw_data = get_raw_data_with_cache(
             session, api_client, etf_ticker, 
             'DAILY_ADJUSTED', 'get_daily_adjusted', 
@@ -67,34 +68,36 @@ def _flush_candidates_batch(session: Session, candidates_buffer: list):
         
         session.execute(insert_stmt, candidates_buffer)
         
-        # 2. Zbiorczy log do bazy (zamiast 50 osobnych update'ów logu)
+        # 2. Zbiorczy log do bazy
         tickers_str = ", ".join([c['ticker'] for c in candidates_buffer])
         log_msg = f"✅ ZAPISANO PACZKĘ F1 ({len(candidates_buffer)}): {tickers_str}"
         
-        # Logujemy tylko do workera, w bazie zapiszemy przy okazji commita
-        # (append_scan_log robi commit, więc tu jest OK)
+        # Logujemy tylko do workera
         append_scan_log(session, log_msg)
         
-        # 3. Jeden commit na całą paczkę - TO RATUJE BAZĘ
-        # append_scan_log już commituje, ale dla pewności jeśli coś by się zmieniło w utils:
+        # 3. Jeden commit na całą paczkę
         session.commit()
         logger.info(log_msg)
+        
+        # 4. SAFETY THROTTLE: Odczekaj chwilę po zapisie, aby baza zwolniła połączenia
+        time.sleep(0.5) 
         
     except Exception as e:
         logger.error(f"CRITICAL: Błąd zapisu paczki kandydatów: {e}", exc_info=True)
         session.rollback()
-        # W razie awarii spróbuj odczekać chwilę, baza może być przeciążona (Cool Down)
-        time.sleep(3)
+        # W razie awarii spróbuj odczekać dłużej (Cool Down)
+        time.sleep(5)
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
-    Skaner Fazy 1 (V6.1 - SAFETY BATCH MODE).
-    Zoptymalizowany pod kątem stabilności połączenia z bazą danych (unikamy Connection Refused).
+    Skaner Fazy 1 (V6.2 - ULTRA SAFE BATCH MODE).
+    Zoptymalizowany pod kątem stabilności połączenia z bazą danych.
+    Zwiększony BATCH_SIZE i dodany Throttling.
     """
-    logger.info("Running Phase 1: EOD Scan (V6.1 Batch Mode)...")
-    append_scan_log(session, "Faza 1 (V6.1): Start. Tryb oszczędzania połączeń (Batch Insert) aktywny.")
+    logger.info("Running Phase 1: EOD Scan (V6.2 Ultra Safe Mode)...")
+    append_scan_log(session, "Faza 1 (V6.2): Start. Tryb oszczędzania połączeń (Batch 100 + Throttle) aktywny.")
 
-    # Czyszczenie tabeli przed startem (dla pewności)
+    # Czyszczenie tabeli przed startem
     try:
         session.execute(text("DELETE FROM phase1_candidates"))
         session.commit()
@@ -115,7 +118,8 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     
     # Bufor na kandydatów do zapisu wsadowego
     candidates_buffer = []
-    BATCH_SIZE = 20 # Zapisujemy co 20 kandydatów, aby nie blokować bazy
+    # ZWIĘKSZONY BATCH SIZE DLA OCHRONY BAZY
+    BATCH_SIZE = 100 
     
     start_time = time.time()
 
@@ -123,14 +127,17 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         ticker = row[0]
         sector = row[1]
         
+        # Pauza manualna
         if get_current_state() == 'PAUSED':
             while get_current_state() == 'PAUSED': time.sleep(1)
 
-        # Logowanie postępu rzadziej (co 50) i commit tylko przy update progress
-        if processed_count % 50 == 0: 
+        # Logowanie postępu rzadziej (co 100)
+        if processed_count % 100 == 0: 
             update_scan_progress(session, processed_count, total_tickers)
+            # Dodatkowe mini-opóźnienie co 100 tickerów, aby nie zajechać CPU/Bazy
+            time.sleep(0.1)
 
-        if processed_count > 0 and processed_count % 100 == 0:
+        if processed_count > 0 and processed_count % 200 == 0:
             elapsed = time.time() - start_time
             rate = processed_count / elapsed if elapsed > 0 else 0
             logger.info(f"F1 Heartbeat: {processed_count}/{total_tickers} ({rate:.1f} t/s)")
@@ -161,8 +168,8 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             
             if pd.isna(current_price): continue
                 
-            # === 1. Cena (2.0$ - 35.0$) ===
-            if not (2.0 <= current_price <= 35.0): 
+            # === 1. Cena (0.5$ - 50.0$) ===
+            if not (0.5 <= current_price <= 50.0): 
                 reject_stats['price'] += 1
                 continue
             
@@ -190,8 +197,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             # 5. Strażnik Sektora
             is_sector_healthy, sector_trend, etf_symbol = _check_sector_health(session, api_client, sector)
             
-            # === SUKCES - Dodaj do bufora (NIE ZAPISUJ JESZCZE) ===
-            # Zbieramy dane w pamięci RAM
+            # === SUKCES - Dodaj do bufora ===
             candidates_buffer.append({
                 'ticker': ticker, 
                 'price': float(current_price),
@@ -202,24 +208,22 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
             
             final_candidate_tickers.append(ticker)
             
-            # Jeśli bufor pełny, zrzucamy do bazy (Flush)
+            # Jeśli bufor pełny (100), zrzucamy do bazy
             if len(candidates_buffer) >= BATCH_SIZE:
                 _flush_candidates_batch(session, candidates_buffer)
-                candidates_buffer = [] # Wyczyść bufor po zapisie
+                candidates_buffer = [] 
 
         except Exception as e:
-            # Błąd pojedynczego tickera nie powinien przerywać pętli
-            # Ale nie robimy rollback sesji globalnej, bo mamy otwarty bufor, po prostu pomijamy ticker
             logger.error(f"Error F1 logic for {ticker}: {e}")
             continue
     
-    # Na koniec pętli zapisz to, co zostało w buforze (resztki)
+    # Na koniec pętli zapisz resztki
     if candidates_buffer:
         _flush_candidates_batch(session, candidates_buffer)
 
     update_scan_progress(session, total_tickers, total_tickers)
     
-    summary_msg = (f"🏁 Faza 1 (Batch Mode) zakończona. Kandydatów: {len(final_candidate_tickers)}. "
+    summary_msg = (f"🏁 Faza 1 (Ultra Safe Mode) zakończona. Kandydatów: {len(final_candidate_tickers)}. "
                    f"Odrzuty: Trend(SMA200)={reject_stats['trend']}, Cena={reject_stats['price']}, Vol={reject_stats['volume']}")
     
     logger.info(summary_msg)
