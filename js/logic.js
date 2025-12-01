@@ -70,6 +70,22 @@ export const showDashboard = async () => {
     stopViewPolling(); // Dashboard nie wymaga szybkiego odświeżania treści głównej
     if (!UI) return;
     UI.mainContent.innerHTML = renderers.dashboard();
+    
+    // === PUNKT 1: AKTYWACJA PASKA WYSZUKIWANIA ===
+    const searchInput = document.querySelector('input[placeholder*="Wpisz ticker"]');
+    if (searchInput) {
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const ticker = e.target.value.trim().toUpperCase();
+                if (ticker) {
+                    showSignalDetails(ticker); // Wywołanie modalu szczegółów
+                    e.target.value = ''; // Wyczyszczenie pola
+                }
+            }
+        });
+    }
+    // =============================================
+
     try {
         const countData = await api.getDiscardedCount();
         if (countData && countData.discarded_count_24h !== undefined) {
@@ -100,7 +116,6 @@ export const showPortfolio = async (silent = false) => {
             
             if (tickers.length > 0) {
                 try {
-                    // Używamy nowego endpointu BULK, aby oszczędzać API
                     const bulkData = await api.getBulkQuotes(tickers);
                     if (bulkData && Array.isArray(bulkData)) {
                         bulkData.forEach(q => {
@@ -114,8 +129,7 @@ export const showPortfolio = async (silent = false) => {
                 }
             }
             
-            // 3. Renderuj
-            // (Tutaj w przyszłości można dodać mechanizm diffowania DOM, aby nie migotało przy zaznaczaniu tekstu)
+            // 3. Renderuj (Punkt 7 zostanie obsłużony w renderers.portfolio w ui.js)
             UI.mainContent.innerHTML = renderers.portfolio(holdings, quotes);
             
         } catch (error) {
@@ -123,7 +137,6 @@ export const showPortfolio = async (silent = false) => {
         }
     };
 
-    // Uruchom natychmiast, potem w pętli
     await runCycle();
     state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
 };
@@ -197,7 +210,6 @@ export const showH3Signals = async (silent = false) => {
             state.phase3 = signals || [];
             _renderH3ViewInternal();
             
-            // Opcjonalna aktualizacja licznika w sidebarze
             if (UI && UI.phase3 && UI.phase3.count) {
                 updateElement(UI.phase3.count, state.phase3.length);
             }
@@ -381,7 +393,7 @@ export const handleBuyConfirm = async () => {
         UI.buyModal.confirmBtn.textContent = "Przetwarzanie...";
         await api.buyStock({ ticker, quantity: qty, price_per_share: price });
         hideBuyModal();
-        showPortfolio(); // Tu od razu odświeży się lista i zacznie polling
+        showPortfolio();
         showSystemAlert(`Kupiono ${qty} akcji ${ticker}.`);
     } catch (e) {
         alert(e.message);
@@ -391,8 +403,9 @@ export const handleBuyConfirm = async () => {
     }
 };
 
-// === GHOST MODE HANDLER ===
+// === PUNKT 6: ZAKOMENTOWANY GHOST MODE (Funkcja wyłączona) ===
 export const handleGhostBuy = async (ticker) => {
+    /* Funkcja wyłączona na żądanie użytkownika.
     try {
         await api.addToWatchlist(ticker);
         showSystemAlert(`👻 Ghost Protocol: Otwarto wirtualną pozycję dla ${ticker}.`);
@@ -400,6 +413,8 @@ export const handleGhostBuy = async (ticker) => {
     } catch (e) {
         alert("Ghost Mode Error: " + e.message);
     }
+    */
+    alert("Funkcja Ghost Mode została wyłączona.");
 };
 
 export const showSellModal = (ticker, maxQty) => {
@@ -556,14 +571,20 @@ export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.r
 export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
 export const handleRunH3LiveScan = async () => {
+    // === PUNKT 4: OBSŁUGA NOWEGO PARAMETRU AQM ===
     const params = {
         h3_percentile: UI.h3LiveModal.percentile.value,
         h3_m_sq_threshold: UI.h3LiveModal.mass.value,
         h3_min_score: UI.h3LiveModal.minScore.value,
         h3_tp_multiplier: UI.h3LiveModal.tp.value,
         h3_sl_multiplier: UI.h3LiveModal.sl.value,
-        h3_max_hold: UI.h3LiveModal.maxHold.value 
+        h3_max_hold: UI.h3LiveModal.maxHold.value,
+        // Pobieramy wartość z nowego inputu (który dodamy w index.html)
+        // Jeśli element nie istnieje (jeszcze), fallback to 0.5
+        aqm_component_min: document.getElementById('h3-live-aqm-min')?.value || 0.5 
     };
+    // ============================================
+    
     try {
         UI.h3LiveModal.startBtn.disabled = true;
         await api.sendWorkerControl('start_phase3', params);
@@ -601,27 +622,16 @@ export const showSignalDetails = async (ticker) => {
     const newsContainer = document.getElementById('sd-news-container');
     if (newsContainer) newsContainer.classList.add('hidden');
 
-    // === UPDATE BUTTONS ===
+    // === PUNKT 6: USUNIĘTO INIEKCJĘ GHOST BUTTON ===
     if (UI.signalDetails.buyBtn) {
         UI.signalDetails.buyBtn.textContent = "Inwestuj (Kup)";
         UI.signalDetails.buyBtn.onclick = () => {
             hideSignalDetails();
             showBuyModal(ticker);
         };
-        
-        // Dodaj przycisk GHOST, jeśli go nie ma
-        let ghostBtn = document.getElementById('sd-ghost-btn');
-        if (!ghostBtn) {
-            ghostBtn = document.createElement('button');
-            ghostBtn.id = 'sd-ghost-btn';
-            ghostBtn.className = 'flex items-center gap-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 font-bold py-2 px-4 rounded-md transition-colors border border-purple-500/30 mr-3';
-            ghostBtn.innerHTML = '<i data-lucide="ghost" class="w-4 h-4"></i>Ghost Buy';
-            // Wstaw przed przyciskiem Buy
-            UI.signalDetails.buyBtn.parentNode.insertBefore(ghostBtn, UI.signalDetails.buyBtn);
-        }
-        ghostBtn.onclick = () => handleGhostBuy(ticker);
-        if (window.lucide) window.lucide.createIcons();
+        // KOD USUNIĘTY: Nie dodajemy już przycisku Ghost.
     }
+    // ==============================================
 
     updateMarketTimeDisplay();
     if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
@@ -863,28 +873,27 @@ export const showOptimizationResults = async () => {
                     hideOptimizationResults();
                     showH3LiveParamsModal();
                     
-                    // Helper helper to clean up values (Krok 7: Auto-Rounding)
                     const _fmt = (val, prec=2) => {
                         if (typeof val === 'number') return parseFloat(val.toFixed(prec));
                         return val;
                     };
 
-                    // === AUTOMATYCZNE MAPOWANIE I ZAOKRĄGLANIE PARAMETRÓW ===
                     setTimeout(() => {
-                        // 1. Parametry H3 (2 miejsca po przecinku dla mnożników)
                         if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = _fmt(params.h3_percentile, 2);
                         if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = _fmt(params.h3_m_sq_threshold, 2);
-                        if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = _fmt(params.h3_min_score, 4); // Score: 4 miejsca
-                        
-                        // 2. Parametry AQM (Score: 4 miejsca)
+                        if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = _fmt(params.h3_min_score, 4);
                         if (UI.h3LiveModal.minScore && params.aqm_min_score) {
                             UI.h3LiveModal.minScore.value = _fmt(params.aqm_min_score, 4);
                         }
-
-                        // 3. Wyjścia (2 miejsca po przecinku)
                         if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = _fmt(params.h3_tp_multiplier, 2);
                         if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = _fmt(params.h3_sl_multiplier, 2);
                         if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = parseInt(params.h3_max_hold);
+                        
+                        // Ustawienie nowego parametru (jeśli input istnieje)
+                        const aqmInput = document.getElementById('h3-live-aqm-min');
+                        if (aqmInput && params.aqm_component_min) {
+                            aqmInput.value = _fmt(params.aqm_component_min, 2);
+                        }
                     }, 100);
                     
                 } catch(err) {
