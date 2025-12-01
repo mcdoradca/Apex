@@ -103,7 +103,7 @@ def handle_backtest_request(session, api_client) -> str:
     req = utils.get_system_control_value(session, 'backtest_request')
     if req and req not in ['NONE', 'PROCESSING']:
         utils.update_system_control(session, 'worker_status', 'BUSY_BACKTEST')
-        utils.update_system_control(session, 'current_phase', 'BACKTESTING') # FIX
+        utils.update_system_control(session, 'current_phase', 'BACKTESTING')
         utils.update_system_control(session, 'backtest_request', 'PROCESSING')
         params = {}
         try: params = json.loads(utils.get_system_control_value(session, 'backtest_parameters') or '{}')
@@ -112,7 +112,7 @@ def handle_backtest_request(session, api_client) -> str:
         except Exception as e: logger.error(f"BT Error: {e}")
         finally:
             utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE') # FIX
+            utils.update_system_control(session, 'current_phase', 'NONE')
             utils.update_system_control(session, 'backtest_request', 'NONE')
             return 'IDLE'
     elif req == 'PROCESSING': return 'BUSY'
@@ -122,13 +122,13 @@ def handle_ai_optimizer_request(session) -> str:
     req = utils.get_system_control_value(session, 'ai_optimizer_request')
     if req == 'REQUESTED':
         utils.update_system_control(session, 'worker_status', 'BUSY_AI_OPTIMIZER')
-        utils.update_system_control(session, 'current_phase', 'AI_ANALYSIS') # FIX
+        utils.update_system_control(session, 'current_phase', 'AI_ANALYSIS')
         utils.update_system_control(session, 'ai_optimizer_request', 'PROCESSING')
         try: ai_optimizer.run_ai_optimization_analysis(session)
         except: pass
         finally:
             utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE') # FIX
+            utils.update_system_control(session, 'current_phase', 'NONE')
             utils.update_system_control(session, 'ai_optimizer_request', 'NONE')
             return 'IDLE'
     elif req == 'PROCESSING': return 'BUSY'
@@ -138,13 +138,13 @@ def handle_h3_deep_dive_request(session) -> str:
     req = utils.get_system_control_value(session, 'h3_deep_dive_request')
     if req and req not in ['NONE', 'PROCESSING']:
         utils.update_system_control(session, 'worker_status', 'BUSY_DEEP_DIVE')
-        utils.update_system_control(session, 'current_phase', 'DEEP_DIVE') # FIX
+        utils.update_system_control(session, 'current_phase', 'DEEP_DIVE')
         utils.update_system_control(session, 'h3_deep_dive_request', 'PROCESSING')
         try: h3_deep_dive_agent.run_h3_deep_dive_analysis(session, int(req))
         except: pass
         finally:
             utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE') # FIX
+            utils.update_system_control(session, 'current_phase', 'NONE')
             utils.update_system_control(session, 'h3_deep_dive_request', 'NONE')
             return 'IDLE'
     elif req == 'PROCESSING': return 'BUSY'
@@ -156,7 +156,7 @@ def handle_optimization_request(session) -> str:
     if job_id and job_id not in ['NONE', 'PROCESSING']:
         logger.info(f"Otrzymano zlecenie optymalizacji: {job_id}")
         utils.update_system_control(session, 'worker_status', 'BUSY_OPTIMIZING')
-        utils.update_system_control(session, 'current_phase', 'QUANTUM_OPT') # FIX
+        utils.update_system_control(session, 'current_phase', 'QUANTUM_OPT')
         utils.update_system_control(session, 'optimization_request', 'PROCESSING')
         
         try:
@@ -176,7 +176,7 @@ def handle_optimization_request(session) -> str:
             utils.append_scan_log(session, f"BŁĄD OPTYMALIZACJI: {e}")
         finally:
             utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE') # FIX
+            utils.update_system_control(session, 'current_phase', 'NONE')
             utils.update_system_control(session, 'optimization_request', 'NONE')
             return 'IDLE'
             
@@ -194,14 +194,16 @@ def main_loop():
     
     schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
     schedule.every().day.at("23:00", "Europe/Warsaw").do(lambda: virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client))
-    schedule.every(1).minutes.do(lambda: signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client))
+    
+    # === TURBO MODE: STRAŻNIK CO 3 SEKUNDY ===
+    schedule.every(3).seconds.do(lambda: signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client))
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         utils.report_heartbeat(initial_session)
-        utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy. Oczekiwanie na komendy.")
+        utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy. Tryb TURBO (Strażnik 3s) aktywny.")
 
     while True:
         with get_db_session() as session:
