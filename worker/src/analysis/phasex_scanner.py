@@ -12,7 +12,8 @@ from ..models import Company
 # Importy narzędziowe z wnętrza aplikacji
 from .utils import (
     append_scan_log, update_scan_progress, 
-    standardize_df_columns, get_raw_data_with_cache 
+    standardize_df_columns, get_raw_data_with_cache,
+    update_system_control
 )
 
 logger = logging.getLogger(__name__)
@@ -43,18 +44,24 @@ def _update_company_sector(session: Session, api_client, ticker: str) -> tuple[s
     Zwraca (sector, industry).
     """
     try:
+        # To zapytanie kosztuje limit API, używane tylko gdy cena pasuje a sektor nieznany
         overview = api_client.get_company_overview(ticker)
-        if not overview: return 'N/A', 'N/A'
+        
+        # Obsługa błędów API / pustych odpowiedzi
+        if not overview: 
+            return 'N/A', 'N/A'
         
         sector = overview.get('Sector', 'N/A')
         industry = overview.get('Industry', 'N/A')
         
-        # Aktualizacja w bazie
-        session.query(Company).filter(Company.ticker == ticker).update({
-            Company.sector: sector,
-            Company.industry: industry
-        })
-        session.commit()
+        # Aktualizacja w bazie (aby nie pytać ponownie przy następnym skanie)
+        if sector != 'N/A':
+            session.execute(
+                text("UPDATE companies SET sector=:s, industry=:i, last_updated=NOW() WHERE ticker=:t"),
+                {'s': sector, 'i': industry, 't': ticker}
+            )
+            session.commit()
+            
         return sector, industry
     except Exception as e:
         logger.warning(f"Błąd aktualizacji sektora dla {ticker}: {e}")
@@ -62,119 +69,154 @@ def _update_company_sector(session: Session, api_client, ticker: str) -> tuple[s
 
 def run_phasex_scan(session: Session, api_client) -> List[str]:
     """
-    Skaner Fazy X: BioX Hunter (Pure Logic).
-    Wyszukuje spółki biotechnologiczne w przedziale 0.5$-4.0$.
-    Bez zbędnej analizy historycznych pomp w tym kroku.
+    Skaner Fazy X: BioX Hunter (Brute Force Mode).
+    Przechodzi przez WSZYSTKIE spółki w bazie (alfabetycznie).
+    1. Sprawdza cenę (Cache/API).
+    2. Jeśli cena OK -> Weryfikuje sektor (DB -> API Fallback).
+    3. Jeśli Biotech -> Zapisuje.
     """
-    logger.info("Running Phase X: BioX Scanner (Pure Criteria: Biotech, $0.5-$4.0)...")
-    append_scan_log(session, "Faza X (BioX): Start. Kryteria: Biotech, Cena 0.5$-4.0$.")
+    logger.info("Running Phase X: BioX Scanner (Full Market Scan)...")
+    append_scan_log(session, "Faza X (BioX): Start pełnego skanowania rynku. Cel: Biotech $0.5-$4.0.")
 
-    # 1. Próba pobrania tickerów z poprawnym sektorem
-    sector_filters = " OR ".join([f"industry ILIKE '%{k}%' OR sector ILIKE '%{k}%'" for k in BIOTECH_KEYWORDS])
-    query = text(f"SELECT ticker, sector, industry FROM companies WHERE {sector_filters}")
+    # 1. Pobieramy WSZYSTKIE tickery, posortowane alfabetycznie (dla porządku w logach)
+    # Pobieramy też sektor, żeby wiedzieć czy musimy pytać API
+    try:
+        query = text("SELECT ticker, sector, industry FROM companies ORDER BY ticker ASC")
+        rows = session.execute(query).fetchall()
+        # Mapa: ticker -> {'sector': ..., 'industry': ...}
+        all_companies = {r[0]: {'s': r[1], 'i': r[2]} for r in rows}
+    except Exception as e:
+        logger.error(f"Faza X: Krytyczny błąd bazy danych: {e}")
+        return []
     
-    rows = session.execute(query).fetchall()
-    initial_candidates = {r[0]: (r[1], r[2]) for r in rows} 
+    total_tickers = len(all_companies)
+    tickers_list = list(all_companies.keys())
     
-    # Tryb Odkrywania (Discovery Mode)
-    discovery_mode = False
-    if len(initial_candidates) < 50:
-        logger.warning("Faza X: Mało spółek Biotech w bazie. Uruchamiam TRYB ODKRYWANIA.")
-        append_scan_log(session, "Faza X: Tryb Odkrywania (Skanowanie całego rynku)...")
-        
-        all_query = text("SELECT ticker, sector, industry FROM companies")
-        all_rows = session.execute(all_query).fetchall()
-        initial_candidates = {r[0]: (r[1], r[2]) for r in all_rows}
-        discovery_mode = True
-    
-    tickers_to_scan = list(initial_candidates.keys())
-    logger.info(f"Faza X: Do przeanalizowania {len(tickers_to_scan)} spółek.")
+    if total_tickers == 0:
+        append_scan_log(session, "Faza X BŁĄD: Tabela 'companies' jest pusta! Uruchom Data Initializer.")
+        return []
 
+    logger.info(f"Faza X: Załadowano {total_tickers} tickerów do sprawdzenia.")
+    
     candidates_buffer = []
-    BATCH_SIZE = 50
+    BATCH_SIZE = 20 # Mniejszy batch, częstszy zapis
     processed_count = 0
+    passed_price = 0
     found_count = 0
     
-    # Czyścimy tabelę kandydatów
+    # Czyścimy tabelę kandydatów na starcie, żeby mieć czysty obraz
     try:
         session.execute(text("DELETE FROM phasex_candidates"))
         session.commit()
     except Exception:
         session.rollback()
 
-    # 2. Główna pętla analizy
-    for ticker in tickers_to_scan:
+    start_time = time.time()
+
+    # 2. Główna pętla
+    for ticker in tickers_list:
         processed_count += 1
-        if processed_count % 20 == 0:
-             update_scan_progress(session, processed_count, len(tickers_to_scan))
         
+        # Aktualizacja postępu w UI co 10 sztuk (żebyś widział, że działa)
+        if processed_count % 10 == 0:
+             update_scan_progress(session, processed_count, total_tickers)
+             # Log w konsoli co 50 sztuk
+             if processed_count % 50 == 0:
+                 logger.info(f"Faza X: Przetworzono {processed_count}/{total_tickers} (Znaleziono: {found_count})")
+
         try:
-            # A. SZYBKI FILTR CENOWY
+            # === KROK A: CENA (Najpierw, bo to odsiewa 90% rynku) ===
+            # Pobieramy dane dzienne (Compact wystarczy do ceny bieżącej)
+            # expiry_hours=24 -> jeśli mamy dane z wczoraj, to ok, nie pytamy API
             price_data_raw = get_raw_data_with_cache(
                 session, api_client, ticker, 
                 'DAILY_ADJUSTED', 'get_daily_adjusted', 
                 expiry_hours=24, 
-                outputsize='compact' # Wystarczy compact do sprawdzenia bieżącej ceny
+                outputsize='compact' 
             )
 
+            # Jeśli brak danych (API limit, błąd sieci, błąd tickera) -> Skip
             if not price_data_raw or 'Time Series (Daily)' not in price_data_raw:
                 continue
 
-            # Szybkie wyciągnięcie ostatniej ceny bez pełnego parsowania DataFrame (optymalizacja)
+            # Szybkie wyciągnięcie ostatniej ceny (bez pełnego parsowania pandasa dla szybkości)
             ts = price_data_raw['Time Series (Daily)']
-            last_date = sorted(ts.keys())[-1]
-            last_close = float(ts[last_date].get('4. close', 0))
-            volume = int(ts[last_date].get('6. volume', 0)) # lub '5. volume' w zależności od endpointu
+            # Sortujemy daty, bierzemy ostatnią
+            dates = sorted(list(ts.keys()))
+            if not dates: continue
+            
+            last_date = dates[-1]
+            last_candle = ts[last_date]
+            
+            # Close price (Adjusted lub raw)
+            # Klucze mogą być "4. close" lub "5. adjusted close" zależnie od endpointu,
+            # ale get_daily_adjusted zwraca adjusted w '5.' i close w '4.'.
+            # Używamy close (raw price) do filtra $0.5-$4.0
+            raw_close = float(last_candle.get('4. close', 0))
+            volume = int(last_candle.get('6. volume', 0))
 
-            # KRYTERIUM: Cena 0.50$ - 4.00$
-            if not (MIN_PRICE <= last_close <= MAX_PRICE):
+            # FILTR CENOWY
+            if not (MIN_PRICE <= raw_close <= MAX_PRICE):
                 continue 
+            
+            passed_price += 1
 
-            # B. WERYFIKACJA SEKTORA
-            sec, ind = initial_candidates.get(ticker, ('N/A', 'N/A'))
+            # === KROK B: SEKTOR (Tylko jeśli cena pasuje) ===
+            sector = all_companies[ticker]['s']
+            industry = all_companies[ticker]['i']
             
-            if discovery_mode and (not sec or sec == 'N/A' or ind == 'N/A'):
-                sec, ind = _update_company_sector(session, api_client, ticker)
-                time.sleep(1.2) 
-            
-            if not _is_biotech(sec, ind):
+            # Jeśli w bazie brak danych -> Pytamy API (Overview)
+            if not sector or sector == 'N/A' or not industry or industry == 'N/A':
+                # append_scan_log(session, f"Faza X: Sprawdzam sektor w API dla {ticker}...")
+                sector, industry = _update_company_sector(session, api_client, ticker)
+                # Mały sleep po callu do API Overview, żeby nie zabić limitu
+                time.sleep(1.0) 
+
+            # Czy to Biotech?
+            if not _is_biotech(sector, industry):
                 continue
 
-            # === SUKCES: Mamy Biotech w dobrej cenie! ===
+            # === KROK C: MAMY KANDYDATA! ===
+            # append_scan_log(session, f"✅ Faza X: Znaleziono {ticker} ({sector}) Cena: {raw_close}")
             
-            # C. Dodanie do bufora (Bez logiki pomp)
             candidates_buffer.append({
                 'ticker': ticker,
-                'price': float(last_close),
-                'volume_avg': volume, # Używamy bieżącego wolumenu jako proxy
-                'pump_count_1y': 0, # Placeholder (usunięto logikę)
+                'price': raw_close,
+                'volume_avg': volume,
+                # Pola historyczne (puste, bo to czysty skaner, agent historii je wypełni/zweryfikuje w innym procesie)
+                'pump_count_1y': 0, 
                 'last_pump_date': None,
                 'last_pump_percent': 0.0
             })
             found_count += 1
             
-            if len(candidates_buffer) >= BATCH_SIZE:
+            # Zapisz natychmiast po znalezieniu (lub małymi paczkami), żebyś widział wynik od razu
+            if len(candidates_buffer) >= 5:
                 _save_phasex_batch_upsert(session, candidates_buffer)
                 candidates_buffer = []
 
         except Exception as e:
+            # Ignorujemy błędy pojedynczych tickerów, lecimy dalej
+            # logger.error(f"Err {ticker}: {e}")
             continue
 
+    # Zapisz resztę z bufora na koniec
     if candidates_buffer:
         _save_phasex_batch_upsert(session, candidates_buffer)
 
-    summary = f"🏁 Faza X (BioX): Zakończono. Przeskanowano {processed_count}. Zidentyfikowano {found_count} spółek Biotech (0.5$-4.0$)."
+    update_scan_progress(session, total_tickers, total_tickers)
+    
+    summary = f"🏁 Faza X (BioX): Koniec. Przeanalizowano: {total_tickers}. Pasowało cenowo: {passed_price}. Wynik Biotech: {found_count}."
     logger.info(summary)
     append_scan_log(session, summary)
     
-    final_list_rows = session.execute(text("SELECT ticker FROM phasex_candidates")).fetchall()
+    final_list_rows = session.execute(text("SELECT ticker FROM phasex_candidates ORDER BY ticker")).fetchall()
     return [r[0] for r in final_list_rows]
 
 def _save_phasex_batch_upsert(session: Session, data: list):
     """Bezpieczny zapis kandydatów (Upsert)."""
     if not data: return
     try:
-        # Zapisujemy podstawowe dane, reszta kolumn (o pompach) zostaje pusta/domyślna
         stmt = text("""
             INSERT INTO phasex_candidates (
                 ticker, price, volume_avg, pump_count_1y, last_pump_date, last_pump_percent, analysis_date
