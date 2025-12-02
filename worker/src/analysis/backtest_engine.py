@@ -79,23 +79,42 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         session.commit()
         # ====================================
 
-        # 1. SELEKCJA UNIWERSUM
-        phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
-        tickers = [r[0] for r in phase1_rows]
+        # 1. SELEKCJA UNIWERSUM (Rozszerzona o PhaseX)
+        tickers = []
         
-        port_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
-        tickers += [r[0] for r in port_rows]
+        # A. Kandydaci Fazy 1 (Baza)
+        try:
+            phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
+            tickers += [r[0] for r in phase1_rows]
+        except Exception: pass
+
+        # B. Kandydaci Fazy X (BioX - KLUCZOWE DLA STRATEGII BIOX)
+        try:
+            phasex_rows = session.execute(text("SELECT ticker FROM phasex_candidates")).fetchall()
+            tickers += [r[0] for r in phasex_rows]
+        except Exception: pass
+        
+        # C. Portfel
+        try:
+            port_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
+            tickers += [r[0] for r in port_rows]
+        except Exception: pass
+
         tickers = list(set(tickers))
         
         if not tickers:
-            logger.warning("Brak kandydatów Fazy 1. Pobieram próbkę z bazy.")
+            logger.warning("Brak kandydatów (F1/FX). Pobieram próbkę z bazy companies.")
             tickers = [r[0] for r in session.execute(text("SELECT ticker FROM companies LIMIT 100")).fetchall()]
         
-        # Pobranie informacji o sektorach (dla BioX)
-        company_sectors = {
-            r.ticker: (r.sector or '', r.industry or '') 
-            for r in session.query(models.Company.ticker, models.Company.sector, models.Company.industry).all()
-        }
+        # Pobranie informacji o sektorach (dla BioX - filtr bezpieczeństwa)
+        # Pobieramy dane sektorowe tylko raz, aby nie zapychać bazy w pętli
+        company_sectors = {}
+        try:
+            rows = session.execute(text("SELECT ticker, sector, industry FROM companies")).fetchall()
+            for r in rows:
+                company_sectors[r[0]] = (r[1] or '', r[2] or '')
+        except Exception as e:
+            logger.warning(f"Błąd pobierania sektorów: {e}")
         
         logger.info(f"[Backtest] Wybrano {len(tickers)} tickerów do analizy.")
         
@@ -173,7 +192,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     trade_open_col, trade_high_col, trade_low_col, trade_close_col = 'open', 'high', 'low', 'close'
 
                 df.sort_index(inplace=True)
-                if len(df) < 100: continue # BioX może mieć krótszą historię niż H3
+                if len(df) < 100: continue 
                 
                 df['atr_14'] = calculate_atr(df).ffill().fillna(0)
 
@@ -269,10 +288,15 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
 
                 # ŚCIEŻKA 3: STRATEGIA BIOX (BioX Pump Hunter)
                 elif strategy_mode == 'BIOX':
-                    # 1. Weryfikacja Sektora
+                    # 1. Weryfikacja Sektora (Filtr Bezpieczeństwa)
                     sec, ind = company_sectors.get(ticker, ('',''))
-                    if not any(k in sec or k in ind for k in BIOTECH_KEYWORDS):
-                        continue # Pomijamy spółki spoza Biotech
+                    
+                    # Jeśli nie mamy danych sektora, ale ticker jest z tabeli phasex_candidates, to przepuszczamy.
+                    # W przeciwnym razie sprawdzamy keywords.
+                    is_biotech = any(k in sec or k in ind for k in BIOTECH_KEYWORDS)
+                    
+                    if not is_biotech:
+                        continue 
 
                     # 2. Obliczanie wskaźników pompy
                     df['prev_close'] = df['close'].shift(1)
@@ -280,7 +304,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df['session_change'] = (df['close'] - df['prev_close']) / df['prev_close']
                     
                     BIO_MIN_PRICE = 0.50
-                    BIO_MAX_PRICE = 5.00
+                    BIO_MAX_PRICE = 5.00 # Zgodnie ze skanerem (podniesione do 5)
                     BIO_PUMP_THRESHOLD = 0.50 # 50%
 
                     # Sygnał: Pompa cenowa w zakresie penny stock
@@ -309,11 +333,12 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                             entry_price = next_day_row[trade_open_col]
                             atr = row['atr_14']
                             
-                            # Dla BioX używamy szerszego ATR lub sztywnego stopa, tutaj dziedziczymy ATR z parametrów
+                            # Dla BioX używamy szerszego ATR lub sztywnego stopa
                             if atr <= 0 and strategy_mode != 'BIOX':
                                 i += 1; continue
-                            elif atr <= 0 and strategy_mode == 'BIOX':
-                                atr = entry_price * 0.1 # Fallback ATR dla BioX (10%)
+                            elif (atr <= 0 or strategy_mode == 'BIOX'):
+                                # W BioX ATR może być zaburzony przez pompę, używamy % ceny jako proxy zmienności
+                                atr = entry_price * 0.15 
                                 
                             if entry_price <= 0:
                                 i += 1; continue
@@ -367,7 +392,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                             metric_score = 0.0
                             if strategy_mode == 'H3': metric_score = float(row.get('aqm_score_h3', 0))
                             elif strategy_mode == 'AQM': metric_score = float(row.get('aqm_score', 0))
-                            elif strategy_mode == 'BIOX': metric_score = float(row.get('session_change', 0) * 100) # Moc pompy jako score
+                            elif strategy_mode == 'BIOX': metric_score = float(row.get('session_change', 0) * 100)
 
                             trade_data = {
                                 "ticker": ticker,
