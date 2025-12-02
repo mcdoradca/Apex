@@ -198,7 +198,10 @@ class AlphaVantageClient:
 
     # === SENTYMENT I NEWSY ===
 
-    def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None):
+    def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None, time_to: str = None):
+        """
+        Pobiera sentyment newsów. Obsługuje filtry czasowe dla BioX History.
+        """
         params = {
             "function": "NEWS_SENTIMENT", 
             "tickers": ticker, 
@@ -206,12 +209,22 @@ class AlphaVantageClient:
         }
         if time_from:
             params["time_from"] = time_from
+        if time_to:
+            params["time_to"] = time_to
         return self._make_request(params)
 
     # === DANE FUNDAMENTALNE ===
 
     def get_earnings(self, symbol: str):
         params = {"function": "EARNINGS", "symbol": symbol}
+        return self._make_request(params)
+    
+    def get_insider_transactions(self, symbol: str):
+        """
+        Pobiera transakcje insiderów.
+        KLUCZOWE DLA STRATEGII H3 (Institutional Sync).
+        """
+        params = {"function": "INSIDER_TRANSACTIONS", "symbol": symbol}
         return self._make_request(params)
 
     # === NARZĘDZIA POMOCNICZE ===
@@ -260,6 +273,7 @@ class AlphaVantageClient:
                 formatted_quote["05. price"] = quote_data.get("extended_hours_quote")
                 formatted_quote["09. change"] = quote_data.get("extended_hours_change")
                 formatted_quote["10. change percent"] = f'{quote_data.get("extended_hours_change_percent")}%'
+                formatted_quote["_price_source"] = "extended_hours"
             return formatted_quote
         except Exception:
             return None
