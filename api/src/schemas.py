@@ -58,6 +58,21 @@ class Phase1Candidate(BaseModel):
     change_percent: Optional[float] = None
     volume: Optional[int] = None
     score: int
+    sector_ticker: Optional[str] = None
+    sector_trend_score: Optional[float] = None
+    days_to_earnings: Optional[int] = None
+    analysis_date: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+# === NOWOŚĆ: SCHEMA FAZY X (BioX) ===
+class PhaseXCandidate(BaseModel):
+    ticker: str
+    price: Optional[float] = None
+    volume_avg: Optional[int] = None
+    pump_count_1y: int
+    last_pump_date: Optional[date] = None
+    last_pump_percent: Optional[float] = None
     analysis_date: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -86,8 +101,6 @@ class TradingSignal(BaseModel):
     entry_zone_bottom: Optional[float] = None
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
-    
-    # === NOWOŚĆ: Pole przesyłane do UI ===
     expiration_date: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
