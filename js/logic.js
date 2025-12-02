@@ -67,7 +67,7 @@ const updateMarketTimeDisplay = () => {
 };
 
 export const showDashboard = async () => {
-    stopViewPolling(); // Dashboard nie wymaga szybkiego odświeżania treści głównej
+    stopViewPolling(); 
     if (!UI) return;
     UI.mainContent.innerHTML = renderers.dashboard();
     
@@ -78,13 +78,12 @@ export const showDashboard = async () => {
             if (e.key === 'Enter') {
                 const ticker = e.target.value.trim().toUpperCase();
                 if (ticker) {
-                    showSignalDetails(ticker); // Wywołanie modalu szczegółów
-                    e.target.value = ''; // Wyczyszczenie pola
+                    showSignalDetails(ticker);
+                    e.target.value = '';
                 }
             }
         });
     }
-    // =============================================
 
     try {
         const countData = await api.getDiscardedCount();
@@ -100,17 +99,15 @@ export const showDashboard = async () => {
 };
 
 export const showPortfolio = async (silent = false) => {
-    stopViewPolling(); // Czyścimy poprzednie pętle
+    stopViewPolling();
     
     if (!silent) showLoading();
 
     const runCycle = async () => {
         try {
-            // 1. Pobierz stan portfela
             const holdings = await api.getPortfolio();
             state.portfolio = holdings;
             
-            // 2. Pobierz aktualne ceny (BULK MODE)
             const tickers = holdings.map(h => h.ticker);
             const quotes = {};
             
@@ -129,7 +126,6 @@ export const showPortfolio = async (silent = false) => {
                 }
             }
             
-            // 3. Renderuj (Punkt 7 zostanie obsłużony w renderers.portfolio w ui.js)
             UI.mainContent.innerHTML = renderers.portfolio(holdings, quotes);
             
         } catch (error) {
@@ -171,7 +167,6 @@ const _renderH3ViewInternal = () => {
         }
     });
 
-    // Przekazujemy również quotes do renderera!
     UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals, state.liveQuotes);
 
     const sortSelect = document.getElementById('h3-sort-select');
@@ -207,11 +202,9 @@ export const showH3Signals = async (silent = false) => {
 
     const runCycle = async () => {
         try {
-            // 1. Pobierz sygnały
             const signals = await api.getPhase3Signals();
             state.phase3 = signals || [];
             
-            // 2. Pobierz Ceny LIVE dla sygnałów (BULK) - TO JEST KLUCZOWE
             const tickers = signals.map(s => s.ticker);
             if (tickers.length > 0) {
                 try {
@@ -224,14 +217,12 @@ export const showH3Signals = async (silent = false) => {
                             }
                         });
                     }
-                    // Aktualizujemy globalny stan cen
                     state.liveQuotes = { ...state.liveQuotes, ...newQuotes };
                 } catch(e) {
                     logger.warn("Błąd pobierania cen H3 Bulk:", e);
                 }
             }
 
-            // 3. Renderuj (teraz UI.js będzie miało dostęp do cen)
             _renderH3ViewInternal();
             
             if (UI && UI.phase3 && UI.phase3.count) {
@@ -244,6 +235,44 @@ export const showH3Signals = async (silent = false) => {
 
     await runCycle();
     state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
+};
+
+// === NOWOŚĆ: WIDOK FAZY X (BioX) ===
+export const showPhaseX = async () => {
+    stopViewPolling(); // Tu nie ma live cen na liście (na razie), więc polling niepotrzebny
+    showLoading();
+    
+    try {
+        const candidates = await api.getPhaseXCandidates();
+        UI.mainContent.innerHTML = renderers.phaseXView(candidates);
+        
+        // Obsługa przycisku skanowania wewnątrz widoku (jeśli dodamy go w ui.js)
+        const runBtn = document.getElementById('run-phasex-scan-btn');
+        if (runBtn) {
+            runBtn.addEventListener('click', handleRunPhaseXScan);
+        }
+    } catch (e) {
+        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania Fazy X: ${e.message}</p>`;
+    }
+};
+
+export const handleRunPhaseXScan = async () => {
+    const btn = document.getElementById('run-phasex-scan-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Skanowanie w tle...";
+    }
+    try {
+        await api.sendWorkerControl('start_phasex');
+        // showSystemAlert("Rozpoczęto skanowanie BioX (Faza X)."); // Funkcja alertu musi być dostępna
+        alert("Rozpoczęto skanowanie BioX (Faza X). Sprawdź status workera.");
+    } catch (e) {
+        alert("Błąd startu Fazy X: " + e.message);
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Skanuj BioX";
+        }
+    }
 };
 
 export const showTransactions = async (silent = false) => {
@@ -427,17 +456,7 @@ export const handleBuyConfirm = async () => {
     }
 };
 
-// === PUNKT 6: ZAKOMENTOWANY GHOST MODE (Funkcja wyłączona) ===
 export const handleGhostBuy = async (ticker) => {
-    /* Funkcja wyłączona na żądanie użytkownika.
-    try {
-        await api.addToWatchlist(ticker);
-        showSystemAlert(`👻 Ghost Protocol: Otwarto wirtualną pozycję dla ${ticker}.`);
-        hideSignalDetails();
-    } catch (e) {
-        alert("Ghost Mode Error: " + e.message);
-    }
-    */
     alert("Funkcja Ghost Mode została wyłączona.");
 };
 
@@ -595,7 +614,6 @@ export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.r
 export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
 export const handleRunH3LiveScan = async () => {
-    // === PUNKT 4: OBSŁUGA NOWEGO PARAMETRU AQM ===
     const params = {
         h3_percentile: UI.h3LiveModal.percentile.value,
         h3_m_sq_threshold: UI.h3LiveModal.mass.value,
@@ -603,11 +621,8 @@ export const handleRunH3LiveScan = async () => {
         h3_tp_multiplier: UI.h3LiveModal.tp.value,
         h3_sl_multiplier: UI.h3LiveModal.sl.value,
         h3_max_hold: UI.h3LiveModal.maxHold.value,
-        // Pobieramy wartość z nowego inputu (który dodamy w index.html)
-        // Jeśli element nie istnieje (jeszcze), fallback to 0.5
         aqm_component_min: document.getElementById('h3-live-aqm-min')?.value || 0.5 
     };
-    // ============================================
     
     try {
         UI.h3LiveModal.startBtn.disabled = true;
@@ -646,16 +661,13 @@ export const showSignalDetails = async (ticker) => {
     const newsContainer = document.getElementById('sd-news-container');
     if (newsContainer) newsContainer.classList.add('hidden');
 
-    // === PUNKT 6: USUNIĘTO INIEKCJĘ GHOST BUTTON ===
     if (UI.signalDetails.buyBtn) {
         UI.signalDetails.buyBtn.textContent = "Inwestuj (Kup)";
         UI.signalDetails.buyBtn.onclick = () => {
             hideSignalDetails();
             showBuyModal(ticker);
         };
-        // KOD USUNIĘTY: Nie dodajemy już przycisku Ghost.
     }
-    // ==============================================
 
     updateMarketTimeDisplay();
     if (signalDetailsClockInterval) clearInterval(signalDetailsClockInterval);
