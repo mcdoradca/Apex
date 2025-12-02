@@ -147,7 +147,6 @@ def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
         update_system_control(session, 'worker_command', 'NONE')
         return "PHASE_3_RUN", current_state
         
-    # === NOWOŚĆ: Obsługa komendy FAZY X ===
     if cmd == "START_PHASE_X_REQUESTED":
         update_system_control(session, 'worker_command', 'NONE')
         return "PHASE_X_RUN", current_state
@@ -162,8 +161,49 @@ def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
         return "NONE", "RUNNING"
     return "NONE", current_state
 
+# === HEARTBEAT SUPPRESSION (Naprawa przeciążenia bazy) ===
 def report_heartbeat(session: Session):
-    update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
+    """
+    Wysyła sygnał życia (Heartbeat) do bazy danych TYLKO wtedy, gdy system jest IDLE lub PAUSED.
+    Jeśli system pracuje (RUNNING, BUSY, BACKTESTING), wstrzymuje heartbeat, aby nie obciążać
+    połączenia z bazą zbędnymi transakcjami zapisu w tle.
+    """
+    try:
+        # Pobieramy aktualny status (z pamięci podręcznej sesji lub bazy)
+        # Uwaga: Aby nie robić SELECT przy każdym sprawdzeniu, polegamy na logice workera,
+        # ale tutaj dla bezpieczeństwa pobieramy. Jeśli baza leży, to i tak rzuci wyjątek.
+        # Optymalizacja: Sprawdzamy status rzadziej lub zakładamy, że worker wie co robi.
+        
+        # Wersja bezpieczna: Sprawdzamy status przed zapisem
+        # Pobieramy raw SQLem dla szybkości
+        res = session.execute(text("SELECT value FROM system_control WHERE key = 'worker_status'")).fetchone()
+        current_status = res[0] if res else 'UNKNOWN'
+
+        # LISTA STANÓW "CIĘŻKIEJ PRACY" - Wtedy NIE wysyłamy Heartbeat
+        heavy_load_states = [
+            'RUNNING', 
+            'BUSY', 
+            'BUSY_BACKTEST', 
+            'BUSY_OPTIMIZING', 
+            'BUSY_AI_OPTIMIZER', 
+            'BUSY_DEEP_DIVE',
+            'OPTIMIZING_CALC',
+            'OPTIMIZING_DATA_LOAD'
+        ]
+
+        # Jeśli status zawiera któryś z kluczy obciążenia -> PRZERWIJ (nie zapisuj do bazy)
+        if any(s in current_status for s in heavy_load_states):
+            # Opcjonalnie: Logujemy w konsoli, że heartbeat jest wstrzymany, ale nie tykamy bazy
+            # logger.debug("Heartbeat skipped due to heavy load.")
+            return
+
+        # Jeśli system odpoczywa (IDLE, PAUSED, UNKNOWN) -> Zapisz Heartbeat
+        update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
+
+    except Exception:
+        # Jeśli baza jest już przeciążona (Connection Refused), po prostu zignoruj błąd heartbeatu
+        # Nie chcemy, żeby błąd logowania statusu wywalił cały worker
+        pass
 
 def safe_float(value) -> float | None:
     if value is None: return None
