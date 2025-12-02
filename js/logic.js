@@ -236,19 +236,18 @@ export const showH3Signals = async (silent = false) => {
     state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
 };
 
-// === NOWOŚĆ: WIDOK FAZY X (BioX) - NAPRAWA ===
+// === OBSŁUGA WIDOKU FAZY X (BioX) ===
 export const showPhaseX = async () => {
-    stopViewPolling(); // Tu nie ma live cen na liście (na razie), więc polling niepotrzebny
+    stopViewPolling();
     showLoading();
     
-    // Funkcja wewnętrzna renderująca widok i podpinająca zdarzenia
+    // Funkcja wewnętrzna renderująca widok
     const render = async () => {
         try {
             const candidates = await api.getPhaseXCandidates();
             UI.mainContent.innerHTML = renderers.phaseXView(candidates);
             
             // Podpinamy przycisk Skanowania WEWNĄTRZ wyrenderowanego widoku
-            // To kluczowe, bo przycisk powstaje dopiero po wyrenderowaniu HTML
             const runBtn = document.getElementById('run-phasex-scan-btn');
             if (runBtn) {
                 runBtn.addEventListener('click', handleRunPhaseXScan);
@@ -262,6 +261,8 @@ export const showPhaseX = async () => {
     };
     
     await render();
+    // Możemy dodać polling dla Fazy X, aby widzieć zmiany na żywo (np. nowe flagi)
+    state.activeViewPolling = setInterval(render, 10000); // Co 10 sekund odśwież listę
 };
 
 export const handleRunPhaseXScan = async () => {
@@ -270,24 +271,25 @@ export const handleRunPhaseXScan = async () => {
         btn.disabled = true;
         btn.textContent = "Skanowanie w toku...";
         btn.classList.add('animate-pulse');
+        btn.classList.remove('bg-pink-600', 'hover:bg-pink-700');
+        btn.classList.add('bg-gray-600');
     }
     
     try {
         await api.sendWorkerControl('start_phasex');
-        showSystemAlert("Rozpoczęto skanowanie BioX (Faza X). Sprawdź status Workera.");
+        showSystemAlert("Rozpoczęto skanowanie BioX (Faza X). Monitoruj Status Silnika.");
     } catch (e) {
         alert("Błąd startu Fazy X: " + e.message);
     } finally {
-        // Nie odblokowujemy przycisku natychmiast, użytkownik ma widzieć, że zlecenie poszło
-        if (btn) {
-            setTimeout(() => {
-                if (document.body.contains(btn)) { // Sprawdź czy przycisk nadal istnieje
-                    btn.disabled = false;
-                    btn.textContent = "Skanuj BioX";
-                    btn.classList.remove('animate-pulse');
-                }
-            }, 5000);
-        }
+        // Nie odblokowujemy natychmiast, użytkownik widzi status w dashboardzie
+        setTimeout(() => {
+            if (document.body.contains(btn)) {
+                btn.disabled = false;
+                btn.textContent = "Skanuj BioX";
+                btn.classList.remove('animate-pulse', 'bg-gray-600');
+                btn.classList.add('bg-pink-600', 'hover:bg-pink-700');
+            }
+        }, 5000);
     }
 };
 
@@ -319,6 +321,15 @@ export const loadAgentReportPage = async (page) => {
         state.currentReportPage = page;
         const reportData = await api.getVirtualAgentReport(page, REPORT_PAGE_SIZE);
         UI.mainContent.innerHTML = renderers.agentReport(reportData);
+        
+        // Ponowne podpięcie handlerów dla dynamicznie załadowanego contentu raportu
+        // (Ważne dla przycisków Backtestu wewnątrz raportu)
+        const strategySelect = document.getElementById('backtest-strategy-select');
+        if (strategySelect) {
+            // Możemy ustawić domyślną wartość lub nasłuchiwać zmian,
+            // ale w obecnej architekturze zdarzenia 'click' są delegowane w app.js
+        }
+        
     } catch (error) {
         UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd raportu agenta: ${error.message}</p>`;
     }
@@ -349,9 +360,15 @@ export const pollWorkerStatus = () => {
             
             if (UI.workerStatusText) {
                 UI.workerStatusText.textContent = status.status;
-                UI.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${
-                    status.status.includes('RUNNING') || status.status.includes('BUSY') ? 'bg-green-900 text-green-300 animate-pulse' : 'bg-gray-700 text-gray-200'
-                }`;
+                let bgClass = 'bg-gray-700 text-gray-200';
+                
+                if (status.status.includes('RUNNING') || status.status.includes('BUSY')) {
+                    bgClass = 'bg-green-900 text-green-300 animate-pulse';
+                } else if (status.status.includes('PAUSED')) {
+                    bgClass = 'bg-red-900 text-red-300';
+                }
+                
+                UI.workerStatusText.className = `font-mono px-2 py-1 rounded-md text-xs ${bgClass}`;
             }
 
             if (UI.heartbeatStatus) {
@@ -428,9 +445,10 @@ export const pollSystemAlerts = () => {
 const showSystemAlert = (msg) => {
     if (!UI.alertContainer) return;
     const div = document.createElement('div');
-    div.className = 'alert-bar bg-red-600 text-white px-4 py-3 rounded shadow-lg flex justify-between items-center mb-2 animate-bounce';
-    div.innerHTML = `<span>${msg}</span><button onclick="this.parentElement.remove()" class="ml-4 font-bold">X</button>`;
+    div.className = 'alert-bar bg-gradient-to-r from-red-600 to-red-800 text-white px-4 py-3 rounded shadow-lg flex justify-between items-center mb-2 animate-bounce border border-red-500';
+    div.innerHTML = `<span class="font-bold flex items-center"><i data-lucide="alert-circle" class="w-5 h-5 mr-2"></i>${msg}</span><button onclick="this.parentElement.remove()" class="ml-4 font-bold hover:text-gray-300">X</button>`;
     UI.alertContainer.appendChild(div);
+    if (window.lucide) window.lucide.createIcons();
     setTimeout(() => div.remove(), 10000);
 };
 
@@ -508,16 +526,22 @@ export const handleSellConfirm = async () => {
     }
 };
 
+// === OBSŁUGA BACKTESTU (Teraz z BioX) ===
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
     const strategySelect = document.getElementById('backtest-strategy-select');
+    
+    // Pobieramy wybraną strategię: H3, AQM lub BIOX
     const strategyMode = strategySelect ? strategySelect.value : 'H3';
 
-    if (!input || !input.value) return;
+    if (!input || !input.value) {
+        if(status) status.textContent = "Wpisz rok.";
+        return;
+    }
     
     const params = {
-        strategy_mode: strategyMode,
+        strategy_mode: strategyMode, // Przekazujemy BIOX jeśli wybrano
         h3_percentile: document.getElementById('h3-param-percentile')?.value || 0.95,
         h3_m_sq_threshold: document.getElementById('h3-param-mass')?.value || -0.5,
         h3_min_score: document.getElementById('h3-param-min-score')?.value || 0.0,
@@ -529,7 +553,9 @@ export const handleYearBacktestRequest = async () => {
     try {
         status.textContent = `Wysyłanie zlecenia (${strategyMode})...`;
         status.className = "text-yellow-400 text-sm mt-3 h-4";
+        
         await api.requestBacktest(input.value, params);
+        
         status.textContent = "Zlecenie przyjęte. Sprawdź status Workera.";
         status.className = "text-green-400 text-sm mt-3 h-4";
     } catch (e) {
