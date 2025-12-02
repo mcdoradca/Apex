@@ -134,15 +134,24 @@ def clear_scan_log(session: Session):
 
 def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
     cmd = get_system_control_value(session, 'worker_command')
+    
     if cmd == "START_REQUESTED":
         update_system_control(session, 'worker_command', 'NONE')
         return "FULL_RUN", current_state
+    
     if cmd == "START_PHASE_1_REQUESTED":
         update_system_control(session, 'worker_command', 'NONE')
         return "PHASE_1_RUN", current_state
+    
     if cmd == "START_PHASE_3_REQUESTED":
         update_system_control(session, 'worker_command', 'NONE')
         return "PHASE_3_RUN", current_state
+        
+    # === NOWOŚĆ: Obsługa komendy FAZY X ===
+    if cmd == "START_PHASE_X_REQUESTED":
+        update_system_control(session, 'worker_command', 'NONE')
+        return "PHASE_X_RUN", current_state
+        
     if cmd == "PAUSE_REQUESTED":
         update_system_control(session, 'worker_status', 'PAUSED')
         update_system_control(session, 'worker_command', 'NONE')
@@ -249,9 +258,6 @@ def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.S
         logger.error(f"Błąd normalizacji institutional_sync_v4: {e}")
         return pd.Series(0, index=df.index)
 
-# ==================================================================
-# === FIX IMPORT ERROR: Dodano brakującą funkcję ===
-# ==================================================================
 def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
     """
     BEZPIECZNA NOWA FUNKCJA: Capping wartości ekstremalnych Retail Herding
@@ -260,7 +266,6 @@ def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.S
     if retail_herding_series.empty:
         return retail_herding_series
     return retail_herding_series.clip(-1.0, 1.0)
-# ==================================================================
 
 def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     """
