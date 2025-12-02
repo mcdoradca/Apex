@@ -27,6 +27,20 @@ class Phase1Candidate(Base):
     days_to_earnings = Column(INTEGER, nullable=True)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# === NOWOŚĆ: FAZA X (BIOTECH & PENNY STOCKS) ===
+class PhaseXCandidate(Base):
+    __tablename__ = 'phasex_candidates'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    price = Column(NUMERIC(12, 4))
+    volume_avg = Column(BIGINT, nullable=True)
+    
+    # Statystyki historycznych "Wybuchów" (>50%)
+    pump_count_1y = Column(INTEGER, default=0, comment="Ile razy urosła >50% w ciągu roku")
+    last_pump_date = Column(DATE, nullable=True, comment="Data ostatniego skoku >50%")
+    last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
+    
+    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+
 class Phase2Result(Base):
     __tablename__ = 'phase2_results'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -59,7 +73,6 @@ class TradingSignal(Base):
     is_trailing_active = Column(Boolean, default=False)
     earnings_date = Column(DATE, nullable=True)
     
-    # === NOWOŚĆ: Data wygaśnięcia (TTL) ===
     expiration_date = Column(PG_TIMESTAMP(timezone=True), nullable=True, comment="Data wygaśnięcia sygnału (Max Hold)")
     
     __table_args__ = (
