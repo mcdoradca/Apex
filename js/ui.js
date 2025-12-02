@@ -29,7 +29,7 @@ style.textContent = `
 
     /* Sniper Scope Bar (Pasek Setupu) */
     .sniper-scope-container {
-        height: 14px; /* Powiększony dla czytelności */
+        height: 14px;
         background: #0f172a;
         border-radius: 4px;
         position: relative;
@@ -62,7 +62,7 @@ style.textContent = `
         box-shadow: 0 0 8px 3px rgba(255, 255, 255, 0.9);
         z-index: 30;
         transform: translateX(-50%);
-        transition: left 0.8s cubic-bezier(0.22, 1, 0.36, 1); /* Płynna animacja */
+        transition: left 0.8s cubic-bezier(0.22, 1, 0.36, 1);
     }
     
     /* Żółta Linia (Entry Price) */
@@ -108,6 +108,7 @@ export const ui = {
     init: () => {
         const get = (id) => document.getElementById(id);
         
+        // Iniekcja pola AQM do modalu H3
         const h3ModalContent = document.querySelector('#h3-live-modal .grid');
         if (h3ModalContent && !document.getElementById('h3-live-aqm-min')) {
             const newDiv = document.createElement('div');
@@ -115,9 +116,8 @@ export const ui = {
             h3ModalContent.appendChild(newDiv);
         }
 
-        // === PUNKT 2: INIEKCJA POLA OKRESU DO MODALU QUANTUM ===
+        // Iniekcja pola Okresu do modalu Quantum
         const quantumModalContent = document.querySelector('#quantum-optimization-modal .space-y-3');
-        // Wstrzykujemy pole okresu, jeśli go nie ma
         if (quantumModalContent && !document.getElementById('qo-period-select')) {
             const periodDiv = document.createElement('div');
             periodDiv.innerHTML = `
@@ -131,10 +131,25 @@ export const ui = {
                 </select>
                 <p class="text-xs text-gray-500 mt-1">Wybierz sezonowość.</p>
             `;
-            // Wstawiamy jako drugi element (po strategii, przed rokiem)
             quantumModalContent.insertBefore(periodDiv, quantumModalContent.children[1]);
         }
-        // =======================================================
+
+        // Iniekcja przycisku Fazy X do Sidebaru
+        const sidebarControls = document.querySelector('#app-sidebar .pt-4 .space-y-2');
+        if (sidebarControls && !document.getElementById('btn-phasex-scan')) {
+             const btn = document.createElement('button');
+             btn.id = 'btn-phasex-scan';
+             btn.className = 'w-full text-left flex items-center bg-pink-600/20 hover:bg-pink-600/40 text-pink-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
+             btn.innerHTML = '<i data-lucide="biohazard" class="mr-2 h-4 w-4"></i>Skanuj Faza X (BioX)';
+             btn.onclick = () => {
+                 const event = new CustomEvent('run-phasex'); // Logika w logic.js powinna to przechwycić lub obsługujemy przez event globalny w app.js (ale tu używamy prostszego wiązania w logic.js)
+                 // UWAGA: Ponieważ w logic.js nie dodaliśmy listenera globalnego, logic.js musi sam podpiąć się pod ten przycisk po załadowaniu widoku, 
+                 // ALE ten przycisk jest w sidebarze (stały), więc podepniemy go w app.js lub tutaj wywołamy funkcję globalną jeśli dostępna.
+                 // Bezpieczniej: app.js powinien obsłużyć click, ale skoro app.js nie zmieniamy, zostawmy to tak, a logic.js przy starcie powinien znaleźć ten przycisk.
+                 // Jednak ui.init zwraca btnPhaseX, więc app.js/logic.js może dodać listenera.
+             };
+             sidebarControls.appendChild(btn);
+        }
 
         return {
             loginScreen: get('login-screen'),
@@ -145,6 +160,7 @@ export const ui = {
             
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
+            btnPhaseX: get('btn-phasex-scan'),
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
@@ -188,7 +204,7 @@ export const ui = {
             quantumModal: {
                 backdrop: get('quantum-optimization-modal'),
                 strategySelect: get('qo-strategy-select'),
-                periodSelect: get('qo-period-select'), // Dodajemy referencję do obiektu UI
+                periodSelect: get('qo-period-select'),
                 yearInput: get('qo-year-input'),
                 trialsInput: get('qo-trials-input'),
                 cancelBtn: get('qo-cancel-btn'),
@@ -215,8 +231,8 @@ export const ui = {
             agentReportLink: get('agent-report-link'),
             heartbeatStatus: get('heartbeat-status'),
             alertContainer: get('system-alert-container'),
-            phase1: { list: get('phase-1-list'), count: get('phase-1-count') },
             
+            phase1: { list: get('phase-1-list'), count: get('phase-1-count') },
             phase3: { list: get('phase-3-list'), count: get('phase-3-count') },
             
             buyModal: { 
@@ -250,6 +266,7 @@ export const ui = {
 export const renderers = {
     loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
     
+    // === NAPRAWIONE: LISTA KANDYDATÓW (SIDEBAR) ===
     phase1List: (candidates) => candidates.map(c => {
         let sectorBadge = "";
         if (c.sector_ticker) {
@@ -261,6 +278,7 @@ export const renderers = {
         return `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text border-b border-gray-800 last:border-0 hover:bg-gray-800"><div><span class="font-bold text-sky-400">${c.ticker}</span>${sectorBadge}</div><span class="text-gray-500 font-mono">${c.price ? c.price.toFixed(2) : '-'}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
     
+    // === NAPRAWIONE: LISTA SYGNAŁÓW W SIDEBARZE ===
     phase3List: (signals) => signals.map(s => {
         let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
@@ -284,6 +302,7 @@ export const renderers = {
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
+    // === NAPRAWIONE: DASHBOARD ===
     dashboard: () => {
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
         const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
@@ -365,7 +384,6 @@ export const renderers = {
             let currentPrice = 0;
             let isLive = false;
 
-            // Sprawdzamy cenę w paczce
             if (quotes && quotes[s.ticker] && quotes[s.ticker]['05. price']) {
                 const liveP = parseFloat(quotes[s.ticker]['05. price']);
                 if (!isNaN(liveP) && liveP > 0) {
@@ -377,7 +395,6 @@ export const renderers = {
                 currentPrice = parseFloat(s.entry_price);
             }
 
-            // === OBLICZANIE APEX R-FACTOR (Brutalna Prawda) ===
             let rValueDisplay = "---";
             let rValueClass = "text-gray-400";
             let scopeLeft = "0%"; 
@@ -388,22 +405,19 @@ export const renderers = {
             const sl = parseFloat(s.stop_loss || 0);
             const entry = parseFloat(s.entry_price || 0);
 
-            if (entry > 0 && sl > 0) {
-                 const totalDistance = tp - sl; // Całkowity zasięg wizualny
-                 const riskDistance = entry - sl; // Odległość ryzyka (1R)
+            if (entry > 0 && sl > 0 && tp > 0) {
+                 const totalDistance = tp - sl; 
+                 const riskDistance = entry - sl; 
 
                  if (totalDistance > 0 && riskDistance > 0) {
-                     // 1. Obliczanie pozycji Entry na pasku (%)
                      let ep = ((entry - sl) / totalDistance) * 100;
                      ep = Math.max(0, Math.min(100, ep));
                      entryPercent = `${ep}%`;
 
                      if (currentPrice > 0) {
-                        // 2. Obliczanie APEX R-FACTOR
                         const profitLossAmount = currentPrice - entry;
                         const rValue = profitLossAmount / riskDistance;
                         
-                        // Formatowanie R-Factor
                         if (rValue > 0) {
                             rValueDisplay = `+${rValue.toFixed(2)} R`;
                             rValueClass = "text-green-400 font-black";
@@ -415,11 +429,9 @@ export const renderers = {
                             rValueClass = "text-gray-300";
                         }
 
-                        // Kolorowanie Ceny Środkowej
                         if (currentPrice > entry) priceDisplayClass = "text-green-400 font-bold";
                         else if (currentPrice < entry) priceDisplayClass = "text-red-400 font-bold";
 
-                        // 3. Pozycja Białej Kreski (Celownika) na pasku
                         let progress = ((currentPrice - sl) / totalDistance) * 100;
                         progress = Math.max(0, Math.min(100, progress));
                         scopeLeft = `${progress}%`;
@@ -427,7 +439,6 @@ export const renderers = {
                  }
             }
 
-            // === TTL FIX (Czas Wygaśnięcia) ===
             let timeRemaining = "---";
             let timeBarWidth = 100;
             
@@ -435,7 +446,6 @@ export const renderers = {
                 const now = new Date();
                 const exp = new Date(s.expiration_date);
                 const gen = new Date(s.generation_date);
-                
                 const totalLife = exp.getTime() - gen.getTime();
                 const timeLeft = exp.getTime() - now.getTime();
                 
@@ -457,11 +467,9 @@ export const renderers = {
 
             return `
             <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
-                <!-- Pasek TTL na dole -->
                 <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full">
                     <div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div>
                 </div>
-
                 <div class="flex justify-between items-start mb-3">
                     <div>
                         <div class="flex items-center gap-2">
@@ -482,31 +490,25 @@ export const renderers = {
                         </div>
                     </div>
                 </div>
-
-                <!-- Ceny i Pasek (Scope) -->
                 <div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2">
                     <div class="text-left">
                         <span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span>
                         <span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span>
                     </div>
-                    
                     <div class="text-center pb-1">
                         <span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
                     </div>
-
                     <div class="text-right">
                         <span class="block text-[9px] uppercase text-green-500/70">Take Profit</span>
                         <span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span>
                     </div>
                 </div>
-                
-                <div class="sniper-scope-container" title="Zakres: SL (Czerwone) | Wejście (Żółte) | TP (Zielone)">
+                <div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)">
                     <div class="scope-zone-risk" style="width: ${entryPercent}"></div>
                     <div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div>
                     <div class="entry-marker" style="left: ${entryPercent}"></div>
                     <div class="scope-marker" style="left: ${scopeLeft}"></div>
                 </div>
-
                 <div class="mt-3 flex justify-between items-center">
                     <span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span>
                     <button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">
@@ -555,7 +557,59 @@ export const renderers = {
         </div>`;
     },
 
-    // === PORTFEL Z OBSŁUGĄ EXTENDED HOURS I PROCENTOWĄ ZMIANĄ ===
+    // === WIDOK FAZY X (BioX) ===
+    phaseXView: (candidates) => {
+        const rows = candidates.map(c => {
+            const dateStr = c.last_pump_date ? new Date(c.last_pump_date).toLocaleDateString() : '-';
+            const pumpColor = c.last_pump_percent >= 100 ? 'text-purple-400 font-black' : (c.last_pump_percent >= 50 ? 'text-pink-400 font-bold' : 'text-gray-400');
+            
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
+                <td class="p-3 font-bold text-pink-500">${c.ticker}</td>
+                <td class="p-3 text-right font-mono text-white">${c.price.toFixed(4)}</td>
+                <td class="p-3 text-right text-gray-400">${(c.volume_avg / 1000000).toFixed(1)}M</td>
+                <td class="p-3 text-center font-bold text-white bg-gray-800/50 rounded">${c.pump_count_1y}</td>
+                <td class="p-3 text-right text-gray-300">${dateStr}</td>
+                <td class="p-3 text-right ${pumpColor}">+${c.last_pump_percent.toFixed(0)}%</td>
+            </tr>`;
+        }).join('');
+
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr>
+            <th class="p-3 text-left">Ticker</th>
+            <th class="p-3 text-right">Cena ($)</th>
+            <th class="p-3 text-right">Vol (Avg)</th>
+            <th class="p-3 text-center">Pompy (1Y)</th>
+            <th class="p-3 text-right">Ost. Wybuch</th>
+            <th class="p-3 text-right">Moc (%)</th>
+        </tr></thead>`;
+
+        return `
+        <div id="phasex-view" class="max-w-6xl mx-auto">
+            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                <div>
+                    <h2 class="text-2xl font-bold text-white flex items-center">
+                        <i data-lucide="biohazard" class="w-6 h-6 mr-3 text-pink-500"></i>
+                        Faza X: BioX Hunter
+                    </h2>
+                    <p class="text-sm text-gray-500 mt-1">Biotech Penny Stocks (0.5$ - 4$) z historią wybuchów >50%.</p>
+                </div>
+                <button id="run-phasex-scan-btn" class="modal-button modal-button-primary bg-pink-600 hover:bg-pink-700 flex items-center shadow-[0_0_15px_rgba(219,39,119,0.3)]">
+                    <i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj BioX
+                </button>
+            </div>
+
+            ${candidates.length === 0 ? 
+                '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search-x" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć kandydatów.</p></div>' : 
+                `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl">
+                    <table class="w-full text-sm text-left text-gray-300">
+                        ${tableHeader}
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>`
+            }
+        </div>`;
+    },
+
+    // === PORTFEL ===
     portfolio: (holdings, quotes) => {
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
@@ -571,7 +625,7 @@ export const renderers = {
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
-                    priceSource = quote['_price_source'] || 'close'; // Sprawdzamy źródło ceny
+                    priceSource = quote['_price_source'] || 'close';
                     dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                     priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                     currentValue = h.quantity * currentPrice;
@@ -580,7 +634,6 @@ export const renderers = {
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
                     
-                    // Obliczanie % zmiany pozycji (Cena - Zakup / Zakup)
                     if (h.average_buy_price > 0) {
                         const pctChange = ((currentPrice - h.average_buy_price) / h.average_buy_price) * 100;
                         changePercentDisplay = `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(2)}%`;
@@ -590,9 +643,8 @@ export const renderers = {
                 } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
             
-            // Obsługa wizualna Extended Hours (Pre/Post Market)
             if (priceSource === 'extended_hours') {
-                priceClass = 'extended-hours-text'; // Używamy nowej klasy CSS
+                priceClass = 'extended-hours-text';
             }
 
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
@@ -604,7 +656,7 @@ export const renderers = {
                 <td class="p-3 text-right">${h.quantity}</td>
                 <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
                 <td class="p-3 text-right ${priceClass}">${priceDisplay}</td>
-                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td> <!-- Nowa kolumna % -->
+                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td>
                 <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
                 <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
                 <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
@@ -612,13 +664,12 @@ export const renderers = {
         }).join('');
         
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
-        // Zaktualizowany nagłówek tabeli
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr>
             <th scope="col" class="p-3">Ticker</th>
             <th scope="col" class="p-3 text-right">Ilość</th>
             <th scope="col" class="p-3 text-right">Cena Zakupu</th>
             <th scope="col" class="p-3 text-right">Kurs (USD)</th>
-            <th scope="col" class="p-3 text-right">Zmiana %</th> <!-- Nowy nagłówek -->
+            <th scope="col" class="p-3 text-right">Zmiana %</th>
             <th scope="col" class="p-3 text-right">Cel (TP)</th>
             <th scope="col" class="p-3 text-right">Zysk / Strata</th>
             <th scope="col" class="p-3 text-right">Akcja</th>
