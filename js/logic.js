@@ -71,7 +71,6 @@ export const showDashboard = async () => {
     if (!UI) return;
     UI.mainContent.innerHTML = renderers.dashboard();
     
-    // === PUNKT 1: AKTYWACJA PASKA WYSZUKIWANIA ===
     const searchInput = document.querySelector('input[placeholder*="Wpisz ticker"]');
     if (searchInput) {
         searchInput.addEventListener('keypress', (e) => {
@@ -237,40 +236,57 @@ export const showH3Signals = async (silent = false) => {
     state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
 };
 
-// === NOWOŚĆ: WIDOK FAZY X (BioX) ===
+// === NOWOŚĆ: WIDOK FAZY X (BioX) - NAPRAWA ===
 export const showPhaseX = async () => {
     stopViewPolling(); // Tu nie ma live cen na liście (na razie), więc polling niepotrzebny
     showLoading();
     
-    try {
-        const candidates = await api.getPhaseXCandidates();
-        UI.mainContent.innerHTML = renderers.phaseXView(candidates);
-        
-        // Obsługa przycisku skanowania wewnątrz widoku (jeśli dodamy go w ui.js)
-        const runBtn = document.getElementById('run-phasex-scan-btn');
-        if (runBtn) {
-            runBtn.addEventListener('click', handleRunPhaseXScan);
+    // Funkcja wewnętrzna renderująca widok i podpinająca zdarzenia
+    const render = async () => {
+        try {
+            const candidates = await api.getPhaseXCandidates();
+            UI.mainContent.innerHTML = renderers.phaseXView(candidates);
+            
+            // Podpinamy przycisk Skanowania WEWNĄTRZ wyrenderowanego widoku
+            // To kluczowe, bo przycisk powstaje dopiero po wyrenderowaniu HTML
+            const runBtn = document.getElementById('run-phasex-scan-btn');
+            if (runBtn) {
+                runBtn.addEventListener('click', handleRunPhaseXScan);
+            }
+            
+            if (window.lucide) window.lucide.createIcons();
+            
+        } catch (e) {
+            UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania Fazy X: ${e.message}</p>`;
         }
-    } catch (e) {
-        UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania Fazy X: ${e.message}</p>`;
-    }
+    };
+    
+    await render();
 };
 
 export const handleRunPhaseXScan = async () => {
     const btn = document.getElementById('run-phasex-scan-btn');
     if (btn) {
         btn.disabled = true;
-        btn.textContent = "Skanowanie w tle...";
+        btn.textContent = "Skanowanie w toku...";
+        btn.classList.add('animate-pulse');
     }
+    
     try {
         await api.sendWorkerControl('start_phasex');
-        // showSystemAlert("Rozpoczęto skanowanie BioX (Faza X)."); // Funkcja alertu musi być dostępna
-        alert("Rozpoczęto skanowanie BioX (Faza X). Sprawdź status workera.");
+        showSystemAlert("Rozpoczęto skanowanie BioX (Faza X). Sprawdź status Workera.");
     } catch (e) {
         alert("Błąd startu Fazy X: " + e.message);
+    } finally {
+        // Nie odblokowujemy przycisku natychmiast, użytkownik ma widzieć, że zlecenie poszło
         if (btn) {
-            btn.disabled = false;
-            btn.textContent = "Skanuj BioX";
+            setTimeout(() => {
+                if (document.body.contains(btn)) { // Sprawdź czy przycisk nadal istnieje
+                    btn.disabled = false;
+                    btn.textContent = "Skanuj BioX";
+                    btn.classList.remove('animate-pulse');
+                }
+            }, 5000);
         }
     }
 };
@@ -454,10 +470,6 @@ export const handleBuyConfirm = async () => {
         UI.buyModal.confirmBtn.disabled = false;
         UI.buyModal.confirmBtn.textContent = "Inwestuj";
     }
-};
-
-export const handleGhostBuy = async (ticker) => {
-    alert("Funkcja Ghost Mode została wyłączona.");
 };
 
 export const showSellModal = (ticker, maxQty) => {
