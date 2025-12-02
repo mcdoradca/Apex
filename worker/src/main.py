@@ -49,7 +49,6 @@ def can_run_background_task():
     ]
     
     if any(s in current_state for s in HEAVY_DUTY_STATES):
-        # logger.debug(f"Background task skipped. System is busy: {current_state}")
         return False
     return True
 
@@ -60,8 +59,6 @@ def safe_run_news_agent():
         news_agent.run_news_agent_cycle(get_db_session(), api_client)
 
 def safe_run_signal_monitor():
-    # Strażnik sygnałów jest krytyczny, ale jeśli robimy Backtest,
-    # to i tak nie chcemy, żeby nam "mulił" bazę co 3 sekundy.
     if can_run_background_task():
         signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client)
 
@@ -92,6 +89,12 @@ def run_phase_1_cycle(session):
         if macro_sentiment == 'RISK_OFF':
             utils.append_scan_log(session, "Faza 0: RISK_OFF. Skanowanie przerwane.")
             return
+
+        # === CZYSZCZENIE TABELI (Fix Duplicate Key) ===
+        # Usuwamy stare wyniki przed nowym skanem, aby uniknąć konfliktów
+        utils.append_scan_log(session, "Czyszczenie tabeli kandydatów Fazy 1...")
+        session.execute(text("DELETE FROM phase1_candidates"))
+        session.commit()
 
         # === FAZA 1 ===
         utils.update_system_control(session, 'current_phase', 'PHASE_1_SCAN')
@@ -183,7 +186,6 @@ def run_full_analysis_cycle():
 def handle_backtest_request(session, api_client) -> str:
     req = utils.get_system_control_value(session, 'backtest_request')
     if req and req not in ['NONE', 'PROCESSING']:
-        # BLOKADA STANU
         utils.update_system_control(session, 'worker_status', 'BUSY_BACKTEST')
         utils.update_system_control(session, 'current_phase', 'BACKTESTING')
         utils.update_system_control(session, 'backtest_request', 'PROCESSING')
@@ -271,15 +273,12 @@ def main_loop():
             logger.critical(f"Database Init Failed: {e}")
             sys.exit(1)
     
-    # === HARMONOGRAMY ZABEZPIECZONE ===
-    # Używamy wersji 'safe_', które sprawdzają, czy worker nie jest zajęty
     schedule.every(2).minutes.do(safe_run_news_agent)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(safe_run_virtual_agent)
     schedule.every(3).seconds.do(safe_run_signal_monitor)
     schedule.every(5).minutes.do(safe_run_biox_monitor)
 
     with get_db_session() as initial_session:
-        # Reset stanów przy starcie (na wypadek crasha)
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
@@ -289,21 +288,15 @@ def main_loop():
     while True:
         with get_db_session() as session:
             try:
-                # 1. Sprawdź komendy ręczne
                 run_action, new_state = utils.check_for_commands(session, current_state)
-                
-                # Aktualizuj globalny stan
                 if new_state != current_state:
                     current_state = new_state
 
-                # Jeśli przyszła komenda uruchomienia, wykonaj ją (to zablokuje pętlę na czas trwania)
                 if run_action == "FULL_RUN": run_full_analysis_cycle()
                 elif run_action == "PHASE_1_RUN": run_phase_1_cycle(session)
                 elif run_action == "PHASE_3_RUN": run_phase_3_cycle(session)
                 elif run_action == "PHASE_X_RUN": run_phase_x_cycle(session)
                 
-                # 2. Jeśli nie ma manualnych faz, sprawdź zlecenia specjalne (Backtest itp.)
-                # Jeśli któreś ruszy, zwróci status inny niż IDLE i zablokuje resztę
                 status = 'IDLE'
                 if current_state == 'IDLE':
                     status = handle_backtest_request(session, api_client)
@@ -314,24 +307,14 @@ def main_loop():
                 if current_state == 'IDLE' and status == 'IDLE':
                     status = handle_optimization_request(session)
                 
-                # Aktualizacja flagi stanu, jeśli coś weszło w tryb PROCESSING
                 if status != 'IDLE':
-                    current_state = 'BUSY' # Uproszczony stan lokalny
+                    current_state = 'BUSY'
 
-                # 3. Uruchom harmonogram (tylko te zadania, które przejdą przez 'can_run_background_task')
-                # Ponieważ safe_run_... sprawdzają 'current_state', jeśli jesteśmy w trakcie
-                # powyższych funkcji (które są synchroniczne), to schedule i tak nie ruszy.
-                # Ale jeśli powyższe funkcje są asynchroniczne lub w wątkach (tu nie są), to zabezpieczenie działa.
                 schedule.run_pending()
-                
-                # 4. Heartbeat
-                # Jeśli worker pracuje ciężko, raportuj heartbeat rzadziej lub wcale wewnątrz pętli
-                # (utils.report_heartbeat ma własne zabezpieczenie przed nadmiernym obciążeniem)
                 utils.report_heartbeat(session) 
                 
             except Exception as e:
                 logger.error(f"Loop error: {e}")
-                # W razie awarii pętli, spróbuj zresetować stan na IDLE, żeby nie zablokować systemu na zawsze
                 current_state = 'IDLE'
         
         time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
