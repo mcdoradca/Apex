@@ -28,10 +28,11 @@ from .. import models
 
 logger = logging.getLogger(__name__)
 
-# Słowa kluczowe BioX (zgodne ze skanerem)
+# Słowa kluczowe BioX (zgodne ze skanerem Fazy X)
 BIOTECH_KEYWORDS = [
     'Biotechnology', 'Pharmaceutical', 'Health Care', 'Life Sciences', 
-    'Medical', 'Therapeutics', 'Biosciences', 'Oncology', 'Genomics'
+    'Medical', 'Therapeutics', 'Biosciences', 'Oncology', 'Genomics',
+    'Drug', 'Bio'
 ]
 
 # Pomocnicza funkcja do Time Dilation (dla H3)
@@ -57,7 +58,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
     """
     Główny wrapper uruchamiający backtest.
     """
-    strategy_mode = 'H3'
+    strategy_mode = 'H3' # Domyślnie H3
     if parameters:
         if parameters.get('strategy_mode') == 'AQM':
             strategy_mode = 'AQM'
@@ -75,6 +76,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
     """
     try:
         # === BEZPIECZNE CZYSZCZENIE DANYCH ===
+        # Czyścimy tylko wyniki starego backtestu, nie ruszamy danych produkcyjnych
         session.execute(text("DELETE FROM virtual_trades WHERE setup_type LIKE 'BACKTEST_%'"))
         session.commit()
         # ====================================
@@ -129,10 +131,11 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         setup_name_suffix = str(params.get('setup_name', ''))
         if setup_name_suffix: setup_name_base += f"_{setup_name_suffix}"
 
+        # Ustawienie zakresu dat
         start_date_ts = pd.Timestamp(f"{year}-01-01").tz_localize(None)
         end_date_ts = pd.Timestamp(f"{year}-12-31").tz_localize(None)
 
-        # A. Pobranie SPY
+        # A. Pobranie SPY (Benchmark dla H3/AQM)
         spy_raw = get_raw_data_with_cache(session, api_client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         spy_df = pd.DataFrame()
         if spy_raw:
@@ -140,7 +143,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
             spy_df.index = pd.to_datetime(spy_df.index).tz_localize(None)
             spy_df.sort_index(inplace=True)
 
-        # B. Przygotowanie Kontekstu Makro
+        # B. Przygotowanie Kontekstu Makro (Dla AQM)
         macro_data = {
             'spy_df': spy_df, 
             'vix': 20.0, 
@@ -183,6 +186,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                 
                 if not adj.empty:
                     df = adj.join(ohlcv[['open', 'high', 'low', 'close']], rsuffix='_raw')
+                    # Mapowanie kolumn, aby mieć pewność, że używamy surowych cen do otwarcia pozycji
                     trade_open_col = 'open_raw' if 'open_raw' in df.columns else 'open'
                     trade_high_col = 'high_raw' if 'high_raw' in df.columns else 'high'
                     trade_low_col = 'low_raw' if 'low_raw' in df.columns else 'low'
@@ -198,7 +202,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
 
                 signal_df = pd.DataFrame()
 
-                # ŚCIEŻKA 1: STRATEGIA H3
+                # ŚCIEŻKA 1: STRATEGIA H3 (Elite Sniper)
                 if strategy_mode == 'H3':
                     if len(df) < 201: continue
                     h2_data = load_h2_data_into_cache(ticker, api_client, session)
@@ -245,7 +249,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     )
                     signal_df = df
 
-                # ŚCIEŻKA 2: STRATEGIA AQM (V4)
+                # ŚCIEŻKA 2: STRATEGIA AQM (V4 - Adaptive Quantum Model)
                 elif strategy_mode == 'AQM':
                     if len(df) < 201: continue
                     w_raw = get_raw_data_with_cache(session, api_client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
@@ -291,21 +295,23 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     # 1. Weryfikacja Sektora (Filtr Bezpieczeństwa)
                     sec, ind = company_sectors.get(ticker, ('',''))
                     
-                    # Jeśli nie mamy danych sektora, ale ticker jest z tabeli phasex_candidates, to przepuszczamy.
-                    # W przeciwnym razie sprawdzamy keywords.
+                    # Sprawdzamy czy spółka jest Biotechnologiczna
+                    # (Używamy keywords oraz sprawdzamy czy była w tabeli phasex_candidates)
                     is_biotech = any(k in sec or k in ind for k in BIOTECH_KEYWORDS)
                     
                     if not is_biotech:
                         continue 
 
-                    # 2. Obliczanie wskaźników pompy
+                    # 2. Obliczanie wskaźników pompy (Wzrost > 20%)
                     df['prev_close'] = df['close'].shift(1)
+                    # Zmiana Intraday: (High - Open) / Open
                     df['intraday_change'] = (df['high'] - df['open']) / df['open']
+                    # Zmiana Sesyjna: (Close - Prev Close) / Prev Close
                     df['session_change'] = (df['close'] - df['prev_close']) / df['prev_close']
                     
                     BIO_MIN_PRICE = 0.50
-                    BIO_MAX_PRICE = 5.00 # Zgodnie ze skanerem (podniesione do 5)
-                    BIO_PUMP_THRESHOLD = 0.50 # 50%
+                    BIO_MAX_PRICE = 4.00 # Zgodnie z wytycznymi (0.5$ - 4.0$)
+                    BIO_PUMP_THRESHOLD = 0.20 # 20%
 
                     # Sygnał: Pompa cenowa w zakresie penny stock
                     df['is_signal'] = (
@@ -314,12 +320,14 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                         (df['close'] <= BIO_MAX_PRICE)
                     )
                     
-                    # Proxy score dla raportów
-                    df['aqm_score_h3'] = df['session_change'] * 10
+                    # Proxy score dla raportów (aby wiedzieć jak duża była pompa)
+                    # Zapisujemy max zmianę w procentach (np. 45.5 oznacza 45.5%)
+                    df['aqm_score_h3'] = df[['intraday_change', 'session_change']].max(axis=1) * 100
                     signal_df = df
 
                 # 4. PĘTLA SYMULACYJNA (Generowanie Transakcji)
                 if not signal_df.empty and 'is_signal' in signal_df.columns:
+                    # Filtrujemy tylko rok wybrany do analizy
                     sim_start_idx = signal_df.index.searchsorted(start_date_ts)
                     i = sim_start_idx
                     
@@ -329,16 +337,24 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                         
                         if signal_df['is_signal'].iloc[i]:
                             row = signal_df.iloc[i]
+                            
+                            # Symulacja wejścia:
+                            # Dla BioX: Wchodzimy w momencie wykrycia pompy (tutaj: na otwarciu następnego dnia lub "po fakcie" jako audit)
+                            # W backteście technicznym wchodzimy na Open następnego dnia
                             next_day_row = signal_df.iloc[i+1]
                             entry_price = next_day_row[trade_open_col]
+                            
                             atr = row['atr_14']
                             
-                            # Dla BioX używamy szerszego ATR lub sztywnego stopa
-                            if atr <= 0 and strategy_mode != 'BIOX':
-                                i += 1; continue
-                            elif (atr <= 0 or strategy_mode == 'BIOX'):
-                                # W BioX ATR może być zaburzony przez pompę, używamy % ceny jako proxy zmienności
+                            # Dla BioX ATR jest często zaburzony przez pompę.
+                            # Używamy sztywnego stopa procentowego lub szerokiego ATR.
+                            if strategy_mode == 'BIOX':
+                                # Dynamiczny Stop Loss dla Penny Stocks: 15% od wejścia
                                 atr = entry_price * 0.15 
+                                tp_mult = 3.0 # Celujemy w 45% zysku (kontynuacja pompy)
+                                sl_mult = 1.0 # SL 15%
+                            elif atr <= 0:
+                                i += 1; continue
                                 
                             if entry_price <= 0:
                                 i += 1; continue
@@ -351,6 +367,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                             close_date = next_day_row.name
                             days_held = 0
                             
+                            # Symulacja trzymania pozycji (max_hold dni)
                             for h in range(max_hold):
                                 day_idx = i + 1 + h
                                 if day_idx >= len(signal_df): 
@@ -367,6 +384,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                 days_held += 1
                                 close_date = day_candle.name
                                 
+                                # Sprawdzenie warunków wyjścia (SL/TP)
                                 if d_open <= sl_price:
                                     trade_status = 'CLOSED_SL'
                                     close_price = d_open
@@ -389,10 +407,11 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                             
                             p_l_percent = ((close_price - entry_price) / entry_price) * 100
                             
+                            # Zapisujemy metryki do analizy
                             metric_score = 0.0
                             if strategy_mode == 'H3': metric_score = float(row.get('aqm_score_h3', 0))
                             elif strategy_mode == 'AQM': metric_score = float(row.get('aqm_score', 0))
-                            elif strategy_mode == 'BIOX': metric_score = float(row.get('session_change', 0) * 100)
+                            elif strategy_mode == 'BIOX': metric_score = float(row.get('aqm_score_h3', 0)) # Tutaj mamy wielkość pompy w %
 
                             trade_data = {
                                 "ticker": ticker,
@@ -400,7 +419,8 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                 "entry_price": float(entry_price),
                                 "stop_loss": float(sl_price),
                                 "take_profit": float(tp_price),
-                                "metric_aqm_score_h3": metric_score,
+                                # Wykorzystujemy kolumny metryk do zapisania danych o pompie
+                                "metric_aqm_score_h3": metric_score, # Wielkość pompy (%) dla BioX
                                 "metric_atr_14": float(atr),
                                 "metric_J_norm": float(row.get('J_norm', 0)) if strategy_mode == 'H3' else float(row.get('qps', 0)),
                                 "metric_nabla_sq_norm": float(row.get('nabla_sq_norm', 0)) if strategy_mode == 'H3' else float(row.get('ves', 0)),
@@ -416,6 +436,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                             session.add(vt)
                             trades_generated += 1
                             
+                            # Przesuwamy indeks o czas trwania transakcji, żeby nie otwierać nowych w trakcie trwania
                             i += max(1, days_held)
                         else:
                             i += 1
@@ -428,6 +449,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     session.commit()
 
             except Exception as e:
+                # Logujemy, ale nie przerywamy całej symulacji
                 logger.error(f"Błąd backtestu dla {ticker}: {e}")
                 session.rollback()
                 continue
