@@ -48,6 +48,11 @@ export const api = {
         body: params ? JSON.stringify(params) : null
     }),
     getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
+    
+    // === NOWOŚĆ: Pobieranie kandydatów Fazy X (BioX) ===
+    getPhaseXCandidates: () => apiRequest('api/v1/candidates/phasex'),
+    // ===================================================
+
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
     
@@ -57,9 +62,8 @@ export const api = {
     getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
     getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
     
-    // === NOWOŚĆ: Bulk Quotes (dla wydajnego Portfela Live) ===
+    // Bulk Quotes (dla wydajnego Portfela Live i Sygnałów H3)
     getBulkQuotes: (tickers) => apiRequest(`api/v1/quotes/bulk?tickers=${tickers.join(',')}`),
-    // ==========================================================
 
     addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
     getSystemAlert: () => apiRequest('api/v1/system/alert'),
@@ -83,7 +87,6 @@ export const api = {
     getH3DeepDiveReport: () => apiRequest('api/v1/analysis/h3-deep-dive-report'),
     getExportCsvUrl: () => `${API_BASE_URL}/api/v1/export/trades.csv`,
 
-    // === NOWE METODY DLA APEX V4 (Quantum Optimization) ===
     startOptimization: (requestData) => apiRequest('api/v1/optimization/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -91,5 +94,4 @@ export const api = {
     }),
     
     getOptimizationResults: () => apiRequest('api/v1/optimization/results')
-    // =======================================================
 };
