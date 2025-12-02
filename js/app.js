@@ -15,8 +15,9 @@ import {
     showSignalDetails, hideSignalDetails,
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
     showOptimizationResults, hideOptimizationResults,
-    // === NOWOŚĆ: Import kontrolera widoku H3 ===
-    showH3Signals
+    showH3Signals,
+    // === NOWOŚĆ: Importy BioX ===
+    showPhaseX, handleRunPhaseXScan
 } from './logic.js';
 
 // Tworzymy lokalny obiekt Logic dla kompatybilności z resztą kodu
@@ -34,8 +35,9 @@ const Logic = {
     showSignalDetails, hideSignalDetails,
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
     showOptimizationResults, hideOptimizationResults,
-    // Dodajemy nową funkcję do obiektu Logic
-    showH3Signals
+    showH3Signals,
+    // === NOWOŚĆ: BioX Logic ===
+    showPhaseX, handleRunPhaseXScan
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -122,7 +124,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (signalItem) {
                     const ticker = signalItem.dataset.ticker;
                     if (ticker) {
-                        logger.info(`Kliknięto sygnał H3 (Sidebar): ${ticker}`);
                         Logic.showSignalDetails(ticker);
                     }
                 }
@@ -139,6 +140,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (UI.btnPhase3) {
             UI.btnPhase3.addEventListener('click', () => {
                 Logic.showH3LiveParamsModal();
+            });
+        }
+        
+        // === NOWOŚĆ: Obsługa przycisku BioX w Sidebarze ===
+        if (UI.btnPhaseX) {
+            UI.btnPhaseX.addEventListener('click', (e) => {
+                e.preventDefault();
+                Logic.showPhaseX();
             });
         }
         
@@ -171,7 +180,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (UI.transactionsLink) UI.transactionsLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showTransactions(); });
         if (UI.agentReportLink) UI.agentReportLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showAgentReport(); });
         
-        // NOWOŚĆ: Obsługa kliknięcia w link "Sygnały H3 Live"
         if (UI.h3SignalsLink) {
             UI.h3SignalsLink.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -214,7 +222,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
     } catch (error) {
         console.error("CRITICAL ERROR in app.js:", error);
-        const statusEl = document.getElementById('login-status-text');
-        if (statusEl) statusEl.textContent = "Błąd inicjalizacji aplikacji. Sprawdź konsolę.";
     }
 });
