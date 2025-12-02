@@ -142,11 +142,10 @@ export const ui = {
              btn.className = 'w-full text-left flex items-center bg-pink-600/20 hover:bg-pink-600/40 text-pink-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
              btn.innerHTML = '<i data-lucide="biohazard" class="mr-2 h-4 w-4"></i>Skanuj Faza X (BioX)';
              btn.onclick = () => {
-                 const event = new CustomEvent('run-phasex'); // Logika w logic.js powinna to przechwycić lub obsługujemy przez event globalny w app.js (ale tu używamy prostszego wiązania w logic.js)
-                 // UWAGA: Ponieważ w logic.js nie dodaliśmy listenera globalnego, logic.js musi sam podpiąć się pod ten przycisk po załadowaniu widoku, 
-                 // ALE ten przycisk jest w sidebarze (stały), więc podepniemy go w app.js lub tutaj wywołamy funkcję globalną jeśli dostępna.
-                 // Bezpieczniej: app.js powinien obsłużyć click, ale skoro app.js nie zmieniamy, zostawmy to tak, a logic.js przy starcie powinien znaleźć ten przycisk.
-                 // Jednak ui.init zwraca btnPhaseX, więc app.js/logic.js może dodać listenera.
+                 const event = new CustomEvent('run-phasex'); 
+                 // Event listener dodawany w logic.js lub app.js
+                 // Tutaj tylko generujemy przycisk
+                 // W logic.js: showPhaseX()
              };
              sidebarControls.appendChild(btn);
         }
@@ -381,9 +380,11 @@ export const renderers = {
                 if (match) score = match[1];
             }
 
+            // === DYNAMIC R:R CALCULATION & TTL ===
             let currentPrice = 0;
             let isLive = false;
 
+            // Sprawdzamy czy mamy cenę w paczce (quotes)
             if (quotes && quotes[s.ticker] && quotes[s.ticker]['05. price']) {
                 const liveP = parseFloat(quotes[s.ticker]['05. price']);
                 if (!isNaN(liveP) && liveP > 0) {
@@ -391,10 +392,12 @@ export const renderers = {
                     isLive = true;
                 }
             }
+            // Fallback na cenę zapisaną w sygnale (jeśli brak live)
             if (currentPrice === 0 && s.entry_price) {
                 currentPrice = parseFloat(s.entry_price);
             }
 
+            // === OBLICZANIE APEX R-FACTOR (Brutalna Prawda) ===
             let rValueDisplay = "---";
             let rValueClass = "text-gray-400";
             let scopeLeft = "0%"; 
@@ -406,18 +409,21 @@ export const renderers = {
             const entry = parseFloat(s.entry_price || 0);
 
             if (entry > 0 && sl > 0 && tp > 0) {
-                 const totalDistance = tp - sl; 
-                 const riskDistance = entry - sl; 
+                 const totalDistance = tp - sl; // Całkowity zasięg wizualny od SL do TP
+                 const riskDistance = entry - sl; // Odległość ryzyka (1R)
 
                  if (totalDistance > 0 && riskDistance > 0) {
+                     // 1. Obliczanie pozycji Entry na pasku (%) względem całego zakresu SL-TP
                      let ep = ((entry - sl) / totalDistance) * 100;
                      ep = Math.max(0, Math.min(100, ep));
                      entryPercent = `${ep}%`;
 
                      if (currentPrice > 0) {
+                        // 2. Obliczanie APEX R-FACTOR
                         const profitLossAmount = currentPrice - entry;
                         const rValue = profitLossAmount / riskDistance;
                         
+                        // Formatowanie R-Factor
                         if (rValue > 0) {
                             rValueDisplay = `+${rValue.toFixed(2)} R`;
                             rValueClass = "text-green-400 font-black";
@@ -429,30 +435,36 @@ export const renderers = {
                             rValueClass = "text-gray-300";
                         }
 
+                        // Kolorowanie Ceny Środkowej
                         if (currentPrice > entry) priceDisplayClass = "text-green-400 font-bold";
                         else if (currentPrice < entry) priceDisplayClass = "text-red-400 font-bold";
 
+                        // 3. Pozycja Białej Kreski (Celownika) na pasku względem SL-TP
+                        // Wzór: (Cena - SL) / (TP - SL) * 100
                         let progress = ((currentPrice - sl) / totalDistance) * 100;
-                        progress = Math.max(0, Math.min(100, progress));
+                        progress = Math.max(0, Math.min(100, progress)); // Clamp 0-100%
                         scopeLeft = `${progress}%`;
                      }
                  }
             }
 
+            // === TTL FIX (Czas Wygaśnięcia) ===
             let timeRemaining = "---";
             let timeBarWidth = 100;
             
+            // Poprawka: Backend teraz zwraca expiration_date
             if (s.expiration_date) {
                 const now = new Date();
                 const exp = new Date(s.expiration_date);
                 const gen = new Date(s.generation_date);
+                
                 const totalLife = exp.getTime() - gen.getTime();
                 const timeLeft = exp.getTime() - now.getTime();
                 
                 if (timeLeft > 0) {
                     const daysLeft = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
                     const hoursLeft = Math.floor((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-                    timeRemaining = `${daysLeft}d ${hoursLeft}h`;
+                    timeRemaining = `${daysLeft}d ${hoursLeft}h`; // Wyświetlamy np. "4d 2h"
                     if (totalLife > 0) timeBarWidth = Math.max(0, Math.min(100, (timeLeft / totalLife) * 100));
                 } else {
                     timeRemaining = "Wygasł";
@@ -467,9 +479,11 @@ export const renderers = {
 
             return `
             <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
+                <!-- Pasek TTL na dole -->
                 <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full">
                     <div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div>
                 </div>
+
                 <div class="flex justify-between items-start mb-3">
                     <div>
                         <div class="flex items-center gap-2">
@@ -490,25 +504,31 @@ export const renderers = {
                         </div>
                     </div>
                 </div>
+
+                <!-- Ceny i Pasek (Scope) -->
                 <div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2">
                     <div class="text-left">
                         <span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span>
                         <span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span>
                     </div>
+                    
                     <div class="text-center pb-1">
                         <span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
                     </div>
+
                     <div class="text-right">
                         <span class="block text-[9px] uppercase text-green-500/70">Take Profit</span>
                         <span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span>
                     </div>
                 </div>
+                
                 <div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)">
                     <div class="scope-zone-risk" style="width: ${entryPercent}"></div>
                     <div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div>
                     <div class="entry-marker" style="left: ${entryPercent}"></div>
                     <div class="scope-marker" style="left: ${scopeLeft}"></div>
                 </div>
+
                 <div class="mt-3 flex justify-between items-center">
                     <span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span>
                     <button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">
@@ -557,7 +577,7 @@ export const renderers = {
         </div>`;
     },
 
-    // === WIDOK FAZY X (BioX) ===
+    // === NOWOŚĆ: WIDOK FAZY X (BioX) ===
     phaseXView: (candidates) => {
         const rows = candidates.map(c => {
             const dateStr = c.last_pump_date ? new Date(c.last_pump_date).toLocaleDateString() : '-';
@@ -609,7 +629,7 @@ export const renderers = {
         </div>`;
     },
 
-    // === PORTFEL ===
+    // === PORTFEL Z OBSŁUGĄ EXTENDED HOURS I PROCENTOWĄ ZMIANĄ ===
     portfolio: (holdings, quotes) => {
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
@@ -625,7 +645,7 @@ export const renderers = {
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
-                    priceSource = quote['_price_source'] || 'close';
+                    priceSource = quote['_price_source'] || 'close'; // Sprawdzamy źródło ceny
                     dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                     priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                     currentValue = h.quantity * currentPrice;
@@ -634,6 +654,7 @@ export const renderers = {
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
                     
+                    // Obliczanie % zmiany pozycji (Cena - Zakup / Zakup)
                     if (h.average_buy_price > 0) {
                         const pctChange = ((currentPrice - h.average_buy_price) / h.average_buy_price) * 100;
                         changePercentDisplay = `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(2)}%`;
@@ -643,8 +664,9 @@ export const renderers = {
                 } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
             
+            // Obsługa wizualna Extended Hours (Pre/Post Market)
             if (priceSource === 'extended_hours') {
-                priceClass = 'extended-hours-text';
+                priceClass = 'extended-hours-text'; // Używamy nowej klasy CSS
             }
 
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
@@ -656,7 +678,7 @@ export const renderers = {
                 <td class="p-3 text-right">${h.quantity}</td>
                 <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
                 <td class="p-3 text-right ${priceClass}">${priceDisplay}</td>
-                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td>
+                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td> <!-- Nowa kolumna % -->
                 <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
                 <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
                 <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
@@ -664,12 +686,13 @@ export const renderers = {
         }).join('');
         
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
+        // Zaktualizowany nagłówek tabeli
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr>
             <th scope="col" class="p-3">Ticker</th>
             <th scope="col" class="p-3 text-right">Ilość</th>
             <th scope="col" class="p-3 text-right">Cena Zakupu</th>
             <th scope="col" class="p-3 text-right">Kurs (USD)</th>
-            <th scope="col" class="p-3 text-right">Zmiana %</th>
+            <th scope="col" class="p-3 text-right">Zmiana %</th> <!-- Nowy nagłówek -->
             <th scope="col" class="p-3 text-right">Cel (TP)</th>
             <th scope="col" class="p-3 text-right">Zysk / Strata</th>
             <th scope="col" class="p-3 text-right">Akcja</th>
@@ -700,7 +723,7 @@ export const renderers = {
         const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-semibold text-sky-400">${setupName}</td><td class="p-3 text-right">${setupStats.total_trades}</td><td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td><td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td><td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td></tr>`).join('');
         const setupTable = setupRows.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr><th scope="col" class="p-3">Strategia</th><th scope="col" class="p-3 text-right">Ilość Transakcji</th><th scope="col" class="p-3 text-right">Win Rate (%)</th><th scope="col" class="p-3 text-right">Całkowity P/L (%)</th><th scope="col" class="p-3 text-right">Profit Factor</th></tr></thead><tbody>${setupRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
         const tradeHeaders = ['Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)', 'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile', 'Inst. Sync', 'Retail Herd.', 'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)', 'J (H4)', 'J Thresh.'];
-        const headerClasses = ['sticky left-0', 'sticky left-[90px]', 'sticky left-[160px]', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right'];
+        const headerClasses = ['sticky left-0', 'sticky left-[90px]', 'sticky left-[160px]', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right'];
         const tradeRows = trades.map(t => {
             const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
             const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
