@@ -25,18 +25,12 @@ load_dotenv()
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 if not API_KEY: sys.exit(1)
 
-# Zmienna globalna stanu (lokalna kopia dla szybkości decyzji w pętli)
 current_state = "IDLE" 
 api_client = AlphaVantageClient(api_key=API_KEY)
 
-# === STRAŻNIK PROCESÓW (Helper) ===
+# === STRAŻNIK PROCESÓW ===
 def can_run_background_task():
-    """
-    Decyduje, czy można uruchomić zadanie w tle (News, BioX, Strażnik).
-    Zwraca False, jeśli trwa ciężki proces (Faza 1/3, Backtest, Optymalizacja).
-    """
     global current_state
-    # Lista stanów "ciężkich", które blokują wszystko inne
     HEAVY_DUTY_STATES = [
         'RUNNING', 
         'BUSY_BACKTEST', 
@@ -47,28 +41,46 @@ def can_run_background_task():
         'PHASE_3_LIVE',
         'PHASE_X_SCAN'
     ]
-    
     if any(s in current_state for s in HEAVY_DUTY_STATES):
         return False
     return True
 
-# === WRAPPERY DLA ZADAŃ W TLE (Chronią bazę) ===
+# === WRAPPERY DLA ZADAŃ W TLE (FIX: SESSION CONTEXT MANAGER) ===
+# Tutaj była przyczyna błędu QueuePool limit. 
+# Sesja musi być otwierana w bloku 'with', aby została zamknięta po wykonaniu zadania.
 
 def safe_run_news_agent():
     if can_run_background_task():
-        news_agent.run_news_agent_cycle(get_db_session(), api_client)
+        # Używamy bloku 'with', aby połączenie wróciło do puli
+        with get_db_session() as session:
+            try:
+                news_agent.run_news_agent_cycle(session, api_client)
+            except Exception as e:
+                logger.error(f"News Agent Error: {e}")
 
 def safe_run_signal_monitor():
     if can_run_background_task():
-        signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client)
+        with get_db_session() as session:
+            try:
+                signal_monitor.run_signal_monitor_cycle(session, api_client)
+            except Exception as e:
+                logger.error(f"Signal Monitor Error: {e}")
 
 def safe_run_virtual_agent():
     if can_run_background_task():
-        virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client)
+        with get_db_session() as session:
+            try:
+                virtual_agent.run_virtual_trade_monitor(session, api_client)
+            except Exception as e:
+                logger.error(f"Virtual Agent Error: {e}")
 
 def safe_run_biox_monitor():
     if can_run_background_task():
-        biox_agent.run_biox_live_monitor(get_db_session(), api_client)
+        with get_db_session() as session:
+            try:
+                biox_agent.run_biox_live_monitor(session, api_client)
+            except Exception as e:
+                logger.error(f"BioX Monitor Error: {e}")
 
 # === GŁÓWNE PROCESY ===
 
@@ -79,26 +91,20 @@ def run_phase_1_cycle(session):
         logger.info("Starting Phase 1 Cycle (Macro + Scan)...")
         utils.append_scan_log(session, ">>> Rozpoczynanie Fazy 1...") 
         
-        # USTAWIAMY STAN NA BUSY - BLOKADA INNYCH PROCESÓW
         current_state = 'RUNNING'
         utils.update_system_control(session, 'worker_status', 'RUNNING')
         
-        # === FAZA 0 ===
         utils.update_system_control(session, 'current_phase', 'PHASE_0_MACRO')
         macro_sentiment = phase0_macro_agent.run_macro_analysis(session, api_client)
         if macro_sentiment == 'RISK_OFF':
             utils.append_scan_log(session, "Faza 0: RISK_OFF. Skanowanie przerwane.")
             return
 
-        # === CZYSZCZENIE TABELI (Fix Duplicate Key) ===
-        # Usuwamy stare wyniki przed nowym skanem, aby uniknąć konfliktów
         utils.append_scan_log(session, "Czyszczenie tabeli kandydatów Fazy 1...")
         session.execute(text("DELETE FROM phase1_candidates"))
         session.commit()
 
-        # === FAZA 1 ===
         utils.update_system_control(session, 'current_phase', 'PHASE_1_SCAN')
-        # Przekazujemy lambdę do sprawdzania stanu, aby skaner mógł zostać zapauzowany
         candidates = phase1_scanner.run_scan(session, lambda: current_state, api_client)
         
         if candidates:
@@ -263,7 +269,7 @@ def handle_optimization_request(session) -> str:
 
 def main_loop():
     global current_state, api_client
-    logger.info("Worker main loop started with PROCESS GUARD.")
+    logger.info("Worker main loop started with PROCESS GUARD + SESSION FIX.")
     
     with get_db_session() as session:
         try:
@@ -273,6 +279,7 @@ def main_loop():
             logger.critical(f"Database Init Failed: {e}")
             sys.exit(1)
     
+    # Schedule teraz korzysta z bezpiecznych wrapperów
     schedule.every(2).minutes.do(safe_run_news_agent)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(safe_run_virtual_agent)
     schedule.every(3).seconds.do(safe_run_signal_monitor)
@@ -283,9 +290,10 @@ def main_loop():
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         utils.report_heartbeat(initial_session)
-        utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy. Strażnik Procesów Aktywny.")
+        utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy.")
 
     while True:
+        # Pętla główna używa własnej sesji (context manager), która żyje krótko
         with get_db_session() as session:
             try:
                 run_action, new_state = utils.check_for_commands(session, current_state)
