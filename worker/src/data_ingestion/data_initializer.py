@@ -4,7 +4,7 @@ from io import StringIO
 import requests
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
-import os # Wymagany do odczytu zmiennych środowiskowych
+import os 
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.tx
 def _run_schema_and_index_migration(session: Session):
     """
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
-    Ta funkcja jest BEZPIECZNA i nie usuwa danych.
+    Dodano obsługę migracji dla Fazy X (BioX).
     """
     try:
         logger.info("Starting database schema and index migration...")
@@ -43,14 +43,12 @@ def _run_schema_and_index_migration(session: Session):
             
             # === APEX V6 NEW COLUMNS (TTL) ===
             if 'expiration_date' not in columns:
-                logger.warning("Migration V6: Adding column 'expiration_date' to trading_signals.")
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMP WITH TIME ZONE"))
 
         # === MIGRACJA TABELI 2: companies (V5 Update) ===
         if 'companies' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('companies')]
             if 'sector_etf' not in columns:
-                logger.warning("Migration V5: Adding column 'sector_etf' to companies.")
                 session.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS sector_etf VARCHAR(10)"))
 
         # === MIGRACJA TABELI 3: phase1_candidates (V5 Update) ===
@@ -62,6 +60,17 @@ def _run_schema_and_index_migration(session: Session):
                 session.execute(text("ALTER TABLE phase1_candidates ADD COLUMN IF NOT EXISTS sector_trend_score NUMERIC(5, 2)"))
             if 'days_to_earnings' not in columns:
                 session.execute(text("ALTER TABLE phase1_candidates ADD COLUMN IF NOT EXISTS days_to_earnings INTEGER"))
+
+        # === NOWOŚĆ: Weryfikacja Tabeli PhaseX (BioX) ===
+        # Zapewniamy, że tabela ma kolumny statystyczne do analizy pomp
+        if 'phasex_candidates' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('phasex_candidates')]
+            if 'last_pump_date' not in columns:
+                logger.info("Migracja BioX: Dodawanie kolumny 'last_pump_date'")
+                session.execute(text("ALTER TABLE phasex_candidates ADD COLUMN IF NOT EXISTS last_pump_date DATE"))
+            if 'last_pump_percent' not in columns:
+                logger.info("Migracja BioX: Dodawanie kolumny 'last_pump_percent'")
+                session.execute(text("ALTER TABLE phasex_candidates ADD COLUMN IF NOT EXISTS last_pump_percent NUMERIC(10, 2)"))
 
         # === MIGRACJA INDEKSÓW ===
         index_name = 'uq_active_pending_ticker'
@@ -99,7 +108,7 @@ def _run_schema_and_index_migration(session: Session):
                     pass 
 
         session.commit()
-        logger.info("Database schema migration (V6 included) completed successfully.")
+        logger.info("Database schema migration completed successfully.")
 
     except Exception as e:
         logger.critical(f"FATAL: Error during database schema/index migration: {e}", exc_info=True)
@@ -109,11 +118,10 @@ def _run_schema_and_index_migration(session: Session):
 def force_reset_simulation_data(session: Session):
     """
     !!! UWAGA: FUNKCJA DESTRUKCYJNA !!!
-    Usuwa wszystkie wyniki symulacji. Teraz wymaga zmiennej środowiskowej
+    Usuwa wszystkie wyniki symulacji. Wymaga zmiennej środowiskowej
     'APEX_ALLOW_DATA_RESET' ustawionej na 'TRUE'.
     """
     if os.getenv("APEX_ALLOW_DATA_RESET") != "TRUE":
-        logger.critical("❌❌❌ TWARDY RESET ODRZUCONY! Ustaw APEX_ALLOW_DATA_RESET=TRUE, aby kontynuować. ❌❌❌")
         return
         
     logger.warning("⚠️⚠️⚠️ TWARDY RESET ZOSTAŁ WYWOŁANY PRZEZ UŻYTKOWNIKA ⚠️⚠️⚠️")
@@ -126,7 +134,8 @@ def force_reset_simulation_data(session: Session):
             "trading_signals",     
             "phase1_candidates",   
             "phase2_results",
-            "processed_news"       
+            "processed_news",
+            "phasex_candidates"  # Dodano do czyszczenia
         ]
         
         for table in tables_to_clear:
@@ -150,11 +159,11 @@ def initialize_database_if_empty(session: Session, api_client):
     """
     Inicjalizuje bazę danych przy starcie Workera.
     """
-    # 1. Migracja schematu
+    # 1. Migracja schematu (Zawsze uruchamiana, bezpieczna)
     _run_schema_and_index_migration(session)
 
-    # === TWARDY RESET WYŁĄCZONY ===
-    # force_reset_simulation_data(session) # <--- Zakomentowane, aby nie czyścić danych przy każdym starcie!
+    # === TWARDY RESET (Opcjonalny, sterowany ENV) ===
+    # force_reset_simulation_data(session) 
     # ==============================
 
     # 2. Seedowanie firm (jeśli pusta)
