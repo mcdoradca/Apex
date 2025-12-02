@@ -6,7 +6,7 @@ from sqlalchemy import text
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
-# Importy narzędziowe
+# Importy narzędziowe z wnętrza aplikacji
 from .utils import (
     append_scan_log, update_scan_progress, safe_float, 
     standardize_df_columns, get_raw_data_with_cache 
@@ -14,42 +14,46 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-# Parametry Fazy X (BioX)
+# === KONFIGURACJA KRYTERIÓW FAZY X (BIOX) ===
+# Zgodnie z Twoim wymaganiem: Biotech + Penny Stocks (0.5$ - 4.0$)
 MIN_PRICE = 0.50
-MAX_PRICE = 5.00 
-PUMP_THRESHOLD_PERCENT = 0.50 # 50% wzrostu w 1 dzień
+MAX_PRICE = 4.00 
+PUMP_THRESHOLD_PERCENT = 0.20 # Próg do statystyk historycznych (20% wzrostu intraday)
 
 # Słowa kluczowe do identyfikacji sektora Biotech w bazie danych
 BIOTECH_KEYWORDS = [
     'Biotechnology', 'Pharmaceutical', 'Health Care', 'Life Sciences', 
-    'Medical', 'Therapeutics', 'Biosciences', 'Oncology', 'Genomics'
+    'Medical', 'Therapeutics', 'Biosciences', 'Oncology', 'Genomics',
+    'Drug', 'Bio'
 ]
 
 def run_phasex_scan(session: Session, api_client) -> List[str]:
     """
-    Skaner Fazy X: BioX Hunter (V2.0 - Safe Upsert).
-    Wyszukuje tanie spółki biotech z historią gwałtownych wzrostów (pomp).
+    Skaner Fazy X: BioX Hunter (Fixed Logic).
+    Wyszukuje spółki biotechnologiczne w przedziale 0.5$-4.0$, tworząc listę obserwacyjną
+    dla Agenta Newsowego (sprawdzanie co 5 min) oraz dla Backtestu.
     """
-    logger.info("Running Phase X: BioX Scanner (Pump Hunter)...")
-    append_scan_log(session, "Faza X (BioX): Start. Poszukiwanie historycznych pomp >50% w sektorze Biotech.")
+    logger.info("Running Phase X: BioX Scanner (Criteria: Biotech, $0.5-$4.0)...")
+    append_scan_log(session, "Faza X (BioX): Start selekcji. Kryteria: Biotech, Cena 0.5$-4.0$.")
 
-    # 1. Pobieranie listy spółek z sektora
+    # 1. Pobieranie listy spółek z sektora (szeroki lejek)
     try:
         # Budujemy zapytanie SQL z filtrem tekstowym na sektor/branżę
-        sector_filters = " OR ".join([f"industry LIKE '%{k}%' OR sector LIKE '%{k}%'" for k in BIOTECH_KEYWORDS])
+        # Używamy ILIKE dla ignorowania wielkości liter (PostgreSQL)
+        sector_filters = " OR ".join([f"industry ILIKE '%{k}%' OR sector ILIKE '%{k}%'" for k in BIOTECH_KEYWORDS])
         query = text(f"SELECT ticker FROM companies WHERE {sector_filters}")
         
         rows = session.execute(query).fetchall()
         initial_tickers = [r[0] for r in rows]
         
         if not initial_tickers:
-            append_scan_log(session, "Faza X: Nie znaleziono spółek pasujących do kryteriów sektora Biotech.")
+            append_scan_log(session, "Faza X: Błąd. Nie znaleziono żadnych spółek pasujących do sektora Biotech w bazie.")
             return []
             
-        logger.info(f"Faza X: Znaleziono {len(initial_tickers)} spółek w sektorze Biotech. Rozpoczynanie analizy...")
+        logger.info(f"Faza X: Znaleziono {len(initial_tickers)} spółek w sektorze Biotech. Filtrowanie cenowe...")
         
     except Exception as e:
-        logger.error(f"Faza X: Błąd pobierania listy spółek: {e}", exc_info=True)
+        logger.error(f"Faza X: Błąd pobierania listy spółek z bazy: {e}", exc_info=True)
         return []
 
     candidates_buffer = []
@@ -57,7 +61,8 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
     processed_count = 0
     found_count = 0
     
-    # Opcjonalne czyszczenie (nie jest krytyczne przy Upsert, ale utrzymuje porządek)
+    # Czyścimy tabelę kandydatów przed nowym skanem, aby lista była zawsze świeża
+    # (Zostawiamy to, bo to pełny skan EOD/Uruchamiany ręcznie)
     try:
         session.execute(text("DELETE FROM phasex_candidates"))
         session.commit()
@@ -66,20 +71,21 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
 
     start_time = time.time()
 
-    # 2. Główna pętla analizy
+    # 2. Główna pętla analizy (Filtrowanie po cenie + Statystyki historyczne)
     for ticker in initial_tickers:
         processed_count += 1
         if processed_count % 50 == 0:
              update_scan_progress(session, processed_count, len(initial_tickers))
-             time.sleep(0.1) # Throttle dla ochrony bazy
+             # Krótki sleep, żeby nie zabić bazy przy szybkim iterowaniu
+             time.sleep(0.05) 
 
         try:
-            # Pobieramy historię (Full Outputsize, aby objąć rok)
-            # Używamy cache 24h, bo historia nie zmienia się tak szybko
+            # Pobieramy historię (Compact wystarczy do sprawdzenia bieżącej ceny, 
+            # ale potrzebujemy Full do statystyk pomp z ostatniego roku dla Backtestu)
             price_data_raw = get_raw_data_with_cache(
                 session, api_client, ticker, 
                 'DAILY_ADJUSTED', 'get_daily_adjusted', 
-                expiry_hours=24, 
+                expiry_hours=24, # Cache 24h jest OK dla skanera bazowego
                 outputsize='full'
             )
 
@@ -91,76 +97,85 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
             df.index = pd.to_datetime(df.index)
             df.sort_index(inplace=True)
             
-            # Analiza ostatniego roku (252 dni sesyjne to ok. rok kalendarzowy)
-            one_year_ago = datetime.now() - timedelta(days=365)
-            df_1y = df[df.index >= one_year_ago].copy()
-            
-            if df_1y.empty: continue
+            if df.empty: continue
 
-            # Filtr Ceny Aktualnej
-            last_close = df_1y['close'].iloc[-1]
+            # === KRYTERIUM 1: CENA (0.50$ - 4.00$) ===
+            last_close = df['close'].iloc[-1]
             if not (MIN_PRICE <= last_close <= MAX_PRICE):
                 continue 
 
-            # Detekcja Pomp (>50% wzrostu)
-            df_1y['prev_close'] = df_1y['close'].shift(1)
-            # Zmiana Intraday (High vs Open)
-            df_1y['intraday_change'] = (df_1y['high'] - df_1y['open']) / df_1y['open']
-            # Zmiana Sesyjna (Close vs Prev Close)
-            df_1y['session_change'] = (df_1y['close'] - df_1y['prev_close']) / df_1y['prev_close']
+            # === STATYSTYKI DO BACKTESTU (Historia Pomp) ===
+            # Obliczamy to teraz, aby mieć gotowe dane do wyświetlenia w UI i do backtestu
+            one_year_ago = datetime.now() - timedelta(days=365)
+            df_1y = df[df.index >= one_year_ago].copy()
             
-            pump_mask = (df_1y['intraday_change'] >= PUMP_THRESHOLD_PERCENT) | (df_1y['session_change'] >= PUMP_THRESHOLD_PERCENT)
-            pumps = df_1y[pump_mask]
-            
-            pump_count = len(pumps)
-            
-            # Jeśli znaleziono pompy -> Kandydat
-            if pump_count > 0:
-                last_pump = pumps.iloc[-1]
-                last_pump_date = last_pump.name.date()
-                max_pump_pct = max(last_pump['intraday_change'], last_pump['session_change']) * 100
-                avg_vol = int(df_1y['volume'].mean())
+            pump_count = 0
+            last_pump_date = None
+            max_pump_pct = 0.0
+            avg_vol = 0
 
-                candidates_buffer.append({
-                    'ticker': ticker,
-                    'price': float(last_close),
-                    'volume_avg': avg_vol,
-                    'pump_count_1y': int(pump_count),
-                    'last_pump_date': last_pump_date,
-                    'last_pump_percent': float(max_pump_pct)
-                })
-                found_count += 1
+            if not df_1y.empty:
+                df_1y['prev_close'] = df_1y['close'].shift(1)
+                # Zmiana Intraday (High vs Open) - siła wybicia w trakcie sesji
+                df_1y['intraday_change'] = (df_1y['high'] - df_1y['open']) / df_1y['open']
+                # Zmiana Sesyjna (Close vs Prev Close) - siła zamknięcia
+                df_1y['session_change'] = (df_1y['close'] - df_1y['prev_close']) / df_1y['prev_close']
                 
-                # Zapis paczkami
-                if len(candidates_buffer) >= BATCH_SIZE:
-                    _save_phasex_batch_upsert(session, candidates_buffer)
-                    candidates_buffer = []
+                # Definicja pompy: wzrost > 20% (zgodnie z Twoim opisem backtestu)
+                pump_mask = (df_1y['intraday_change'] >= PUMP_THRESHOLD_PERCENT) | (df_1y['session_change'] >= PUMP_THRESHOLD_PERCENT)
+                pumps = df_1y[pump_mask]
+                
+                pump_count = len(pumps)
+                avg_vol = int(df_1y['volume'].mean()) if not df_1y['volume'].empty else 0
+                
+                if pump_count > 0:
+                    last_pump = pumps.iloc[-1]
+                    last_pump_date = last_pump.name.date()
+                    # Zapisujemy największy ruch danego dnia
+                    max_pump_pct = max(last_pump['intraday_change'], last_pump['session_change']) * 100
+
+            # === DODANIE DO LISTY KANDYDATÓW ===
+            candidates_buffer.append({
+                'ticker': ticker,
+                'price': float(last_close),
+                'volume_avg': avg_vol,
+                'pump_count_1y': int(pump_count),
+                'last_pump_date': last_pump_date,
+                'last_pump_percent': float(max_pump_pct)
+            })
+            found_count += 1
+            
+            # Zapis paczkami (Batch Insert/Upsert)
+            if len(candidates_buffer) >= BATCH_SIZE:
+                _save_phasex_batch_upsert(session, candidates_buffer)
+                candidates_buffer = []
 
         except Exception as e:
-            # Ignorujemy błędy pojedynczych tickerów, żeby nie przerywać pętli
+            # Logujemy błąd, ale nie przerywamy pętli dla jednego tickera
+            # logger.warning(f"Faza X: Błąd analizy {ticker}: {e}")
             continue
 
-    # Zapisz pozostałych kandydatów
+    # Zapisz pozostałych kandydatów z bufora
     if candidates_buffer:
         _save_phasex_batch_upsert(session, candidates_buffer)
 
-    summary = f"🏁 Faza X (BioX): Zakończono. Przeanalizowano {processed_count}. Znaleziono {found_count} kandydatów."
+    summary = f"🏁 Faza X (BioX): Zakończono. Przeanalizowano {processed_count}. Znaleziono {found_count} spółek Biotech (0.5$-4.0$)."
     logger.info(summary)
     append_scan_log(session, summary)
     
-    # Pobierz finalną listę z bazy
-    final_list = session.execute(text("SELECT ticker FROM phasex_candidates")).fetchall()
-    return [r[0] for r in final_list]
+    # Zwracamy listę tickerów (np. dla kolejnych kroków w pipeline, jeśli będą potrzebne)
+    # W tym modelu dane są już w bazie 'phasex_candidates', skąd pobierze je News Agent.
+    final_list_rows = session.execute(text("SELECT ticker FROM phasex_candidates")).fetchall()
+    return [r[0] for r in final_list_rows]
 
 def _save_phasex_batch_upsert(session: Session, data: list):
     """
     Zapisuje dane używając UPSERT (ON CONFLICT DO UPDATE).
-    Kluczowe dla stabilności bazy danych - zapobiega błędom duplikatów.
+    Gwarantuje, że lista kandydatów jest zawsze aktualna.
     """
     if not data: return
     
     try:
-        # Składnia PostgreSQL dla bezpiecznego zapisu/aktualizacji
         stmt = text("""
             INSERT INTO phasex_candidates (
                 ticker, price, volume_avg, pump_count_1y, last_pump_date, last_pump_percent, analysis_date
@@ -178,11 +193,6 @@ def _save_phasex_batch_upsert(session: Session, data: list):
         session.execute(stmt, data)
         session.commit()
         
-        # Opcjonalne logowanie co paczkę
-        # tickers_str = ", ".join([d['ticker'] for d in data])
-        # append_scan_log(session, f"🧪 BioX: Zapisano/Zaktualizowano {len(data)}: {tickers_str}")
-        
-        time.sleep(0.1) # Krótki oddech dla bazy
     except Exception as e:
-        logger.error(f"Faza X: Błąd zapisu batcha: {e}", exc_info=True)
+        logger.error(f"Faza X: Błąd zapisu batcha do bazy: {e}", exc_info=True)
         session.rollback()
