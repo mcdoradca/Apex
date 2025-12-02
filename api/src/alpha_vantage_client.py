@@ -218,6 +218,25 @@ class AlphaVantageClient:
             return None
 
     # Pozostałe metody (dla zgodności, jeśli API ich używa)
-    def get_news_sentiment(self, ticker: str, limit: int = 50):
-        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)}
+    def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None, time_to: str = None):
+        """
+        Pobiera sentyment newsów. Obsługuje filtry czasowe.
+        """
+        params = {
+            "function": "NEWS_SENTIMENT", 
+            "tickers": ticker, 
+            "limit": str(limit)
+        }
+        if time_from:
+            params["time_from"] = time_from
+        if time_to:
+            params["time_to"] = time_to
+        return self._make_request(params)
+    
+    def get_insider_transactions(self, symbol: str):
+        """
+        Pobiera transakcje insiderów.
+        KLUCZOWE DLA STRATEGII H3 (Institutional Sync).
+        """
+        params = {"function": "INSIDER_TRANSACTIONS", "symbol": symbol}
         return self._make_request(params)
