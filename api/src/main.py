@@ -26,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="2.9.1") # Bump version
+app = FastAPI(title="APEX Predator API", version="3.0.0") # Major version bump for BioX
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API is running (V4 Quantum Ready + Bulk Support + Universal Search)"}
+    return {"status": "APEX Predator API is running (BioX Module Active)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -109,6 +109,12 @@ def get_transactions(limit: int = Query(100), db: Session = Depends(get_db)):
 def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
     return crud.get_phase1_candidates(db)
 
+# === NOWOŚĆ: ENDPOINT FAZY X (BioX) ===
+@app.get("/api/v1/candidates/phasex", response_model=List[schemas.PhaseXCandidate])
+def get_phasex_candidates_endpoint(db: Session = Depends(get_db)):
+    """Pobiera listę kandydatów Fazy X (Biotech Pump)"""
+    return crud.get_phasex_candidates(db)
+
 @app.get("/api/v1/results/phase2", response_model=List[schemas.Phase2Result])
 def get_phase2_results_endpoint(db: Session = Depends(get_db)):
     return crud.get_phase2_results(db)
@@ -117,25 +123,18 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     return crud.get_active_and_pending_signals(db)
 
-# === NAPRAWIONY ENDPOINT: OBSŁUGA DOWOLNEGO TICKERA ===
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
     ticker = ticker.upper().strip()
     
-    # 1. Próbujemy znaleźć aktywny sygnał (ale nie wymuszamy go)
     signal = db.query(models.TradingSignal).filter(
         models.TradingSignal.ticker == ticker,
         models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
     ).first()
 
-    # 2. Pobieramy dane fundamentalne (jeśli są)
     company = db.query(models.Company).filter(models.Company.ticker == ticker).first()
-    
-    # 3. ZAWSZE pobieramy dane LIVE (Wyszukiwarka musi działać dla każdego tickera)
     live_quote = api_av_client.get_global_quote(ticker)
     
-    # 4. Dopiero jeśli kompletnie nic nie znaleźliśmy (ani w bazie, ani w API), rzucamy 404
-    # To obsłuży przypadek błędnego tickera np. "XYZ123"
     if not signal and not company and not live_quote:
         raise HTTPException(status_code=404, detail=f"Nie znaleziono danych dla tickera {ticker}. Sprawdź poprawność symbolu.")
 
@@ -174,19 +173,15 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
                  market_state = m.get("current_status", "Closed")
                  break
 
-    # === KONSTRUKCJA ODPOWIEDZI (DWA TRYBY) ===
-    
     setup_obj = {
         "entry_price": None, "stop_loss": None, "take_profit": None, 
         "risk_reward": None, "notes": None, "generation_date": None
     }
     
-    # Domyślny status (Gdy brak sygnału - Tryb Podglądu)
     validation_msg = "Tryb Podglądu (Brak Sygnału)"
     status_code = "WATCH_ONLY"
     is_valid_signal = False
 
-    # TRYB 1: ISTNIEJE SYGNAŁ (Pełna analityka)
     if signal:
         status_code = "VALID"
         is_valid_signal = True
@@ -201,7 +196,6 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
             "generation_date": signal.generation_date.isoformat()
         }
         
-        # Walidacja Live dla istniejącego sygnału
         if current_price > 0 and signal.stop_loss and signal.take_profit:
             sl = float(signal.stop_loss)
             tp = float(signal.take_profit)
@@ -210,7 +204,6 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
                 is_valid_signal = False
                 status_code = "INVALIDATED"
                 validation_msg = f"SPALONY (Live): Cena {current_price} przebiła SL {sl}."
-                # Auto-update statusu w bazie
                 signal.status = 'INVALIDATED'
                 signal.notes = (signal.notes or "") + f" [AUTO-REMOVED by API Live Check]"
                 signal.updated_at = datetime.now(timezone.utc)
@@ -221,12 +214,11 @@ def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
                 status_code = "COMPLETED"
                 validation_msg = f"ZREALIZOWANY (Live): Cena {current_price} osiągnęła TP {tp}."
 
-    # Konstrukcja finalnej odpowiedzi (dla obu trybów)
     response_data = {
         "status": status_code,
         "ticker": ticker,
         "company": {
-            "name": company.company_name if company else ticker, # Fallback name
+            "name": company.company_name if company else ticker,
             "sector": company.sector if company else "N/A",
             "industry": company.industry if company else "N/A"
         },
@@ -430,7 +422,9 @@ def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db:
         "pause": "PAUSE_REQUESTED", 
         "resume": "RESUME_REQUESTED",
         "start_phase1": "START_PHASE_1_REQUESTED", 
-        "start_phase3": "START_PHASE_3_REQUESTED" 
+        "start_phase3": "START_PHASE_3_REQUESTED",
+        # === NOWOŚĆ: KOMENDA DLA FAZY X ===
+        "start_phasex": "START_PHASE_X_REQUESTED"
     }
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
