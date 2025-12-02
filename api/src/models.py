@@ -27,6 +27,20 @@ class Phase1Candidate(Base):
     days_to_earnings = Column(INTEGER, nullable=True)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# === NOWOŚĆ: FAZA X (BIOTECH & PENNY STOCKS) ===
+class PhaseXCandidate(Base):
+    __tablename__ = 'phasex_candidates'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    price = Column(NUMERIC(12, 4))
+    volume_avg = Column(BIGINT, nullable=True)
+    
+    # Statystyki historycznych "Wybuchów" (>50%)
+    pump_count_1y = Column(INTEGER, default=0, comment="Ile razy urosła >50% w ciągu roku")
+    last_pump_date = Column(DATE, nullable=True, comment="Data ostatniego skoku >50%")
+    last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
+    
+    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+
 class Phase2Result(Base):
     __tablename__ = 'phase2_results'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -42,10 +56,10 @@ class TradingSignal(Base):
     id = Column(INTEGER, primary_key=True, autoincrement=True)
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
-    
+
     updated_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
-    
-    status = Column(VARCHAR(50), default='PENDING')
+
+    status = Column(VARCHAR(50), default='PENDING') 
     entry_price = Column(NUMERIC(12, 2), nullable=True)
     stop_loss = Column(NUMERIC(12, 2), nullable=True)
     take_profit = Column(NUMERIC(12, 2), nullable=True)
@@ -54,14 +68,13 @@ class TradingSignal(Base):
     entry_zone_bottom = Column(NUMERIC(12, 2), nullable=True)
     entry_zone_top = Column(NUMERIC(12, 2), nullable=True)
     notes = Column(TEXT, nullable=True)
-
+    
     highest_price_since_entry = Column(NUMERIC(12, 2), nullable=True)
     is_trailing_active = Column(Boolean, default=False)
     earnings_date = Column(DATE, nullable=True)
     
-    # === NOWOŚĆ: TTL Management ===
     expiration_date = Column(PG_TIMESTAMP(timezone=True), nullable=True, comment="Data wygaśnięcia sygnału (Max Hold)")
-
+    
     __table_args__ = (
         Index(
             'uq_active_pending_ticker',
