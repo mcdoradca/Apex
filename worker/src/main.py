@@ -10,10 +10,11 @@ from sqlalchemy import text, select, func
 
 from .models import Base, OptimizationJob 
 from .database import get_db_session, engine
+# === DODANO: phasex_scanner, biox_agent ===
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
-    signal_monitor, apex_optimizer 
+    signal_monitor, apex_optimizer, phasex_scanner, biox_agent
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -90,6 +91,31 @@ def run_phase_3_cycle(session):
     except Exception as e:
         logger.error(f"Error in Phase 3 Cycle: {e}", exc_info=True)
         utils.append_scan_log(session, f"BŁĄD Fazy 3: {e}")
+    finally:
+        utils.update_system_control(session, 'worker_status', 'IDLE')
+        utils.update_system_control(session, 'current_phase', 'NONE')
+
+# === NOWOŚĆ: Cykl Fazy X (BioX Pump Hunter) ===
+def run_phase_x_cycle(session):
+    session.rollback()
+    try:
+        logger.info("Starting Phase X Cycle (BioX Pump Hunter)...")
+        utils.append_scan_log(session, ">>> Rozpoczynanie Fazy X (BioX Pump Hunter)...")
+        utils.update_system_control(session, 'worker_status', 'RUNNING')
+        utils.update_system_control(session, 'current_phase', 'PHASE_X_SCAN')
+        
+        # 1. Skanowanie historycznych pomp (Budowa koszyka)
+        phasex_scanner.run_phasex_scan(session, api_client)
+        
+        # 2. Analiza przyczyn (Historyczny Detektyw) - opcjonalnie, zaraz po skanie
+        utils.update_system_control(session, 'current_phase', 'PHASE_X_AUDIT')
+        biox_agent.run_historical_catalyst_scan(session, api_client)
+        
+        utils.append_scan_log(session, "Faza X zakończona.")
+
+    except Exception as e:
+        logger.error(f"Error in Phase X Cycle: {e}", exc_info=True)
+        utils.append_scan_log(session, f"BŁĄD Fazy X: {e}")
     finally:
         utils.update_system_control(session, 'worker_status', 'IDLE')
         utils.update_system_control(session, 'current_phase', 'NONE')
@@ -192,18 +218,22 @@ def main_loop():
         Base.metadata.create_all(bind=engine)
         initialize_database_if_empty(session, api_client)
     
+    # Harmonogramy
     schedule.every(2).minutes.do(lambda: news_agent.run_news_agent_cycle(get_db_session(), api_client))
     schedule.every().day.at("23:00", "Europe/Warsaw").do(lambda: virtual_agent.run_virtual_trade_monitor(get_db_session(), api_client))
-    
-    # === TURBO MODE: STRAŻNIK CO 3 SEKUNDY ===
+    # Tryb TURBO (Strażnik co 3s)
     schedule.every(3).seconds.do(lambda: signal_monitor.run_signal_monitor_cycle(get_db_session(), api_client))
+
+    # === NOWOŚĆ: Harmonogram BioX Live Monitor (co 5 minut) ===
+    # Sprawdza newsy dla koszyka Fazy X
+    schedule.every(5).minutes.do(lambda: biox_agent.run_biox_live_monitor(get_db_session(), api_client))
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
         utils.update_system_control(initial_session, 'current_phase', 'NONE')
         utils.update_system_control(initial_session, 'worker_command', 'NONE')
         utils.report_heartbeat(initial_session)
-        utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy. Tryb TURBO (Strażnik 3s) aktywny.")
+        utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy. Tryb TURBO + BioX aktywny.")
 
     while True:
         with get_db_session() as session:
@@ -214,6 +244,7 @@ def main_loop():
                 if run_action == "FULL_RUN": run_full_analysis_cycle()
                 elif run_action == "PHASE_1_RUN": run_phase_1_cycle(session)
                 elif run_action == "PHASE_3_RUN": run_phase_3_cycle(session)
+                elif run_action == "PHASE_X_RUN": run_phase_x_cycle(session) # Obsługa Fazy X
                 
                 status = handle_backtest_request(session, api_client)
                 if status == 'IDLE': status = handle_ai_optimizer_request(session)
