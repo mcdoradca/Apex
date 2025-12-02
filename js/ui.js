@@ -134,19 +134,15 @@ export const ui = {
             quantumModalContent.insertBefore(periodDiv, quantumModalContent.children[1]);
         }
 
-        // Iniekcja przycisku Fazy X do Sidebaru
+        // === INIEKCJA PRZYCISKU FAZY X (BIOX) ===
+        // Dodajemy przycisk do sidebaru, jeśli go tam nie ma
         const sidebarControls = document.querySelector('#app-sidebar .pt-4 .space-y-2');
         if (sidebarControls && !document.getElementById('btn-phasex-scan')) {
              const btn = document.createElement('button');
              btn.id = 'btn-phasex-scan';
              btn.className = 'w-full text-left flex items-center bg-pink-600/20 hover:bg-pink-600/40 text-pink-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
              btn.innerHTML = '<i data-lucide="biohazard" class="mr-2 h-4 w-4"></i>Skanuj Faza X (BioX)';
-             btn.onclick = () => {
-                 const event = new CustomEvent('run-phasex'); 
-                 // Event listener dodawany w logic.js lub app.js
-                 // Tutaj tylko generujemy przycisk
-                 // W logic.js: showPhaseX()
-             };
+             // Handler kliknięcia jest przypisywany w app.js / logic.js
              sidebarControls.appendChild(btn);
         }
 
@@ -159,7 +155,7 @@ export const ui = {
             
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
-            btnPhaseX: get('btn-phasex-scan'),
+            btnPhaseX: get('btn-phasex-scan'), // Teraz na pewno istnieje
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
@@ -265,7 +261,6 @@ export const ui = {
 export const renderers = {
     loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
     
-    // === NAPRAWIONE: LISTA KANDYDATÓW (SIDEBAR) ===
     phase1List: (candidates) => candidates.map(c => {
         let sectorBadge = "";
         if (c.sector_ticker) {
@@ -277,7 +272,6 @@ export const renderers = {
         return `<div class="candidate-item flex justify-between items-center text-xs p-2 rounded-md cursor-default transition-colors phase-1-text border-b border-gray-800 last:border-0 hover:bg-gray-800"><div><span class="font-bold text-sky-400">${c.ticker}</span>${sectorBadge}</div><span class="text-gray-500 font-mono">${c.price ? c.price.toFixed(2) : '-'}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak wyników.</p>`,
     
-    // === NAPRAWIONE: LISTA SYGNAŁÓW W SIDEBARZE ===
     phase3List: (signals) => signals.map(s => {
         let statusClass = s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400';
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
@@ -301,7 +295,6 @@ export const renderers = {
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
-    // === NAPRAWIONE: DASHBOARD ===
     dashboard: () => {
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
         const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
@@ -327,14 +320,14 @@ export const renderers = {
                         <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex items-center"><i data-lucide="activity" class="w-6 h-6 mr-3"></i>Centrum Dowodzenia</h2>
                         
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <!-- Karta 1: Status Silnika (PULSUJĄCA + GLASS) -->
+                            <!-- Karta 1: Status Silnika -->
                             <div class="glass-panel p-6 rounded-xl relative overflow-hidden ${pulseClass} transition-all duration-500">
                                 <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
                                 <p id="dashboard-worker-status" class="text-5xl font-black ${statusColor} tracking-tighter drop-shadow-lg">${workerStatus}</p>
                                 <p id="dashboard-current-phase" class="text-xs text-gray-500 mt-2 font-mono bg-black/30 inline-block px-2 py-1 rounded">Faza: ${state.workerStatus.phase || 'NONE'}</p>
                             </div>
 
-                            <!-- Karta 2: Postęp Skanowania (GLASS) -->
+                            <!-- Karta 2: Postęp Skanowania -->
                             <div class="glass-panel p-6 rounded-xl">
                                 <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
                                 <div class="mt-2 flex items-baseline gap-2">
@@ -346,7 +339,7 @@ export const renderers = {
                                 </div>
                             </div>
 
-                            <!-- Karta 3: Statystyki Sygnałów (GLASS) -->
+                            <!-- Karta 3: Statystyki Sygnałów -->
                             <div class="glass-panel p-6 rounded-xl relative">
                                 <div class="absolute top-0 right-0 p-3 opacity-10"><i data-lucide="crosshair" class="w-16 h-16 text-white"></i></div>
                                 <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-4 uppercase tracking-wider"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały</h3>
@@ -368,7 +361,6 @@ export const renderers = {
                     </div>`;
     },
     
-    // === PANEL SYGNAŁÓW Z APEX R-FACTOR (Brutalna Prawda) ===
     h3SignalsPanel: (signals, quotes = {}) => {
         const activeCount = signals.filter(s => s.status === 'ACTIVE').length;
         const pendingCount = signals.filter(s => s.status === 'PENDING').length;
@@ -380,11 +372,9 @@ export const renderers = {
                 if (match) score = match[1];
             }
 
-            // === DYNAMIC R:R CALCULATION & TTL ===
             let currentPrice = 0;
             let isLive = false;
 
-            // Sprawdzamy czy mamy cenę w paczce (quotes)
             if (quotes && quotes[s.ticker] && quotes[s.ticker]['05. price']) {
                 const liveP = parseFloat(quotes[s.ticker]['05. price']);
                 if (!isNaN(liveP) && liveP > 0) {
@@ -392,12 +382,10 @@ export const renderers = {
                     isLive = true;
                 }
             }
-            // Fallback na cenę zapisaną w sygnale (jeśli brak live)
             if (currentPrice === 0 && s.entry_price) {
                 currentPrice = parseFloat(s.entry_price);
             }
 
-            // === OBLICZANIE APEX R-FACTOR (Brutalna Prawda) ===
             let rValueDisplay = "---";
             let rValueClass = "text-gray-400";
             let scopeLeft = "0%"; 
@@ -409,21 +397,18 @@ export const renderers = {
             const entry = parseFloat(s.entry_price || 0);
 
             if (entry > 0 && sl > 0 && tp > 0) {
-                 const totalDistance = tp - sl; // Całkowity zasięg wizualny od SL do TP
-                 const riskDistance = entry - sl; // Odległość ryzyka (1R)
+                 const totalDistance = tp - sl;
+                 const riskDistance = entry - sl;
 
                  if (totalDistance > 0 && riskDistance > 0) {
-                     // 1. Obliczanie pozycji Entry na pasku (%) względem całego zakresu SL-TP
                      let ep = ((entry - sl) / totalDistance) * 100;
                      ep = Math.max(0, Math.min(100, ep));
                      entryPercent = `${ep}%`;
 
                      if (currentPrice > 0) {
-                        // 2. Obliczanie APEX R-FACTOR
                         const profitLossAmount = currentPrice - entry;
                         const rValue = profitLossAmount / riskDistance;
                         
-                        // Formatowanie R-Factor
                         if (rValue > 0) {
                             rValueDisplay = `+${rValue.toFixed(2)} R`;
                             rValueClass = "text-green-400 font-black";
@@ -435,24 +420,19 @@ export const renderers = {
                             rValueClass = "text-gray-300";
                         }
 
-                        // Kolorowanie Ceny Środkowej
                         if (currentPrice > entry) priceDisplayClass = "text-green-400 font-bold";
                         else if (currentPrice < entry) priceDisplayClass = "text-red-400 font-bold";
 
-                        // 3. Pozycja Białej Kreski (Celownika) na pasku względem SL-TP
-                        // Wzór: (Cena - SL) / (TP - SL) * 100
                         let progress = ((currentPrice - sl) / totalDistance) * 100;
-                        progress = Math.max(0, Math.min(100, progress)); // Clamp 0-100%
+                        progress = Math.max(0, Math.min(100, progress));
                         scopeLeft = `${progress}%`;
                      }
                  }
             }
 
-            // === TTL FIX (Czas Wygaśnięcia) ===
             let timeRemaining = "---";
             let timeBarWidth = 100;
             
-            // Poprawka: Backend teraz zwraca expiration_date
             if (s.expiration_date) {
                 const now = new Date();
                 const exp = new Date(s.expiration_date);
@@ -464,7 +444,7 @@ export const renderers = {
                 if (timeLeft > 0) {
                     const daysLeft = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
                     const hoursLeft = Math.floor((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-                    timeRemaining = `${daysLeft}d ${hoursLeft}h`; // Wyświetlamy np. "4d 2h"
+                    timeRemaining = `${daysLeft}d ${hoursLeft}h`; 
                     if (totalLife > 0) timeBarWidth = Math.max(0, Math.min(100, (timeLeft / totalLife) * 100));
                 } else {
                     timeRemaining = "Wygasł";
@@ -479,7 +459,6 @@ export const renderers = {
 
             return `
             <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
-                <!-- Pasek TTL na dole -->
                 <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full">
                     <div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div>
                 </div>
@@ -505,7 +484,6 @@ export const renderers = {
                     </div>
                 </div>
 
-                <!-- Ceny i Pasek (Scope) -->
                 <div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2">
                     <div class="text-left">
                         <span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span>
@@ -610,7 +588,7 @@ export const renderers = {
                         <i data-lucide="biohazard" class="w-6 h-6 mr-3 text-pink-500"></i>
                         Faza X: BioX Hunter
                     </h2>
-                    <p class="text-sm text-gray-500 mt-1">Biotech Penny Stocks (0.5$ - 4$) z historią wybuchów >50%.</p>
+                    <p class="text-sm text-gray-500 mt-1">Biotech Penny Stocks (0.5$ - 4.0$) z historią wybuchów >20%.</p>
                 </div>
                 <button id="run-phasex-scan-btn" class="modal-button modal-button-primary bg-pink-600 hover:bg-pink-700 flex items-center shadow-[0_0_15px_rgba(219,39,119,0.3)]">
                     <i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj BioX
@@ -629,7 +607,6 @@ export const renderers = {
         </div>`;
     },
 
-    // === PORTFEL Z OBSŁUGĄ EXTENDED HOURS I PROCENTOWĄ ZMIANĄ ===
     portfolio: (holdings, quotes) => {
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
@@ -645,7 +622,7 @@ export const renderers = {
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
-                    priceSource = quote['_price_source'] || 'close'; // Sprawdzamy źródło ceny
+                    priceSource = quote['_price_source'] || 'close'; 
                     dayChangePercent = parseFloat(quote['change percent'] ? quote['change percent'].replace('%', '') : '0');
                     priceClass = dayChangePercent >= 0 ? 'text-green-500' : 'text-red-500';
                     currentValue = h.quantity * currentPrice;
@@ -654,7 +631,6 @@ export const renderers = {
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
                     
-                    // Obliczanie % zmiany pozycji (Cena - Zakup / Zakup)
                     if (h.average_buy_price > 0) {
                         const pctChange = ((currentPrice - h.average_buy_price) / h.average_buy_price) * 100;
                         changePercentDisplay = `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(2)}%`;
@@ -664,9 +640,8 @@ export const renderers = {
                 } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
             
-            // Obsługa wizualna Extended Hours (Pre/Post Market)
             if (priceSource === 'extended_hours') {
-                priceClass = 'extended-hours-text'; // Używamy nowej klasy CSS
+                priceClass = 'extended-hours-text'; 
             }
 
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
@@ -678,7 +653,7 @@ export const renderers = {
                 <td class="p-3 text-right">${h.quantity}</td>
                 <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
                 <td class="p-3 text-right ${priceClass}">${priceDisplay}</td>
-                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td> <!-- Nowa kolumna % -->
+                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td>
                 <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
                 <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
                 <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
@@ -686,13 +661,12 @@ export const renderers = {
         }).join('');
         
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
-        // Zaktualizowany nagłówek tabeli
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr>
             <th scope="col" class="p-3">Ticker</th>
             <th scope="col" class="p-3 text-right">Ilość</th>
             <th scope="col" class="p-3 text-right">Cena Zakupu</th>
             <th scope="col" class="p-3 text-right">Kurs (USD)</th>
-            <th scope="col" class="p-3 text-right">Zmiana %</th> <!-- Nowy nagłówek -->
+            <th scope="col" class="p-3 text-right">Zmiana %</th>
             <th scope="col" class="p-3 text-right">Cel (TP)</th>
             <th scope="col" class="p-3 text-right">Zysk / Strata</th>
             <th scope="col" class="p-3 text-right">Akcja</th>
@@ -731,7 +705,8 @@ export const renderers = {
         }).join('');
         const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
         
-        const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option></select></div><div class="flex items-start gap-3 mb-4"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
+        // === UPDATE: STRATEGIA BIOX W BACKTEŚCIE ===
+        const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option><option value="BIOX">BioX (Pump Hunter >20%)</option></select></div><div class="flex items-start gap-3 mb-4"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const quantumLabSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden"><div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none"><i data-lucide="atom" class="w-32 h-32 text-purple-500"></i></div><h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center"><i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i>Quantum Lab (Apex V4)</h4><p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p><div class="flex flex-wrap gap-3"><button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0"><i data-lucide="cpu" class="w-4 h-4 mr-2"></i>Konfiguruj Optymalizację</button><button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="list" class="w-4 h-4 mr-2"></i>Wyniki</button></div><div id="quantum-lab-status" class="text-sm mt-3 h-4"></div></div>`;
         const aiOptimizerSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4><p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane i zasugerował optymalizacje strategii.</p><div class="flex items-start gap-3"><button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>Analiza AI</button><button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="eye" class="w-4 h-4 mr-2"></i>Raport</button></div><div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const exportSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4><p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje jako CSV.</p><div class="flex items-start gap-3"><button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>Eksport CSV</button></div><div id="csv-export-status-message" class="text-sm mt-3 h-4"></div></div>`;
