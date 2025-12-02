@@ -14,6 +14,10 @@ from ..config import SECTOR_TO_ETF_MAP, DEFAULT_MARKET_ETF
 
 logger = logging.getLogger(__name__)
 
+# === CONFIG OPTYMALIZACJI ===
+BATCH_SIZE = 50       # Zapisujemy do bazy co 50 spółek (drastycznie zmniejsza IOPS)
+THROTTLE_DELAY = 0.05 # 50ms pauzy po każdej spółce (odciąża CPU bazy i API)
+
 def _check_sector_health(session: Session, api_client, sector_name: str) -> tuple[bool, float, str]:
     """
     Sprawdza kondycję sektora (ETF).
@@ -52,20 +56,15 @@ def _check_sector_health(session: Session, api_client, sector_name: str) -> tupl
 
 def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     """
-    Skaner Fazy 1 (V6.0 - TREND GUARD & PF 2.0).
-    
-    UWAGA: Wersja ta zakłada, że czyszczenie tabeli 'phase1_candidates'
-    zostało wykonane przez funkcję nadrzędną (run_phase_1_cycle w main.py)
-    przed wywołaniem tej funkcji.
+    Skaner Fazy 1 (V6.1 - OPTIMIZED BATCH MODE).
+    Zoptymalizowany pod kątem minimalnego obciążenia bazy danych.
     """
-    logger.info("Running Phase 1: EOD Scan (V6.0 Trend Guard)...")
-    append_scan_log(session, "Faza 1 (V6.0): Start. Aktywacja filtru SMA 200 (Trend Guard) w celu podniesienia PF.")
+    logger.info("Running Phase 1: EOD Scan (V6.1 Optimized Batch Mode)...")
+    append_scan_log(session, "Faza 1 (V6.1): Start. Tryb oszczędzania bazy danych (Batch Commit).")
 
     try:
         # Ten fragment jest teraz zbędny, ponieważ Worker czyści tabelę
         # przed wywołaniem tej funkcji w trybie manualnym.
-        # session.execute(text("DELETE FROM phase1_candidates"))
-        # session.commit()
         pass
     except Exception as e:
         logger.error(f"Failed to clear Phase 1 table: {e}", exc_info=True)
@@ -73,6 +72,7 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
         return [] 
 
     try:
+        # Pobieramy same tickery, bez zbędnych kolumn, żeby nie zapychać RAM
         all_tickers_rows = session.execute(text("SELECT ticker, sector FROM companies ORDER BY ticker")).fetchall()
         total_tickers = len(all_tickers_rows)
         logger.info(f"Found {total_tickers} tickers to process.")
@@ -83,19 +83,27 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     final_candidate_tickers = []
     reject_stats = {'price': 0, 'volume': 0, 'atr': 0, 'intraday': 0, 'sector': 0, 'data': 0, 'trend': 0}
     
+    # Bufor na kandydatów do zapisu batchowego
+    candidates_buffer = [] 
+    
     start_time = time.time()
 
     for processed_count, row in enumerate(all_tickers_rows):
         ticker = row[0]
         sector = row[1]
         
+        # === THROTTLING ===
+        # Pauza, żeby nie zabić bazy i API
+        time.sleep(THROTTLE_DELAY)
+        
         if get_current_state() == 'PAUSED':
             while get_current_state() == 'PAUSED': time.sleep(1)
 
-        if processed_count % 10 == 0: 
+        # Aktualizuj postęp rzadziej (co 50 sztuk), a nie co 10
+        if processed_count % 50 == 0: 
             update_scan_progress(session, processed_count, total_tickers)
 
-        if processed_count > 0 and processed_count % 100 == 0:
+        if processed_count > 0 and processed_count % 200 == 0:
             elapsed = time.time() - start_time
             rate = processed_count / elapsed if elapsed > 0 else 0
             logger.info(f"F1 Heartbeat: {processed_count}/{total_tickers} ({rate:.1f} t/s)")
@@ -136,7 +144,6 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 continue
             
             # === 2. Płynność (Vol > 300k, średnia z ostatnich 20 dni) ===
-            # Używamy iloc[-21:-1] aby wykluczyć dzisiejszy (często niepełny) wolumen
             avg_volume = daily_df['volume'].iloc[-21:-1].mean()
             if pd.isna(avg_volume) or avg_volume < 300000: 
                 reject_stats['volume'] += 1
@@ -152,46 +159,44 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
                 reject_stats['atr'] += 1
                 continue 
 
-            # === 4. NOWOŚĆ: TREND GUARD (SMA 200) ===
-            # Obliczamy SMA 200 lokalnie na podstawie pobranych danych
+            # === 4. TREND GUARD (SMA 200) ===
             sma_200 = daily_df['close'].rolling(window=200).mean().iloc[-1]
             
             if pd.isna(sma_200) or current_price < sma_200:
                 reject_stats['trend'] += 1
-                # Odrzucamy, bo trend długoterminowy jest spadkowy
                 continue
 
-            # 5. Strażnik Sektora (Wynik jest zapisywany, ale nie używany jako twardy filtr)
+            # 5. Strażnik Sektora
             is_sector_healthy, sector_trend, etf_symbol = _check_sector_health(session, api_client, sector)
-            # Jeśli sektor jest słaby, to spółka musi polegać na sile własnego trendu (co sprawdziliśmy SMA 200)
             
-            sector_msg = f"Sektor {etf_symbol} {'OK' if is_sector_healthy else 'SŁABY'}"
-
-            # === SUKCES ===
-            log_msg = (f"✅ DODANO: {ticker} | Cena: {current_price:.2f} | > SMA200 ({sma_200:.2f}) | {sector_msg}")
-            logger.info(log_msg)
-            append_scan_log(session, log_msg)
-            
-            insert_stmt = text("""
-                INSERT INTO phase1_candidates (ticker, price, volume, change_percent, score, sector_ticker, sector_trend_score, analysis_date)
-                VALUES (:ticker, :price, :volume, 0.0, 1, :sector_ticker, :sector_trend, NOW())
-            """)
-            
-            session.execute(insert_stmt, {
+            # === KANDYDAT ZAAKCEPTOWANY ===
+            # Dodajemy do bufora zamiast od razu do bazy
+            candidates_buffer.append({
                 'ticker': ticker, 
                 'price': float(current_price),
                 'volume': int(latest_candle['volume']),
                 'sector_ticker': etf_symbol,
                 'sector_trend': float(sector_trend)
             })
-            session.commit()
-            
             final_candidate_tickers.append(ticker)
+            
+            # Logowanie tylko co 10. kandydata, żeby nie śmiecić w logach bazy
+            if len(candidates_buffer) % 10 == 0:
+                logger.info(f"✅ F1 Buffer: {ticker} dodany. Razem w buforze: {len(candidates_buffer)}")
+
+            # === BATCH WRITE (ZAPIS PACZKAMI) ===
+            if len(candidates_buffer) >= BATCH_SIZE:
+                _save_batch(session, candidates_buffer)
+                candidates_buffer = [] # Wyczyść bufor
 
         except Exception as e:
-            logger.error(f"Error F1 for {ticker}: {e}")
+            # logger.error(f"Error F1 for {ticker}: {e}") # Zmniejszamy logowanie błędów pojedynczych
             session.rollback()
     
+    # Zapisz pozostałych kandydatów z bufora na koniec
+    if candidates_buffer:
+        _save_batch(session, candidates_buffer)
+
     update_scan_progress(session, total_tickers, total_tickers)
     
     summary_msg = (f"🏁 Faza 1 (Trend Guard) zakończona. Kandydatów: {len(final_candidate_tickers)}. "
@@ -201,3 +206,24 @@ def run_scan(session: Session, get_current_state, api_client) -> list[str]:
     append_scan_log(session, summary_msg)
     
     return final_candidate_tickers
+
+def _save_batch(session: Session, candidates_data: list):
+    """Pomocnicza funkcja do zapisu grupowego."""
+    if not candidates_data: return
+    
+    try:
+        insert_stmt = text("""
+            INSERT INTO phase1_candidates (ticker, price, volume, change_percent, score, sector_ticker, sector_trend_score, analysis_date)
+            VALUES (:ticker, :price, :volume, 0.0, 1, :sector_ticker, :sector_trend, NOW())
+        """)
+        
+        # Wykonujemy executemany (lista słowników)
+        session.execute(insert_stmt, candidates_data)
+        session.commit()
+        
+        tickers = [c['ticker'] for c in candidates_data]
+        # append_scan_log(session, f"💾 Zapisano paczkę {len(candidates_data)} kandydatów: {', '.join(tickers)}")
+        
+    except Exception as e:
+        logger.error(f"Failed to save batch in Phase 1: {e}", exc_info=True)
+        session.rollback()
