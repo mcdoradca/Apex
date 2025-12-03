@@ -16,7 +16,7 @@ import {
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
-    // === NOWOŚĆ: Importy BioX ===
+    // Importy BioX
     showPhaseX, handleRunPhaseXScan
 } from './logic.js';
 
@@ -36,7 +36,6 @@ const Logic = {
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
-    // === NOWOŚĆ: BioX Logic ===
     showPhaseX, handleRunPhaseXScan
 };
 
@@ -79,10 +78,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 const prevBtn = target.closest('#report-prev-btn');
                 const nextBtn = target.closest('#report-next-btn');
                 
-                // === OBSŁUGA PRZYCISKÓW (Delegacja Zdarzeń) ===
+                // === NOWOŚĆ: OBSŁUGA PRZYCISKU RE-CHECK ===
+                const recheckBtn = target.closest('.recheck-btn');
+                
+                if (recheckBtn) {
+                    const tradeId = recheckBtn.dataset.tradeId;
+                    if (tradeId) {
+                        handleShowAuditModal(tradeId, UI);
+                    }
+                }
+                // ===========================================
                 
                 // 1. Backtest i Konfiguracja
-                if (target.closest('#run-backtest-year-btn')) Logic.handleYearBacktestRequest();
+                else if (target.closest('#run-backtest-year-btn')) Logic.handleYearBacktestRequest();
                 else if (target.closest('#toggle-h3-params')) {
                      const container = document.getElementById('h3-params-container');
                      const icon = document.getElementById('h3-params-icon');
@@ -143,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
-        // === NOWOŚĆ: Obsługa przycisku BioX w Sidebarze ===
+        // Obsługa przycisku BioX w Sidebarze
         if (UI.btnPhaseX) {
             UI.btnPhaseX.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -174,6 +182,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (UI.quantumModal.startBtn) UI.quantumModal.startBtn.addEventListener('click', Logic.handleStartQuantumOptimization);
         if (UI.optimizationResultsModal.closeBtn) UI.optimizationResultsModal.closeBtn.addEventListener('click', Logic.hideOptimizationResults);
     
+        // === MODAL AUDYTU RE-CHECK (Zamykanie) ===
+        if (UI.tradeAuditModal.closeBtn) {
+            UI.tradeAuditModal.closeBtn.addEventListener('click', () => {
+                UI.tradeAuditModal.backdrop.classList.add('hidden');
+            });
+        }
+        if (UI.tradeAuditModal.backdrop) {
+            UI.tradeAuditModal.backdrop.addEventListener('click', (e) => {
+                if (e.target === UI.tradeAuditModal.backdrop) {
+                    UI.tradeAuditModal.backdrop.classList.add('hidden');
+                }
+            });
+        }
+
         // === NAWIGACJA GŁÓWNA ===
         if (UI.dashboardLink) UI.dashboardLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showDashboard(); });
         if (UI.portfolioLink) UI.portfolioLink.addEventListener('click', (e) => { e.preventDefault(); Logic.showPortfolio(); });
@@ -224,3 +246,53 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error("CRITICAL ERROR in app.js:", error);
     }
 });
+
+// === HELPER FUNCTION: Pokaż Modal Audytu ===
+async function handleShowAuditModal(tradeId, UI) {
+    if (!tradeId) return;
+    
+    // Pokaż modal z loaderem
+    UI.tradeAuditModal.backdrop.classList.remove('hidden');
+    UI.tradeAuditModal.reportContent.innerHTML = "Ładowanie danych z serwera...";
+    UI.tradeAuditModal.suggestionBox.classList.add('hidden');
+    
+    // Reset wartości
+    UI.tradeAuditModal.expPf.textContent = "---";
+    UI.tradeAuditModal.expWr.textContent = "---";
+    UI.tradeAuditModal.actPl.textContent = "---";
+    UI.tradeAuditModal.status.textContent = "---";
+
+    try {
+        const data = await api.getTradeAuditDetails(tradeId);
+        
+        // Wypełnij dane
+        UI.tradeAuditModal.expPf.textContent = data.expected_pf ? data.expected_pf.toFixed(2) : "N/A";
+        UI.tradeAuditModal.expWr.textContent = (data.expected_pf !== null) ? "High EV" : "N/A"; // Uproszczenie jeśli brak WR w modelu
+        
+        if (data.actual_pl !== null) {
+            UI.tradeAuditModal.actPl.textContent = `${data.actual_pl > 0 ? '+' : ''}${data.actual_pl.toFixed(2)}%`;
+            UI.tradeAuditModal.actPl.className = `font-mono font-bold ${data.actual_pl > 0 ? 'text-green-400' : 'text-red-400'}`;
+        }
+        
+        UI.tradeAuditModal.status.textContent = "ZAKOŃCZONY";
+        
+        // Raport
+        if (data.ai_audit_report) {
+            UI.tradeAuditModal.reportContent.innerHTML = data.ai_audit_report.replace(/\n/g, '<br>');
+        } else {
+            UI.tradeAuditModal.reportContent.textContent = "Audyt w toku... Sprawdź później.";
+        }
+        
+        // Sugestie
+        if (data.ai_optimization_suggestion && Object.keys(data.ai_optimization_suggestion).length > 0) {
+            const suggestions = Object.entries(data.ai_optimization_suggestion)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(', ');
+            UI.tradeAuditModal.suggestionText.textContent = suggestions;
+            UI.tradeAuditModal.suggestionBox.classList.remove('hidden');
+        }
+
+    } catch (e) {
+        UI.tradeAuditModal.reportContent.textContent = "Błąd pobierania raportu: " + e.message;
+    }
+}
