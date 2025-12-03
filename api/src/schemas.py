@@ -22,7 +22,6 @@ class PortfolioHolding(PortfolioHoldingBase):
     first_purchase_date: datetime
     last_updated: datetime
     take_profit: Optional[float] = None 
-    # === NOWOŚĆ: Pole notes do identyfikacji strategii w Portfelu ===
     notes: Optional[str] = None 
 
     model_config = ConfigDict(from_attributes=True)
@@ -67,7 +66,6 @@ class Phase1Candidate(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-# === NOWOŚĆ: SCHEMA FAZY X (BioX) ===
 class PhaseXCandidate(BaseModel):
     ticker: str
     price: Optional[float] = None
@@ -104,6 +102,10 @@ class TradingSignal(BaseModel):
     entry_zone_top: Optional[float] = None
     notes: Optional[str] = None
     expiration_date: Optional[datetime] = None
+    
+    # === RE-CHECK DATA (Oczekiwania w Sygnale) ===
+    expected_profit_factor: Optional[float] = None
+    expected_win_rate: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -134,6 +136,12 @@ class VirtualTrade(BaseModel):
     metric_m_sq_norm: Optional[float] = None
     metric_J: Optional[float] = None
     metric_J_threshold_2sigma: Optional[float] = None
+
+    # === NOWOŚĆ: RE-CHECK RESULT (Raport Audytora) ===
+    expected_profit_factor: Optional[float] = None
+    expected_win_rate: Optional[float] = None
+    ai_audit_report: Optional[str] = None
+    ai_optimization_suggestion: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
