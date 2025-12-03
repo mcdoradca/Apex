@@ -10,14 +10,17 @@ from sqlalchemy import text, select, func
 
 from .models import Base, OptimizationJob 
 from .database import get_db_session, engine
+# Importujemy najpierw tylko to co niezbędne do migracji
+from .data_ingestion.data_initializer import initialize_database_if_empty
+from .data_ingestion.alpha_vantage_client import AlphaVantageClient
+from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
+
+# Reszta importów
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
     signal_monitor, apex_optimizer, phasex_scanner, biox_agent, recheck_agent
 )
-from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
-from .data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .data_ingestion.data_initializer import initialize_database_if_empty
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
@@ -79,7 +82,6 @@ def safe_run_biox_monitor():
             except Exception as e:
                 logger.error(f"BioX Monitor Error: {e}")
 
-# === NOWOŚĆ: RE-CHECK AGENT WRAPPER ===
 def safe_run_recheck_audit():
     if can_run_background_task():
         with get_db_session() as session:
@@ -275,30 +277,39 @@ def handle_optimization_request(session) -> str:
 
 def main_loop():
     global current_state, api_client
-    logger.info("Worker main loop started with PROCESS GUARD + SESSION FIX + RE-CHECK.")
+    logger.info("Worker main loop started with FORCED DATABASE INIT.")
     
-    with get_db_session() as session:
-        try:
+    # === KROK 0: WYMUSZENIE INICJALIZACJI I MIGRACJI ===
+    # To jest kluczowe: wykonujemy to PRZED wejściem w jakąkolwiek pętlę
+    # i przed załadowaniem innych modułów, które mogą korzystać z bazy.
+    try:
+        with get_db_session() as session:
+            logger.info("Executing Pre-Flight Database Check & Migration...")
             Base.metadata.create_all(bind=engine)
             initialize_database_if_empty(session, api_client)
-        except Exception as e:
-            logger.critical(f"Database Init Failed: {e}")
-            sys.exit(1)
+            logger.info("Pre-Flight Check Completed Successfully.")
+    except Exception as e:
+        logger.critical(f"CRITICAL STARTUP ERROR: Database initialization failed: {e}", exc_info=True)
+        # Nie wychodzimy, próbujemy dalej, ale logujemy błąd
+        time.sleep(5)
     
     # Schedule
     schedule.every(2).minutes.do(safe_run_news_agent)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(safe_run_virtual_agent)
     schedule.every(3).seconds.do(safe_run_signal_monitor)
     schedule.every(5).minutes.do(safe_run_biox_monitor)
-    # Re-check działa rzadziej, bo nie wymaga ultra niskiej latencji, a zużywa tokeny AI
     schedule.every(10).minutes.do(safe_run_recheck_audit)
 
-    with get_db_session() as initial_session:
-        utils.update_system_control(initial_session, 'worker_status', 'IDLE')
-        utils.update_system_control(initial_session, 'current_phase', 'NONE')
-        utils.update_system_control(initial_session, 'worker_command', 'NONE')
-        utils.report_heartbeat(initial_session)
-        utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy.")
+    # Inicjalizacja statusów systemowych
+    try:
+        with get_db_session() as initial_session:
+            utils.update_system_control(initial_session, 'worker_status', 'IDLE')
+            utils.update_system_control(initial_session, 'current_phase', 'NONE')
+            utils.update_system_control(initial_session, 'worker_command', 'NONE')
+            utils.report_heartbeat(initial_session)
+            utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy (Po naprawie migracji).")
+    except Exception as e:
+        logger.error(f"Startup status init failed: {e}")
 
     while True:
         with get_db_session() as session:
