@@ -756,6 +756,12 @@ export const renderers = {
         const stats = report.stats;
         const trades = report.trades;
         const total_trades_count = report.total_trades_count;
+        
+        // Obliczenia paginacji - NAPRAWA BŁĘDU "totalPages is not defined"
+        const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
+        const startTrade = (state.currentReportPage - 1) * REPORT_PAGE_SIZE + 1;
+        const endTrade = Math.min(startTrade + REPORT_PAGE_SIZE - 1, total_trades_count);
+
         const formatMetric = (val) => (typeof val !== 'number' || isNaN(val)) ? `<span class="text-gray-600">---</span>` : val.toFixed(3);
         const formatPercent = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 0 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}%</span>`; };
         const formatProfitFactor = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 1 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}</span>`; };
