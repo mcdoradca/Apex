@@ -13,7 +13,7 @@ NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.tx
 def _run_schema_and_index_migration(session: Session):
     """
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
-    Dodano obsługę migracji dla Fazy X (BioX).
+    Dodano obsługę migracji dla Fazy X (BioX) oraz modułu RE-CHECK.
     """
     try:
         logger.info("Starting database schema and index migration...")
@@ -21,7 +21,7 @@ def _run_schema_and_index_migration(session: Session):
         engine = session.get_bind()
         inspector = inspect(engine)
         
-        # === MIGRACJA TABELI 1: trading_signals (V6 Update - Expiration) ===
+        # === MIGRACJA TABELI 1: trading_signals ===
         if 'trading_signals' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('trading_signals')]
             
@@ -45,6 +45,14 @@ def _run_schema_and_index_migration(session: Session):
             if 'expiration_date' not in columns:
                 session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMP WITH TIME ZONE"))
 
+            # === APEX V7 NEW COLUMNS (RE-CHECK) ===
+            if 'expected_profit_factor' not in columns:
+                logger.info("Migracja Re-check: Dodawanie kolumny 'expected_profit_factor' do trading_signals")
+                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expected_profit_factor NUMERIC(10, 4)"))
+            if 'expected_win_rate' not in columns:
+                logger.info("Migracja Re-check: Dodawanie kolumny 'expected_win_rate' do trading_signals")
+                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expected_win_rate NUMERIC(10, 4)"))
+
         # === MIGRACJA TABELI 2: companies (V5 Update) ===
         if 'companies' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('companies')]
@@ -62,7 +70,6 @@ def _run_schema_and_index_migration(session: Session):
                 session.execute(text("ALTER TABLE phase1_candidates ADD COLUMN IF NOT EXISTS days_to_earnings INTEGER"))
 
         # === NOWOŚĆ: Weryfikacja Tabeli PhaseX (BioX) ===
-        # Zapewniamy, że tabela ma kolumny statystyczne do analizy pomp
         if 'phasex_candidates' in inspector.get_table_names():
             columns = [col['name'] for col in inspector.get_columns('phasex_candidates')]
             if 'last_pump_date' not in columns:
@@ -82,8 +89,10 @@ def _run_schema_and_index_migration(session: Session):
         """)
         session.execute(create_index_sql)
         
-        # === MIGRACJA TABELI 4: virtual_trades (Metryki) ===
+        # === MIGRACJA TABELI 4: virtual_trades (Metryki + RE-CHECK) ===
         if 'virtual_trades' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('virtual_trades')]
+            
             metric_columns_to_add = [
                 ("metric_atr_14", "NUMERIC(12, 6)"),
                 ("metric_time_dilation", "NUMERIC(12, 6)"),
@@ -101,11 +110,28 @@ def _run_schema_and_index_migration(session: Session):
                 ("metric_J_threshold_2sigma", "NUMERIC(12, 6)")
             ]
             for col_name, col_type in metric_columns_to_add:
-                try:
-                    sql_command = f'ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS "{col_name}" {col_type}'
-                    session.execute(text(sql_command))
-                except Exception:
-                    pass 
+                if col_name not in columns:
+                    try:
+                        sql_command = f'ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS "{col_name}" {col_type}'
+                        session.execute(text(sql_command))
+                    except Exception: pass
+
+            # === RE-CHECK COLUMNS ===
+            if 'expected_profit_factor' not in columns:
+                logger.info("Migracja Re-check: Dodawanie 'expected_profit_factor' do virtual_trades")
+                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS expected_profit_factor NUMERIC(10, 4)"))
+            if 'expected_win_rate' not in columns:
+                logger.info("Migracja Re-check: Dodawanie 'expected_win_rate' do virtual_trades")
+                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS expected_win_rate NUMERIC(10, 4)"))
+            if 'ai_audit_report' not in columns:
+                logger.info("Migracja Re-check: Dodawanie 'ai_audit_report' do virtual_trades")
+                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS ai_audit_report TEXT"))
+            if 'ai_audit_date' not in columns:
+                logger.info("Migracja Re-check: Dodawanie 'ai_audit_date' do virtual_trades")
+                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS ai_audit_date TIMESTAMP WITH TIME ZONE"))
+            if 'ai_optimization_suggestion' not in columns:
+                logger.info("Migracja Re-check: Dodawanie 'ai_optimization_suggestion' do virtual_trades")
+                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS ai_optimization_suggestion JSONB"))
 
         session.commit()
         logger.info("Database schema migration completed successfully.")
@@ -135,7 +161,7 @@ def force_reset_simulation_data(session: Session):
             "phase1_candidates",   
             "phase2_results",
             "processed_news",
-            "phasex_candidates"  # Dodano do czyszczenia
+            "phasex_candidates"
         ]
         
         for table in tables_to_clear:
@@ -161,10 +187,6 @@ def initialize_database_if_empty(session: Session, api_client):
     """
     # 1. Migracja schematu (Zawsze uruchamiana, bezpieczna)
     _run_schema_and_index_migration(session)
-
-    # === TWARDY RESET (Opcjonalny, sterowany ENV) ===
-    # force_reset_simulation_data(session) 
-    # ==============================
 
     # 2. Seedowanie firm (jeśli pusta)
     try:
