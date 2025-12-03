@@ -4,6 +4,7 @@ import hashlib
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text, select, func
+import pandas as pd # Potrzebne do analizy danych historycznych
 
 # Modele bazy danych
 from ..models import ProcessedNews, PhaseXCandidate
@@ -13,7 +14,8 @@ from .utils import (
     append_scan_log, 
     send_telegram_alert, 
     get_raw_data_with_cache,
-    update_system_control
+    update_system_control,
+    standardize_df_columns
 )
 # Mózg Agenta Newsowego
 from .ai_agents import _run_news_analysis_agent
@@ -161,21 +163,123 @@ def run_biox_live_monitor(session: Session, api_client):
         # append_scan_log(session, "BioX Agent: Brak nowych wiadomości w tym cyklu.")
 
 # ==================================================================
-# CZĘŚĆ 2: HISTORICAL AUDIT (Dla Backtestu)
+# CZĘŚĆ 2: HISTORICAL AUDIT (Poprawa: Implementacja Logiki)
 # ==================================================================
 
 def run_historical_catalyst_scan(session: Session, api_client):
     """
-    Analiza Wsteczna dla Backtestu.
+    Analiza Wsteczna dla Fazy X (BioX Audit).
+    Przeszukuje historię cen kandydatów, aby znaleźć "Pompy" (>20%) w ostatnim roku.
+    Uzupełnia tabelę `phasex_candidates`.
     """
-    logger.info("BioX History: Start analizy wstecznej...")
-    append_scan_log(session, "🧬 BioX History: Analiza katalizatorów dla historycznych pomp...")
+    logger.info("BioX Audit: Uruchamianie analizy historycznej pomp...")
+    append_scan_log(session, "🧬 BioX Audit: Analiza historii cen w poszukiwaniu pomp >20%...")
 
-    # Pobieramy kandydatów, którzy mieli pompę (tutaj pole last_pump_percent będzie 0,
-    # bo usunęliśmy logikę ze skanera, więc w nowym podejściu ten moduł będzie czekał
-    # na dane z Backtest Engine, który uzupełni historię transakcji).
-    
-    # W tym momencie (po czystym skanie) ta funkcja może nie mieć co robić,
-    # dopóki nie puścisz Backtestu, który wygeneruje 'virtual_trades' z pompami.
-    
-    append_scan_log(session, "BioX History: Oczekiwanie na wyniki Backtestu (Symulacji Pomp).")
+    try:
+        # 1. Pobierz kandydatów do sprawdzenia (tylko tych, którzy mają puste statystyki lub stary audit)
+        # Dla uproszczenia bierzemy wszystkich, ale sortujemy by zacząć od tych bez danych
+        stmt = text("""
+            SELECT ticker FROM phasex_candidates 
+            WHERE last_pump_date IS NULL 
+            OR analysis_date < (NOW() - INTERVAL '24 hours')
+            ORDER BY ticker
+        """)
+        candidates = [r[0] for r in session.execute(stmt).fetchall()]
+        
+        if not candidates:
+            append_scan_log(session, "BioX Audit: Wszyscy kandydaci są aktualni.")
+            return
+
+        logger.info(f"BioX Audit: {len(candidates)} tickerów do sprawdzenia.")
+        
+        processed = 0
+        updated = 0
+        
+        for ticker in candidates:
+            try:
+                # 2. Pobierz dane dzienne (FULL) z cache lub API
+                raw_data = get_raw_data_with_cache(
+                    session, api_client, ticker, 
+                    'DAILY_ADJUSTED', 'get_daily_adjusted', 
+                    expiry_hours=24, outputsize='full'
+                )
+                
+                if not raw_data or 'Time Series (Daily)' not in raw_data:
+                    continue
+                
+                df = standardize_df_columns(pd.DataFrame.from_dict(raw_data['Time Series (Daily)'], orient='index'))
+                df.index = pd.to_datetime(df.index)
+                df.sort_index(inplace=True)
+                
+                # Filtrujemy ostatni rok (ok. 252 dni handlowe)
+                one_year_ago = datetime.now() - timedelta(days=365)
+                df_1y = df[df.index >= one_year_ago].copy()
+                
+                if df_1y.empty: continue
+
+                # 3. Szukamy pomp (>20%)
+                # Definicja pompy:
+                # A. Intraday spike: (High - Open) / Open >= 0.20
+                # B. Gap/Session run: (Close - PrevClose) / PrevClose >= 0.20
+                
+                df_1y['prev_close'] = df_1y['close'].shift(1)
+                df_1y['pump_intraday'] = (df_1y['high'] - df_1y['open']) / df_1y['open']
+                df_1y['pump_session'] = (df_1y['close'] - df_1y['prev_close']) / df_1y['prev_close']
+                
+                # Znajdź dni spełniające warunek (20% = 0.20)
+                pump_threshold = 0.20
+                pumps = df_1y[
+                    (df_1y['pump_intraday'] >= pump_threshold) | 
+                    (df_1y['pump_session'] >= pump_threshold)
+                ]
+                
+                pump_count = len(pumps)
+                last_pump_date = None
+                last_pump_percent = 0.0
+                
+                if pump_count > 0:
+                    # Bierzemy ostatnią pompę
+                    last_pump_row = pumps.iloc[-1]
+                    last_pump_date = last_pump_row.name.date() # timestamp to date
+                    
+                    # Wybieramy większą wartość (intraday vs session) jako "Moc"
+                    max_pump = max(last_pump_row['pump_intraday'], last_pump_row['pump_session'])
+                    last_pump_percent = round(max_pump * 100, 2) # Zapisujemy jako % (np. 45.20)
+
+                # 4. Aktualizacja w bazie
+                update_stmt = text("""
+                    UPDATE phasex_candidates 
+                    SET pump_count_1y = :count, 
+                        last_pump_date = :date, 
+                        last_pump_percent = :percent,
+                        analysis_date = NOW()
+                    WHERE ticker = :ticker
+                """)
+                
+                session.execute(update_stmt, {
+                    'count': pump_count,
+                    'date': last_pump_date,
+                    'percent': last_pump_percent,
+                    'ticker': ticker
+                })
+                session.commit()
+                updated += 1
+                
+            except Exception as e:
+                # logger.error(f"Err {ticker}: {e}")
+                session.rollback()
+                continue
+            
+            processed += 1
+            # Co 10 sztuk mały log
+            if processed % 10 == 0:
+                logger.info(f"BioX Audit: Przetworzono {processed}/{len(candidates)}.")
+                time.sleep(0.5) # Szanujemy API/DB
+
+        summary = f"🏁 BioX Audit: Zakończono. Zaktualizowano statystyki pomp dla {updated} spółek."
+        logger.info(summary)
+        append_scan_log(session, summary)
+
+    except Exception as e:
+        logger.error(f"BioX Audit Critical Error: {e}", exc_info=True)
+        append_scan_log(session, f"BŁĄD BioX Audit: {e}")
