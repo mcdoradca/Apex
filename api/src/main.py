@@ -26,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="3.0.0") # Major version bump for BioX
+app = FastAPI(title="APEX Predator API", version="3.1.0") # Minor bump for Re-check
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API is running (BioX Module Active)"}
+    return {"status": "APEX Predator API is running (Re-check Module Active)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -109,10 +109,8 @@ def get_transactions(limit: int = Query(100), db: Session = Depends(get_db)):
 def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
     return crud.get_phase1_candidates(db)
 
-# === NOWOŚĆ: ENDPOINT FAZY X (BioX) ===
 @app.get("/api/v1/candidates/phasex", response_model=List[schemas.PhaseXCandidate])
 def get_phasex_candidates_endpoint(db: Session = Depends(get_db)):
-    """Pobiera listę kandydatów Fazy X (Biotech Pump)"""
     return crud.get_phasex_candidates(db)
 
 @app.get("/api/v1/results/phase2", response_model=List[schemas.Phase2Result])
@@ -257,6 +255,27 @@ def export_virtual_trades(db: Session = Depends(get_db)):
 @app.get("/api/v1/virtual-agent/report", response_model=schemas.VirtualAgentReport)
 def get_virtual_agent_report_endpoint(page: int = 1, page_size: int = 200, db: Session = Depends(get_db)):
     return crud.get_virtual_agent_report(db, page, page_size)
+
+# === NOWOŚĆ: ENDPOINT RE-CHECK ===
+@app.get("/api/v1/virtual-agent/trade/{trade_id}/audit", response_model=Dict[str, Any])
+def get_trade_audit_details(trade_id: int, db: Session = Depends(get_db)):
+    """Pobiera szczegółowy raport audytu dla pojedynczej transakcji."""
+    try:
+        trade = db.query(models.VirtualTrade).filter(models.VirtualTrade.id == trade_id).first()
+        if not trade:
+            raise HTTPException(status_code=404, detail="Transakcja nie znaleziona.")
+        
+        return {
+            "trade_id": trade.id,
+            "ticker": trade.ticker,
+            "ai_audit_report": trade.ai_audit_report,
+            "ai_optimization_suggestion": trade.ai_optimization_suggestion,
+            "expected_pf": float(trade.expected_profit_factor) if trade.expected_profit_factor else None,
+            "actual_pl": float(trade.final_profit_loss_percent) if trade.final_profit_loss_percent else None
+        }
+    except Exception as e:
+        logger.error(f"Błąd pobierania audytu: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Błąd serwera.")
 
 @app.post("/api/v1/backtest/request", status_code=202)
 def request_backtest(request: schemas.BacktestRequest, db: Session = Depends(get_db)):
@@ -423,7 +442,6 @@ def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db:
         "resume": "RESUME_REQUESTED",
         "start_phase1": "START_PHASE_1_REQUESTED", 
         "start_phase3": "START_PHASE_3_REQUESTED",
-        # === NOWOŚĆ: KOMENDA DLA FAZY X ===
         "start_phasex": "START_PHASE_X_REQUESTED"
     }
     if action not in allowed_actions:
