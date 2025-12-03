@@ -175,12 +175,17 @@ def run_phase_x_cycle(session):
         utils.update_system_control(session, 'current_phase', 'PHASE_X_SCAN')
         utils.append_scan_log(session, ">>> Start Fazy X (BioX Pump Hunter)...")
         
-        phasex_scanner.run_phasex_scan(session, api_client)
+        # 1. Skanowanie wstępne (Krok A+B: Cena + Sektor)
+        # Zapisujemy znalezione tickery do zmiennej, aby przekazać je dalej
+        found_candidates = phasex_scanner.run_phasex_scan(session, api_client)
         
         utils.update_system_control(session, 'current_phase', 'PHASE_X_AUDIT')
-        biox_agent.run_historical_catalyst_scan(session, api_client)
         
-        utils.append_scan_log(session, "Faza X zakończona.")
+        # 2. Audyt historyczny (Krok C: Szukanie pomp)
+        # Przekazujemy listę bezpośrednio, wymuszając sprawdzenie wszystkich 349 (lub więcej) znalezionych
+        biox_agent.run_historical_catalyst_scan(session, api_client, candidates=found_candidates)
+        
+        utils.append_scan_log(session, "Faza X zakończona pomyślnie.")
 
     except Exception as e:
         logger.error(f"Error in Phase X Cycle: {e}", exc_info=True)
@@ -280,8 +285,6 @@ def main_loop():
     logger.info("Worker main loop started with FORCED DATABASE INIT.")
     
     # === KROK 0: WYMUSZENIE INICJALIZACJI I MIGRACJI ===
-    # To jest kluczowe: wykonujemy to PRZED wejściem w jakąkolwiek pętlę
-    # i przed załadowaniem innych modułów, które mogą korzystać z bazy.
     try:
         with get_db_session() as session:
             logger.info("Executing Pre-Flight Database Check & Migration...")
@@ -290,7 +293,6 @@ def main_loop():
             logger.info("Pre-Flight Check Completed Successfully.")
     except Exception as e:
         logger.critical(f"CRITICAL STARTUP ERROR: Database initialization failed: {e}", exc_info=True)
-        # Nie wychodzimy, próbujemy dalej, ale logujemy błąd
         time.sleep(5)
     
     # Schedule
