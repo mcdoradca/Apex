@@ -13,7 +13,7 @@ from .database import get_db_session, engine
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
-    signal_monitor, apex_optimizer, phasex_scanner, biox_agent
+    signal_monitor, apex_optimizer, phasex_scanner, biox_agent, recheck_agent
 )
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
@@ -45,13 +45,10 @@ def can_run_background_task():
         return False
     return True
 
-# === WRAPPERY DLA ZADAŃ W TLE (FIX: SESSION CONTEXT MANAGER) ===
-# Tutaj była przyczyna błędu QueuePool limit. 
-# Sesja musi być otwierana w bloku 'with', aby została zamknięta po wykonaniu zadania.
+# === WRAPPERY DLA ZADAŃ W TLE ===
 
 def safe_run_news_agent():
     if can_run_background_task():
-        # Używamy bloku 'with', aby połączenie wróciło do puli
         with get_db_session() as session:
             try:
                 news_agent.run_news_agent_cycle(session, api_client)
@@ -81,6 +78,15 @@ def safe_run_biox_monitor():
                 biox_agent.run_biox_live_monitor(session, api_client)
             except Exception as e:
                 logger.error(f"BioX Monitor Error: {e}")
+
+# === NOWOŚĆ: RE-CHECK AGENT WRAPPER ===
+def safe_run_recheck_audit():
+    if can_run_background_task():
+        with get_db_session() as session:
+            try:
+                recheck_agent.run_recheck_audit_cycle(session)
+            except Exception as e:
+                logger.error(f"Re-check Agent Error: {e}")
 
 # === GŁÓWNE PROCESY ===
 
@@ -269,7 +275,7 @@ def handle_optimization_request(session) -> str:
 
 def main_loop():
     global current_state, api_client
-    logger.info("Worker main loop started with PROCESS GUARD + SESSION FIX.")
+    logger.info("Worker main loop started with PROCESS GUARD + SESSION FIX + RE-CHECK.")
     
     with get_db_session() as session:
         try:
@@ -279,11 +285,13 @@ def main_loop():
             logger.critical(f"Database Init Failed: {e}")
             sys.exit(1)
     
-    # Schedule teraz korzysta z bezpiecznych wrapperów
+    # Schedule
     schedule.every(2).minutes.do(safe_run_news_agent)
     schedule.every().day.at("23:00", "Europe/Warsaw").do(safe_run_virtual_agent)
     schedule.every(3).seconds.do(safe_run_signal_monitor)
     schedule.every(5).minutes.do(safe_run_biox_monitor)
+    # Re-check działa rzadziej, bo nie wymaga ultra niskiej latencji, a zużywa tokeny AI
+    schedule.every(10).minutes.do(safe_run_recheck_audit)
 
     with get_db_session() as initial_session:
         utils.update_system_control(initial_session, 'worker_status', 'IDLE')
@@ -293,7 +301,6 @@ def main_loop():
         utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy.")
 
     while True:
-        # Pętla główna używa własnej sesji (context manager), która żyje krótko
         with get_db_session() as session:
             try:
                 run_action, new_state = utils.check_for_commands(session, current_state)
