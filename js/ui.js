@@ -79,6 +79,13 @@ style.textContent = `
     .sector-badge-up { background-color: rgba(6, 78, 59, 0.6); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); }
     .sector-badge-down { background-color: rgba(127, 29, 29, 0.6); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
     .extended-hours-text { color: #c084fc; font-weight: bold; text-shadow: 0 0 5px rgba(192, 132, 252, 0.3); }
+
+    /* Nowe Badges Strategii */
+    .strat-badge { font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.05em; border: 1px solid transparent; }
+    .strat-badge-h3 { background-color: rgba(124, 58, 237, 0.2); color: #a78bfa; border-color: rgba(124, 58, 237, 0.4); box-shadow: 0 0 5px rgba(124, 58, 237, 0.2); }
+    .strat-badge-aqm { background-color: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.4); box-shadow: 0 0 5px rgba(6, 182, 212, 0.2); }
+    .strat-badge-biox { background-color: rgba(236, 72, 153, 0.2); color: #f472b6; border-color: rgba(236, 72, 153, 0.4); box-shadow: 0 0 5px rgba(236, 72, 153, 0.2); }
+    .strat-badge-unknown { background-color: rgba(75, 85, 99, 0.3); color: #9ca3af; border-color: rgba(75, 85, 99, 0.5); }
 `;
 document.head.appendChild(style);
 
@@ -102,6 +109,18 @@ const playTacticalAlert = (ticker, score) => {
     
     synth.speak(utterance);
     lastSpokenSignal = ticker;
+};
+
+// === HELPER: Wykrywanie Strategii ===
+const getStrategyInfo = (notes) => {
+    if (!notes) return { name: 'UNK', class: 'strat-badge-unknown', full: 'Unknown' };
+    
+    const n = notes.toUpperCase();
+    if (n.includes("STRATEGIA: H3") || n.includes("STRATEGY: H3")) return { name: 'H3', class: 'strat-badge-h3', full: 'H3 Elite Sniper' };
+    if (n.includes("STRATEGIA: AQM") || n.includes("STRATEGY: AQM")) return { name: 'AQM', class: 'strat-badge-aqm', full: 'AQM V4' };
+    if (n.includes("STRATEGIA: BIOX") || n.includes("STRATEGY: BIOX")) return { name: 'BIOX', class: 'strat-badge-biox', full: 'BioX Pump' };
+    
+    return { name: 'MANUAL', class: 'strat-badge-unknown', full: 'Manual/Other' };
 };
 
 export const ui = {
@@ -277,13 +296,22 @@ export const renderers = {
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
         let scoreDisplay = "";
         let scoreVal = 0;
-        if (s.notes && s.notes.includes("Score:")) {
+        
+        // Detekcja strategii z notatek
+        const strat = getStrategyInfo(s.notes);
+
+        if (s.notes && s.notes.includes("SCORE:")) {
             try {
-                const parts = s.notes.split("Score:");
+                const parts = s.notes.split("SCORE:");
                 if (parts.length > 1) {
-                    const scorePart = parts[1].trim().split(" ")[0].replace(",", "").replace(".", ".");
+                    const scorePart = parts[1].trim().split(/[\s\/]/)[0].replace(",", "").replace(".", "."); // split on space or slash
                     scoreVal = parseFloat(scorePart);
-                    scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${scoreVal.toFixed(2)}</span>`;
+                    // AQM Badge only if AQM/H3, BioX might have different scoring
+                    if (strat.name !== 'BIOX') {
+                        scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${scoreVal.toFixed(2)}</span>`;
+                    } else {
+                        scoreDisplay = `<span class="ml-2 text-xs text-pink-300 bg-pink-900/30 px-1 rounded">MOC: ${scoreVal.toFixed(0)}%</span>`;
+                    }
                 }
             } catch(e) {}
         }
@@ -292,7 +320,13 @@ export const renderers = {
             playTacticalAlert(s.ticker, (scoreVal * 100).toFixed(0));
         }
 
-        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
+        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
+            <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
+            <span class="font-bold">${s.ticker}</span>
+            <span class="ml-2 strat-badge ${strat.class}">${strat.name}</span>
+            ${scoreDisplay}
+            <span class="ml-auto text-gray-500">${s.status}</span>
+        </div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
     dashboard: () => {
@@ -367,6 +401,9 @@ export const renderers = {
 
         const cardsHtml = signals.length > 0 ? signals.map(s => {
             let score = "N/A";
+            // Rozróżnienie Strategii
+            const strat = getStrategyInfo(s.notes);
+
             if (s.notes && s.notes.includes("SCORE:")) {
                 const match = s.notes.match(/SCORE:\s*(\d+)/);
                 if (match) score = match[1];
@@ -467,6 +504,7 @@ export const renderers = {
                     <div>
                         <div class="flex items-center gap-2">
                             <h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4>
+                            <span class="strat-badge ${strat.class}">${strat.name}</span>
                             <i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i>
                         </div>
                         <div class="text-xs text-gray-500 mt-1 font-mono">
@@ -619,6 +657,11 @@ export const renderers = {
             let changePercentClass = 'text-gray-500';
             let priceSource = 'close';
 
+            // Próba ustalenia strategii (na razie z placeholdera lub notatek jeśli by były dostępne w API)
+            // Ponieważ API jeszcze nie zwraca strategii dla portfela, dodajemy bezpieczny fallback.
+            // W następnym kroku zaktualizujemy Backend, by 'h.strategy' lub 'h.notes' były dostępne.
+            const strat = getStrategyInfo(h.notes || h.strategy || "");
+
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
@@ -649,7 +692,10 @@ export const renderers = {
             const priceDisplay = (priceSource === 'extended_hours') ? `🌙 ${currentPrice.toFixed(2)}` : (currentPrice ? currentPrice.toFixed(2) : '---');
 
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
-                <td class="p-3 font-bold text-sky-400">${h.ticker}</td>
+                <td class="p-3 font-bold text-sky-400 flex items-center gap-2">
+                    ${h.ticker}
+                    <span class="strat-badge ${strat.class}" style="font-size: 8px;">${strat.name}</span>
+                </td>
                 <td class="p-3 text-right">${h.quantity}</td>
                 <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
                 <td class="p-3 text-right ${priceClass}">${priceDisplay}</td>
@@ -662,7 +708,7 @@ export const renderers = {
         
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr>
-            <th scope="col" class="p-3">Ticker</th>
+            <th scope="col" class="p-3">Ticker / Strategia</th>
             <th scope="col" class="p-3 text-right">Ilość</th>
             <th scope="col" class="p-3 text-right">Cena Zakupu</th>
             <th scope="col" class="p-3 text-right">Kurs (USD)</th>
