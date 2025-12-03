@@ -120,22 +120,26 @@ def get_optimization_trials(db: Session, job_id: str) -> List[models.Optimizatio
 # ==========================================================
 
 def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
+    # === AKTUALIZACJA: Pobieramy również pole 'notes' ze strategią ===
     results = db.query(
         models.PortfolioHolding,
-        models.TradingSignal.take_profit
+        models.TradingSignal.take_profit,
+        models.TradingSignal.notes
     ).outerjoin(
         models.TradingSignal,
         (models.PortfolioHolding.ticker == models.TradingSignal.ticker) &
         (models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])) 
     ).order_by(models.PortfolioHolding.ticker).all()
 
-    holdings_with_tp = []
-    for (holding, take_profit) in results:
+    holdings_processed = []
+    for (holding, take_profit, notes) in results:
+        # Konwersja na Pydantic z dodatkowymi polami
         holding_schema = schemas.PortfolioHolding.model_validate(holding)
         holding_schema.take_profit = float(take_profit) if take_profit is not None else None
-        holdings_with_tp.append(holding_schema)
+        holding_schema.notes = notes # Przekazujemy notatki (np. "STRATEGIA: H3...")
+        holdings_processed.append(holding_schema)
     
-    return holdings_with_tp
+    return holdings_processed
 
 def get_transaction_history(db: Session, limit: int = 100) -> List[models.TransactionHistory]:
     return db.query(models.TransactionHistory).order_by(desc(models.TransactionHistory.transaction_date)).limit(limit).all()
