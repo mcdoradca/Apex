@@ -99,23 +99,29 @@ def _is_setup_still_valid(entry_price: float, stop_loss: float, take_profit: flo
         return False, f"Błąd walidacji: {e}"
 
 def _get_historical_ev_stats(session: Session) -> Dict[str, Dict[str, float]]:
+    """
+    Pobiera historyczne statystyki (EV, PF, WinRate) z bazy wirtualnych transakcji.
+    Używane do określenia 'Oczekiwań' dla nowych sygnałów.
+    """
     try:
         trades = session.query(models.VirtualTrade).filter(
             models.VirtualTrade.status.in_(['CLOSED_TP', 'CLOSED_SL', 'CLOSED_EXPIRED']),
             models.VirtualTrade.metric_aqm_score_h3.isnot(None)
-        ).limit(500).all()
+        ).limit(1000).all() # Zwiększony limit dla lepszej próbki
 
         if len(trades) < 10: return {}
 
         data = []
         for t in trades:
             if t.metric_aqm_score_h3 is None or t.metric_aqm_percentile_95 is None or t.final_profit_loss_percent is None: continue
+            # Oblicz "Moc sygnału" jako nadwyżkę nad progiem
             power = float(t.metric_aqm_score_h3) - float(t.metric_aqm_percentile_95)
             data.append({'pl': float(t.final_profit_loss_percent), 'power': power})
         
         if not data: return {}
         df = pd.DataFrame(data)
         
+        # Definiujemy koszyki jakości
         buckets = {
             'LOW': df[(df['power'] >= 0) & (df['power'] < 0.2)],
             'MID': df[(df['power'] >= 0.2) & (df['power'] < 0.5)],
@@ -124,14 +130,28 @@ def _get_historical_ev_stats(session: Session) -> Dict[str, Dict[str, float]]:
         
         stats = {}
         for name, subset in buckets.items():
-            if len(subset) < 5: subset = df 
+            if len(subset) < 5: subset = df # Fallback do ogółu jeśli mało danych w koszyku
+            
             wins = subset[subset['pl'] > 0]
             losses = subset[subset['pl'] <= 0]
+            
             win_rate = len(wins) / len(subset) if len(subset) > 0 else 0
-            avg_win = wins['pl'].mean() if not wins.empty else 0
-            avg_loss = abs(losses['pl'].mean()) if not losses.empty else 0
-            ev = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
-            stats[name] = {'ev': ev}
+            
+            avg_win = wins['pl'].sum()
+            avg_loss = abs(losses['pl'].sum())
+            
+            pf = avg_win / avg_loss if avg_loss > 0 else 0.0
+            
+            # EV w procentach na transakcję
+            avg_win_pct = wins['pl'].mean() if not wins.empty else 0
+            avg_loss_pct = abs(losses['pl'].mean()) if not losses.empty else 0
+            ev = (win_rate * avg_win_pct) - ((1 - win_rate) * avg_loss_pct)
+            
+            stats[name] = {
+                'ev': ev,
+                'pf': pf,
+                'wr': win_rate * 100
+            }
         return stats
     except: return {}
 
@@ -212,7 +232,7 @@ def _get_macro_context_for_aqm(session, client):
     return macro
 
 def run_h3_live_scan(session, candidates, client, parameters=None):
-    logger.info("Start Phase 3 Live Sniper (V7 Secure Core + TypeFix)...")
+    logger.info("Start Phase 3 Live Sniper (V7.2 - Re-check Integration)...")
     
     params = DEFAULT_PARAMS.copy()
     if parameters:
@@ -234,10 +254,12 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
     max_hold_days = int(params['h3_max_hold'])
     min_score = float(params['h3_min_score']) 
 
-    append_scan_log(session, f"⚙️ FAZA 3: Tryb Strategii = {strategy_mode} (Precision+)")
+    append_scan_log(session, f"⚙️ FAZA 3: Tryb Strategii = {strategy_mode} (Re-check Ready)")
     append_scan_log(session, f"   Parametry: MinScore={min_score}, TP={tp_mult}x, SL={sl_mult}x, Hold={max_hold_days}d")
 
     mkt = _get_market_pkg(session, client)
+    
+    # Pobieramy statystyki historyczne (baza wiedzy dla Re-check)
     ev_model = _get_historical_ev_stats(session)
     
     macro_data_aqm = {}
@@ -278,7 +300,6 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             
             last = df.iloc[-1]
             
-            # === TYPE FIX: KONWERSJA NA PY FLOAT PRZED OBLICZENIAMI ===
             entry = _to_py_float(last['close'])
             atr_val = _to_py_float(last['atr_14'])
             
@@ -289,6 +310,9 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
             score = 0
             metric_details = {}
             rec = "HOLD"
+            ev = 0.0
+            expected_pf = 0.0
+            expected_wr = 0.0
             
             if strategy_mode == 'H3':
                 h2 = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, client, session)
@@ -356,9 +380,16 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     score_int, det = _calculate_setup_score(curr_aqm, curr_thr, curr_m, df, mkt['spy_df'], st)
                     score = score_int
                     
+                    # === OBLICZANIE OCZEKIWAŃ (RE-CHECK) ===
                     surplus = curr_aqm - curr_thr
                     ev_b = 'LOW' if surplus < 0.2 else ('MID' if surplus < 0.5 else 'HIGH')
-                    ev = ev_model.get(ev_b, {'ev': surplus*2})['ev']
+                    
+                    # Pobieramy statystyki z modelu historycznego
+                    stats_model = ev_model.get(ev_b, {'ev': surplus*2, 'pf': 1.5, 'wr': 40.0})
+                    ev = stats_model['ev']
+                    expected_pf = stats_model['pf']
+                    expected_wr = stats_model['wr']
+                    
                     rec = "TOP 💎" if score >= 80 else ("BUY ✅" if score >= 60 else "MOD ⚠️")
                 else:
                     if curr_aqm <= curr_thr: rejects['aqm']+=1
@@ -413,7 +444,12 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                         score = int(curr_score * 100) 
                         if score > 100: score = 99
                         rec = "TOP 💎" if score >= 80 else ("BUY ✅" if score >= 60 else "MOD ⚠️")
-                        ev = score * 0.05 
+                        
+                        # === OBLICZANIE OCZEKIWAŃ (AQM) ===
+                        # Dla AQM używamy prostszej heurystyki, dopóki nie zbierzemy więcej danych
+                        ev = score * 0.05
+                        expected_pf = 2.0 if score > 80 else 1.5
+                        expected_wr = 60.0 if score > 80 else 50.0
                     else:
                         if curr_score <= min_score: rejects['aqm']+=1
                         else: rejects['components']+=1
@@ -438,7 +474,6 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                 if not ex:
                     expiration_dt = datetime.now(timezone.utc) + timedelta(days=max_hold_days)
                     
-                    # === TYPE FIX: WRAPPING ALL NUMBERS IN _to_py_float ===
                     sig = models.TradingSignal(
                         ticker=ticker, 
                         status='PENDING', 
@@ -452,13 +487,16 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                         entry_zone_bottom=_to_py_float(entry - (0.5 * atr_val)),
                         risk_reward_ratio=_to_py_float(tp_mult / sl_mult), 
                         notes=note,
-                        expiration_date=expiration_dt
+                        expiration_date=expiration_dt,
+                        # === ZAPIS OCZEKIWAŃ DLA RE-CHECK ===
+                        expected_profit_factor=_to_py_float(expected_pf),
+                        expected_win_rate=_to_py_float(expected_wr)
                     )
                     session.add(sig); session.commit()
                     signals+=1
-                    msg = f"💎 SYGNAŁ ({strategy_mode}): {ticker} | SCORE: {score} | {rec}"
+                    msg = f"💎 SYGNAŁ ({strategy_mode}): {ticker} | SCORE: {score} | EXP.PF: {expected_pf:.2f}"
                     logger.info(msg); append_scan_log(session, msg)
-                    send_telegram_alert(f"⚛️ {strategy_mode}: {ticker}\nCena: {entry:.2f}\nSCORE: {score}")
+                    send_telegram_alert(f"⚛️ {strategy_mode}: {ticker}\nCena: {entry:.2f}\nExp. PF: {expected_pf:.2f}")
                 else:
                     append_scan_log(session, f"ℹ️ {ticker}: Już aktywny.")
                 
