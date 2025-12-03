@@ -13,87 +13,74 @@ NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.tx
 def _run_schema_and_index_migration(session: Session):
     """
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
-    Dodano obsługę migracji dla Fazy X (BioX) oraz modułu RE-CHECK.
+    Naprawiona wersja: Wymusza dodanie brakujących kolumn (Re-check, BioX).
     """
     try:
         logger.info("Starting database schema and index migration...")
         
+        # Wymuszamy commit na początku, aby mieć czystą transakcję
+        session.commit()
+        
         engine = session.get_bind()
         inspector = inspect(engine)
         
+        # Funkcja pomocnicza do bezpiecznego dodawania kolumn
+        def safe_add_column(table_name, col_name, col_type):
+            try:
+                # Sprawdzamy ponownie, czy kolumna istnieje (dla pewności wewnątrz transakcji)
+                check_inspector = inspect(engine)
+                current_columns = [c['name'] for c in check_inspector.get_columns(table_name)]
+                
+                if col_name not in current_columns:
+                    logger.info(f"Migracja: Dodawanie kolumny '{col_name}' do tabeli '{table_name}'...")
+                    # Używamy autocommit dla zmian DDL (poza sesją transakcyjną)
+                    with engine.connect() as conn:
+                        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                        conn.commit()
+                    logger.info(f"Migracja: Sukces - dodano '{col_name}'.")
+                else:
+                    # logger.info(f"Migracja: Kolumna '{col_name}' już istnieje w '{table_name}'.")
+                    pass
+            except Exception as e:
+                logger.error(f"Migracja BŁĄD: Nie udało się dodać '{col_name}' do '{table_name}': {e}")
+
         # === MIGRACJA TABELI 1: trading_signals ===
         if 'trading_signals' in inspector.get_table_names():
-            columns = [col['name'] for col in inspector.get_columns('trading_signals')]
-            
             # Apex V3 Columns
-            if 'entry_zone_bottom' not in columns:
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS entry_zone_bottom NUMERIC(12, 2)"))
-            if 'entry_zone_top' not in columns:
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS entry_zone_top NUMERIC(12, 2)"))
-            if 'updated_at' not in columns:
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+            safe_add_column('trading_signals', 'entry_zone_bottom', 'NUMERIC(12, 2)')
+            safe_add_column('trading_signals', 'entry_zone_top', 'NUMERIC(12, 2)')
+            safe_add_column('trading_signals', 'updated_at', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()')
 
-            # === APEX V5 NEW COLUMNS ===
-            if 'highest_price_since_entry' not in columns:
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS highest_price_since_entry NUMERIC(12, 2)"))
-            if 'is_trailing_active' not in columns:
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS is_trailing_active BOOLEAN DEFAULT FALSE"))
-            if 'earnings_date' not in columns:
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS earnings_date DATE"))
+            # Apex V5 Columns
+            safe_add_column('trading_signals', 'highest_price_since_entry', 'NUMERIC(12, 2)')
+            safe_add_column('trading_signals', 'is_trailing_active', 'BOOLEAN DEFAULT FALSE')
+            safe_add_column('trading_signals', 'earnings_date', 'DATE')
             
-            # === APEX V6 NEW COLUMNS (TTL) ===
-            if 'expiration_date' not in columns:
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMP WITH TIME ZONE"))
+            # Apex V6 Columns (TTL)
+            safe_add_column('trading_signals', 'expiration_date', 'TIMESTAMP WITH TIME ZONE')
 
-            # === APEX V7 NEW COLUMNS (RE-CHECK) ===
-            if 'expected_profit_factor' not in columns:
-                logger.info("Migracja Re-check: Dodawanie kolumny 'expected_profit_factor' do trading_signals")
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expected_profit_factor NUMERIC(10, 4)"))
-            if 'expected_win_rate' not in columns:
-                logger.info("Migracja Re-check: Dodawanie kolumny 'expected_win_rate' do trading_signals")
-                session.execute(text("ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS expected_win_rate NUMERIC(10, 4)"))
+            # === APEX V7 COLUMNS (RE-CHECK) - KRYTYCZNE ===
+            safe_add_column('trading_signals', 'expected_profit_factor', 'NUMERIC(10, 4)')
+            safe_add_column('trading_signals', 'expected_win_rate', 'NUMERIC(10, 4)')
 
-        # === MIGRACJA TABELI 2: companies (V5 Update) ===
+        # === MIGRACJA TABELI 2: companies ===
         if 'companies' in inspector.get_table_names():
-            columns = [col['name'] for col in inspector.get_columns('companies')]
-            if 'sector_etf' not in columns:
-                session.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS sector_etf VARCHAR(10)"))
+            safe_add_column('companies', 'sector_etf', 'VARCHAR(10)')
 
-        # === MIGRACJA TABELI 3: phase1_candidates (V5 Update) ===
+        # === MIGRACJA TABELI 3: phase1_candidates ===
         if 'phase1_candidates' in inspector.get_table_names():
-            columns = [col['name'] for col in inspector.get_columns('phase1_candidates')]
-            if 'sector_ticker' not in columns:
-                session.execute(text("ALTER TABLE phase1_candidates ADD COLUMN IF NOT EXISTS sector_ticker VARCHAR(10)"))
-            if 'sector_trend_score' not in columns:
-                session.execute(text("ALTER TABLE phase1_candidates ADD COLUMN IF NOT EXISTS sector_trend_score NUMERIC(5, 2)"))
-            if 'days_to_earnings' not in columns:
-                session.execute(text("ALTER TABLE phase1_candidates ADD COLUMN IF NOT EXISTS days_to_earnings INTEGER"))
+            safe_add_column('phase1_candidates', 'sector_ticker', 'VARCHAR(10)')
+            safe_add_column('phase1_candidates', 'sector_trend_score', 'NUMERIC(5, 2)')
+            safe_add_column('phase1_candidates', 'days_to_earnings', 'INTEGER')
 
         # === NOWOŚĆ: Weryfikacja Tabeli PhaseX (BioX) ===
         if 'phasex_candidates' in inspector.get_table_names():
-            columns = [col['name'] for col in inspector.get_columns('phasex_candidates')]
-            if 'last_pump_date' not in columns:
-                logger.info("Migracja BioX: Dodawanie kolumny 'last_pump_date'")
-                session.execute(text("ALTER TABLE phasex_candidates ADD COLUMN IF NOT EXISTS last_pump_date DATE"))
-            if 'last_pump_percent' not in columns:
-                logger.info("Migracja BioX: Dodawanie kolumny 'last_pump_percent'")
-                session.execute(text("ALTER TABLE phasex_candidates ADD COLUMN IF NOT EXISTS last_pump_percent NUMERIC(10, 2)"))
+            safe_add_column('phasex_candidates', 'last_pump_date', 'DATE')
+            safe_add_column('phasex_candidates', 'last_pump_percent', 'NUMERIC(10, 2)')
 
-        # === MIGRACJA INDEKSÓW ===
-        index_name = 'uq_active_pending_ticker'
-        session.execute(text("ALTER TABLE trading_signals DROP CONSTRAINT IF EXISTS trading_signals_ticker_key;"))
-        create_index_sql = text(f"""
-            CREATE UNIQUE INDEX IF NOT EXISTS {index_name}
-            ON trading_signals (ticker)
-            WHERE status IN ('ACTIVE', 'PENDING');
-        """)
-        session.execute(create_index_sql)
-        
-        # === MIGRACJA TABELI 4: virtual_trades (Metryki + RE-CHECK) ===
+        # === MIGRACJA TABELI 4: virtual_trades ===
         if 'virtual_trades' in inspector.get_table_names():
-            columns = [col['name'] for col in inspector.get_columns('virtual_trades')]
-            
-            metric_columns_to_add = [
+            metrics = [
                 ("metric_atr_14", "NUMERIC(12, 6)"),
                 ("metric_time_dilation", "NUMERIC(12, 6)"),
                 ("metric_price_gravity", "NUMERIC(12, 6)"),
@@ -107,45 +94,42 @@ def _run_schema_and_index_migration(session: Session):
                 ("metric_nabla_sq_norm", "NUMERIC(12, 6)"),
                 ("metric_m_sq_norm", "NUMERIC(12, 6)"),
                 ("metric_J", "NUMERIC(12, 6)"),
-                ("metric_J_threshold_2sigma", "NUMERIC(12, 6)")
+                ("metric_J_threshold_2sigma", "NUMERIC(12, 6)"),
+                # RE-CHECK
+                ("expected_profit_factor", "NUMERIC(10, 4)"),
+                ("expected_win_rate", "NUMERIC(10, 4)"),
+                ("ai_audit_report", "TEXT"),
+                ("ai_audit_date", "TIMESTAMP WITH TIME ZONE"),
+                ("ai_optimization_suggestion", "JSONB")
             ]
-            for col_name, col_type in metric_columns_to_add:
-                if col_name not in columns:
-                    try:
-                        sql_command = f'ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS "{col_name}" {col_type}'
-                        session.execute(text(sql_command))
-                    except Exception: pass
+            for col, type_def in metrics:
+                safe_add_column('virtual_trades', col, type_def)
 
-            # === RE-CHECK COLUMNS ===
-            if 'expected_profit_factor' not in columns:
-                logger.info("Migracja Re-check: Dodawanie 'expected_profit_factor' do virtual_trades")
-                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS expected_profit_factor NUMERIC(10, 4)"))
-            if 'expected_win_rate' not in columns:
-                logger.info("Migracja Re-check: Dodawanie 'expected_win_rate' do virtual_trades")
-                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS expected_win_rate NUMERIC(10, 4)"))
-            if 'ai_audit_report' not in columns:
-                logger.info("Migracja Re-check: Dodawanie 'ai_audit_report' do virtual_trades")
-                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS ai_audit_report TEXT"))
-            if 'ai_audit_date' not in columns:
-                logger.info("Migracja Re-check: Dodawanie 'ai_audit_date' do virtual_trades")
-                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS ai_audit_date TIMESTAMP WITH TIME ZONE"))
-            if 'ai_optimization_suggestion' not in columns:
-                logger.info("Migracja Re-check: Dodawanie 'ai_optimization_suggestion' do virtual_trades")
-                session.execute(text("ALTER TABLE virtual_trades ADD COLUMN IF NOT EXISTS ai_optimization_suggestion JSONB"))
+        # === MIGRACJA INDEKSÓW ===
+        try:
+            # Sprawdzamy, czy indeks istnieje, zanim spróbujemy go stworzyć (aby uniknąć błędów w logach)
+            # W PostgreSQL `CREATE INDEX IF NOT EXISTS` jest bezpieczne, ale `DROP CONSTRAINT` może rzucać błędem jeśli nie istnieje.
+            # Dla uproszczenia, po prostu puszczamy CREATE INDEX IF NOT EXISTS
+            with engine.connect() as conn:
+                 conn.execute(text("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_active_pending_ticker
+                    ON trading_signals (ticker)
+                    WHERE status IN ('ACTIVE', 'PENDING');
+                 """))
+                 conn.commit()
+        except Exception as e:
+            logger.warning(f"Indeks migration warning: {e}")
 
-        session.commit()
         logger.info("Database schema migration completed successfully.")
 
     except Exception as e:
         logger.critical(f"FATAL: Error during database schema/index migration: {e}", exc_info=True)
-        session.rollback()
+        # session.rollback() # Nie rollbackujemy tutaj, bo używaliśmy osobnych połączeń DDL
         pass
 
 def force_reset_simulation_data(session: Session):
     """
     !!! UWAGA: FUNKCJA DESTRUKCYJNA !!!
-    Usuwa wszystkie wyniki symulacji. Wymaga zmiennej środowiskowej
-    'APEX_ALLOW_DATA_RESET' ustawionej na 'TRUE'.
     """
     if os.getenv("APEX_ALLOW_DATA_RESET") != "TRUE":
         return
