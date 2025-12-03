@@ -127,8 +127,25 @@ export const ui = {
     init: () => {
         const get = (id) => document.getElementById(id);
         
-        // Iniekcja pola AQM do modalu H3
+        // Iniekcja elementów do modalu H3
         const h3ModalContent = document.querySelector('#h3-live-modal .grid');
+        
+        // 1. Iniekcja Selectora Strategii (H3/AQM) - NAPRAWA BŁĘDU MIESZANIA STRATEGII
+        if (h3ModalContent && !document.getElementById('h3-live-strategy-mode')) {
+            const stratDiv = document.createElement('div');
+            stratDiv.innerHTML = `
+                <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Tryb Strategii</label>
+                <select id="h3-live-strategy-mode" class="modal-input cursor-pointer hover:bg-gray-800 transition-colors">
+                    <option value="H3">H3 (Elite Sniper)</option>
+                    <option value="AQM">AQM (Adaptive Quantum)</option>
+                </select>
+                <p class="text-[10px] text-gray-600 mt-1">Wymusza logikę obliczeń (H3 vs AQM).</p>
+            `;
+            // Wstawiamy na początek siatki, aby było widoczne jako pierwsze
+            h3ModalContent.insertBefore(stratDiv, h3ModalContent.firstChild);
+        }
+
+        // 2. Iniekcja pola AQM min score (jeśli nie istnieje)
         if (h3ModalContent && !document.getElementById('h3-live-aqm-min')) {
             const newDiv = document.createElement('div');
             newDiv.innerHTML = `<label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Min. Component Score (AQM)</label><input type="number" id="h3-live-aqm-min" class="modal-input" placeholder="0.5" step="0.1" value="0.5"><p class="text-[10px] text-gray-600 mt-1">Próg dla QPS, VES, MRS.</p>`;
@@ -154,14 +171,12 @@ export const ui = {
         }
 
         // === INIEKCJA PRZYCISKU FAZY X (BIOX) ===
-        // Dodajemy przycisk do sidebaru, jeśli go tam nie ma
         const sidebarControls = document.querySelector('#app-sidebar .pt-4 .space-y-2');
         if (sidebarControls && !document.getElementById('btn-phasex-scan')) {
              const btn = document.createElement('button');
              btn.id = 'btn-phasex-scan';
              btn.className = 'w-full text-left flex items-center bg-pink-600/20 hover:bg-pink-600/40 text-pink-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
              btn.innerHTML = '<i data-lucide="biohazard" class="mr-2 h-4 w-4"></i>Skanuj Faza X (BioX)';
-             // Handler kliknięcia jest przypisywany w app.js / logic.js
              sidebarControls.appendChild(btn);
         }
 
@@ -174,10 +189,11 @@ export const ui = {
             
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
-            btnPhaseX: get('btn-phasex-scan'), // Teraz na pewno istnieje
+            btnPhaseX: get('btn-phasex-scan'),
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
+                strategyMode: get('h3-live-strategy-mode'), // Nowe pole w obiekcie UI
                 percentile: get('h3-live-percentile'),
                 mass: get('h3-live-mass'),
                 minScore: get('h3-live-min-score'),
@@ -749,7 +765,7 @@ export const renderers = {
             const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono"><td class="p-2 whitespace-nowrap text-gray-400 sticky left-0 bg-[#161B22] hover:bg-[#1f2937]">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td><td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[90px] bg-[#161B22] hover:bg-[#1f2937]">${t.ticker}</td><td class="p-2 whitespace-nowrap text-gray-300 sticky left-[160px] bg-[#161B22] hover:bg-[#1f2937]">${setupNameShort}</td><td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td><td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td><td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td><td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td></tr>`;
         }).join('');
-        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
+        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]} ${index < 3 ? 'bg-[#0D1117]' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
         
         // === UPDATE: STRATEGIA BIOX W BACKTEŚCIE ===
         const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option><option value="BIOX">BioX (Pump Hunter >20%)</option></select></div><div class="flex items-start gap-3 mb-4"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
