@@ -27,18 +27,15 @@ class Phase1Candidate(Base):
     days_to_earnings = Column(INTEGER, nullable=True)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
-# === NOWOŚĆ: FAZA X (BIOTECH & PENNY STOCKS) ===
+# === FAZA X (BIOTECH & PENNY STOCKS) ===
 class PhaseXCandidate(Base):
     __tablename__ = 'phasex_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
     price = Column(NUMERIC(12, 4))
     volume_avg = Column(BIGINT, nullable=True)
-    
-    # Statystyki historycznych "Wybuchów" (>50%)
     pump_count_1y = Column(INTEGER, default=0, comment="Ile razy urosła >50% w ciągu roku")
     last_pump_date = Column(DATE, nullable=True, comment="Data ostatniego skoku >50%")
     last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
-    
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
 class Phase2Result(Base):
@@ -74,6 +71,11 @@ class TradingSignal(Base):
     earnings_date = Column(DATE, nullable=True)
     
     expiration_date = Column(PG_TIMESTAMP(timezone=True), nullable=True, comment="Data wygaśnięcia sygnału (Max Hold)")
+    
+    # === NOWOŚĆ: RE-CHECK DATA (Oczekiwania Optymalizatora) ===
+    # Te pola przechowują "obietnicę" strategii w momencie generowania sygnału
+    expected_profit_factor = Column(NUMERIC(10, 4), nullable=True, comment="PF z backtestu dla użytych parametrów")
+    expected_win_rate = Column(NUMERIC(10, 4), nullable=True, comment="Win Rate z backtestu dla użytych parametrów")
     
     __table_args__ = (
         Index(
@@ -140,6 +142,8 @@ class VirtualTrade(Base):
     close_date = Column(PG_TIMESTAMP(timezone=True), nullable=True)
     close_price = Column(NUMERIC(12, 2), nullable=True)
     final_profit_loss_percent = Column(NUMERIC(8, 2), nullable=True)
+    
+    # Metryki Strategiczne
     metric_atr_14 = Column(NUMERIC(10, 4), nullable=True)
     metric_time_dilation = Column(NUMERIC(10, 4), nullable=True)
     metric_price_gravity = Column(NUMERIC(10, 4), nullable=True)
@@ -154,6 +158,14 @@ class VirtualTrade(Base):
     metric_m_sq_norm = Column(NUMERIC(10, 4), nullable=True)
     metric_J = Column(NUMERIC(10, 4), nullable=True)
     metric_J_threshold_2sigma = Column(NUMERIC(10, 4), nullable=True)
+
+    # === NOWOŚĆ: MODUŁ RE-CHECK (AUDIT) ===
+    expected_profit_factor = Column(NUMERIC(10, 4), nullable=True, comment="Oczekiwany PF (kopia z sygnału)")
+    expected_win_rate = Column(NUMERIC(10, 4), nullable=True, comment="Oczekiwany WR (kopia z sygnału)")
+    
+    ai_audit_report = Column(TEXT, nullable=True, comment="Raport tekstowy 'Re-check' od Gemini")
+    ai_audit_date = Column(PG_TIMESTAMP(timezone=True), nullable=True)
+    ai_optimization_suggestion = Column(JSONB, nullable=True, comment="Strukturalne wnioski dla Optymalizatora (Machine Learning)")
 
 class AlphaVantageCache(Base):
     __tablename__ = 'alpha_vantage_cache'
