@@ -64,7 +64,9 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         'metric_inst_sync', 'metric_retail_herding',
         'metric_aqm_score_h3', 'metric_aqm_percentile_95',
         'metric_J_norm', 'metric_nabla_sq_norm', 'metric_m_sq_norm',
-        'metric_J', 'metric_J_threshold_2sigma'
+        'metric_J', 'metric_J_threshold_2sigma',
+        # === NOWOŚĆ: RE-CHECK METRICS ===
+        'expected_profit_factor', 'expected_win_rate'
     ]
     
     for field in optional_fields_to_clean:
@@ -120,7 +122,6 @@ def get_optimization_trials(db: Session, job_id: str) -> List[models.Optimizatio
 # ==========================================================
 
 def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
-    # === AKTUALIZACJA: Pobieramy również pole 'notes' ze strategią ===
     results = db.query(
         models.PortfolioHolding,
         models.TradingSignal.take_profit,
@@ -133,10 +134,9 @@ def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
 
     holdings_processed = []
     for (holding, take_profit, notes) in results:
-        # Konwersja na Pydantic z dodatkowymi polami
         holding_schema = schemas.PortfolioHolding.model_validate(holding)
         holding_schema.take_profit = float(take_profit) if take_profit is not None else None
-        holding_schema.notes = notes # Przekazujemy notatki (np. "STRATEGIA: H3...")
+        holding_schema.notes = notes 
         holdings_processed.append(holding_schema)
     
     return holdings_processed
@@ -281,13 +281,10 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
         } for c in candidates_from_db
     ]
 
-# === NOWOŚĆ: CRUD DLA FAZY X (BioX) ===
+# === CRUD DLA FAZY X (BioX) ===
 def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
-    """
-    Pobiera kandydatów Fazy X posortowanych wg wielkości ostatniej pompy.
-    """
     candidates = db.query(models.PhaseXCandidate).order_by(
-        desc(models.PhaseXCandidate.last_pump_percent) # Największe pompy na górze
+        desc(models.PhaseXCandidate.last_pump_percent)
     ).all()
     
     return [
@@ -296,7 +293,7 @@ def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
             "price": float(c.price) if c.price is not None else 0.0,
             "volume_avg": c.volume_avg,
             "pump_count_1y": c.pump_count_1y,
-            "last_pump_date": c.last_pump_date, # Date object
+            "last_pump_date": c.last_pump_date,
             "last_pump_percent": float(c.last_pump_percent) if c.last_pump_percent is not None else 0.0,
             "analysis_date": c.analysis_date
         }
@@ -344,7 +341,10 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
             "entry_zone_bottom": _safe_float_stat(signal.entry_zone_bottom),
             "entry_zone_top": _safe_float_stat(signal.entry_zone_top),
             "notes": signal.notes,
-            "expiration_date": signal.expiration_date.isoformat() if signal.expiration_date else None
+            "expiration_date": signal.expiration_date.isoformat() if signal.expiration_date else None,
+            # === NOWOŚĆ: RE-CHECK ===
+            "expected_profit_factor": _safe_float_stat(signal.expected_profit_factor),
+            "expected_win_rate": _safe_float_stat(signal.expected_win_rate)
         } for signal in signals_from_db
     ]
 
