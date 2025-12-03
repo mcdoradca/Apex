@@ -327,6 +327,12 @@ class QuantumOptimizer:
             safe_score = float(score) if score is not None and not np.isnan(score) else 0.0
             safe_win_rate = float(win_rate) if win_rate is not None and not np.isnan(win_rate) else 0.0
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
+            
+            # === NOWOŚĆ: Explicit Strategy Mode ===
+            # Jawny zapis trybu strategii w parametrach próby
+            safe_params['strategy_mode'] = self.strategy_mode 
+            # ======================================
+
             trial_record = models.OptimizationTrial(
                 job_id=self.job_id, trial_number=trial.number, params=safe_params,
                 profit_factor=safe_pf, total_trades=safe_trades, win_rate=safe_win_rate,
