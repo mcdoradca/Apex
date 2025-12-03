@@ -323,11 +323,9 @@ export const loadAgentReportPage = async (page) => {
         UI.mainContent.innerHTML = renderers.agentReport(reportData);
         
         // Ponowne podpięcie handlerów dla dynamicznie załadowanego contentu raportu
-        // (Ważne dla przycisków Backtestu wewnątrz raportu)
         const strategySelect = document.getElementById('backtest-strategy-select');
         if (strategySelect) {
-            // Możemy ustawić domyślną wartość lub nasłuchiwać zmian,
-            // ale w obecnej architekturze zdarzenia 'click' są delegowane w app.js
+            // Handlery delegowane w app.js
         }
         
     } catch (error) {
@@ -652,7 +650,11 @@ export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.r
 export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
 export const handleRunH3LiveScan = async () => {
+    // === POPRAWKA: Pobieranie Trybu Strategii (H3/AQM) ===
+    const strategyMode = UI.h3LiveModal.strategyMode ? UI.h3LiveModal.strategyMode.value : 'H3';
+    
     const params = {
+        strategy_mode: strategyMode, // Jawne wysłanie trybu
         h3_percentile: UI.h3LiveModal.percentile.value,
         h3_m_sq_threshold: UI.h3LiveModal.mass.value,
         h3_min_score: UI.h3LiveModal.minScore.value,
@@ -666,9 +668,9 @@ export const handleRunH3LiveScan = async () => {
         UI.h3LiveModal.startBtn.disabled = true;
         await api.sendWorkerControl('start_phase3', params);
         hideH3LiveParamsModal();
-        showSystemAlert("Rozpoczęto Skanowanie H3 Live.");
+        showSystemAlert(`Rozpoczęto Skanowanie Live (${strategyMode}).`);
     } catch (e) {
-        alert("Błąd startu H3: " + e.message);
+        alert("Błąd startu skanowania: " + e.message);
     } finally {
         UI.h3LiveModal.startBtn.disabled = false;
     }
@@ -953,6 +955,23 @@ export const showOptimizationResults = async () => {
                     };
 
                     setTimeout(() => {
+                        // === POPRAWKA: Automatyczne Ustawianie Trybu Strategii (H3/AQM) ===
+                        if (UI.h3LiveModal.strategyMode) {
+                            if (params.strategy_mode) {
+                                // Nowe próby mają ten parametr jawnie
+                                UI.h3LiveModal.strategyMode.value = params.strategy_mode;
+                            } else {
+                                // Stare próby: Wnioskowanie na podstawie parametrów
+                                // Jeśli aqm_min_score istnieje i jest > 0, to jest to AQM
+                                if (params.aqm_min_score && params.aqm_min_score > 0) {
+                                    UI.h3LiveModal.strategyMode.value = "AQM";
+                                } else {
+                                    UI.h3LiveModal.strategyMode.value = "H3";
+                                }
+                            }
+                        }
+                        
+                        // Mapowanie reszty parametrów
                         if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = _fmt(params.h3_percentile, 2);
                         if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = _fmt(params.h3_m_sq_threshold, 2);
                         if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = _fmt(params.h3_min_score, 4);
@@ -962,6 +981,11 @@ export const showOptimizationResults = async () => {
                         if (UI.h3LiveModal.tp && params.h3_tp_multiplier) UI.h3LiveModal.tp.value = _fmt(params.h3_tp_multiplier, 2);
                         if (UI.h3LiveModal.sl && params.h3_sl_multiplier) UI.h3LiveModal.sl.value = _fmt(params.h3_sl_multiplier, 2);
                         if (UI.h3LiveModal.maxHold && params.h3_max_hold) UI.h3LiveModal.maxHold.value = parseInt(params.h3_max_hold);
+                        
+                        const aqmMinInput = document.getElementById('h3-live-aqm-min');
+                        if (aqmMinInput && params.aqm_component_min) {
+                            aqmMinInput.value = _fmt(params.aqm_component_min, 2);
+                        }
                     }, 100);
                     
                 } catch(err) {
