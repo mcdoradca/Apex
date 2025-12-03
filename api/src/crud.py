@@ -65,7 +65,7 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         'metric_aqm_score_h3', 'metric_aqm_percentile_95',
         'metric_J_norm', 'metric_nabla_sq_norm', 'metric_m_sq_norm',
         'metric_J', 'metric_J_threshold_2sigma',
-        # === NOWOŚĆ: RE-CHECK METRICS ===
+        # === RE-CHECK METRICS ===
         'expected_profit_factor', 'expected_win_rate'
     ]
     
@@ -281,10 +281,14 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
         } for c in candidates_from_db
     ]
 
-# === CRUD DLA FAZY X (BioX) ===
+# === CRUD DLA FAZY X (BioX) - NAPRAWA SORTOWANIA ===
 def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
+    # Sortowanie: Najpierw te z najwyższym %, potem te z 0/NULL
+    # W Postgres DESC domyślnie daje NULLS FIRST, co psuło widok.
+    # Używamy nullslast(), aby puste wyniki wylądowały na dnie.
     candidates = db.query(models.PhaseXCandidate).order_by(
-        desc(models.PhaseXCandidate.last_pump_percent)
+        models.PhaseXCandidate.last_pump_percent.desc().nullslast(),
+        models.PhaseXCandidate.ticker.asc() # Drugie kryterium: alfabetycznie
     ).all()
     
     return [
@@ -342,7 +346,7 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
             "entry_zone_top": _safe_float_stat(signal.entry_zone_top),
             "notes": signal.notes,
             "expiration_date": signal.expiration_date.isoformat() if signal.expiration_date else None,
-            # === NOWOŚĆ: RE-CHECK ===
+            # === RE-CHECK ===
             "expected_profit_factor": _safe_float_stat(signal.expected_profit_factor),
             "expected_win_rate": _safe_float_stat(signal.expected_win_rate)
         } for signal in signals_from_db
