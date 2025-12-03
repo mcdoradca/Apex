@@ -49,9 +49,8 @@ export const api = {
     }),
     getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
     
-    // === NOWOŚĆ: Pobieranie kandydatów Fazy X (BioX) ===
+    // Pobieranie kandydatów Fazy X (BioX)
     getPhaseXCandidates: () => apiRequest('api/v1/candidates/phasex'),
-    // ===================================================
 
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
@@ -73,6 +72,10 @@ export const api = {
     getTransactionHistory: () => apiRequest('api/v1/transactions'),
     getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
     
+    // === NOWOŚĆ: RE-CHECK (Pobieranie raportu audytu) ===
+    getTradeAuditDetails: (tradeId) => apiRequest(`api/v1/virtual-agent/trade/${tradeId}/audit`),
+    // ====================================================
+
     requestBacktest: (year, params = null) => apiRequest('api/v1/backtest/request', { 
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year, parameters: params })
     }),
