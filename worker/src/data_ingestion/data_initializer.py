@@ -13,118 +13,101 @@ NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.tx
 def _run_schema_and_index_migration(session: Session):
     """
     Zapewnia, że schemat bazy danych i niezbędne indeksy są aktualne.
-    Naprawiona wersja: Wymusza dodanie brakujących kolumn (Re-check, BioX).
+    Naprawiona wersja: Wymusza dodanie brakujących kolumn poprzez bezpośrednie połączenie.
     """
     try:
-        logger.info("Starting database schema and index migration...")
-        
-        # Wymuszamy commit na początku, aby mieć czystą transakcję
-        session.commit()
+        logger.info("Starting database schema and index migration (BRUTE FORCE MODE)...")
         
         engine = session.get_bind()
-        inspector = inspect(engine)
         
-        # Funkcja pomocnicza do bezpiecznego dodawania kolumn
+        # Funkcja pomocnicza do bezpiecznego dodawania kolumn na osobnym połączeniu
         def safe_add_column(table_name, col_name, col_type):
             try:
-                # Sprawdzamy ponownie, czy kolumna istnieje (dla pewności wewnątrz transakcji)
-                check_inspector = inspect(engine)
-                current_columns = [c['name'] for c in check_inspector.get_columns(table_name)]
-                
-                if col_name not in current_columns:
-                    logger.info(f"Migracja: Dodawanie kolumny '{col_name}' do tabeli '{table_name}'...")
-                    # Używamy autocommit dla zmian DDL (poza sesją transakcyjną)
-                    with engine.connect() as conn:
-                        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
-                        conn.commit()
-                    logger.info(f"Migracja: Sukces - dodano '{col_name}'.")
-                else:
-                    # logger.info(f"Migracja: Kolumna '{col_name}' już istnieje w '{table_name}'.")
-                    pass
+                with engine.connect() as conn:
+                    # Sprawdzamy wewnątrz bloku connect, aby mieć świeży stan
+                    inspector = inspect(engine)
+                    if table_name in inspector.get_table_names():
+                        current_columns = [c['name'] for c in inspector.get_columns(table_name)]
+                        
+                        if col_name not in current_columns:
+                            logger.info(f"Migracja: Dodawanie kolumny '{col_name}' do tabeli '{table_name}'...")
+                            # Wymuszamy autocommit dla DDL
+                            conn.execute(text("COMMIT")) 
+                            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                            conn.execute(text("COMMIT"))
+                            logger.info(f"Migracja: Sukces - dodano '{col_name}'.")
+                        else:
+                            pass # Kolumna już jest, wszystko ok
             except Exception as e:
-                logger.error(f"Migracja BŁĄD: Nie udało się dodać '{col_name}' do '{table_name}': {e}")
+                logger.error(f"Migracja BŁĄD (niekrytyczny) dla '{col_name}' w '{table_name}': {e}")
 
-        # === MIGRACJA TABELI 1: trading_signals ===
-        if 'trading_signals' in inspector.get_table_names():
-            # Apex V3 Columns
-            safe_add_column('trading_signals', 'entry_zone_bottom', 'NUMERIC(12, 2)')
-            safe_add_column('trading_signals', 'entry_zone_top', 'NUMERIC(12, 2)')
-            safe_add_column('trading_signals', 'updated_at', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()')
+        # === 1. TRADING SIGNALS (Brakujące kolumny RE-CHECK) ===
+        safe_add_column('trading_signals', 'entry_zone_bottom', 'NUMERIC(12, 2)')
+        safe_add_column('trading_signals', 'entry_zone_top', 'NUMERIC(12, 2)')
+        safe_add_column('trading_signals', 'updated_at', 'TIMESTAMP WITH TIME ZONE DEFAULT NOW()')
+        safe_add_column('trading_signals', 'highest_price_since_entry', 'NUMERIC(12, 2)')
+        safe_add_column('trading_signals', 'is_trailing_active', 'BOOLEAN DEFAULT FALSE')
+        safe_add_column('trading_signals', 'earnings_date', 'DATE')
+        safe_add_column('trading_signals', 'expiration_date', 'TIMESTAMP WITH TIME ZONE')
+        # TE DWIE KOLUMNY POWODUJĄ BŁĄD - MUSZĄ ZOSTAĆ DODANE:
+        safe_add_column('trading_signals', 'expected_profit_factor', 'NUMERIC(10, 4)')
+        safe_add_column('trading_signals', 'expected_win_rate', 'NUMERIC(10, 4)')
 
-            # Apex V5 Columns
-            safe_add_column('trading_signals', 'highest_price_since_entry', 'NUMERIC(12, 2)')
-            safe_add_column('trading_signals', 'is_trailing_active', 'BOOLEAN DEFAULT FALSE')
-            safe_add_column('trading_signals', 'earnings_date', 'DATE')
-            
-            # Apex V6 Columns (TTL)
-            safe_add_column('trading_signals', 'expiration_date', 'TIMESTAMP WITH TIME ZONE')
+        # === 2. COMPANIES ===
+        safe_add_column('companies', 'sector_etf', 'VARCHAR(10)')
 
-            # === APEX V7 COLUMNS (RE-CHECK) - KRYTYCZNE ===
-            safe_add_column('trading_signals', 'expected_profit_factor', 'NUMERIC(10, 4)')
-            safe_add_column('trading_signals', 'expected_win_rate', 'NUMERIC(10, 4)')
+        # === 3. PHASE 1 CANDIDATES ===
+        safe_add_column('phase1_candidates', 'sector_ticker', 'VARCHAR(10)')
+        safe_add_column('phase1_candidates', 'sector_trend_score', 'NUMERIC(5, 2)')
+        safe_add_column('phase1_candidates', 'days_to_earnings', 'INTEGER')
 
-        # === MIGRACJA TABELI 2: companies ===
-        if 'companies' in inspector.get_table_names():
-            safe_add_column('companies', 'sector_etf', 'VARCHAR(10)')
+        # === 4. PHASE X CANDIDATES (BIOX) ===
+        safe_add_column('phasex_candidates', 'last_pump_date', 'DATE')
+        safe_add_column('phasex_candidates', 'last_pump_percent', 'NUMERIC(10, 2)')
 
-        # === MIGRACJA TABELI 3: phase1_candidates ===
-        if 'phase1_candidates' in inspector.get_table_names():
-            safe_add_column('phase1_candidates', 'sector_ticker', 'VARCHAR(10)')
-            safe_add_column('phase1_candidates', 'sector_trend_score', 'NUMERIC(5, 2)')
-            safe_add_column('phase1_candidates', 'days_to_earnings', 'INTEGER')
+        # === 5. VIRTUAL TRADES (METRYKI + RE-CHECK) ===
+        metrics_cols = [
+            ("metric_atr_14", "NUMERIC(12, 6)"),
+            ("metric_time_dilation", "NUMERIC(12, 6)"),
+            ("metric_price_gravity", "NUMERIC(12, 6)"),
+            ("metric_td_percentile_90", "NUMERIC(12, 6)"),
+            ("metric_pg_percentile_90", "NUMERIC(12, 6)"),
+            ("metric_inst_sync", "NUMERIC(12, 6)"),
+            ("metric_retail_herding", "NUMERIC(12, 6)"),
+            ("metric_aqm_score_h3", "NUMERIC(12, 6)"),
+            ("metric_aqm_percentile_95", "NUMERIC(12, 6)"),
+            ("metric_J_norm", "NUMERIC(12, 6)"),
+            ("metric_nabla_sq_norm", "NUMERIC(12, 6)"),
+            ("metric_m_sq_norm", "NUMERIC(12, 6)"),
+            ("metric_J", "NUMERIC(12, 6)"),
+            ("metric_J_threshold_2sigma", "NUMERIC(12, 6)"),
+            # Re-check columns
+            ("expected_profit_factor", "NUMERIC(10, 4)"),
+            ("expected_win_rate", "NUMERIC(10, 4)"),
+            ("ai_audit_report", "TEXT"),
+            ("ai_audit_date", "TIMESTAMP WITH TIME ZONE"),
+            ("ai_optimization_suggestion", "JSONB")
+        ]
+        for col, type_def in metrics_cols:
+            safe_add_column('virtual_trades', col, type_def)
 
-        # === NOWOŚĆ: Weryfikacja Tabeli PhaseX (BioX) ===
-        if 'phasex_candidates' in inspector.get_table_names():
-            safe_add_column('phasex_candidates', 'last_pump_date', 'DATE')
-            safe_add_column('phasex_candidates', 'last_pump_percent', 'NUMERIC(10, 2)')
-
-        # === MIGRACJA TABELI 4: virtual_trades ===
-        if 'virtual_trades' in inspector.get_table_names():
-            metrics = [
-                ("metric_atr_14", "NUMERIC(12, 6)"),
-                ("metric_time_dilation", "NUMERIC(12, 6)"),
-                ("metric_price_gravity", "NUMERIC(12, 6)"),
-                ("metric_td_percentile_90", "NUMERIC(12, 6)"),
-                ("metric_pg_percentile_90", "NUMERIC(12, 6)"),
-                ("metric_inst_sync", "NUMERIC(12, 6)"),
-                ("metric_retail_herding", "NUMERIC(12, 6)"),
-                ("metric_aqm_score_h3", "NUMERIC(12, 6)"),
-                ("metric_aqm_percentile_95", "NUMERIC(12, 6)"),
-                ("metric_J_norm", "NUMERIC(12, 6)"),
-                ("metric_nabla_sq_norm", "NUMERIC(12, 6)"),
-                ("metric_m_sq_norm", "NUMERIC(12, 6)"),
-                ("metric_J", "NUMERIC(12, 6)"),
-                ("metric_J_threshold_2sigma", "NUMERIC(12, 6)"),
-                # RE-CHECK
-                ("expected_profit_factor", "NUMERIC(10, 4)"),
-                ("expected_win_rate", "NUMERIC(10, 4)"),
-                ("ai_audit_report", "TEXT"),
-                ("ai_audit_date", "TIMESTAMP WITH TIME ZONE"),
-                ("ai_optimization_suggestion", "JSONB")
-            ]
-            for col, type_def in metrics:
-                safe_add_column('virtual_trades', col, type_def)
-
-        # === MIGRACJA INDEKSÓW ===
+        # === INDEKSY ===
         try:
-            # Sprawdzamy, czy indeks istnieje, zanim spróbujemy go stworzyć (aby uniknąć błędów w logach)
-            # W PostgreSQL `CREATE INDEX IF NOT EXISTS` jest bezpieczne, ale `DROP CONSTRAINT` może rzucać błędem jeśli nie istnieje.
-            # Dla uproszczenia, po prostu puszczamy CREATE INDEX IF NOT EXISTS
             with engine.connect() as conn:
+                 conn.execute(text("COMMIT"))
                  conn.execute(text("""
                     CREATE UNIQUE INDEX IF NOT EXISTS uq_active_pending_ticker
                     ON trading_signals (ticker)
                     WHERE status IN ('ACTIVE', 'PENDING');
                  """))
-                 conn.commit()
+                 conn.execute(text("COMMIT"))
         except Exception as e:
             logger.warning(f"Indeks migration warning: {e}")
 
-        logger.info("Database schema migration completed successfully.")
+        logger.info("Database schema migration completed.")
 
     except Exception as e:
         logger.critical(f"FATAL: Error during database schema/index migration: {e}", exc_info=True)
-        # session.rollback() # Nie rollbackujemy tutaj, bo używaliśmy osobnych połączeń DDL
         pass
 
 def force_reset_simulation_data(session: Session):
