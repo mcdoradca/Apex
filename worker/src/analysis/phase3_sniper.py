@@ -191,7 +191,8 @@ def _get_market_pkg(session, client):
     pkg = {'vix': 20.0, 'trend': 'NEUTRAL', 'spy_df': pd.DataFrame(), 'macro': 'UNKNOWN'}
     try:
         pkg['macro'] = get_system_control_value(session, 'macro_sentiment') or "UNKNOWN"
-        spy = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=24)
+        # === FIX: SPY -> QQQ (NASDAQ BENCHMARK) ===
+        spy = get_raw_data_with_cache(session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', expiry_hours=24)
         if spy:
             df = standardize_df_columns(pd.DataFrame.from_dict(spy.get('Time Series (Daily)', {}), orient='index'))
             df.index = pd.to_datetime(df.index); df.sort_index(inplace=True)
@@ -212,7 +213,8 @@ def _get_sector_trend(session, ticker):
 def _get_macro_context_for_aqm(session, client):
     macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
     try:
-        spy_raw = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+        # === FIX: SPY -> QQQ (NASDAQ BENCHMARK) ===
+        spy_raw = get_raw_data_with_cache(session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         if spy_raw:
             macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
             macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
@@ -232,7 +234,7 @@ def _get_macro_context_for_aqm(session, client):
     return macro
 
 def run_h3_live_scan(session, candidates, client, parameters=None):
-    logger.info("Start Phase 3 Live Sniper (V7.2 - Re-check Integration)...")
+    logger.info("Start Phase 3 Live Sniper (V7.3 - Nasdaq Fix & Tagging Repair)...")
     
     params = DEFAULT_PARAMS.copy()
     if parameters:
@@ -243,11 +245,19 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                 except:
                     params[k] = v 
 
-    strategy_mode = 'H3'
-    if params.get('strategy_mode') == 'AQM':
-        strategy_mode = 'AQM'
-    elif params.get('aqm_component_min') is not None and float(params['aqm_component_min']) > 0:
-        strategy_mode = 'AQM'
+    # === FIX: POPRAWA LOGIKI WYKRYWANIA STRATEGII ===
+    # 1. Sprawdzamy, czy przekazano JAWNY tryb strategii (np. z Optymalizatora)
+    requested_mode = params.get('strategy_mode', 'AUTO')
+    
+    if requested_mode in ['H3', 'AQM', 'BIOX']:
+        strategy_mode = requested_mode
+    else:
+        # 2. Tryb AUTO (Fallback): Wnioskowanie na podstawie parametrów
+        if params.get('aqm_component_min') is not None and float(params['aqm_component_min']) > 0:
+            strategy_mode = 'AQM'
+        else:
+            strategy_mode = 'H3'
+    # ================================================
     
     tp_mult = float(params['h3_tp_multiplier'])
     sl_mult = float(params['h3_sl_multiplier'])
@@ -415,7 +425,7 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     intraday_df = standardize_df_columns(pd.DataFrame.from_dict(i_raw.get('Time Series (60min)', {}), orient='index'))
                     intraday_df.index = pd.to_datetime(intraday_df.index)
 
-                aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
+                aqm_metrics_df = aqm_v4_logic.calculate_aqm_full_vector(
                     daily_df=df,
                     weekly_df=weekly_df,
                     intraday_60m_df=intraday_df, 
@@ -424,8 +434,8 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     earnings_days_to=None
                 )
                 
-                if not aqm_df.empty:
-                    last_aqm = aqm_df.iloc[-1]
+                if not aqm_metrics_df.empty:
+                    last_aqm = aqm_metrics_df.iloc[-1]
                     curr_score = last_aqm['aqm_score']
                     comp_min = float(params.get('aqm_component_min', 0.5))
                     
@@ -468,7 +478,7 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                 if strategy_mode == 'H3':
                     note = f"STRATEGIA: H3\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{metric_details.get('tech_score',0)} Mkt:{metric_details.get('market_score',0)} RS:{metric_details.get('rs_score',0)}\nAQM H3:{metric_details['aqm_score']:.2f} (vs {metric_details['threshold']:.2f})"
                 else:
-                    note = f"STRATEGIA: AQM (V4)\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details['qps']:.2f} VES:{metric_details['ves']:.2f} MRS:{metric_details['mrs']:.2f} TCS:{metric_details['tcs']:.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
+                    note = f"STRATEGIA: AQM (V4)\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details.get('qps',0):.2f} VES:{metric_details.get('ves',0):.2f} MRS:{metric_details.get('mrs',0):.2f} TCS:{metric_details.get('tcs',0):.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
 
                 ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
                 if not ex:
