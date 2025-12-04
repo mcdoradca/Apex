@@ -33,9 +33,6 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 class QuantumOptimizer:
     """
     SERCE SYSTEMU APEX V14 - PERSISTENT MEMORY MODE (SAFE)
-    - Zapisywanie wyników Optuny do bazy danych PostgreSQL.
-    - Osobna historia nauki dla każdego roku (study_name).
-    - Obsługa trybów okresowych: FULL, Q1, Q2, Q3, Q4.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -60,7 +57,6 @@ class QuantumOptimizer:
         except: pass
         
         self.strategy_mode = self.job_config.get('strategy', 'H3')
-        # Domyślny okres to cały rok, jeśli nie podano inaczej
         self.scan_period = self.job_config.get('scan_period', 'FULL') 
         
         logger.info(f"QuantumOptimizer V14 initialized for Job {job_id} (Mode: {self.strategy_mode}, Period: {self.scan_period})")
@@ -84,7 +80,6 @@ class QuantumOptimizer:
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
             
-            # Unikalna nazwa badania uwzględniająca teraz też okres (np. apex_opt_H3_2023_Q1)
             study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}_{self.scan_period}"
             
             logger.info(f"Podłączanie do badania Optuny: {study_name} w bazie danych...")
@@ -141,13 +136,13 @@ class QuantumOptimizer:
             self._mark_job_failed()
             raise
 
-    # ... Metody pomocnicze ...
     def _load_macro_context(self):
-        append_scan_log(self.session, "📊 Pobieranie danych Makro...")
+        append_scan_log(self.session, "📊 Pobieranie danych Makro (Nasdaq Benchmark)...")
         macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
         with get_db_session() as session:
             client = backtest_engine.AlphaVantageClient()
-            spy_raw = get_raw_data_with_cache(session, client, 'SPY', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+            # === FIX: SPY -> QQQ (NASDAQ) ===
+            spy_raw = get_raw_data_with_cache(session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
             if spy_raw:
                 macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
                 macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
@@ -216,10 +211,9 @@ class QuantumOptimizer:
 
         self._save_trial(trial, params, pf, trades, pf, result['win_rate'])
         
-        if trades < 3: return 0.0 # Zmniejszony próg dla kwartałów
+        if trades < 3: return 0.0
         return pf
 
-    # ... Reszta metod klasy ...
     def _run_simulation_unified(self, params, start_ts, end_ts):
         trades_pnl = []
         tp_mult = params['h3_tp_multiplier']
@@ -328,10 +322,7 @@ class QuantumOptimizer:
             safe_win_rate = float(win_rate) if win_rate is not None and not np.isnan(win_rate) else 0.0
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
             
-            # === NOWOŚĆ: Explicit Strategy Mode ===
-            # Jawny zapis trybu strategii w parametrach próby
             safe_params['strategy_mode'] = self.strategy_mode 
-            # ======================================
 
             trial_record = models.OptimizationTrial(
                 job_id=self.job_id, trial_number=trial.number, params=safe_params,
@@ -353,7 +344,7 @@ class QuantumOptimizer:
                 'sensitivity_analysis': sensitivity_report, 
                 'version': 'V14_PERSISTENT', 
                 'strategy': self.strategy_mode,
-                'scan_period': self.scan_period, # Dodajemy info o okresie do wyniku
+                'scan_period': self.scan_period, 
                 'tickers_analyzed': self.tickers_count
             }
             self.session.commit()
@@ -431,7 +422,7 @@ class QuantumOptimizer:
                 daily_df['daily_returns'] = daily_df['close'].pct_change()
                 daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std()
                 if not news_df.empty:
-                    nc = news_df.groupby(news_df.index.date).size()
+                    nc = news_df.groupby(news.index.date).size()
                     nc.index = pd.to_datetime(nc.index)
                     nc = nc.reindex(daily_df.index, fill_value=0)
                     daily_df['information_entropy'] = nc.rolling(window=10).sum()
