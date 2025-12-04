@@ -65,7 +65,9 @@ async def startup_event():
             'h3_deep_dive_report': 'NONE',
             'h3_live_parameters': '{}',
             'macro_sentiment': 'UNKNOWN',
-            'optimization_request': 'NONE' 
+            'optimization_request': 'NONE',
+            # Inicjalizacja stanu dla Fazy 5
+            'phase5_monitor_state': '{}'
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -132,6 +134,41 @@ def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
     # Ten endpoint zwraca wszystkie aktywne/oczekujące sygnały (H3 + Flux)
     # To poprawne dla głównego widoku sygnałów
     return crud.get_active_and_pending_signals(db)
+
+# === NOWOŚĆ: ENDPOINT STANU MONITORINGU FAZY 5 ===
+@app.get("/api/v1/monitor/phase5", response_model=Dict[str, Any])
+def get_phase5_monitor_state_endpoint(db: Session = Depends(get_db)):
+    """
+    Zwraca aktualny stan monitora Omni-Flux (Faza 5).
+    Używane przez Frontend do wizualizacji 'Karuzeli'.
+    """
+    try:
+        raw_state = crud.get_system_control_value(db, 'phase5_monitor_state')
+        if raw_state:
+            return json.loads(raw_state)
+        # Domyślny stan oczekiwania
+        return {
+            "active_pool": [],
+            "macro_bias": "WAITING",
+            "reserve_count": 0,
+            "last_updated": 0
+        }
+    except json.JSONDecodeError:
+        return {
+            "active_pool": [],
+            "macro_bias": "ERROR",
+            "reserve_count": 0,
+            "last_updated": 0,
+            "error": "Corrupted Data"
+        }
+    except Exception as e:
+        logger.error(f"Error fetching Phase 5 state: {e}", exc_info=True)
+        return {
+            "active_pool": [],
+            "macro_bias": "ERROR",
+            "reserve_count": 0,
+            "last_updated": 0
+        }
 
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
