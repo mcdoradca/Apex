@@ -85,7 +85,15 @@ style.textContent = `
     .strat-badge-h3 { background-color: rgba(124, 58, 237, 0.2); color: #a78bfa; border-color: rgba(124, 58, 237, 0.4); box-shadow: 0 0 5px rgba(124, 58, 237, 0.2); }
     .strat-badge-aqm { background-color: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.4); box-shadow: 0 0 5px rgba(6, 182, 212, 0.2); }
     .strat-badge-biox { background-color: rgba(236, 72, 153, 0.2); color: #f472b6; border-color: rgba(236, 72, 153, 0.4); box-shadow: 0 0 5px rgba(236, 72, 153, 0.2); }
+    
+    /* H4 Kinetic Badge */
+    .strat-badge-h4 { background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 5px rgba(245, 158, 11, 0.2); }
+    
     .strat-badge-unknown { background-color: rgba(75, 85, 99, 0.3); color: #9ca3af; border-color: rgba(75, 85, 99, 0.5); }
+    
+    /* Kinetic Score Bar */
+    .kinetic-bar-bg { background: rgba(255,255,255,0.1); height: 6px; width: 100%; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+    .kinetic-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
 `;
 document.head.appendChild(style);
 
@@ -128,10 +136,8 @@ export const ui = {
         const get = (id) => document.getElementById(id);
         
         // Iniekcja elementów do modalu H3
-        // UWAGA: Selektor .grid wewnątrz modalu H3
         const h3ModalContent = document.querySelector('#h3-live-modal .grid');
         
-        // 1. Iniekcja Selectora Strategii (H3/AQM)
         if (h3ModalContent && !document.getElementById('h3-live-strategy-mode')) {
             const stratDiv = document.createElement('div');
             stratDiv.innerHTML = `
@@ -145,14 +151,12 @@ export const ui = {
             h3ModalContent.insertBefore(stratDiv, h3ModalContent.firstChild);
         }
 
-        // 2. Iniekcja pola AQM min score (jeśli nie istnieje)
         if (h3ModalContent && !document.getElementById('h3-live-aqm-min')) {
             const newDiv = document.createElement('div');
             newDiv.innerHTML = `<label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Min. Component Score (AQM)</label><input type="number" id="h3-live-aqm-min" class="modal-input" placeholder="0.5" step="0.1" value="0.5"><p class="text-[10px] text-gray-600 mt-1">Próg dla QPS, VES, MRS.</p>`;
             h3ModalContent.appendChild(newDiv);
         }
 
-        // Iniekcja pola Okresu do modalu Quantum
         const quantumModalContent = document.querySelector('#quantum-optimization-modal .space-y-3');
         if (quantumModalContent && !document.getElementById('qo-period-select')) {
             const periodDiv = document.createElement('div');
@@ -180,6 +184,15 @@ export const ui = {
              sidebarControls.appendChild(btn);
         }
 
+        // === INIEKCJA PRZYCISKU FAZY 4 (H4 KINETIC) - NOWOŚĆ ===
+        if (sidebarControls && !document.getElementById('btn-phase4-scan')) {
+             const btnH4 = document.createElement('button');
+             btnH4.id = 'btn-phase4-scan';
+             btnH4.className = 'w-full text-left flex items-center bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
+             btnH4.innerHTML = '<i data-lucide="zap" class="mr-2 h-4 w-4"></i>Skanuj H4 (Kinetic)';
+             sidebarControls.appendChild(btnH4);
+        }
+
         return {
             loginScreen: get('login-screen'),
             dashboardScreen: get('dashboard'),
@@ -190,6 +203,7 @@ export const ui = {
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
             btnPhaseX: get('btn-phasex-scan'),
+            btnPhase4: get('btn-phase4-scan'), // Dodano referencję
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
@@ -246,8 +260,6 @@ export const ui = {
                 content: get('optimization-results-content'),
                 closeBtn: get('optimization-results-close-btn')
             },
-            
-            // === NOWOŚĆ: MODAL AUDYTU RE-CHECK ===
             tradeAuditModal: {
                 backdrop: get('trade-audit-modal'),
                 closeBtn: get('ta-close-btn'),
@@ -325,9 +337,7 @@ export const renderers = {
         let icon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
         let scoreDisplay = "";
         let scoreVal = 0;
-        
         const strat = getStrategyInfo(s.notes);
-
         if (s.notes && s.notes.includes("SCORE:")) {
             try {
                 const parts = s.notes.split("SCORE:");
@@ -342,19 +352,74 @@ export const renderers = {
                 }
             } catch(e) {}
         }
-        
-        if (s.status === 'ACTIVE' && scoreVal >= 0.80) {
-            playTacticalAlert(s.ticker, (scoreVal * 100).toFixed(0));
-        }
-
-        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}">
-            <i data-lucide="${icon}" class="w-4 h-4 mr-2"></i>
-            <span class="font-bold">${s.ticker}</span>
-            <span class="ml-2 strat-badge ${strat.class}">${strat.name}</span>
-            ${scoreDisplay}
-            <span class="ml-auto text-gray-500">${s.status}</span>
-        </div>`;
+        if (s.status === 'ACTIVE' && scoreVal >= 0.80) { playTacticalAlert(s.ticker, (scoreVal * 100).toFixed(0)); }
+        return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-2 strat-badge ${strat.class}">${strat.name}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
+
+    // === WIDOK H4: KINETIC ALPHA (RANKING PETARD) ===
+    phase4View: (candidates) => {
+        const rows = candidates.map(c => {
+            const scoreColor = c.kinetic_score >= 80 ? 'text-amber-400 font-black' : (c.kinetic_score >= 50 ? 'text-yellow-200 font-bold' : 'text-gray-400');
+            const shotsClass = c.max_daily_shots >= 3 ? 'text-green-400 font-bold' : 'text-gray-300';
+            const floorClass = c.hard_floor_violations > 0 ? 'text-red-500 font-bold' : 'text-gray-500';
+            
+            // Pasek Score
+            const barWidth = Math.min(100, c.kinetic_score);
+            const barColor = c.kinetic_score >= 70 ? '#fbbf24' : '#d97706';
+            
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
+                <td class="p-3 font-bold text-amber-500">${c.ticker}</td>
+                <td class="p-3 text-right font-mono text-white">${c.price ? c.price.toFixed(2) : '---'}</td>
+                <td class="p-3">
+                    <div class="flex items-center justify-between">
+                        <span class="${scoreColor}">${c.kinetic_score}</span>
+                        <span class="text-xs text-gray-600 ml-2">PKT</span>
+                    </div>
+                    <div class="kinetic-bar-bg"><div class="kinetic-bar-fill" style="width: ${barWidth}%; background-color: ${barColor};"></div></div>
+                </td>
+                <td class="p-3 text-right text-gray-300 font-mono">${c.total_2pct_shots_ytd || 0}</td>
+                <td class="p-3 text-right ${shotsClass} font-mono">${c.max_daily_shots || 0}</td>
+                <td class="p-3 text-right text-sky-300 font-mono">~${c.avg_swing_size ? c.avg_swing_size.toFixed(2) : '0.00'}%</td>
+                <td class="p-3 text-right ${floorClass}">${c.hard_floor_violations}</td>
+            </tr>`;
+        }).join('');
+
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr>
+            <th class="p-3 text-left">Ticker</th>
+            <th class="p-3 text-right">Cena</th>
+            <th class="p-3 text-left">Kinetic Score</th>
+            <th class="p-3 text-right">Strzały (30d)</th>
+            <th class="p-3 text-right">Max Dziennie</th>
+            <th class="p-3 text-right">Śr. Zasięg</th>
+            <th class="p-3 text-right">Podłoga (-5%)</th>
+        </tr></thead>`;
+
+        return `
+        <div id="phase4-view" class="max-w-6xl mx-auto">
+            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                <div>
+                    <h2 class="text-2xl font-bold text-white flex items-center">
+                        <i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>
+                        Faza 4: Kinetic Alpha
+                    </h2>
+                    <p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p>
+                </div>
+                <button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]">
+                    <i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4
+                </button>
+            </div>
+
+            ${candidates.length === 0 ? 
+                '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : 
+                `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl">
+                    <table class="w-full text-sm text-left text-gray-300">
+                        ${tableHeader}
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>`
+            }
+        </div>`;
+    },
 
     dashboard: () => {
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
@@ -372,72 +437,21 @@ export const renderers = {
             statusColor = "text-red-500";
         }
 
-        return `<div id="dashboard-view" class="max-w-6xl mx-auto">
-                        <div class="mb-6 relative">
-                            <i data-lucide="search" class="absolute left-3 top-3 w-5 h-5 text-gray-500"></i>
-                            <input type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 text-gray-300 rounded-lg pl-10 pr-4 py-3 focus:ring-sky-500 focus:border-sky-500 outline-none shadow-lg placeholder-gray-600">
-                        </div>
-
-                        <h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex items-center"><i data-lucide="activity" class="w-6 h-6 mr-3"></i>Centrum Dowodzenia</h2>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                            <!-- Karta 1: Status Silnika -->
-                            <div class="glass-panel p-6 rounded-xl relative overflow-hidden ${pulseClass} transition-all duration-500">
-                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3>
-                                <p id="dashboard-worker-status" class="text-5xl font-black ${statusColor} tracking-tighter drop-shadow-lg">${workerStatus}</p>
-                                <p id="dashboard-current-phase" class="text-xs text-gray-500 mt-2 font-mono bg-black/30 inline-block px-2 py-1 rounded">Faza: ${state.workerStatus.phase || 'NONE'}</p>
-                            </div>
-
-                            <!-- Karta 2: Postęp Skanowania -->
-                            <div class="glass-panel p-6 rounded-xl">
-                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3>
-                                <div class="mt-2 flex items-baseline gap-2">
-                                    <span id="progress-text" class="text-3xl font-extrabold text-white">0 / 0</span>
-                                    <span class="text-gray-500 text-sm">analiz</span>
-                                </div>
-                                <div class="w-full bg-gray-800 rounded-full h-3 mt-4 overflow-hidden border border-gray-700">
-                                    <div id="progress-bar" class="bg-gradient-to-r from-sky-600 to-blue-500 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(14,165,233,0.5)]" style="width: 0%"></div>
-                                </div>
-                            </div>
-
-                            <!-- Karta 3: Statystyki Sygnałów -->
-                            <div class="glass-panel p-6 rounded-xl relative">
-                                <div class="absolute top-0 right-0 p-3 opacity-10"><i data-lucide="crosshair" class="w-16 h-16 text-white"></i></div>
-                                <h3 class="font-semibold text-gray-400 flex items-center text-sm mb-4 uppercase tracking-wider"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały</h3>
-                                <div class="flex justify-between items-center">
-                                    <div class="text-center pr-6 border-r border-gray-700 z-10">
-                                        <p id="dashboard-active-signals" class="text-5xl font-black text-white">${activeSignalsCount + pendingSignalsCount}</p>
-                                        <p class="text-[10px] text-gray-500 mt-1 uppercase font-bold tracking-widest text-green-400">Aktywne</p>
-                                    </div>
-                                    <div class="text-center pl-4 flex-grow z-10">
-                                        <p id="dashboard-discarded-signals" class="text-5xl font-black text-gray-500">${state.discardedSignalCount || 0}</p>
-                                        <p class="text-[10px] text-gray-600 mt-1 uppercase font-bold tracking-widest">Odrzucone</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <h3 class="text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider flex items-center"><i data-lucide="terminal" class="w-4 h-4 mr-2"></i>Dziennik Operacyjny</h3>
-                        <div id="scan-log-container" class="bg-[#0d1117] p-4 rounded-lg inner-shadow h-96 overflow-y-scroll border border-gray-800 custom-scrollbar font-mono text-xs text-gray-400 leading-relaxed shadow-inner"><pre id="scan-log">Inicjalizacja systemu...</pre></div>
-                    </div>`;
+        return `<div id="dashboard-view" class="max-w-6xl mx-auto"><div class="mb-6 relative"><i data-lucide="search" class="absolute left-3 top-3 w-5 h-5 text-gray-500"></i><input type="text" placeholder="Wpisz ticker (np. AAPL) i naciśnij Enter" class="w-full bg-[#161B22] border border-gray-700 text-gray-300 rounded-lg pl-10 pr-4 py-3 focus:ring-sky-500 focus:border-sky-500 outline-none shadow-lg placeholder-gray-600"></div><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex items-center"><i data-lucide="activity" class="w-6 h-6 mr-3"></i>Centrum Dowodzenia</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="glass-panel p-6 rounded-xl relative overflow-hidden ${pulseClass} transition-all duration-500"><h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="cpu" class="w-4 h-4 mr-2 text-sky-400"></i>Status Silnika</h3><p id="dashboard-worker-status" class="text-5xl font-black ${statusColor} tracking-tighter drop-shadow-lg">${workerStatus}</p><p id="dashboard-current-phase" class="text-xs text-gray-500 mt-2 font-mono bg-black/30 inline-block px-2 py-1 rounded">Faza: ${state.workerStatus.phase || 'NONE'}</p></div><div class="glass-panel p-6 rounded-xl"><h3 class="font-semibold text-gray-400 flex items-center text-sm mb-3 uppercase tracking-wider"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-yellow-400"></i>Postęp Skanowania</h3><div class="mt-2 flex items-baseline gap-2"><span id="progress-text" class="text-3xl font-extrabold text-white">0 / 0</span><span class="text-gray-500 text-sm">analiz</span></div><div class="w-full bg-gray-800 rounded-full h-3 mt-4 overflow-hidden border border-gray-700"><div id="progress-bar" class="bg-gradient-to-r from-sky-600 to-blue-500 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(14,165,233,0.5)]" style="width: 0%"></div></div></div><div class="glass-panel p-6 rounded-xl relative"><div class="absolute top-0 right-0 p-3 opacity-10"><i data-lucide="crosshair" class="w-16 h-16 text-white"></i></div><h3 class="font-semibold text-gray-400 flex items-center text-sm mb-4 uppercase tracking-wider"><i data-lucide="trending-up" class="w-4 h-4 mr-2 text-red-500"></i>Sygnały</h3><div class="flex justify-between items-center"><div class="text-center pr-6 border-r border-gray-700 z-10"><p id="dashboard-active-signals" class="text-5xl font-black text-white">${activeSignalsCount + pendingSignalsCount}</p><p class="text-[10px] text-gray-500 mt-1 uppercase font-bold tracking-widest text-green-400">Aktywne</p></div><div class="text-center pl-4 flex-grow z-10"><p id="dashboard-discarded-signals" class="text-5xl font-black text-gray-500">${state.discardedSignalCount || 0}</p><p class="text-[10px] text-gray-600 mt-1 uppercase font-bold tracking-widest">Odrzucone</p></div></div></div></div><h3 class="text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider flex items-center"><i data-lucide="terminal" class="w-4 h-4 mr-2"></i>Dziennik Operacyjny</h3><div id="scan-log-container" class="bg-[#0d1117] p-4 rounded-lg inner-shadow h-96 overflow-y-scroll border border-gray-800 custom-scrollbar font-mono text-xs text-gray-400 leading-relaxed shadow-inner"><pre id="scan-log">Inicjalizacja systemu...</pre></div></div>`;
     },
     
     h3SignalsPanel: (signals, quotes = {}) => {
         const activeCount = signals.filter(s => s.status === 'ACTIVE').length;
         const pendingCount = signals.filter(s => s.status === 'PENDING').length;
-
         const cardsHtml = signals.length > 0 ? signals.map(s => {
             let score = "N/A";
             const strat = getStrategyInfo(s.notes);
-
             if (s.notes && s.notes.includes("SCORE:")) {
                 const match = s.notes.match(/SCORE:\s*(\d+)/);
                 if (match) score = match[1];
             }
-
             let currentPrice = 0;
             let isLive = false;
-
             if (quotes && quotes[s.ticker] && quotes[s.ticker]['05. price']) {
                 const liveP = parseFloat(quotes[s.ticker]['05. price']);
                 if (!isNaN(liveP) && liveP > 0) {
@@ -448,30 +462,24 @@ export const renderers = {
             if (currentPrice === 0 && s.entry_price) {
                 currentPrice = parseFloat(s.entry_price);
             }
-
             let rValueDisplay = "---";
             let rValueClass = "text-gray-400";
             let scopeLeft = "0%"; 
             let entryPercent = "0%";
             let priceDisplayClass = "text-gray-500"; 
-
             const tp = parseFloat(s.take_profit || 0);
             const sl = parseFloat(s.stop_loss || 0);
             const entry = parseFloat(s.entry_price || 0);
-
             if (entry > 0 && sl > 0 && tp > 0) {
                  const totalDistance = tp - sl;
                  const riskDistance = entry - sl;
-
                  if (totalDistance > 0 && riskDistance > 0) {
                      let ep = ((entry - sl) / totalDistance) * 100;
                      ep = Math.max(0, Math.min(100, ep));
                      entryPercent = `${ep}%`;
-
                      if (currentPrice > 0) {
                         const profitLossAmount = currentPrice - entry;
                         const rValue = profitLossAmount / riskDistance;
-                        
                         if (rValue > 0) {
                             rValueDisplay = `+${rValue.toFixed(2)} R`;
                             rValueClass = "text-green-400 font-black";
@@ -482,28 +490,22 @@ export const renderers = {
                             rValueDisplay = "0.00 R";
                             rValueClass = "text-gray-300";
                         }
-
                         if (currentPrice > entry) priceDisplayClass = "text-green-400 font-bold";
                         else if (currentPrice < entry) priceDisplayClass = "text-red-400 font-bold";
-
                         let progress = ((currentPrice - sl) / totalDistance) * 100;
                         progress = Math.max(0, Math.min(100, progress));
                         scopeLeft = `${progress}%`;
                      }
                  }
             }
-
             let timeRemaining = "---";
             let timeBarWidth = 100;
-            
             if (s.expiration_date) {
                 const now = new Date();
                 const exp = new Date(s.expiration_date);
                 const gen = new Date(s.generation_date);
-                
                 const totalLife = exp.getTime() - gen.getTime();
                 const timeLeft = exp.getTime() - now.getTime();
-                
                 if (timeLeft > 0) {
                     const daysLeft = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
                     const hoursLeft = Math.floor((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
@@ -516,166 +518,27 @@ export const renderers = {
             } else if (s.status === 'PENDING') {
                 timeRemaining = "Oczekiwanie";
             }
-
             const statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
-
-            return `
-            <div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
-                <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full">
-                    <div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div>
-                </div>
-
-                <div class="flex justify-between items-start mb-3">
-                    <div>
-                        <div class="flex items-center gap-2">
-                            <h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4>
-                            <span class="strat-badge ${strat.class}">${strat.name}</span>
-                            <i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i>
-                        </div>
-                        <div class="text-xs text-gray-500 mt-1 font-mono">
-                            Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span>
-                        </div>
-                    </div>
-                    <div class="text-right">
-                        <div class="flex flex-col items-end">
-                            <span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span>
-                            <span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">
-                                ${rValueDisplay}
-                                ${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2">
-                    <div class="text-left">
-                        <span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span>
-                        <span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span>
-                    </div>
-                    
-                    <div class="text-center pb-1">
-                        <span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span>
-                    </div>
-
-                    <div class="text-right">
-                        <span class="block text-[9px] uppercase text-green-500/70">Take Profit</span>
-                        <span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span>
-                    </div>
-                </div>
-                
-                <div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)">
-                    <div class="scope-zone-risk" style="width: ${entryPercent}"></div>
-                    <div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div>
-                    <div class="entry-marker" style="left: ${entryPercent}"></div>
-                    <div class="scope-marker" style="left: ${scopeLeft}"></div>
-                </div>
-
-                <div class="mt-3 flex justify-between items-center">
-                    <span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span>
-                    <button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">
-                        Szczegóły >
-                    </button>
-                </div>
-            </div>`;
+            return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}"><div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div><div class="flex justify-between items-start mb-3"><div><div class="flex items-center gap-2"><h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4><span class="strat-badge ${strat.class}">${strat.name}</span><i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i></div><div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div></div><div class="text-right"><div class="flex flex-col items-end"><span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span><span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span></div></div></div><div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2"><div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div><div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div><div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div></div><div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div><div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div></div>`;
         }).join('') : `<p class="text-center text-gray-500 col-span-full py-20">Brak aktywnych sygnałów H3. Uruchom skaner.</p>`;
-
-        return `
-        <div id="h3-signals-view" class="max-w-7xl mx-auto">
-            <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-gray-700 pb-4 gap-4">
-                <div>
-                    <h2 class="text-2xl font-bold text-white flex items-center">
-                        <i data-lucide="target" class="w-6 h-6 mr-3 text-purple-500"></i>
-                        Sygnały H3 Live
-                    </h2>
-                    <p class="text-sm text-gray-500 mt-1">
-                        Aktywne: <span class="text-green-400 font-bold">${activeCount}</span> | 
-                        Oczekujące: <span class="text-yellow-400 font-bold">${pendingCount}</span>
-                    </p>
-                </div>
-
-                <div class="flex items-center gap-3">
-                    <div class="relative">
-                        <select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-gray-300 text-sm rounded-md focus:ring-sky-500 focus:border-sky-500 block w-full p-2 pl-3 pr-8 appearance-none cursor-pointer hover:bg-gray-800 transition-colors">
-                            <option value="score">Wg AQM Score</option>
-                            <option value="rr">Wg R-Factor (Najlepsze)</option>
-                            <option value="time">Wg Czasu Wygaśnięcia</option>
-                            <option value="ticker">Wg Ticker (A-Z)</option>
-                        </select>
-                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400">
-                            <i data-lucide="arrow-up-down" class="w-4 h-4"></i>
-                        </div>
-                    </div>
-                    
-                    <button id="h3-refresh-btn" class="p-2 bg-gray-800 hover:bg-gray-700 rounded-md border border-gray-700 text-gray-300 transition-colors" title="Odśwież">
-                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                    </button>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                ${cardsHtml}
-            </div>
-        </div>`;
+        return `<div id="h3-signals-view" class="max-w-7xl mx-auto"><div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-gray-700 pb-4 gap-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="target" class="w-6 h-6 mr-3 text-purple-500"></i>Sygnały H3 Live</h2><p class="text-sm text-gray-500 mt-1">Aktywne: <span class="text-green-400 font-bold">${activeCount}</span> | Oczekujące: <span class="text-yellow-400 font-bold">${pendingCount}</span></p></div><div class="flex items-center gap-3"><div class="relative"><select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-gray-300 text-sm rounded-md focus:ring-sky-500 focus:border-sky-500 block w-full p-2 pl-3 pr-8 appearance-none cursor-pointer hover:bg-gray-800 transition-colors"><option value="score">Wg AQM Score</option><option value="rr">Wg R-Factor (Najlepsze)</option><option value="time">Wg Czasu Wygaśnięcia</option><option value="ticker">Wg Ticker (A-Z)</option></select><div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400"><i data-lucide="arrow-up-down" class="w-4 h-4"></i></div></div><button id="h3-refresh-btn" class="p-2 bg-gray-800 hover:bg-gray-700 rounded-md border border-gray-700 text-gray-300 transition-colors" title="Odśwież"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></div></div><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">${cardsHtml}</div></div>`;
     },
 
     phaseXView: (candidates) => {
         const rows = candidates.map(c => {
-            // === POPRAWKA BIOX: Bezpieczne formatowanie daty i liczb ===
             const dateStr = c.last_pump_date ? new Date(c.last_pump_date).toLocaleDateString() : '-';
             const pumpVal = c.last_pump_percent || 0.0;
             const pumpColor = pumpVal >= 100 ? 'text-purple-400 font-black' : (pumpVal >= 50 ? 'text-pink-400 font-bold' : 'text-gray-400');
-            
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
-                <td class="p-3 font-bold text-pink-500">${c.ticker}</td>
-                <td class="p-3 text-right font-mono text-white">${c.price ? c.price.toFixed(4) : '0.0000'}</td>
-                <td class="p-3 text-right text-gray-400">${c.volume_avg ? (c.volume_avg / 1000000).toFixed(1) : '0.0'}M</td>
-                <td class="p-3 text-center font-bold text-white bg-gray-800/50 rounded">${c.pump_count_1y || 0}</td>
-                <td class="p-3 text-right text-gray-300">${dateStr}</td>
-                <td class="p-3 text-right ${pumpColor}">+${pumpVal.toFixed(0)}%</td>
-            </tr>`;
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors"><td class="p-3 font-bold text-pink-500">${c.ticker}</td><td class="p-3 text-right font-mono text-white">${c.price ? c.price.toFixed(4) : '0.0000'}</td><td class="p-3 text-right text-gray-400">${c.volume_avg ? (c.volume_avg / 1000000).toFixed(1) : '0.0'}M</td><td class="p-3 text-center font-bold text-white bg-gray-800/50 rounded">${c.pump_count_1y || 0}</td><td class="p-3 text-right text-gray-300">${dateStr}</td><td class="p-3 text-right ${pumpColor}">+${pumpVal.toFixed(0)}%</td></tr>`;
         }).join('');
-
-        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr>
-            <th class="p-3 text-left">Ticker</th>
-            <th class="p-3 text-right">Cena ($)</th>
-            <th class="p-3 text-right">Vol (Avg)</th>
-            <th class="p-3 text-center">Pompy (1Y)</th>
-            <th class="p-3 text-right">Ost. Wybuch</th>
-            <th class="p-3 text-right">Moc (%)</th>
-        </tr></thead>`;
-
-        return `
-        <div id="phasex-view" class="max-w-6xl mx-auto">
-            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-                <div>
-                    <h2 class="text-2xl font-bold text-white flex items-center">
-                        <i data-lucide="biohazard" class="w-6 h-6 mr-3 text-pink-500"></i>
-                        Faza X: BioX Hunter
-                    </h2>
-                    <p class="text-sm text-gray-500 mt-1">Biotech Penny Stocks (0.5$ - 4.0$) z historią wybuchów >20%.</p>
-                </div>
-                <button id="run-phasex-scan-btn" class="modal-button modal-button-primary bg-pink-600 hover:bg-pink-700 flex items-center shadow-[0_0_15px_rgba(219,39,119,0.3)]">
-                    <i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj BioX
-                </button>
-            </div>
-
-            ${candidates.length === 0 ? 
-                '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search-x" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć kandydatów.</p></div>' : 
-                `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl">
-                    <table class="w-full text-sm text-left text-gray-300">
-                        ${tableHeader}
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>`
-            }
-        </div>`;
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr><th class="p-3 text-left">Ticker</th><th class="p-3 text-right">Cena ($)</th><th class="p-3 text-right">Vol (Avg)</th><th class="p-3 text-center">Pompy (1Y)</th><th class="p-3 text-right">Ost. Wybuch</th><th class="p-3 text-right">Moc (%)</th></tr></thead>`;
+        return `<div id="phasex-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="biohazard" class="w-6 h-6 mr-3 text-pink-500"></i>Faza X: BioX Hunter</h2><p class="text-sm text-gray-500 mt-1">Biotech Penny Stocks (0.5$ - 4.0$) z historią wybuchów >20%.</p></div><button id="run-phasex-scan-btn" class="modal-button modal-button-primary bg-pink-600 hover:bg-pink-700 flex items-center shadow-[0_0_15px_rgba(219,39,119,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj BioX</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search-x" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć kandydatów.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
     portfolio: (holdings, quotes) => {
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
-        
         const rows = holdings.map(h => {
             const quote = quotes[h.ticker];
             let currentPrice = null, dayChangePercent = null, profitLoss = null, currentValue = null;
@@ -683,9 +546,7 @@ export const renderers = {
             let changePercentDisplay = '---';
             let changePercentClass = 'text-gray-500';
             let priceSource = 'close';
-
             const strat = getStrategyInfo(h.notes || h.strategy || "");
-
             if (quote && quote['05. price']) {
                 try {
                     currentPrice = parseFloat(quote['05. price']);
@@ -697,51 +558,21 @@ export const renderers = {
                     profitLoss = currentValue - costBasis;
                     totalPortfolioValue += currentValue;
                     totalProfitLoss += profitLoss;
-                    
                     if (h.average_buy_price > 0) {
                         const pctChange = ((currentPrice - h.average_buy_price) / h.average_buy_price) * 100;
                         changePercentDisplay = `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(2)}%`;
                         changePercentClass = pctChange >= 0 ? 'text-green-400 font-bold' : 'text-red-400 font-bold';
                     }
-
                 } catch (e) { console.error(`Błąd obliczeń dla ${h.ticker} w portfelu:`, e); }
             }
-            
-            if (priceSource === 'extended_hours') {
-                priceClass = 'extended-hours-text'; 
-            }
-
+            if (priceSource === 'extended_hours') { priceClass = 'extended-hours-text'; }
             const profitLossClass = profitLoss == null ? 'text-gray-500' : (profitLoss >= 0 ? 'text-green-500' : 'text-red-500');
             const takeProfitFormatted = h.take_profit ? h.take_profit.toFixed(2) : '---';
             const priceDisplay = (priceSource === 'extended_hours') ? `🌙 ${currentPrice.toFixed(2)}` : (currentPrice ? currentPrice.toFixed(2) : '---');
-
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]">
-                <td class="p-3 font-bold text-sky-400 flex items-center gap-2">
-                    ${h.ticker}
-                    <span class="strat-badge ${strat.class}" style="font-size: 8px;">${strat.name}</span>
-                </td>
-                <td class="p-3 text-right">${h.quantity}</td>
-                <td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td>
-                <td class="p-3 text-right ${priceClass}">${priceDisplay}</td>
-                <td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td>
-                <td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td>
-                <td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td>
-                <td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td>
-            </tr>`;
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-bold text-sky-400 flex items-center gap-2">${h.ticker}<span class="strat-badge ${strat.class}" style="font-size: 8px;">${strat.name}</span></td><td class="p-3 text-right">${h.quantity}</td><td class="p-3 text-right">${h.average_buy_price.toFixed(4)}</td><td class="p-3 text-right ${priceClass}">${priceDisplay}</td><td class="p-3 text-right ${changePercentClass}">${changePercentDisplay}</td><td class="p-3 text-right text-cyan-400 font-bold">${takeProfitFormatted}</td><td class="p-3 text-right ${profitLossClass}">${profitLoss != null ? profitLoss.toFixed(2) + ' USD' : '---'}</td><td class="p-3 text-right"><button data-ticker="${h.ticker}" data-quantity="${h.quantity}" class="sell-stock-btn text-xs bg-red-600/20 hover:bg-red-600/40 text-red-300 py-1 px-3 rounded">Sprzedaj</button></td></tr>`;
         }).join('');
-        
         const totalProfitLossClass = totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500';
-        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr>
-            <th scope="col" class="p-3">Ticker / Strategia</th>
-            <th scope="col" class="p-3 text-right">Ilość</th>
-            <th scope="col" class="p-3 text-right">Cena Zakupu</th>
-            <th scope="col" class="p-3 text-right">Kurs (USD)</th>
-            <th scope="col" class="p-3 text-right">Zmiana %</th>
-            <th scope="col" class="p-3 text-right">Cel (TP)</th>
-            <th scope="col" class="p-3 text-right">Zysk / Strata</th>
-            <th scope="col" class="p-3 text-right">Akcja</th>
-        </tr></thead>`;
-        
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Ticker / Strategia</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena Zakupu</th><th scope="col" class="p-3 text-right">Kurs (USD)</th><th scope="col" class="p-3 text-right">Zmiana %</th><th scope="col" class="p-3 text-right">Cel (TP)</th><th scope="col" class="p-3 text-right">Zysk / Strata</th><th scope="col" class="p-3 text-right">Akcja</th></tr></thead>`;
         return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>` }</div>`;
     },
     
@@ -759,12 +590,9 @@ export const renderers = {
         const stats = report.stats;
         const trades = report.trades;
         const total_trades_count = report.total_trades_count;
-        
-        // Obliczenia paginacji
         const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
         const startTrade = (state.currentReportPage - 1) * REPORT_PAGE_SIZE + 1;
         const endTrade = Math.min(startTrade + REPORT_PAGE_SIZE - 1, total_trades_count);
-
         const formatMetric = (val) => (typeof val !== 'number' || isNaN(val)) ? `<span class="text-gray-600">---</span>` : val.toFixed(3);
         const formatPercent = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 0 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}%</span>`; };
         const formatProfitFactor = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 1 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}</span>`; };
@@ -772,55 +600,23 @@ export const renderers = {
         const createStatCard = (label, value, icon) => `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center text-sm"><i data-lucide="${icon}" class="w-4 h-4 mr-2 text-sky-400"></i>${label}</h3><p class="text-3xl font-extrabold mt-2 text-white">${value}</p></div>`;
         const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-semibold text-sky-400">${setupName}</td><td class="p-3 text-right">${setupStats.total_trades}</td><td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td><td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td><td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td></tr>`).join('');
         const setupTable = setupRows.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr><th scope="col" class="p-3">Strategia</th><th scope="col" class="p-3 text-right">Ilość Transakcji</th><th scope="col" class="p-3 text-right">Win Rate (%)</th><th scope="col" class="p-3 text-right">Całkowity P/L (%)</th><th scope="col" class="p-3 text-right">Profit Factor</th></tr></thead><tbody>${setupRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
-        
-        // === NOWOŚĆ: KOLUMNA RE-CHECK ===
         const tradeHeaders = ['Akcja', 'Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)', 'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile', 'Inst. Sync', 'Retail Herd.', 'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)', 'J (H4)', 'J Thresh.'];
         const headerClasses = ['sticky left-0 bg-[#0D1117] z-20', 'sticky left-[50px] bg-[#0D1117]', 'sticky left-[140px] bg-[#0D1117]', 'sticky left-[210px] bg-[#0D1117]', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right'];
-        
         const tradeRows = trades.map(t => {
             const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
             const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
-            
-            // Przycisk "Re-check" - pojawia się tylko, gdy audyt jest dostępny (lub po zakończeniu transakcji)
             const auditBtn = t.ai_audit_report 
                 ? `<button class="text-xs bg-purple-600 hover:bg-purple-500 text-white px-2 py-1 rounded flex items-center gap-1 recheck-btn" data-trade-id="${t.id}"><i data-lucide="check-circle" class="w-3 h-3"></i>Wynik</button>`
                 : (t.expected_profit_factor ? `<button class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1 rounded recheck-btn" data-trade-id="${t.id}" title="Czekam na audyt...">🕒</button>` : `<span class="text-gray-600">-</span>`);
-
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono">
-                <td class="p-2 whitespace-nowrap sticky left-0 bg-[#161B22] hover:bg-[#1f2937] z-10 border-r border-gray-700">${auditBtn}</td>
-                <td class="p-2 whitespace-nowrap text-gray-400 sticky left-[50px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td>
-                <td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[140px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${t.ticker}</td>
-                <td class="p-2 whitespace-nowrap text-gray-300 sticky left-[210px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${setupNameShort}</td>
-                <td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td>
-                <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td>
-                <td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td>
-                <td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td>
-                <td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td>
-            </tr>`;
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono"><td class="p-2 whitespace-nowrap sticky left-0 bg-[#161B22] hover:bg-[#1f2937] z-10 border-r border-gray-700">${auditBtn}</td><td class="p-2 whitespace-nowrap text-gray-400 sticky left-[50px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td><td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[140px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${t.ticker}</td><td class="p-2 whitespace-nowrap text-gray-300 sticky left-[210px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${setupNameShort}</td><td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td><td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td><td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td><td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td></tr>`;
         }).join('');
-        
         const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-20"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
-        
-        const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option><option value="BIOX">BioX (Pump Hunter >20%)</option></select></div><div class="flex items-start gap-3 mb-4"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
+        const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option><option value="BIOX">BioX (Pump Hunter >20%)</option></select></div><div class="flex items-start gap-3"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const quantumLabSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden"><div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none"><i data-lucide="atom" class="w-32 h-32 text-purple-500"></i></div><h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center"><i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i>Quantum Lab (Apex V4)</h4><p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p><div class="flex flex-wrap gap-3"><button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0"><i data-lucide="cpu" class="w-4 h-4 mr-2"></i>Konfiguruj Optymalizację</button><button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="list" class="w-4 h-4 mr-2"></i>Wyniki</button></div><div id="quantum-lab-status" class="text-sm mt-3 h-4"></div></div>`;
         const aiOptimizerSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4><p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane i zasugerował optymalizacje strategii.</p><div class="flex items-start gap-3"><button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>Analiza AI</button><button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="eye" class="w-4 h-4 mr-2"></i>Raport</button></div><div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const exportSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4><p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje jako CSV.</p><div class="flex items-start gap-3"><button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>Eksport CSV</button></div><div id="csv-export-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const h3DeepDiveSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Analiza "słabego roku" (Deep Dive).</p><div class="flex items-start gap-3"><button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i>Analiza Deep Dive</button></div><div id="h3-deep-dive-main-status" class="text-sm mt-3 h-4"></div></div>`;
         const paginationControls = totalPages > 1 ? `<div class="flex justify-between items-center mt-4"><span class="text-sm text-gray-400">Wyświetlanie ${startTrade}-${endTrade} z ${total_trades_count} transakcji</span><div class="flex gap-2"><button id="report-prev-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === 1 ? 'disabled' : ''}><i data-lucide="arrow-left" class="w-4 h-4"></i></button><span class="text-sm text-gray-400 p-2">Strona ${state.currentReportPage} / ${totalPages}</span><button id="report-next-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === totalPages ? 'disabled' : ''}><i data-lucide="arrow-right" class="w-4 h-4"></i></button></div></div>` : '';
-        
         return `<div id="agent-report-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2><h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie ${stats.total_trades} Transakcji)</h3><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">${createStatCard('Całkowity P/L (%)', formatPercent(stats.total_p_l_percent), 'percent')}${createStatCard('Win Rate (%)', formatPercent(stats.win_rate_percent), 'target')}${createStatCard('Profit Factor', formatProfitFactor(stats.profit_factor), 'ratio')}${createStatCard('Ilość Transakcji', stats.total_trades, 'bar-chart-2')}</div><h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>${setupTable}<h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">${backtestSection}${quantumLabSection}${aiOptimizerSection}${h3DeepDiveSection}${exportSection}</div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji</h3>${paginationControls}${tradeTable}${paginationControls}</div>`;
     },
 
