@@ -60,7 +60,154 @@ def _resample_to_daily(source_df: pd.DataFrame, rule='1D', method='last') -> pd.
     return resampled.ffill()
 
 # ==================================================================================
-# GŁÓWNA LOGIKA AQM
+# LOGIKA H4: KINETIC ALPHA (PULSE HUNTER)
+# ==================================================================================
+
+def analyze_intraday_kinetics(intraday_df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    MÓZG STRATEGII H4: KINETIC ALPHA
+    Analizuje dane 5-minutowe w poszukiwaniu 'Kinetycznych Strzałów' (>2% ruchu w górę).
+    
+    Zwraca słownik ze statystykami:
+    - kinetic_score: Ocena 0-100
+    - elasticity: Średnia sprężystość (odbicie od Low)
+    - total_2pct_shots: Liczba cykli >2% (YTD/30d)
+    - max_daily_shots: Rekord w jednym dniu
+    - avg_swing_size: Średnia wielkość ruchu (%)
+    - hard_floor_violations: Liczba spadków poniżej -5%
+    - avg_intraday_volatility: Średnia zmienność High-Low
+    """
+    stats = {
+        'kinetic_score': 0,
+        'elasticity': 0.0,
+        'total_2pct_shots': 0,
+        'max_daily_shots': 0,
+        'avg_swing_size': 0.0,
+        'hard_floor_violations': 0,
+        'avg_intraday_volatility': 0.0,
+        'last_shot_date': None
+    }
+
+    if intraday_df is None or intraday_df.empty:
+        return stats
+
+    try:
+        df = _ensure_numeric(intraday_df.copy(), ['open', 'high', 'low', 'close', 'volume'])
+        
+        # Upewniamy się, że mamy datetime w indeksie
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        
+        # Sortujemy chronologicznie (dla pewności, choć API zwykle zwraca dobrze)
+        df.sort_index(inplace=True)
+
+        # Grupowanie po dniach
+        daily_groups = df.groupby(df.index.date)
+        
+        daily_shots_list = []
+        swing_sizes = []
+        volatilities = []
+        elasticity_scores = []
+        last_shot_dt = None
+
+        for date, day_data in daily_groups:
+            if len(day_data) < 10: continue # Ignorujemy dni z szczątkowymi danymi
+
+            day_open = day_data['open'].iloc[0]
+            day_high = day_data['high'].max()
+            day_low = day_data['low'].min()
+            
+            # 1. Hard Floor Violation (-5% od otwarcia)
+            if day_open > 0 and (day_low - day_open) / day_open < -0.05:
+                stats['hard_floor_violations'] += 1
+            
+            # 2. Average Intraday Volatility
+            if day_low > 0:
+                vol = (day_high - day_low) / day_low
+                volatilities.append(vol)
+
+            # 3. Elasticity (Sprężystość)
+            # Jak mocno zamknęliśmy się powyżej dziennego minimum?
+            # (Close - Low) / (High - Low)
+            if (day_high - day_low) > 0:
+                day_close = day_data['close'].iloc[-1]
+                elast = (day_close - day_low) / (day_high - day_low)
+                elasticity_scores.append(elast)
+
+            # 4. PULSE HUNTER ALGORITHM (Zliczanie Strzałów)
+            # Szukamy sekwencji: Dołek -> Szczyt > 2%
+            shots_today = 0
+            current_low = day_data['low'].iloc[0]
+            
+            # Iterujemy po świecach wewnątrz dnia
+            for i in range(1, len(day_data)):
+                candle = day_data.iloc[i]
+                price_high = candle['high']
+                price_low = candle['low']
+                
+                # Sprawdzamy potencjalny zysk od aktualnego dołka
+                if current_low > 0:
+                    potential_gain = (price_high - current_low) / current_low
+                    
+                    if potential_gain >= 0.02: # PRÓG 2% (Zgodnie z wymaganiami)
+                        shots_today += 1
+                        swing_sizes.append(potential_gain * 100)
+                        last_shot_dt = date
+                        
+                        # Resetujemy dołek - szukamy nowej okazji po korekcie
+                        # Zakładamy, że po strzale "wchodzimy" w nowy cykl, więc current_low
+                        # staje się bieżącym low (lub close), aby szukać odbicia od nowa.
+                        # Uproszczenie: po zaliczeniu strzału, resetujemy punkt odniesienia na aktualną cenę.
+                        current_low = price_low 
+                    
+                    elif price_low < current_low:
+                        # Znaleziono nowy niższy dołek - aktualizujemy punkt odniesienia
+                        current_low = price_low
+            
+            daily_shots_list.append(shots_today)
+
+        # --- AGREGACJA WYNIKÓW ---
+        stats['total_2pct_shots'] = sum(daily_shots_list)
+        stats['max_daily_shots'] = max(daily_shots_list) if daily_shots_list else 0
+        stats['avg_swing_size'] = np.mean(swing_sizes) if swing_sizes else 0.0
+        stats['avg_intraday_volatility'] = np.mean(volatilities) if volatilities else 0.0
+        stats['elasticity'] = np.mean(elasticity_scores) if elasticity_scores else 0.0
+        stats['last_shot_date'] = last_shot_dt
+
+        # --- SCORE KINETYCZNY (0-100) ---
+        # Formuła autorska H4:
+        # Score rośnie wraz z liczbą strzałów i ich wielkością.
+        # Score maleje drastycznie przy naruszeniach podłogi.
+        
+        base_score = 0
+        # 1. Aktywność (do 50 pkt)
+        # Zakładamy, że 30 strzałów w 30 dni (1 dziennie) to świetny wynik.
+        base_score += min(50, stats['total_2pct_shots'] * 1.5)
+        
+        # 2. Rekord Dnia (do 20 pkt)
+        # Jeśli potrafi strzelić 5 razy w dzień -> +20 pkt
+        base_score += min(20, stats['max_daily_shots'] * 4)
+        
+        # 3. Jakość Ruchu (do 30 pkt)
+        # Średni swing > 3% to +30 pkt
+        if stats['avg_swing_size'] > 0:
+            base_score += min(30, (stats['avg_swing_size'] / 3.0) * 30)
+            
+        # KARY
+        # Każde naruszenie podłogi to -20 pkt
+        penalty = stats['hard_floor_violations'] * 20
+        
+        final_score = int(max(0, min(100, base_score - penalty)))
+        stats['kinetic_score'] = final_score
+
+        return stats
+
+    except Exception as e:
+        logger.error(f"H4 Logic Error: {e}", exc_info=True)
+        return stats
+
+# ==================================================================================
+# GŁÓWNA LOGIKA AQM (V4 Classic)
 # ==================================================================================
 
 def calculate_aqm_full_vector(
