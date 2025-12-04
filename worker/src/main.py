@@ -19,7 +19,9 @@ from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
-    signal_monitor, apex_optimizer, phasex_scanner, biox_agent, recheck_agent
+    signal_monitor, apex_optimizer, phasex_scanner, biox_agent, recheck_agent,
+    # === IMPORT SKANERA FAZY 4 ===
+    phase4_kinetic 
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
@@ -42,7 +44,9 @@ def can_run_background_task():
         'BUSY_DEEP_DIVE',
         'PHASE_1_SCAN', 
         'PHASE_3_LIVE',
-        'PHASE_X_SCAN'
+        'PHASE_X_SCAN',
+        # === NOWY STAN CIĘŻKI ===
+        'PHASE_4_KINETIC'
     ]
     if any(s in current_state for s in HEAVY_DUTY_STATES):
         return False
@@ -175,14 +179,10 @@ def run_phase_x_cycle(session):
         utils.update_system_control(session, 'current_phase', 'PHASE_X_SCAN')
         utils.append_scan_log(session, ">>> Start Fazy X (BioX Pump Hunter)...")
         
-        # 1. Skanowanie wstępne (Krok A+B: Cena + Sektor)
-        # Zapisujemy znalezione tickery do zmiennej, aby przekazać je dalej
         found_candidates = phasex_scanner.run_phasex_scan(session, api_client)
         
         utils.update_system_control(session, 'current_phase', 'PHASE_X_AUDIT')
         
-        # 2. Audyt historyczny (Krok C: Szukanie pomp)
-        # Przekazujemy listę bezpośrednio, wymuszając sprawdzenie wszystkich 349 (lub więcej) znalezionych
         biox_agent.run_historical_catalyst_scan(session, api_client, candidates=found_candidates)
         
         utils.append_scan_log(session, "Faza X zakończona pomyślnie.")
@@ -190,6 +190,30 @@ def run_phase_x_cycle(session):
     except Exception as e:
         logger.error(f"Error in Phase X Cycle: {e}", exc_info=True)
         utils.append_scan_log(session, f"BŁĄD Fazy X: {e}")
+    finally:
+        current_state = 'IDLE'
+        utils.update_system_control(session, 'worker_status', 'IDLE')
+        utils.update_system_control(session, 'current_phase', 'NONE')
+
+# === NOWA FUNKCJA WRAPPER DLA H4 ===
+def run_phase_4_cycle(session):
+    global current_state
+    session.rollback()
+    try:
+        logger.info("Starting Phase 4 Cycle (Kinetic Alpha)...")
+        current_state = 'RUNNING'
+        utils.update_system_control(session, 'worker_status', 'RUNNING')
+        utils.update_system_control(session, 'current_phase', 'PHASE_4_KINETIC')
+        utils.append_scan_log(session, ">>> Start Fazy 4 (H4: Kinetic Alpha)...")
+        
+        # Uruchomienie skanera z nowego modułu
+        phase4_kinetic.run_phase4_scan(session, api_client)
+        
+        utils.append_scan_log(session, "Faza 4 zakończona pomyślnie.")
+
+    except Exception as e:
+        logger.error(f"Error in Phase 4 Cycle: {e}", exc_info=True)
+        utils.append_scan_log(session, f"BŁĄD Fazy 4: {e}")
     finally:
         current_state = 'IDLE'
         utils.update_system_control(session, 'worker_status', 'IDLE')
@@ -284,7 +308,6 @@ def main_loop():
     global current_state, api_client
     logger.info("Worker main loop started with FORCED DATABASE INIT.")
     
-    # === KROK 0: WYMUSZENIE INICJALIZACJI I MIGRACJI ===
     try:
         with get_db_session() as session:
             logger.info("Executing Pre-Flight Database Check & Migration...")
@@ -302,14 +325,13 @@ def main_loop():
     schedule.every(5).minutes.do(safe_run_biox_monitor)
     schedule.every(10).minutes.do(safe_run_recheck_audit)
 
-    # Inicjalizacja statusów systemowych
     try:
         with get_db_session() as initial_session:
             utils.update_system_control(initial_session, 'worker_status', 'IDLE')
             utils.update_system_control(initial_session, 'current_phase', 'NONE')
             utils.update_system_control(initial_session, 'worker_command', 'NONE')
             utils.report_heartbeat(initial_session)
-            utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy (Po naprawie migracji).")
+            utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy (H4 Active).")
     except Exception as e:
         logger.error(f"Startup status init failed: {e}")
 
@@ -324,6 +346,10 @@ def main_loop():
                 elif run_action == "PHASE_1_RUN": run_phase_1_cycle(session)
                 elif run_action == "PHASE_3_RUN": run_phase_3_cycle(session)
                 elif run_action == "PHASE_X_RUN": run_phase_x_cycle(session)
+                # === OBSŁUGA KOMENDY H4 ===
+                elif run_action == "PHASE_4_RUN": 
+                    # Sprawdź komendę w utils.py - musimy tam dodać mapowanie 'START_PHASE_4_REQUESTED'
+                    run_phase_4_cycle(session)
                 
                 status = 'IDLE'
                 if current_state == 'IDLE':
