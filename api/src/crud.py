@@ -264,9 +264,11 @@ def record_sell_transaction(db: Session, sell_request: schemas.SellRequest) -> O
             raise
 
 def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
-    candidates_from_db = db.query(models.Phase1Candidate).filter(
-        models.Phase1Candidate.analysis_date >= func.current_date()
-    ).order_by(models.Phase1Candidate.ticker).all()
+    """
+    Pobiera WSZYSTKICH kandydatów Fazy 1 z bazy danych.
+    Usunięto filtr czasowy - lista jest czyszczona tylko przez Workera przy nowym skanie.
+    """
+    candidates_from_db = db.query(models.Phase1Candidate).order_by(models.Phase1Candidate.ticker).all()
 
     return [
         {
@@ -284,8 +286,6 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
 # === CRUD DLA FAZY X (BioX) - NAPRAWA SORTOWANIA ===
 def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
     # Sortowanie: Najpierw te z najwyższym %, potem te z 0/NULL
-    # W Postgres DESC domyślnie daje NULLS FIRST, co psuło widok.
-    # Używamy nullslast(), aby puste wyniki wylądowały na dnie.
     candidates = db.query(models.PhaseXCandidate).order_by(
         models.PhaseXCandidate.last_pump_percent.desc().nullslast(),
         models.PhaseXCandidate.ticker.asc() # Drugie kryterium: alfabetycznie
