@@ -10,18 +10,18 @@ from sqlalchemy import text, select, func
 
 from .models import Base, OptimizationJob 
 from .database import get_db_session, engine
-# Importujemy najpierw tylko to co niezbędne do migracji
 from .data_ingestion.data_initializer import initialize_database_if_empty
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
 
-# Reszta importów
+# Importy analityczne
 from .analysis import (
     phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
     signal_monitor, apex_optimizer, phasex_scanner, biox_agent, recheck_agent,
-    # === IMPORT SKANERA FAZY 4 ===
-    phase4_kinetic 
+    phase4_kinetic,
+    # === NOWOŚĆ: FAZA 5 (OMNI-FLUX) ===
+    phase5_omniflux
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
@@ -45,8 +45,9 @@ def can_run_background_task():
         'PHASE_1_SCAN', 
         'PHASE_3_LIVE',
         'PHASE_X_SCAN',
-        # === NOWY STAN CIĘŻKI ===
-        'PHASE_4_KINETIC'
+        'PHASE_4_KINETIC',
+        # === NOWY STAN DLA FAZY 5 ===
+        'PHASE_5_FLUX'
     ]
     if any(s in current_state for s in HEAVY_DUTY_STATES):
         return False
@@ -195,7 +196,6 @@ def run_phase_x_cycle(session):
         utils.update_system_control(session, 'worker_status', 'IDLE')
         utils.update_system_control(session, 'current_phase', 'NONE')
 
-# === NOWA FUNKCJA WRAPPER DLA H4 ===
 def run_phase_4_cycle(session):
     global current_state
     session.rollback()
@@ -206,7 +206,6 @@ def run_phase_4_cycle(session):
         utils.update_system_control(session, 'current_phase', 'PHASE_4_KINETIC')
         utils.append_scan_log(session, ">>> Start Fazy 4 (H4: Kinetic Alpha)...")
         
-        # Uruchomienie skanera z nowego modułu
         phase4_kinetic.run_phase4_scan(session, api_client)
         
         utils.append_scan_log(session, "Faza 4 zakończona pomyślnie.")
@@ -218,6 +217,36 @@ def run_phase_4_cycle(session):
         current_state = 'IDLE'
         utils.update_system_control(session, 'worker_status', 'IDLE')
         utils.update_system_control(session, 'current_phase', 'NONE')
+
+# === NOWOŚĆ: FAZA 5 (OMNI-FLUX) ===
+def run_phase_5_cycle(session):
+    global current_state
+    # Uwaga: Faza 5 w trybie ciągłym (Karuzela) nie powinna blokować workera na zawsze w jednej funkcji,
+    # ale tutaj uruchamiamy 'run_cycle' które robi jeden obrót karuzeli.
+    # Pętla główna workera zajmie się powtarzaniem tego.
+    
+    # Jeśli stan nie jest ustawiony na Flux, ustawiamy go
+    if current_state != 'PHASE_5_FLUX':
+        current_state = 'PHASE_5_FLUX' # Specjalny stan, który nie jest 'RUNNING' (dla odróżnienia)
+        utils.update_system_control(session, 'worker_status', 'RUNNING_FLUX')
+        utils.update_system_control(session, 'current_phase', 'PHASE_5_OMNI_FLUX')
+        utils.append_scan_log(session, ">>> Start Fazy 5 (Omni-Flux Active Loop)...")
+
+    try:
+        # Uruchamiamy jeden cykl karuzeli (sprawdzenie 8 spółek)
+        phase5_omniflux.run_phase5_cycle(session, api_client)
+        
+        # W Fazie 5 nie kończymy po jednym przebiegu, worker powinien trzymać ten stan
+        # dopóki nie przyjdzie komenda STOP/PAUSE.
+        # Ale w architekturze Apex, worker sprawdza komendy w każdej iteracji pętli głównej.
+        # Więc funkcja musi zwrócić sterowanie.
+        
+    except Exception as e:
+        logger.error(f"Error in Phase 5 Cycle: {e}", exc_info=True)
+        utils.append_scan_log(session, f"BŁĄD Fazy 5: {e}")
+        # W razie błędu resetujemy stan, żeby nie pętlił błędu w nieskończoność
+        current_state = 'IDLE'
+        utils.update_system_control(session, 'worker_status', 'IDLE')
 
 def run_full_analysis_cycle():
     with get_db_session() as session:
@@ -331,26 +360,52 @@ def main_loop():
             utils.update_system_control(initial_session, 'current_phase', 'NONE')
             utils.update_system_control(initial_session, 'worker_command', 'NONE')
             utils.report_heartbeat(initial_session)
-            utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy (H4 Active).")
+            utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy (V5: Omni-Flux Ready).")
     except Exception as e:
         logger.error(f"Startup status init failed: {e}")
 
     while True:
         with get_db_session() as session:
             try:
+                # 1. Standardowe sprawdzanie komend (z utils.py)
                 run_action, new_state = utils.check_for_commands(session, current_state)
-                if new_state != current_state:
+                
+                # 2. Manualny Override dla Fazy 5 (obejście braku edycji utils.py w tym kroku)
+                # Sprawdzamy surową wartość w bazie, jeśli utils.py zwrócił NONE
+                if run_action == "NONE":
+                    raw_cmd = utils.get_system_control_value(session, 'worker_command')
+                    if raw_cmd == "START_PHASE_5_REQUESTED":
+                        utils.update_system_control(session, 'worker_command', 'NONE')
+                        run_action = "PHASE_5_RUN"
+                    # Obsługa STOP dla Fazy 5
+                    elif raw_cmd == "PAUSE_REQUESTED" and current_state == 'PHASE_5_FLUX':
+                        current_state = "IDLE"
+                        utils.update_system_control(session, 'worker_status', 'IDLE')
+                        utils.update_system_control(session, 'current_phase', 'NONE')
+                        utils.update_system_control(session, 'worker_command', 'NONE')
+                        utils.append_scan_log(session, "Faza 5: Zatrzymano ręcznie.")
+
+                # Obsługa zmiany stanu
+                if new_state != current_state and new_state != "PHASE_5_FLUX": # Nie nadpisuj specjalnego stanu Flux
                     current_state = new_state
 
+                # Wykonanie akcji
                 if run_action == "FULL_RUN": run_full_analysis_cycle()
                 elif run_action == "PHASE_1_RUN": run_phase_1_cycle(session)
                 elif run_action == "PHASE_3_RUN": run_phase_3_cycle(session)
                 elif run_action == "PHASE_X_RUN": run_phase_x_cycle(session)
-                # === OBSŁUGA KOMENDY H4 ===
-                elif run_action == "PHASE_4_RUN": 
-                    # Sprawdź komendę w utils.py - musimy tam dodać mapowanie 'START_PHASE_4_REQUESTED'
-                    run_phase_4_cycle(session)
+                elif run_action == "PHASE_4_RUN": run_phase_4_cycle(session)
                 
+                # === URUCHOMIENIE FAZY 5 ===
+                elif run_action == "PHASE_5_RUN":
+                    run_phase_5_cycle(session) # Inicjalizacja stanu Flux
+                
+                # === PĘTLA CIĄGŁA DLA FAZY 5 ===
+                # Jeśli worker jest w stanie Flux, kontynuuj kręcenie karuzelą w każdej iteracji
+                if current_state == 'PHASE_5_FLUX':
+                    run_phase_5_cycle(session)
+
+                # Obsługa innych zadań (tylko gdy IDLE)
                 status = 'IDLE'
                 if current_state == 'IDLE':
                     status = handle_backtest_request(session, api_client)
@@ -371,6 +426,8 @@ def main_loop():
                 logger.error(f"Loop error: {e}")
                 current_state = 'IDLE'
         
+        # W trybie Flux (Faza 5) opóźnienie jest kontrolowane wewnątrz silnika (Cycle Delay),
+        # ale tutaj dodajemy minimalny sleep dla pętli głównej.
         time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
