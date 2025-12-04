@@ -338,10 +338,9 @@ export const handleRunPhase4Scan = async () => {
     }
 };
 
-// === OBSŁUGA WIDOKU FAZY 5 (OMNI-FLUX) ===
+// === NOWOŚĆ: HANDLER FAZY 5 (OMNI-FLUX) - JEDYNA DEFINICJA ===
 export const handleRunPhase5Scan = async () => {
     // 1. ZABEZPIECZENIE PRZED WIELOKROTNYM KLIKNIĘCIEM
-    // Sprawdzamy czy Worker już nie jest w stanie pętli Flux
     if (state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX')) {
         showSystemAlert("Faza 5 (Omni-Flux) jest już aktywna. Ignorowanie duplikatu.");
         return;
@@ -358,14 +357,11 @@ export const handleRunPhase5Scan = async () => {
         await api.sendWorkerControl('start_phase5');
         showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Przełączam na monitor...");
         setTimeout(() => { showPhase5Monitor(); }, 1000);
-        // SUKCES: Nie odblokowujemy przycisku tutaj. 
-        // Pozostaje zablokowany, dopóki pollWorkerStatus nie wykryje zmiany stanu lub użytkownik nie zatrzyma procesu.
     } catch (e) {
         // BŁĄD: Sprawdzamy stan faktyczny przed odblokowaniem
         const isRunningNow = state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX');
         
         if (!isRunningNow) {
-            // Tylko jeśli faktycznie nie działa, przywracamy przycisk
             showSystemAlert("Błąd startu F5: " + e.message);
             if (btn) {
                 btn.disabled = false;
@@ -373,7 +369,6 @@ export const handleRunPhase5Scan = async () => {
                 btn.classList.remove('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
             }
         } else {
-            // Jeśli worker ruszył (mimo np. timeoutu), informujemy o tym
             showSystemAlert("Faza 5 wystartowała (mimo błędu komunikacji).");
         }
     }
@@ -388,7 +383,6 @@ export const showPhase5Monitor = async () => {
             const monitorState = await api.getPhase5MonitorState();
             const poolData = monitorState.active_pool || [];
             
-            // Zapisz makro do stanu globalnego, aby UI.js mógł go odczytać
             if (monitorState.macro_bias) {
                 state.macroBias = monitorState.macro_bias;
             }
@@ -493,17 +487,11 @@ export const pollWorkerStatus = () => {
             const btnF5 = document.getElementById('btn-phase5-scan');
             if (btnF5) {
                 if (status.phase === 'PHASE_5_OMNI_FLUX' || status.status === 'RUNNING_FLUX') {
-                    // Jeśli worker potwierdza F5, wymuszamy stan zablokowany (dla bezpieczeństwa przy odświeżaniu)
                     if (!btnF5.disabled) {
                         btnF5.disabled = true;
                         btnF5.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Omni-Flux Active...';
                         btnF5.classList.add('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
                     }
-                } else {
-                    // Jeśli worker NIE działa w F5, a przycisk jest zablokowany i NIE ma klasy 'pulse' (oznaczającej oczekiwanie lokalne),
-                    // to można by go odblokować. Ale dla bezpieczeństwa obsługujemy to w handleRun.
-                    // Tutaj odblokowujemy tylko jeśli status to IDLE/PAUSED i przycisk jest zablokowany "na stałe" (np. po odświeżeniu strony)
-                    // Poniższy kod jest opcjonalny, ale pomaga w spójności.
                 }
             }
 
@@ -1118,74 +1106,4 @@ export const showOptimizationResults = async () => {
 
 export const hideOptimizationResults = () => {
     UI.optimizationResultsModal.backdrop.classList.add('hidden');
-};
-
-// === NOWOŚĆ: HANDLER FAZY 5 (OMNI-FLUX) - POPRAWIONA OBSŁUGA STANU ===
-export const handleRunPhase5Scan = async () => {
-    // 1. ZABEZPIECZENIE PRZED WIELOKROTNYM KLIKNIĘCIEM
-    // Sprawdzamy czy Worker już nie jest w stanie pętli Flux
-    if (state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX')) {
-        showSystemAlert("Faza 5 (Omni-Flux) jest już aktywna. Ignorowanie duplikatu.");
-        return;
-    }
-
-    const btn = document.getElementById('btn-phase5-scan');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Omni-Flux Active...';
-        btn.classList.add('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
-    }
-    
-    try {
-        await api.sendWorkerControl('start_phase5');
-        showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Przełączam na monitor...");
-        setTimeout(() => { showPhase5Monitor(); }, 1000);
-        // SUKCES: Nie odblokowujemy przycisku tutaj. 
-        // Pozostaje zablokowany, dopóki pollWorkerStatus nie wykryje zmiany stanu lub użytkownik nie zatrzyma procesu.
-    } catch (e) {
-        // BŁĄD: Sprawdzamy stan faktyczny przed odblokowaniem
-        const isRunningNow = state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX');
-        
-        if (!isRunningNow) {
-            // Tylko jeśli faktycznie nie działa, przywracamy przycisk
-            showSystemAlert("Błąd startu F5: " + e.message);
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
-                btn.classList.remove('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
-            }
-        } else {
-            // Jeśli worker ruszył (mimo np. timeoutu), informujemy o tym
-            showSystemAlert("Faza 5 wystartowała (mimo błędu komunikacji).");
-        }
-    }
-};
-
-export const showPhase5Monitor = async () => {
-    stopViewPolling();
-    showLoading();
-    
-    const render = async () => {
-        try {
-            const monitorState = await api.getPhase5MonitorState();
-            const poolData = monitorState.active_pool || [];
-            
-            if (monitorState.macro_bias) {
-                state.macroBias = monitorState.macro_bias;
-            }
-            
-            UI.mainContent.innerHTML = renderers.phase5View(poolData);
-            if (window.lucide) window.lucide.createIcons();
-        } catch (e) {
-            const container = document.getElementById('phase5-monitor-view');
-            if (!container) {
-                UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd monitora F5: ${e.message}</p>`;
-            } else {
-                console.error("Błąd odświeżania F5:", e);
-            }
-        }
-    };
-    
-    await render();
-    state.activeViewPolling = setInterval(render, 2000);
 };
