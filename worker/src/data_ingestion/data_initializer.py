@@ -59,11 +59,26 @@ def _run_schema_and_index_migration(session: Session):
         # === 4. PHASE X CANDIDATES (BIOX) - PEŁNA WERYFIKACJA ===
         safe_add_column('phasex_candidates', 'last_pump_date', 'DATE')
         safe_add_column('phasex_candidates', 'last_pump_percent', 'NUMERIC(10, 2)')
-        # == DODANO BRAKUJĄCE KOLUMNY ==
         safe_add_column('phasex_candidates', 'pump_count_1y', 'INTEGER DEFAULT 0')
         safe_add_column('phasex_candidates', 'volume_avg', 'BIGINT')
 
-        # === 5. VIRTUAL TRADES ===
+        # === 5. PHASE 4 CANDIDATES (H4 KINETIC ALPHA) ===
+        # Tabela phase4_candidates powinna zostać utworzona automatycznie przez SQLAlchemy create_all,
+        # ale na wszelki wypadek dodajemy tutaj kolumny, jeśli tabela już istnieje (migracja w przód).
+        safe_add_column('phase4_candidates', 'kinetic_score', 'INTEGER')
+        safe_add_column('phase4_candidates', 'elasticity', 'NUMERIC(10, 4)')
+        safe_add_column('phase4_candidates', 'shots_30d', 'INTEGER DEFAULT 0')
+        safe_add_column('phase4_candidates', 'avg_intraday_volatility', 'NUMERIC(10, 4)')
+        
+        # Nowe kolumny statystyczne H4 (zgodnie z najnowszym modelem)
+        safe_add_column('phase4_candidates', 'max_daily_shots', 'INTEGER DEFAULT 0')
+        safe_add_column('phase4_candidates', 'total_2pct_shots_ytd', 'INTEGER DEFAULT 0')
+        safe_add_column('phase4_candidates', 'avg_swing_size', 'NUMERIC(10, 2)')
+        safe_add_column('phase4_candidates', 'hard_floor_violations', 'INTEGER DEFAULT 0')
+        
+        safe_add_column('phase4_candidates', 'last_shot_date', 'DATE')
+
+        # === 6. VIRTUAL TRADES (Metryki H4 dla Backtestu) ===
         metrics_cols = [
             ("metric_atr_14", "NUMERIC(12, 6)"),
             ("metric_time_dilation", "NUMERIC(12, 6)"),
@@ -83,7 +98,10 @@ def _run_schema_and_index_migration(session: Session):
             ("expected_win_rate", "NUMERIC(10, 4)"),
             ("ai_audit_report", "TEXT"),
             ("ai_audit_date", "TIMESTAMP WITH TIME ZONE"),
-            ("ai_optimization_suggestion", "JSONB")
+            ("ai_optimization_suggestion", "JSONB"),
+            # Nowe kolumny dla H4
+            ("metric_kinetic_energy", "NUMERIC(10, 4)"),
+            ("metric_elasticity", "NUMERIC(10, 4)")
         ]
         for col, type_def in metrics_cols:
             safe_add_column('virtual_trades', col, type_def)
@@ -111,7 +129,7 @@ def force_reset_simulation_data(session: Session):
     if os.getenv("APEX_ALLOW_DATA_RESET") != "TRUE": return
     logger.warning("⚠️⚠️⚠️ TWARDY RESET ZOSTAŁ WYWOŁANY PRZEZ UŻYTKOWNIKA ⚠️⚠️⚠️")
     try:
-        tables_to_clear = ["optimization_trials", "optimization_jobs", "virtual_trades", "trading_signals", "phase1_candidates", "phase2_results", "processed_news", "phasex_candidates"]
+        tables_to_clear = ["optimization_trials", "optimization_jobs", "virtual_trades", "trading_signals", "phase1_candidates", "phase2_results", "processed_news", "phasex_candidates", "phase4_candidates"]
         for table in tables_to_clear:
             engine = session.get_bind()
             inspector = inspect(engine)
