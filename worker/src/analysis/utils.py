@@ -133,6 +133,9 @@ def clear_scan_log(session: Session):
     update_system_control(session, 'scan_log', '')
 
 def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
+    """
+    Sprawdza, czy w bazie pojawiło się nowe polecenie dla Workera.
+    """
     cmd = get_system_control_value(session, 'worker_command')
     
     if cmd == "START_REQUESTED":
@@ -150,6 +153,12 @@ def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
     if cmd == "START_PHASE_X_REQUESTED":
         update_system_control(session, 'worker_command', 'NONE')
         return "PHASE_X_RUN", current_state
+
+    # === NOWE POLECENIE DLA H4 (KINETIC ALPHA) ===
+    if cmd == "START_PHASE_4_REQUESTED":
+        update_system_control(session, 'worker_command', 'NONE')
+        return "PHASE_4_RUN", current_state
+    # ============================================
         
     if cmd == "PAUSE_REQUESTED":
         update_system_control(session, 'worker_status', 'PAUSED')
@@ -161,25 +170,11 @@ def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
         return "NONE", "RUNNING"
     return "NONE", current_state
 
-# === HEARTBEAT SUPPRESSION (Naprawa przeciążenia bazy) ===
 def report_heartbeat(session: Session):
-    """
-    Wysyła sygnał życia (Heartbeat) do bazy danych TYLKO wtedy, gdy system jest IDLE lub PAUSED.
-    Jeśli system pracuje (RUNNING, BUSY, BACKTESTING), wstrzymuje heartbeat, aby nie obciążać
-    połączenia z bazą zbędnymi transakcjami zapisu w tle.
-    """
     try:
-        # Pobieramy aktualny status (z pamięci podręcznej sesji lub bazy)
-        # Uwaga: Aby nie robić SELECT przy każdym sprawdzeniu, polegamy na logice workera,
-        # ale tutaj dla bezpieczeństwa pobieramy. Jeśli baza leży, to i tak rzuci wyjątek.
-        # Optymalizacja: Sprawdzamy status rzadziej lub zakładamy, że worker wie co robi.
-        
-        # Wersja bezpieczna: Sprawdzamy status przed zapisem
-        # Pobieramy raw SQLem dla szybkości
         res = session.execute(text("SELECT value FROM system_control WHERE key = 'worker_status'")).fetchone()
         current_status = res[0] if res else 'UNKNOWN'
 
-        # LISTA STANÓW "CIĘŻKIEJ PRACY" - Wtedy NIE wysyłamy Heartbeat
         heavy_load_states = [
             'RUNNING', 
             'BUSY', 
@@ -188,21 +183,17 @@ def report_heartbeat(session: Session):
             'BUSY_AI_OPTIMIZER', 
             'BUSY_DEEP_DIVE',
             'OPTIMIZING_CALC',
-            'OPTIMIZING_DATA_LOAD'
+            'OPTIMIZING_DATA_LOAD',
+            # Dodajemy H4 do listy stanów, w których nie spamujemy heartbeatem
+            'PHASE_4_KINETIC'
         ]
 
-        # Jeśli status zawiera któryś z kluczy obciążenia -> PRZERWIJ (nie zapisuj do bazy)
         if any(s in current_status for s in heavy_load_states):
-            # Opcjonalnie: Logujemy w konsoli, że heartbeat jest wstrzymany, ale nie tykamy bazy
-            # logger.debug("Heartbeat skipped due to heavy load.")
             return
 
-        # Jeśli system odpoczywa (IDLE, PAUSED, UNKNOWN) -> Zapisz Heartbeat
         update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
 
     except Exception:
-        # Jeśli baza jest już przeciążona (Connection Refused), po prostu zignoruj błąd heartbeatu
-        # Nie chcemy, żeby błąd logowania statusu wywalił cały worker
         pass
 
 def safe_float(value) -> float | None:
@@ -279,7 +270,10 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             metric_nabla_sq_norm=_safe_float_convert(setup.get('metric_nabla_sq_norm')),
             metric_m_sq_norm=_safe_float_convert(setup.get('metric_m_sq_norm')),
             metric_J=_safe_float_convert(setup.get('metric_J')),
-            metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma'))
+            metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma')),
+            # Nowe metryki H4 dla Backtestu (obsługa w _resolve_trade opcjonalna, ale warto mieć)
+            metric_kinetic_energy=_safe_float_convert(setup.get('metric_kinetic_energy')),
+            metric_elasticity=_safe_float_convert(setup.get('metric_elasticity'))
         )
     except Exception as e:
         logger.error(f"[Backtest Utils] Błąd transakcji: {e}")
