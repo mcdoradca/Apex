@@ -15,9 +15,10 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Funkcja pomocnicza do bezpiecznej konwersji na Decimal
+# === FUNKCJE POMOCNICZE ===
+
 def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
-    """Konwertuje float lub str na Decimal z określoną precyją."""
+    """Konwertuje float lub str na Decimal z określoną precyzją."""
     if value is None:
         return None
     try:
@@ -27,10 +28,7 @@ def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
         return None
 
 def _safe_float_stat(val) -> float:
-    """
-    Bezpieczna konwersja na float dla statystyk.
-    Zamienia Infinity/NaN na 0.0, aby uniknąć błędu JSON.
-    """
+    """Bezpieczna konwersja na float (0.0 dla None/NaN/Inf)."""
     if val is None: return 0.0
     try:
         f = float(val)
@@ -40,10 +38,7 @@ def _safe_float_stat(val) -> float:
         return 0.0
 
 def _sanitize_trade_metrics(trade: models.VirtualTrade):
-    """
-    Czyści obiekt VirtualTrade z wartości None, NaN/Infinity w kluczowych polach 
-    finansowych, zanim trafią do Pydantic (in-place).
-    """
+    """Czyści metryki transakcji (in-place) przed serializacją Pydantic."""
     required_float_fields = ['entry_price', 'stop_loss', 'take_profit']
     
     for field in required_float_fields:
@@ -65,9 +60,7 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         'metric_aqm_score_h3', 'metric_aqm_percentile_95',
         'metric_J_norm', 'metric_nabla_sq_norm', 'metric_m_sq_norm',
         'metric_J', 'metric_J_threshold_2sigma',
-        # === RE-CHECK METRICS ===
         'expected_profit_factor', 'expected_win_rate',
-        # === H4 METRICS ===
         'metric_kinetic_energy', 'metric_elasticity'
     ]
     
@@ -83,9 +76,7 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
             except Exception:
                 setattr(trade, field, None)
 
-# ==========================================================
-# === FUNKCJE CRUD DLA OPTYMALIZACJI (APEX V4) ===
-# ==========================================================
+# === FUNKCJE OPTYMALIZACJI (APEX V4) ===
 
 def create_optimization_job(db: Session, request: schemas.OptimizationRequest) -> models.OptimizationJob:
     job_id = str(uuid.uuid4())
@@ -119,9 +110,7 @@ def get_optimization_trials(db: Session, job_id: str) -> List[models.Optimizatio
         models.OptimizationTrial.job_id == job_id
     ).order_by(models.OptimizationTrial.trial_number).all()
 
-# ==========================================================
-# === POZOSTAŁE FUNKCJE CRUD ===
-# ==========================================================
+# === FUNKCJE PORTFELA ===
 
 def get_portfolio_holdings(db: Session) -> List[schemas.PortfolioHolding]:
     results = db.query(
@@ -265,11 +254,9 @@ def record_sell_transaction(db: Session, sell_request: schemas.SellRequest) -> O
             logger.error(f"Nie udało się zaktualizować pozycji: {e}", exc_info=True)
             raise
 
+# === FUNKCJE POBIERANIA KANDYDATÓW ===
+
 def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
-    """
-    Pobiera WSZYSTKICH kandydatów Fazy 1 z bazy danych.
-    Usunięto filtr czasowy - lista jest czyszczona tylko przez Workera przy nowym skanie.
-    """
     candidates_from_db = db.query(models.Phase1Candidate).order_by(models.Phase1Candidate.ticker).all()
 
     return [
@@ -285,12 +272,10 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
         } for c in candidates_from_db
     ]
 
-# === CRUD DLA FAZY X (BioX) ===
 def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
-    # Sortowanie: Najpierw te z najwyższym %, potem te z 0/NULL
     candidates = db.query(models.PhaseXCandidate).order_by(
         models.PhaseXCandidate.last_pump_percent.desc().nullslast(),
-        models.PhaseXCandidate.ticker.asc() # Drugie kryterium: alfabetycznie
+        models.PhaseXCandidate.ticker.asc()
     ).all()
     
     return [
@@ -306,14 +291,10 @@ def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
         for c in candidates
     ]
 
-# === CRUD DLA FAZY 4 (H4 Kinetic Alpha) - NOWOŚĆ ===
 def get_phase4_candidates(db: Session) -> List[Dict[str, Any]]:
-    """
-    Pobiera kandydatów H4 posortowanych malejąco według Kinetic Score (najlepsze petardy).
-    """
     candidates = db.query(models.Phase4Candidate).order_by(
         desc(models.Phase4Candidate.kinetic_score),
-        desc(models.Phase4Candidate.max_daily_shots) # Drugie kryterium: rekord dzienny
+        desc(models.Phase4Candidate.max_daily_shots) 
     ).all()
     
     return [
@@ -376,11 +357,41 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
             "entry_zone_top": _safe_float_stat(signal.entry_zone_top),
             "notes": signal.notes,
             "expiration_date": signal.expiration_date.isoformat() if signal.expiration_date else None,
-            # === RE-CHECK ===
             "expected_profit_factor": _safe_float_stat(signal.expected_profit_factor),
             "expected_win_rate": _safe_float_stat(signal.expected_win_rate)
         } for signal in signals_from_db
     ]
+
+# === NOWA FUNKCJA DLA FAZY 5 (OMNI-FLUX) ===
+def get_flux_signals(db: Session) -> List[Dict[str, Any]]:
+    """
+    Zwraca tylko sygnały strategii Flux (F5) posortowane od najnowszych.
+    Używa filtra po notatkach (STRATEGIA: FLUX).
+    """
+    signals = db.query(models.TradingSignal).filter(
+        models.TradingSignal.status.in_(['ACTIVE', 'PENDING']),
+        models.TradingSignal.notes.like('%STRATEGIA: FLUX%')
+    ).order_by(desc(models.TradingSignal.generation_date)).all()
+    
+    # Wersja zapasowa dla starszych notatek (jeśli byłoby inne nazewnictwo)
+    if not signals:
+        signals = db.query(models.TradingSignal).filter(
+            models.TradingSignal.status.in_(['ACTIVE', 'PENDING']),
+            models.TradingSignal.notes.like('%OMNI-FLUX%')
+        ).order_by(desc(models.TradingSignal.generation_date)).all()
+
+    return [{
+        "id": s.id,
+        "ticker": s.ticker,
+        "status": s.status,
+        "entry_price": _safe_float_stat(s.entry_price),
+        "take_profit": _safe_float_stat(s.take_profit),
+        "stop_loss": _safe_float_stat(s.stop_loss),
+        "notes": s.notes,
+        "generation_date": s.generation_date.isoformat() if s.generation_date else None
+    } for s in signals]
+
+# === POZOSTAŁE FUNKCJE SYSTEMOWE ===
 
 def get_discarded_signals_count_24h(db: Session) -> int:
     try:
@@ -390,7 +401,6 @@ def get_discarded_signals_count_24h(db: Session) -> int:
             models.TradingSignal.status.in_(discarded_statuses),
             models.TradingSignal.updated_at >= time_24_hours_ago
         ).scalar()
-        
         return count if count is not None else 0
     except Exception as e:
         logger.error(f"Error counting discarded signals: {e}", exc_info=True)
