@@ -135,6 +135,7 @@ def clear_scan_log(session: Session):
 def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
     """
     Sprawdza, czy w bazie pojawiło się nowe polecenie dla Workera.
+    Zaktualizowano o obsługę Fazy 5 (Omni-Flux).
     """
     cmd = get_system_control_value(session, 'worker_command')
     
@@ -154,11 +155,15 @@ def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
         update_system_control(session, 'worker_command', 'NONE')
         return "PHASE_X_RUN", current_state
 
-    # === NOWE POLECENIE DLA H4 (KINETIC ALPHA) ===
     if cmd == "START_PHASE_4_REQUESTED":
         update_system_control(session, 'worker_command', 'NONE')
         return "PHASE_4_RUN", current_state
-    # ============================================
+
+    # === FAZA 5: OMNI-FLUX ===
+    if cmd == "START_PHASE_5_REQUESTED":
+        update_system_control(session, 'worker_command', 'NONE')
+        return "PHASE_5_RUN", current_state
+    # =========================
         
     if cmd == "PAUSE_REQUESTED":
         update_system_control(session, 'worker_status', 'PAUSED')
@@ -184,8 +189,10 @@ def report_heartbeat(session: Session):
             'BUSY_DEEP_DIVE',
             'OPTIMIZING_CALC',
             'OPTIMIZING_DATA_LOAD',
-            # Dodajemy H4 do listy stanów, w których nie spamujemy heartbeatem
-            'PHASE_4_KINETIC'
+            'PHASE_4_KINETIC',
+            # Dodajemy F5, żeby worker nie tracił czasu na heartbeat w trakcie karuzeli
+            'PHASE_5_FLUX',
+            'RUNNING_FLUX'
         ]
 
         if any(s in current_status for s in heavy_load_states):
@@ -271,7 +278,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             metric_m_sq_norm=_safe_float_convert(setup.get('metric_m_sq_norm')),
             metric_J=_safe_float_convert(setup.get('metric_J')),
             metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma')),
-            # Nowe metryki H4 dla Backtestu (obsługa w _resolve_trade opcjonalna, ale warto mieć)
             metric_kinetic_energy=_safe_float_convert(setup.get('metric_kinetic_energy')),
             metric_elasticity=_safe_float_convert(setup.get('metric_elasticity'))
         )
@@ -280,9 +286,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         return None
 
 def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.Series:
-    """
-    BEZPIECZNA NOWA FUNKCJA: Normalizacja Institutional Sync (Z-Score) dla V4
-    """
     try:
         rolling_mean = df['institutional_sync'].rolling(window).mean()
         rolling_std = df['institutional_sync'].rolling(window).std()
@@ -293,40 +296,28 @@ def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.S
         return pd.Series(0, index=df.index)
 
 def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
-    """
-    BEZPIECZNA NOWA FUNKCJA: Capping wartości ekstremalnych Retail Herding
-    Importowana przez phase3_sniper.py
-    """
     if retail_herding_series.empty:
         return retail_herding_series
     return retail_herding_series.clip(-1.0, 1.0)
 
 def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
-    """
-    BEZPIECZNA NOWA FUNKCJA (V5.3 FIX): Ujednolicone obliczenia H3 V4
-    Zabezpieczona przed KeyError i NaN. Gwarantuje zwrot kolumn H3.
-    """
     try:
-        # === INITIALIZATION (Ensure columns exist) ===
         required_cols = ['J', 'J_norm', 'nabla_sq_norm', 'm_sq_norm', 'aqm_score_h3', 'aqm_percentile_95']
         for col in required_cols:
             if col not in df.columns: df[col] = 0.0
 
         Z_SCORE_WINDOW = 100
         
-        # 1. Normalizacja institutional_sync (Z-Score)
         if 'institutional_sync' in df.columns:
             df['mu_normalized'] = normalize_institutional_sync_v4(df, Z_SCORE_WINDOW)
         else:
             df['mu_normalized'] = 0.0
         
-        # 2. Cap wartości ekstremalnych dla Retail Herding
         if 'retail_herding' in df.columns:
             df['retail_herding_capped'] = calculate_retail_herding_capped_v4(df['retail_herding'])
         else:
             df['retail_herding_capped'] = 0.0
         
-        # 3. Obliczenie J
         if 'information_entropy' not in df.columns: df['information_entropy'] = 0.0
         if 'market_temperature' not in df.columns: df['market_temperature'] = 0.0001 
 
@@ -335,11 +326,9 @@ def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
         T = df['market_temperature'].replace(0, np.nan).fillna(0.0001) 
         mu_norm = df['mu_normalized']
         
-        # Formuła H3
         df['J'] = S - (Q / T) + (mu_norm * 1.0)
         df['J'] = df['J'].replace([np.inf, -np.inf], 0).fillna(0)
         
-        # 4. Normalizacja składników AQM
         j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
         j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
         df['J_norm'] = ((df['J'] - j_mean) / j_std).replace([np.inf, -np.inf], 0).fillna(0)
@@ -354,10 +343,8 @@ def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
         m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
         df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
         
-        # 5. Główna Formuła Pola (AQM V3 Score)
         df['aqm_score_h3'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
         
-        # 6. Dynamiczny próg percentyla
         h3_percentile = 0.95
         if params and 'h3_percentile' in params:
              try: h3_percentile = float(params['h3_percentile'])
@@ -369,7 +356,6 @@ def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
         
     except Exception as e:
         logger.error(f"Błąd calculate_h3_metrics_v4 (CRITICAL FIX): {e}", exc_info=True)
-        # Fallback
         for col in ['aqm_score_h3', 'aqm_percentile_95', 'm_sq_norm']:
             if col not in df.columns: df[col] = 0.0
         return df
@@ -400,13 +386,10 @@ def get_optimized_tickers_v4(session: Session, limit: int = 100) -> list:
 def precompute_h3_metrics_v4(df: pd.DataFrame) -> pd.DataFrame:
     df['m_sq'] = df['volume'].rolling(10).mean() / df['volume'].rolling(200).mean() - 1
     df['nabla_sq'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
-    
     for col in ['m_sq', 'nabla_sq']:
         mean = df[col].rolling(100).mean()
         std = df[col].rolling(100).std()
         df[f'{col}_norm'] = (df[col] - mean) / std.replace(0, 1)
-    
     df['aqm_score_h3'] = -df['m_sq_norm'] - df['nabla_sq_norm']
     df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(100).quantile(0.95)
-    
     return df.fillna(0)
