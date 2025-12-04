@@ -26,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="5.0.1") # V5.0.1: Login Fix
+app = FastAPI(title="APEX Predator API", version="5.0.1") # V5.0.1: Omni-Flux + Login Fix
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    # === FIX: Przywrócono słowo 'running', aby odblokować Frontend ===
+    # === CRITICAL FIX: Słowo 'running' jest wymagane przez Frontend (js/app.js) ===
     return {"status": "APEX Predator API V5 is running (Omni-Flux Ready)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
@@ -129,6 +129,8 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/signals/phase3", response_model=List[schemas.TradingSignal])
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
+    # Ten endpoint zwraca wszystkie aktywne/oczekujące sygnały (H3 + Flux)
+    # To poprawne dla głównego widoku sygnałów
     return crud.get_active_and_pending_signals(db)
 
 @app.get("/api/v1/signal/{ticker}/details")
