@@ -38,6 +38,29 @@ class PhaseXCandidate(Base):
     last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# === FAZA 4: KINETIC ALPHA (NOWOŚĆ H4) ===
+class Phase4Candidate(Base):
+    __tablename__ = 'phase4_candidates'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    price = Column(NUMERIC(12, 4))
+    
+    # Główne wskaźniki H4
+    kinetic_score = Column(INTEGER, comment="Ocena energii kinetycznej (0-100)")
+    elasticity = Column(NUMERIC(10, 4), comment="Wskaźnik sprężystości (odbicie od Low)")
+    
+    # Statystyki 'Strzałów' (Shots)
+    shots_30d = Column(INTEGER, default=0, comment="Ile razy (High-Open) > 2.5% w 30 dni")
+    avg_intraday_volatility = Column(NUMERIC(10, 4), comment="Średnia zmienność dzienna (High-Low)")
+    
+    # Dodatkowe metryki z ustalonej strategii analitycznej
+    max_daily_shots = Column(INTEGER, default=0, comment="Rekordowa liczba strzałów w jednym dniu")
+    total_2pct_shots_ytd = Column(INTEGER, default=0, comment="Całkowita liczba strzałów >2% YTD")
+    avg_swing_size = Column(NUMERIC(10, 2), comment="Średnia wielkość ruchu intraday (%)")
+    hard_floor_violations = Column(INTEGER, default=0, comment="Liczba naruszeń bezpiecznej podłogi (-5%)")
+
+    last_shot_date = Column(DATE, nullable=True, comment="Data ostatniego dynamicznego ruchu")
+    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+
 class Phase2Result(Base):
     __tablename__ = 'phase2_results'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -72,8 +95,7 @@ class TradingSignal(Base):
     
     expiration_date = Column(PG_TIMESTAMP(timezone=True), nullable=True, comment="Data wygaśnięcia sygnału (Max Hold)")
     
-    # === NOWOŚĆ: RE-CHECK DATA (Oczekiwania Optymalizatora) ===
-    # Te pola przechowują "obietnicę" strategii w momencie generowania sygnału
+    # === RE-CHECK DATA (Oczekiwania Optymalizatora) ===
     expected_profit_factor = Column(NUMERIC(10, 4), nullable=True, comment="PF z backtestu dla użytych parametrów")
     expected_win_rate = Column(NUMERIC(10, 4), nullable=True, comment="Win Rate z backtestu dla użytych parametrów")
     
@@ -159,7 +181,11 @@ class VirtualTrade(Base):
     metric_J = Column(NUMERIC(10, 4), nullable=True)
     metric_J_threshold_2sigma = Column(NUMERIC(10, 4), nullable=True)
 
-    # === NOWOŚĆ: MODUŁ RE-CHECK (AUDIT) ===
+    # === METRYKI H4 KINETIC ALPHA (NOWOŚĆ) ===
+    metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True, comment="H4: Energia Kinetyczna (Score)")
+    metric_elasticity = Column(NUMERIC(10, 4), nullable=True, comment="H4: Sprężystość (Odbicie od Low)")
+
+    # === MODUŁ RE-CHECK (AUDIT) ===
     expected_profit_factor = Column(NUMERIC(10, 4), nullable=True, comment="Oczekiwany PF (kopia z sygnału)")
     expected_win_rate = Column(NUMERIC(10, 4), nullable=True, comment="Oczekiwany WR (kopia z sygnału)")
     
