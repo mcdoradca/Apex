@@ -26,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="5.0.0") # V5: Omni-Flux Update
+app = FastAPI(title="APEX Predator API", version="5.0.1") # V5.0.1: Login Fix
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,8 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API V5 (Omni-Flux Ready)"}
+    # === FIX: Przywrócono słowo 'running', aby odblokować Frontend ===
+    return {"status": "APEX Predator API V5 is running (Omni-Flux Ready)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
