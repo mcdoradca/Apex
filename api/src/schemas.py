@@ -77,6 +77,26 @@ class PhaseXCandidate(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+# === FAZA 4: KINETIC ALPHA (H4) - NOWOŚĆ ===
+class Phase4Candidate(BaseModel):
+    ticker: str
+    price: Optional[float] = None
+    kinetic_score: int
+    elasticity: Optional[float] = None
+    shots_30d: int
+    avg_intraday_volatility: Optional[float] = None
+    
+    # Nowe metryki analityczne
+    max_daily_shots: int
+    total_2pct_shots_ytd: int # Tu mapujemy z kolumny total_2pct_shots_30d lub ytd w zależności od nazwy w DB
+    avg_swing_size: Optional[float] = None
+    hard_floor_violations: int
+    
+    last_shot_date: Optional[date] = None
+    analysis_date: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
 class Phase2Result(BaseModel):
     ticker: str
     analysis_date: date
