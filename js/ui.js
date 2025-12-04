@@ -128,6 +128,7 @@ export const ui = {
         const get = (id) => document.getElementById(id);
         
         // Iniekcja elementów do modalu H3
+        // UWAGA: Selektor .grid wewnątrz modalu H3
         const h3ModalContent = document.querySelector('#h3-live-modal .grid');
         
         // 1. Iniekcja Selectora Strategii (H3/AQM)
