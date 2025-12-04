@@ -289,17 +289,17 @@ export const handleRunPhaseXScan = async () => {
     }
 };
 
-// === OBSŁUGA WIDOKU FAZY 4 (H4: Kinetic Alpha) - NOWOŚĆ ===
+// === OBSŁUGA WIDOKU FAZY 4 (H4: Kinetic Alpha) ===
 export const showPhase4 = async () => {
     stopViewPolling();
     showLoading();
     
     const render = async () => {
         try {
-            // Pobieramy kandydatów z nowego endpointu
+            // Pobieramy kandydatów z endpointu H4
             const candidates = await api.getPhase4Candidates();
             
-            // Renderujemy tabelę używając nowej funkcji w ui.js
+            // Renderujemy tabelę
             UI.mainContent.innerHTML = renderers.phase4View(candidates);
             
             // Podpinamy przycisk Skanowania
@@ -579,7 +579,7 @@ export const handleSellConfirm = async () => {
     }
 };
 
-// === OBSŁUGA BACKTESTU (Teraz z BioX) ===
+// === OBSŁUGA BACKTESTU ===
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
@@ -594,7 +594,7 @@ export const handleYearBacktestRequest = async () => {
     }
     
     const params = {
-        strategy_mode: strategyMode, // Przekazujemy BIOX jeśli wybrano
+        strategy_mode: strategyMode, 
         h3_percentile: document.getElementById('h3-param-percentile')?.value || 0.95,
         h3_m_sq_threshold: document.getElementById('h3-param-mass')?.value || -0.5,
         h3_min_score: document.getElementById('h3-param-min-score')?.value || 0.0,
@@ -705,11 +705,10 @@ export const showH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.r
 export const hideH3LiveParamsModal = () => { UI.h3LiveModal.backdrop.classList.add('hidden'); };
 
 export const handleRunH3LiveScan = async () => {
-    // === POPRAWKA: Pobieranie Trybu Strategii (H3/AQM) ===
     const strategyMode = UI.h3LiveModal.strategyMode ? UI.h3LiveModal.strategyMode.value : 'H3';
     
     const params = {
-        strategy_mode: strategyMode, // Jawne wysłanie trybu
+        strategy_mode: strategyMode, 
         h3_percentile: UI.h3LiveModal.percentile.value,
         h3_m_sq_threshold: UI.h3LiveModal.mass.value,
         h3_min_score: UI.h3LiveModal.minScore.value,
@@ -1010,14 +1009,10 @@ export const showOptimizationResults = async () => {
                     };
 
                     setTimeout(() => {
-                        // === POPRAWKA: Automatyczne Ustawianie Trybu Strategii (H3/AQM) ===
                         if (UI.h3LiveModal.strategyMode) {
                             if (params.strategy_mode) {
-                                // Nowe próby mają ten parametr jawnie
                                 UI.h3LiveModal.strategyMode.value = params.strategy_mode;
                             } else {
-                                // Stare próby: Wnioskowanie na podstawie parametrów
-                                // Jeśli aqm_min_score istnieje i jest > 0, to jest to AQM
                                 if (params.aqm_min_score && params.aqm_min_score > 0) {
                                     UI.h3LiveModal.strategyMode.value = "AQM";
                                 } else {
@@ -1026,7 +1021,6 @@ export const showOptimizationResults = async () => {
                             }
                         }
                         
-                        // Mapowanie reszty parametrów
                         if (UI.h3LiveModal.percentile && params.h3_percentile) UI.h3LiveModal.percentile.value = _fmt(params.h3_percentile, 2);
                         if (UI.h3LiveModal.mass && params.h3_m_sq_threshold) UI.h3LiveModal.mass.value = _fmt(params.h3_m_sq_threshold, 2);
                         if (UI.h3LiveModal.minScore && params.h3_min_score) UI.h3LiveModal.minScore.value = _fmt(params.h3_min_score, 4);
@@ -1056,4 +1050,26 @@ export const showOptimizationResults = async () => {
 
 export const hideOptimizationResults = () => {
     UI.optimizationResultsModal.backdrop.classList.add('hidden');
+};
+
+// === NOWOŚĆ: HANDLER FAZY 5 (OMNI-FLUX) ===
+export const handleRunPhase5Scan = async () => {
+    const btn = document.getElementById('btn-phase5-scan');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Omni-Flux Active...';
+        btn.classList.add('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
+    }
+    
+    try {
+        await api.sendWorkerControl('start_phase5');
+        showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Monitoruj Dashboard.");
+    } catch (e) {
+        showSystemAlert("Błąd startu F5: " + e.message);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
+            btn.classList.remove('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
+        }
+    }
 };
