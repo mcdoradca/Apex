@@ -338,7 +338,7 @@ export const handleRunPhase4Scan = async () => {
     }
 };
 
-// === NOWOŚĆ: HANDLER FAZY 5 (OMNI-FLUX) - JEDYNA DEFINICJA ===
+// === OBSŁUGA FAZY 5 (OMNI-FLUX) ===
 export const handleRunPhase5Scan = async () => {
     // 1. ZABEZPIECZENIE PRZED WIELOKROTNYM KLIKNIĘCIEM
     if (state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX')) {
