@@ -128,10 +128,13 @@ class OmniFluxAnalyzer:
         # Jeśli pusto, spróbuj zainicjować
         if not self.active_pool:
             self._initialize_pools()
+            
+            # === POPRAWKA UX: Zapisz stan od razu po inicjalizacji ===
+            # Dzięki temu UI zobaczy puste sloty z nazwami tickerów zanim zaczniemy je skanować
+            self._save_state()
+            
             if not self.active_pool:
                 # Jeśli nadal pusto, to znaczy że nie ma kandydatów w bazie
-                # Spróbuj zrzucić pusty stan do UI, żeby nie wisiało "Ładowanie..."
-                self._save_state()
                 return
 
         self._refresh_macro_context()
