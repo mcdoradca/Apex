@@ -296,27 +296,19 @@ export const showPhase4 = async () => {
     
     const render = async () => {
         try {
-            // Pobieramy kandydatów z endpointu H4
             const candidates = await api.getPhase4Candidates();
-            
-            // Renderujemy tabelę
             UI.mainContent.innerHTML = renderers.phase4View(candidates);
-            
-            // Podpinamy przycisk Skanowania
             const runBtn = document.getElementById('run-phase4-scan-btn');
             if (runBtn) {
                 runBtn.addEventListener('click', handleRunPhase4Scan);
             }
-            
             if (window.lucide) window.lucide.createIcons();
-            
         } catch (e) {
             UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania Fazy 4 (H4): ${e.message}</p>`;
         }
     };
     
     await render();
-    // Odświeżamy rzadziej (co 15s), bo to ciężki widok
     state.activeViewPolling = setInterval(render, 15000); 
 };
 
@@ -329,9 +321,7 @@ export const handleRunPhase4Scan = async () => {
         btn.classList.remove('bg-amber-600', 'hover:bg-amber-700');
         btn.classList.add('bg-gray-600');
     }
-    
     try {
-        // Wysyłamy nową komendę do workera
         await api.sendWorkerControl('start_phase4');
         showSystemAlert("Rozpoczęto analizę H4 Kinetic Alpha. To potrwa kilka minut.");
     } catch (e) {
@@ -347,6 +337,69 @@ export const handleRunPhase4Scan = async () => {
             }
         }, 5000);
     }
+};
+
+// === NOWOŚĆ: OBSŁUGA WIDOKU FAZY 5 (OMNI-FLUX) ===
+export const handleRunPhase5Scan = async () => {
+    const btn = document.getElementById('btn-phase5-scan');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Omni-Flux Active...';
+        btn.classList.add('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
+    }
+    
+    try {
+        await api.sendWorkerControl('start_phase5');
+        showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Przełączam na monitor...");
+        
+        // Automatyczne przełączenie na widok monitora po starcie
+        setTimeout(() => {
+            showPhase5Monitor();
+        }, 1000);
+        
+    } catch (e) {
+        showSystemAlert("Błąd startu F5: " + e.message);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
+            btn.classList.remove('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
+        }
+    }
+};
+
+export const showPhase5Monitor = async () => {
+    stopViewPolling();
+    showLoading();
+    
+    // Funkcja renderująca cykl odświeżania (szybkie 2s)
+    const render = async () => {
+        try {
+            const monitorState = await api.getPhase5MonitorState();
+            
+            // Parsowanie danych (bo mogą być błędne/puste)
+            const poolData = monitorState.active_pool || [];
+            const macroBias = monitorState.macro_bias || 'UNKNOWN';
+            
+            state.macroBias = macroBias; // Zapisz do globalnego stanu dla UI
+            
+            UI.mainContent.innerHTML = renderers.phase5View(poolData);
+            
+            if (window.lucide) window.lucide.createIcons();
+            
+        } catch (e) {
+            // W razie błędu nie czyść widoku całkowicie, pokaż alert
+            const container = document.getElementById('phase5-monitor-view');
+            if (!container) {
+                UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd monitora F5: ${e.message}</p>`;
+            } else {
+                console.error("Błąd odświeżania F5:", e);
+            }
+        }
+    };
+    
+    await render();
+    // Częste odświeżanie (2s) dla efektu Real-Time
+    state.activeViewPolling = setInterval(render, 2000);
 };
 
 export const showTransactions = async (silent = false) => {
@@ -1063,7 +1116,13 @@ export const handleRunPhase5Scan = async () => {
     
     try {
         await api.sendWorkerControl('start_phase5');
-        showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Monitoruj Dashboard.");
+        showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Przełączam na monitor...");
+        
+        // Automatyczne przełączenie na widok monitora po starcie
+        setTimeout(() => {
+            showPhase5Monitor();
+        }, 1000);
+        
     } catch (e) {
         showSystemAlert("Błąd startu F5: " + e.message);
         if (btn) {
@@ -1072,4 +1131,39 @@ export const handleRunPhase5Scan = async () => {
             btn.classList.remove('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
         }
     }
+};
+
+export const showPhase5Monitor = async () => {
+    stopViewPolling();
+    showLoading();
+    
+    // Funkcja renderująca cykl odświeżania (szybkie 2s)
+    const render = async () => {
+        try {
+            const monitorState = await api.getPhase5MonitorState();
+            
+            // Parsowanie danych (bo mogą być błędne/puste)
+            const poolData = monitorState.active_pool || [];
+            const macroBias = monitorState.macro_bias || 'UNKNOWN';
+            
+            state.macroBias = macroBias; // Zapisz do globalnego stanu dla UI
+            
+            UI.mainContent.innerHTML = renderers.phase5View(poolData);
+            
+            if (window.lucide) window.lucide.createIcons();
+            
+        } catch (e) {
+            // W razie błędu nie czyść widoku całkowicie, pokaż alert
+            const container = document.getElementById('phase5-monitor-view');
+            if (!container) {
+                UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd monitora F5: ${e.message}</p>`;
+            } else {
+                console.error("Błąd odświeżania F5:", e);
+            }
+        }
+    };
+    
+    await render();
+    // Częste odświeżanie (2s) dla efektu Real-Time
+    state.activeViewPolling = setInterval(render, 2000);
 };
