@@ -241,13 +241,11 @@ export const showPhaseX = async () => {
     stopViewPolling();
     showLoading();
     
-    // Funkcja wewnętrzna renderująca widok
     const render = async () => {
         try {
             const candidates = await api.getPhaseXCandidates();
             UI.mainContent.innerHTML = renderers.phaseXView(candidates);
             
-            // Podpinamy przycisk Skanowania WEWNĄTRZ wyrenderowanego widoku
             const runBtn = document.getElementById('run-phasex-scan-btn');
             if (runBtn) {
                 runBtn.addEventListener('click', handleRunPhaseXScan);
@@ -261,8 +259,7 @@ export const showPhaseX = async () => {
     };
     
     await render();
-    // Możemy dodać polling dla Fazy X, aby widzieć zmiany na żywo (np. nowe flagi)
-    state.activeViewPolling = setInterval(render, 10000); // Co 10 sekund odśwież listę
+    state.activeViewPolling = setInterval(render, 10000); 
 };
 
 export const handleRunPhaseXScan = async () => {
@@ -281,13 +278,72 @@ export const handleRunPhaseXScan = async () => {
     } catch (e) {
         alert("Błąd startu Fazy X: " + e.message);
     } finally {
-        // Nie odblokowujemy natychmiast, użytkownik widzi status w dashboardzie
         setTimeout(() => {
             if (document.body.contains(btn)) {
                 btn.disabled = false;
                 btn.textContent = "Skanuj BioX";
                 btn.classList.remove('animate-pulse', 'bg-gray-600');
                 btn.classList.add('bg-pink-600', 'hover:bg-pink-700');
+            }
+        }, 5000);
+    }
+};
+
+// === OBSŁUGA WIDOKU FAZY 4 (H4: Kinetic Alpha) - NOWOŚĆ ===
+export const showPhase4 = async () => {
+    stopViewPolling();
+    showLoading();
+    
+    const render = async () => {
+        try {
+            // Pobieramy kandydatów z nowego endpointu
+            const candidates = await api.getPhase4Candidates();
+            
+            // Renderujemy tabelę używając nowej funkcji w ui.js
+            UI.mainContent.innerHTML = renderers.phase4View(candidates);
+            
+            // Podpinamy przycisk Skanowania
+            const runBtn = document.getElementById('run-phase4-scan-btn');
+            if (runBtn) {
+                runBtn.addEventListener('click', handleRunPhase4Scan);
+            }
+            
+            if (window.lucide) window.lucide.createIcons();
+            
+        } catch (e) {
+            UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania Fazy 4 (H4): ${e.message}</p>`;
+        }
+    };
+    
+    await render();
+    // Odświeżamy rzadziej (co 15s), bo to ciężki widok
+    state.activeViewPolling = setInterval(render, 15000); 
+};
+
+export const handleRunPhase4Scan = async () => {
+    const btn = document.getElementById('run-phase4-scan-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Analiza Kinetyczna...";
+        btn.classList.add('animate-pulse');
+        btn.classList.remove('bg-amber-600', 'hover:bg-amber-700');
+        btn.classList.add('bg-gray-600');
+    }
+    
+    try {
+        // Wysyłamy nową komendę do workera
+        await api.sendWorkerControl('start_phase4');
+        showSystemAlert("Rozpoczęto analizę H4 Kinetic Alpha. To potrwa kilka minut.");
+    } catch (e) {
+        alert("Błąd startu Fazy 4: " + e.message);
+    } finally {
+        setTimeout(() => {
+            if (document.body.contains(btn)) {
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4';
+                btn.classList.remove('animate-pulse', 'bg-gray-600');
+                btn.classList.add('bg-amber-600', 'hover:bg-amber-700');
+                if (window.lucide) window.lucide.createIcons();
             }
         }, 5000);
     }
@@ -322,7 +378,6 @@ export const loadAgentReportPage = async (page) => {
         const reportData = await api.getVirtualAgentReport(page, REPORT_PAGE_SIZE);
         UI.mainContent.innerHTML = renderers.agentReport(reportData);
         
-        // Ponowne podpięcie handlerów dla dynamicznie załadowanego contentu raportu
         const strategySelect = document.getElementById('backtest-strategy-select');
         if (strategySelect) {
             // Handlery delegowane w app.js
