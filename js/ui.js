@@ -89,11 +89,22 @@ style.textContent = `
     /* H4 Kinetic Badge */
     .strat-badge-h4 { background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 5px rgba(245, 158, 11, 0.2); }
     
+    /* V5 Flux Badge (NOWOŚĆ) */
+    .strat-badge-flux { background-color: rgba(16, 185, 129, 0.2); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.4); box-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
+    
     .strat-badge-unknown { background-color: rgba(75, 85, 99, 0.3); color: #9ca3af; border-color: rgba(75, 85, 99, 0.5); }
     
     /* Kinetic Score Bar */
     .kinetic-bar-bg { background: rgba(255,255,255,0.1); height: 6px; width: 100%; border-radius: 3px; overflow: hidden; margin-top: 4px; }
     .kinetic-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+
+    /* Flux Pulse Animation (V5) */
+    .flux-pulse { animation: text-pulse 1.5s infinite; }
+    @keyframes text-pulse {
+        0% { opacity: 1; text-shadow: 0 0 5px rgba(110, 231, 183, 0.5); }
+        50% { opacity: 0.8; text-shadow: 0 0 15px rgba(110, 231, 183, 0.8); }
+        100% { opacity: 1; text-shadow: 0 0 5px rgba(110, 231, 183, 0.5); }
+    }
 `;
 document.head.appendChild(style);
 
@@ -124,6 +135,7 @@ const getStrategyInfo = (notes) => {
     if (!notes) return { name: 'UNK', class: 'strat-badge-unknown', full: 'Unknown' };
     
     const n = notes.toUpperCase();
+    if (n.includes("STRATEGIA: FLUX") || n.includes("STRATEGIA: OMNI-FLUX")) return { name: 'FLUX', class: 'strat-badge-flux', full: 'Apex Flux (AF1)' };
     if (n.includes("STRATEGIA: H3") || n.includes("STRATEGY: H3")) return { name: 'H3', class: 'strat-badge-h3', full: 'H3 Elite Sniper' };
     if (n.includes("STRATEGIA: AQM") || n.includes("STRATEGY: AQM")) return { name: 'AQM', class: 'strat-badge-aqm', full: 'AQM V4' };
     if (n.includes("STRATEGIA: BIOX") || n.includes("STRATEGY: BIOX")) return { name: 'BIOX', class: 'strat-badge-biox', full: 'BioX Pump' };
@@ -184,13 +196,23 @@ export const ui = {
              sidebarControls.appendChild(btn);
         }
 
-        // === INIEKCJA PRZYCISKU FAZY 4 (H4 KINETIC) - NOWOŚĆ ===
+        // === INIEKCJA PRZYCISKU FAZY 4 (H4 KINETIC) ===
         if (sidebarControls && !document.getElementById('btn-phase4-scan')) {
              const btnH4 = document.createElement('button');
              btnH4.id = 'btn-phase4-scan';
              btnH4.className = 'w-full text-left flex items-center bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
              btnH4.innerHTML = '<i data-lucide="zap" class="mr-2 h-4 w-4"></i>Skanuj H4 (Kinetic)';
              sidebarControls.appendChild(btnH4);
+        }
+
+        // === INIEKCJA PRZYCISKU FAZY 5 (OMNI-FLUX) - NOWOŚĆ V5 ===
+        if (sidebarControls && !document.getElementById('btn-phase5-scan')) {
+             const btnF5 = document.createElement('button');
+             btnF5.id = 'btn-phase5-scan';
+             // Używamy koloru szmaragdowego (Emerald) dla odróżnienia
+             btnF5.className = 'w-full text-left flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
+             btnF5.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
+             sidebarControls.appendChild(btnF5);
         }
 
         return {
@@ -203,7 +225,8 @@ export const ui = {
             btnPhase1: get('btn-phase-1'),
             btnPhase3: get('btn-phase-3'),
             btnPhaseX: get('btn-phasex-scan'),
-            btnPhase4: get('btn-phase4-scan'), // Dodano referencję
+            btnPhase4: get('btn-phase4-scan'),
+            btnPhase5: get('btn-phase5-scan'), // Dodano referencję
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
@@ -344,8 +367,15 @@ export const renderers = {
                 if (parts.length > 1) {
                     const scorePart = parts[1].trim().split(/[\s\/]/)[0].replace(",", "").replace(".", "."); 
                     scoreVal = parseFloat(scorePart);
+                    
+                    let scoreBg = "bg-blue-900/30 text-blue-300";
+                    // Jeśli to Flux, użyj animacji i koloru
+                    if (strat.name === 'FLUX') {
+                        scoreBg = "bg-emerald-900/30 text-emerald-300 flux-pulse";
+                    }
+                    
                     if (strat.name !== 'BIOX') {
-                        scoreDisplay = `<span class="ml-2 text-xs text-blue-300 bg-blue-900/30 px-1 rounded">AQM: ${scoreVal.toFixed(2)}</span>`;
+                        scoreDisplay = `<span class="ml-2 text-xs ${scoreBg} px-1 rounded">SC: ${scoreVal.toFixed(0)}</span>`;
                     } else {
                         scoreDisplay = `<span class="ml-2 text-xs text-pink-300 bg-pink-900/30 px-1 rounded">MOC: ${scoreVal.toFixed(0)}%</span>`;
                     }
@@ -518,7 +548,13 @@ export const renderers = {
             } else if (s.status === 'PENDING') {
                 timeRemaining = "Oczekiwanie";
             }
-            const statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
+            
+            // Kolor ramki dla FLUX
+            let statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
+            if (strat.name === 'FLUX') {
+                statusColor = 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]';
+            }
+            
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
             return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}"><div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div><div class="flex justify-between items-start mb-3"><div><div class="flex items-center gap-2"><h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4><span class="strat-badge ${strat.class}">${strat.name}</span><i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i></div><div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div></div><div class="text-right"><div class="flex flex-col items-end"><span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span><span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span></div></div></div><div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2"><div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div><div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div><div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div></div><div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div><div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div></div>`;
         }).join('') : `<p class="text-center text-gray-500 col-span-full py-20">Brak aktywnych sygnałów H3. Uruchom skaner.</p>`;
