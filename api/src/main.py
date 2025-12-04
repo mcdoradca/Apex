@@ -26,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="3.1.0") # Minor bump for Re-check
+app = FastAPI(title="APEX Predator API", version="5.0.0") # V5: Omni-Flux Update
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,7 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    return {"status": "APEX Predator API is running (Re-check Module Active)"}
+    return {"status": "APEX Predator API V5 (Omni-Flux Ready)"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -113,7 +113,6 @@ def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
 def get_phasex_candidates_endpoint(db: Session = Depends(get_db)):
     return crud.get_phasex_candidates(db)
 
-# === ENDPOINT FAZY 4: KINETIC ALPHA (NOWOŚĆ H4) ===
 @app.get("/api/v1/candidates/phase4", response_model=List[schemas.Phase4Candidate])
 def get_phase4_candidates_endpoint(db: Session = Depends(get_db)):
     """Pobiera listę kandydatów Kinetic Alpha (Petardy)."""
@@ -266,7 +265,6 @@ def export_virtual_trades(db: Session = Depends(get_db)):
 def get_virtual_agent_report_endpoint(page: int = 1, page_size: int = 200, db: Session = Depends(get_db)):
     return crud.get_virtual_agent_report(db, page, page_size)
 
-# === NOWOŚĆ: ENDPOINT RE-CHECK ===
 @app.get("/api/v1/virtual-agent/trade/{trade_id}/audit", response_model=Dict[str, Any])
 def get_trade_audit_details(trade_id: int, db: Session = Depends(get_db)):
     """Pobiera szczegółowy raport audytu dla pojedynczej transakcji."""
@@ -453,8 +451,9 @@ def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db:
         "start_phase1": "START_PHASE_1_REQUESTED", 
         "start_phase3": "START_PHASE_3_REQUESTED",
         "start_phasex": "START_PHASE_X_REQUESTED",
-        # === NOWE POLECENIE DLA H4 ===
-        "start_phase4": "START_PHASE_4_REQUESTED"
+        "start_phase4": "START_PHASE_4_REQUESTED",
+        # === NOWE POLECENIE DLA FAZY 5 ===
+        "start_phase5": "START_PHASE_5_REQUESTED"
     }
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
