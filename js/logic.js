@@ -14,7 +14,6 @@ export const setUI = (uiInstance) => {
 };
 
 // === GLOBALNY ZARZĄDCA ODŚWIEŻANIA ===
-// Zatrzymuje wszelkie aktywne pętle odświeżania widoków
 const stopViewPolling = () => {
     if (state.activeViewPolling) {
         clearInterval(state.activeViewPolling);
@@ -339,7 +338,7 @@ export const handleRunPhase4Scan = async () => {
     }
 };
 
-// === NOWOŚĆ: OBSŁUGA WIDOKU FAZY 5 (OMNI-FLUX) ===
+// === OBSŁUGA WIDOKU FAZY 5 (OMNI-FLUX) ===
 export const handleRunPhase5Scan = async () => {
     const btn = document.getElementById('btn-phase5-scan');
     if (btn) {
@@ -351,12 +350,7 @@ export const handleRunPhase5Scan = async () => {
     try {
         await api.sendWorkerControl('start_phase5');
         showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Przełączam na monitor...");
-        
-        // Automatyczne przełączenie na widok monitora po starcie
-        setTimeout(() => {
-            showPhase5Monitor();
-        }, 1000);
-        
+        setTimeout(() => { showPhase5Monitor(); }, 1000);
     } catch (e) {
         showSystemAlert("Błąd startu F5: " + e.message);
         if (btn) {
@@ -371,23 +365,19 @@ export const showPhase5Monitor = async () => {
     stopViewPolling();
     showLoading();
     
-    // Funkcja renderująca cykl odświeżania (szybkie 2s)
     const render = async () => {
         try {
             const monitorState = await api.getPhase5MonitorState();
-            
-            // Parsowanie danych (bo mogą być błędne/puste)
             const poolData = monitorState.active_pool || [];
-            const macroBias = monitorState.macro_bias || 'UNKNOWN';
             
-            state.macroBias = macroBias; // Zapisz do globalnego stanu dla UI
+            // Zapisz makro do stanu globalnego, aby UI.js mógł go odczytać
+            if (monitorState.macro_bias) {
+                state.macroBias = monitorState.macro_bias;
+            }
             
             UI.mainContent.innerHTML = renderers.phase5View(poolData);
-            
             if (window.lucide) window.lucide.createIcons();
-            
         } catch (e) {
-            // W razie błędu nie czyść widoku całkowicie, pokaż alert
             const container = document.getElementById('phase5-monitor-view');
             if (!container) {
                 UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd monitora F5: ${e.message}</p>`;
@@ -398,7 +388,6 @@ export const showPhase5Monitor = async () => {
     };
     
     await render();
-    // Częste odświeżanie (2s) dla efektu Real-Time
     state.activeViewPolling = setInterval(render, 2000);
 };
 
@@ -430,12 +419,6 @@ export const loadAgentReportPage = async (page) => {
         state.currentReportPage = page;
         const reportData = await api.getVirtualAgentReport(page, REPORT_PAGE_SIZE);
         UI.mainContent.innerHTML = renderers.agentReport(reportData);
-        
-        const strategySelect = document.getElementById('backtest-strategy-select');
-        if (strategySelect) {
-            // Handlery delegowane w app.js
-        }
-        
     } catch (error) {
         UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd raportu agenta: ${error.message}</p>`;
     }
@@ -637,8 +620,6 @@ export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
     const strategySelect = document.getElementById('backtest-strategy-select');
-    
-    // Pobieramy wybraną strategię: H3, AQM lub BIOX
     const strategyMode = strategySelect ? strategySelect.value : 'H3';
 
     if (!input || !input.value) {
@@ -659,9 +640,7 @@ export const handleYearBacktestRequest = async () => {
     try {
         status.textContent = `Wysyłanie zlecenia (${strategyMode})...`;
         status.className = "text-yellow-400 text-sm mt-3 h-4";
-        
         await api.requestBacktest(input.value, params);
-        
         status.textContent = "Zlecenie przyjęte. Sprawdź status Workera.";
         status.className = "text-green-400 text-sm mt-3 h-4";
     } catch (e) {
@@ -1117,12 +1096,7 @@ export const handleRunPhase5Scan = async () => {
     try {
         await api.sendWorkerControl('start_phase5');
         showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Przełączam na monitor...");
-        
-        // Automatyczne przełączenie na widok monitora po starcie
-        setTimeout(() => {
-            showPhase5Monitor();
-        }, 1000);
-        
+        setTimeout(() => { showPhase5Monitor(); }, 1000);
     } catch (e) {
         showSystemAlert("Błąd startu F5: " + e.message);
         if (btn) {
@@ -1137,23 +1111,18 @@ export const showPhase5Monitor = async () => {
     stopViewPolling();
     showLoading();
     
-    // Funkcja renderująca cykl odświeżania (szybkie 2s)
     const render = async () => {
         try {
             const monitorState = await api.getPhase5MonitorState();
-            
-            // Parsowanie danych (bo mogą być błędne/puste)
             const poolData = monitorState.active_pool || [];
-            const macroBias = monitorState.macro_bias || 'UNKNOWN';
             
-            state.macroBias = macroBias; // Zapisz do globalnego stanu dla UI
+            if (monitorState.macro_bias) {
+                state.macroBias = monitorState.macro_bias;
+            }
             
             UI.mainContent.innerHTML = renderers.phase5View(poolData);
-            
             if (window.lucide) window.lucide.createIcons();
-            
         } catch (e) {
-            // W razie błędu nie czyść widoku całkowicie, pokaż alert
             const container = document.getElementById('phase5-monitor-view');
             if (!container) {
                 UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd monitora F5: ${e.message}</p>`;
@@ -1164,6 +1133,5 @@ export const showPhase5Monitor = async () => {
     };
     
     await render();
-    // Częste odświeżanie (2s) dla efektu Real-Time
     state.activeViewPolling = setInterval(render, 2000);
 };
