@@ -216,29 +216,24 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (NOWOŚĆ) ===
-    // Implementacja widoku "Karuzeli" (Active Pool Rotation)
+    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (Z PRZYCISKIEM STOP) ===
     phase5View: (poolData) => {
-        // poolData: [{ticker: 'AAPL', price: 150.0, elasticity: 1.2, velocity: 2.1, ...}, ...] (max 8)
-        const activeSlots = poolData.slice(0, 8); // Zabezpieczenie rozmiaru
+        const activeSlots = poolData.slice(0, 8); 
         
-        // Generowanie Slotów Karuzeli
         const slotsHtml = activeSlots.map((item, index) => {
             const elast = item.elasticity || 0;
             const vel = item.velocity || 0;
             const score = item.flux_score || 0;
             
-            // Kolorowanie Metryk (Heatmap)
             let elastClass = "text-gray-400";
             if (elast > 2.0) elastClass = "text-red-400 font-bold animate-pulse";
             else if (elast > 0.5) elastClass = "text-green-400";
-            else if (elast < -1.0) elastClass = "text-blue-400"; // Dip Buy zone
+            else if (elast < -1.0) elastClass = "text-blue-400"; 
             
             let velClass = "text-gray-400";
             if (vel > 1.8) velClass = "text-green-400 font-bold";
-            else if (vel < 0.8) velClass = "text-yellow-400"; // Low vol
+            else if (vel < 0.8) velClass = "text-yellow-400"; 
             
-            // Status Slotu
             const isActive = item.fails === 0;
             const statusIcon = isActive ? '<span class="flex h-2 w-2 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span></span>' : '<span class="h-2 w-2 rounded-full bg-red-500"></span>';
             
@@ -274,7 +269,6 @@ export const renderers = {
             </div>`;
         }).join('');
 
-        // Puste sloty (jeśli mniej niż 8)
         const emptySlotsCount = 8 - activeSlots.length;
         const emptySlotsHtml = Array(emptySlotsCount).fill(0).map((_, i) => `
             <div class="pool-slot bg-[#0d1117] border border-gray-800 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-gray-600 opacity-50">
@@ -294,18 +288,24 @@ export const renderers = {
                     <p class="text-sm text-gray-500 mt-1">Active Pool Rotation (Karuzela) - Skanowanie Intraday w Czasie Rzeczywistym.</p>
                 </div>
                 
-                <div class="flex items-center gap-4 bg-gray-800/50 px-4 py-2 rounded-lg border border-gray-700">
-                    <div class="text-right">
-                        <p class="text-[10px] text-gray-500 uppercase font-bold">Makro Bias (USD)</p>
-                        <p class="text-sm font-mono text-gray-300 flex items-center justify-end gap-2">
-                            <span class="h-2 w-2 rounded-full ${state.macroBias === 'BEARISH' ? 'bg-red-500' : 'bg-green-500'}"></span>
-                            ${state.macroBias || 'NEUTRAL'}
-                        </p>
-                    </div>
-                    <div class="h-8 w-px bg-gray-700"></div>
-                    <div class="text-right">
-                        <p class="text-[10px] text-gray-500 uppercase font-bold">Cykl</p>
-                        <p class="text-sm font-mono text-emerald-400">~4.0s</p>
+                <div class="flex items-center gap-4">
+                    <button id="stop-phase5-btn" class="bg-red-900/30 hover:bg-red-800/50 text-red-300 border border-red-800 px-3 py-2 rounded-md text-xs font-bold flex items-center transition-colors">
+                        <i data-lucide="square" class="w-3 h-3 mr-2 fill-current"></i> ZATRZYMAJ SYSTEM
+                    </button>
+                    
+                    <div class="flex items-center gap-4 bg-gray-800/50 px-4 py-2 rounded-lg border border-gray-700 ml-2">
+                        <div class="text-right">
+                            <p class="text-[10px] text-gray-500 uppercase font-bold">Makro Bias (USD)</p>
+                            <p class="text-sm font-mono text-gray-300 flex items-center justify-end gap-2">
+                                <span class="h-2 w-2 rounded-full ${state.macroBias === 'BEARISH' ? 'bg-red-500' : 'bg-green-500'}"></span>
+                                ${state.macroBias || 'NEUTRAL'}
+                            </p>
+                        </div>
+                        <div class="h-8 w-px bg-gray-700"></div>
+                        <div class="text-right">
+                            <p class="text-[10px] text-gray-500 uppercase font-bold">Cykl</p>
+                            <p class="text-sm font-mono text-emerald-400">~4.0s</p>
+                        </div>
                     </div>
                 </div>
             </div>
