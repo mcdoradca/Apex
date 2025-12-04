@@ -1,6 +1,7 @@
 import logging
 import pandas as pd
 import time
+import json
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone, timedelta
@@ -12,7 +13,8 @@ from .utils import (
     standardize_df_columns, 
     append_scan_log, 
     update_scan_progress, 
-    send_telegram_alert
+    send_telegram_alert,
+    update_system_control # Dodano do zapisu stanu dla UI
 )
 from .flux_physics import calculate_flux_vectors
 
@@ -36,7 +38,7 @@ class OmniFluxAnalyzer:
     def __init__(self, session: Session, api_client: AlphaVantageClient):
         self.session = session
         self.client = api_client
-        self.active_pool = []       # Lista słowników: {'ticker': 'AAPL', 'fails': 0, 'added_at': timestamp}
+        self.active_pool = []       # Lista słowników: {'ticker': 'AAPL', 'fails': 0, 'added_at': timestamp, 'metrics': {...}}
         self.reserve_pool = []      # Kolejka tickerów do wejścia
         self.macro_context = {
             'bias': 'NEUTRAL',
@@ -100,7 +102,16 @@ class OmniFluxAnalyzer:
             # 5. Napełnij aktywną pulę do pełna (8 sztuk)
             while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
                 ticker = self.reserve_pool.pop(0)
-                self.active_pool.append({'ticker': ticker, 'fails': 0, 'added_at': time.time()})
+                # Inicjalizacja pustych metryk dla UI
+                self.active_pool.append({
+                    'ticker': ticker, 
+                    'fails': 0, 
+                    'added_at': time.time(),
+                    'price': 0.0,
+                    'elasticity': 0.0,
+                    'velocity': 0.0,
+                    'flux_score': 0
+                })
                 
             msg = f"🌊 Faza 5 (Omni-Flux): Zainicjowano pulę. Aktywne: {len(self.active_pool)}, Rezerwa: {len(self.reserve_pool)}"
             logger.info(msg)
@@ -119,6 +130,8 @@ class OmniFluxAnalyzer:
             self._initialize_pools()
             if not self.active_pool:
                 # Jeśli nadal pusto, to znaczy że nie ma kandydatów w bazie
+                # Spróbuj zrzucić pusty stan do UI, żeby nie wisiało "Ładowanie..."
+                self._save_state()
                 return
 
         self._refresh_macro_context()
@@ -156,6 +169,14 @@ class OmniFluxAnalyzer:
                 metrics = calculate_flux_vectors(df)
                 
                 flux_score = metrics['flux_score']
+                current_price = df['close'].iloc[-1] if not df.empty else 0.0
+                
+                # === AKTUALIZACJA STANU DLA UI ===
+                item['price'] = float(current_price)
+                item['elasticity'] = float(metrics.get('elasticity', 0.0))
+                item['velocity'] = float(metrics.get('velocity', 0.0))
+                item['flux_score'] = int(flux_score)
+                # =================================
                 
                 # 4. Decyzja Strategiczna
                 
@@ -163,6 +184,7 @@ class OmniFluxAnalyzer:
                 if flux_score >= FLUX_THRESHOLD_ENTRY:
                     # Dodatkowy filtr Makro (tylko dla Longów) - nie walcz z dolarem
                     if self.macro_context['bias'] != 'BEARISH':
+                        metrics['price'] = current_price # Dodajemy cenę do metrics dla generatora sygnału
                         self._generate_signal(ticker, metrics)
                         signals_generated += 1
                         tickers_to_remove.append(ticker) # Sygnał wygenerowany -> zdejmij z karuzeli
@@ -195,7 +217,15 @@ class OmniFluxAnalyzer:
             added_count = 0
             while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
                 new_ticker = self.reserve_pool.pop(0)
-                self.active_pool.append({'ticker': new_ticker, 'fails': 0, 'added_at': time.time()})
+                self.active_pool.append({
+                    'ticker': new_ticker, 
+                    'fails': 0, 
+                    'added_at': time.time(),
+                    'price': 0.0,
+                    'elasticity': 0.0,
+                    'velocity': 0.0,
+                    'flux_score': 0
+                })
                 added_count += 1
             
             # 3. Recykling (Opcjonalnie): Te wyrzucone (jeśli nie sygnał) wracają na koniec kolejki
@@ -207,6 +237,23 @@ class OmniFluxAnalyzer:
 
         # Raportowanie postępu (symboliczne, bo to proces ciągły)
         update_scan_progress(self.session, len(self.reserve_pool), 100)
+        
+        # === ZAPIS STANU DLA UI ===
+        self._save_state()
+
+    def _save_state(self):
+        """Serializuje stan monitora do bazy danych, aby Frontend mógł go wyświetlić."""
+        try:
+            state_data = {
+                "active_pool": self.active_pool,
+                "macro_bias": self.macro_context.get('bias', 'NEUTRAL'),
+                "reserve_count": len(self.reserve_pool),
+                "last_updated": time.time()
+            }
+            # Używamy system_control jako kanału komunikacji z UI
+            update_system_control(self.session, 'phase5_monitor_state', json.dumps(state_data))
+        except Exception as e:
+            logger.error(f"Faza 5: Błąd zapisu stanu do UI: {e}")
 
     def _generate_signal(self, ticker: str, metrics: dict):
         """Generuje i zapisuje sygnał Flux."""
