@@ -338,39 +338,46 @@ export const handleRunPhase4Scan = async () => {
     }
 };
 
-// === OBSŁUGA FAZY 5 (OMNI-FLUX) ===
+// === OBSŁUGA FAZY 5 (OMNI-FLUX) - POPRAWKA LOGICZNA ===
 export const handleRunPhase5Scan = async () => {
-    // 1. ZABEZPIECZENIE PRZED WIELOKROTNYM KLIKNIĘCIEM
+    // 1. Sprawdź, czy faza już działa. Jeśli tak -> PRZEŁĄCZ WIDOK zamiast blokować.
     if (state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX')) {
-        showSystemAlert("Faza 5 (Omni-Flux) jest już aktywna. Ignorowanie duplikatu.");
+        showSystemAlert("Faza 5 już pracuje. Przełączam na monitor...");
+        showPhase5Monitor();
         return;
     }
 
     const btn = document.getElementById('btn-phase5-scan');
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Omni-Flux Active...';
-        btn.classList.add('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
+        btn.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Uruchamianie F5...';
     }
     
     try {
         await api.sendWorkerControl('start_phase5');
-        showSystemAlert("Rozpoczęto F5 Omni-Flux (Active Loop). Przełączam na monitor...");
-        setTimeout(() => { showPhase5Monitor(); }, 1000);
+        showSystemAlert("Zlecono start Omni-Flux (F5).");
+        // Szybkie przełączenie na widok, aby użytkownik widział, że coś się dzieje
+        setTimeout(() => { showPhase5Monitor(); }, 1500);
     } catch (e) {
-        // BŁĄD: Sprawdzamy stan faktyczny przed odblokowaniem
-        const isRunningNow = state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX');
-        
-        if (!isRunningNow) {
-            showSystemAlert("Błąd startu F5: " + e.message);
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
-                btn.classList.remove('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
-            }
-        } else {
-            showSystemAlert("Faza 5 wystartowała (mimo błędu komunikacji).");
+        showSystemAlert("Błąd startu F5: " + e.message);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
         }
+    }
+};
+
+const handleStopPhase5 = async () => {
+    if (!confirm("Czy na pewno chcesz zatrzymać Omni-Flux?")) return;
+    
+    const stopBtn = document.getElementById('stop-phase5-btn');
+    if (stopBtn) stopBtn.disabled = true;
+
+    try {
+        await api.sendWorkerControl('pause');
+        showSystemAlert("Wysłano sygnał ZATRZYMANIA. Czekam na workera...");
+    } catch (e) {
+        alert("Błąd zatrzymywania: " + e.message);
     }
 };
 
@@ -388,14 +395,20 @@ export const showPhase5Monitor = async () => {
             }
             
             UI.mainContent.innerHTML = renderers.phase5View(poolData);
+            
+            // Podpięcie zdarzenia dla przycisku STOP (który jest renderowany w UI.js)
+            const stopBtn = document.getElementById('stop-phase5-btn');
+            if (stopBtn) {
+                // Klonowanie, aby usunąć stare listenery przy re-renderze
+                const newBtn = stopBtn.cloneNode(true);
+                stopBtn.parentNode.replaceChild(newBtn, stopBtn);
+                newBtn.addEventListener('click', handleStopPhase5);
+            }
+
             if (window.lucide) window.lucide.createIcons();
         } catch (e) {
-            const container = document.getElementById('phase5-monitor-view');
-            if (!container) {
-                UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd monitora F5: ${e.message}</p>`;
-            } else {
-                console.error("Błąd odświeżania F5:", e);
-            }
+            // Jeśli błąd, nie nadpisuj całego widoku, tylko zaloguj
+            console.error("Błąd odświeżania F5:", e);
         }
     };
     
@@ -487,11 +500,17 @@ export const pollWorkerStatus = () => {
             const btnF5 = document.getElementById('btn-phase5-scan');
             if (btnF5) {
                 if (status.phase === 'PHASE_5_OMNI_FLUX' || status.status === 'RUNNING_FLUX') {
-                    if (!btnF5.disabled) {
-                        btnF5.disabled = true;
-                        btnF5.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Omni-Flux Active...';
-                        btnF5.classList.add('animate-pulse', 'bg-emerald-900', 'text-emerald-200', 'border-emerald-500');
-                    }
+                    // Jeśli działa, przycisk pokazuje info, ale jest aktywny (żeby móc kliknąć i wejść w widok)
+                    btnF5.disabled = false;
+                    btnF5.innerHTML = '<i data-lucide="eye" class="mr-2 h-4 w-4"></i>Pokaż Monitor F5';
+                    btnF5.classList.remove('bg-emerald-600/20');
+                    btnF5.classList.add('bg-emerald-900', 'text-emerald-200', 'border-emerald-500', 'animate-pulse');
+                } else {
+                    // Reset do stanu wyjściowego
+                    btnF5.disabled = false;
+                    btnF5.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
+                    btnF5.classList.remove('bg-emerald-900', 'text-emerald-200', 'border-emerald-500', 'animate-pulse');
+                    btnF5.classList.add('bg-emerald-600/20');
                 }
             }
 
