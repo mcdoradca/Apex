@@ -113,6 +113,16 @@ def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
 def get_phasex_candidates_endpoint(db: Session = Depends(get_db)):
     return crud.get_phasex_candidates(db)
 
+# === ENDPOINT FAZY 4: KINETIC ALPHA (NOWOŚĆ H4) ===
+@app.get("/api/v1/candidates/phase4", response_model=List[schemas.Phase4Candidate])
+def get_phase4_candidates_endpoint(db: Session = Depends(get_db)):
+    """Pobiera listę kandydatów Kinetic Alpha (Petardy)."""
+    try:
+        return crud.get_phase4_candidates(db)
+    except Exception as e:
+        logger.error(f"Error fetching Phase 4 candidates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Błąd pobierania danych Fazy 4.")
+
 @app.get("/api/v1/results/phase2", response_model=List[schemas.Phase2Result])
 def get_phase2_results_endpoint(db: Session = Depends(get_db)):
     return crud.get_phase2_results(db)
@@ -442,7 +452,9 @@ def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db:
         "resume": "RESUME_REQUESTED",
         "start_phase1": "START_PHASE_1_REQUESTED", 
         "start_phase3": "START_PHASE_3_REQUESTED",
-        "start_phasex": "START_PHASE_X_REQUESTED"
+        "start_phasex": "START_PHASE_X_REQUESTED",
+        # === NOWE POLECENIE DLA H4 ===
+        "start_phase4": "START_PHASE_4_REQUESTED"
     }
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
