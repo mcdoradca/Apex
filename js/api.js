@@ -52,6 +52,9 @@ export const api = {
     // Pobieranie kandydatów Fazy X (BioX)
     getPhaseXCandidates: () => apiRequest('api/v1/candidates/phasex'),
 
+    // === NOWOŚĆ: Pobieranie kandydatów Fazy 4 (H4 Kinetic Alpha) ===
+    getPhase4Candidates: () => apiRequest('api/v1/candidates/phase4'),
+
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
     
