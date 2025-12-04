@@ -27,7 +27,6 @@ class Phase1Candidate(Base):
     days_to_earnings = Column(INTEGER, nullable=True)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
-# === FAZA X (BIOTECH & PENNY STOCKS) ===
 class PhaseXCandidate(Base):
     __tablename__ = 'phasex_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -36,6 +35,26 @@ class PhaseXCandidate(Base):
     pump_count_1y = Column(INTEGER, default=0, comment="Ile razy urosła >50% w ciągu roku")
     last_pump_date = Column(DATE, nullable=True, comment="Data ostatniego skoku >50%")
     last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
+    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+
+# === FAZA 4: KINETIC ALPHA (H4) ===
+# To jest klasa, której brakowało w API i powodowała błąd 500
+class Phase4Candidate(Base):
+    __tablename__ = 'phase4_candidates'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    price = Column(NUMERIC(12, 4))
+    
+    kinetic_score = Column(INTEGER, comment="Ocena energii kinetycznej (0-100)")
+    elasticity = Column(NUMERIC(10, 4), comment="Wskaźnik sprężystości")
+    shots_30d = Column(INTEGER, default=0, comment="Strzały >2% w 30 dni")
+    avg_intraday_volatility = Column(NUMERIC(10, 4))
+    
+    max_daily_shots = Column(INTEGER, default=0)
+    total_2pct_shots_ytd = Column(INTEGER, default=0)
+    avg_swing_size = Column(NUMERIC(10, 2))
+    hard_floor_violations = Column(INTEGER, default=0)
+    
+    last_shot_date = Column(DATE, nullable=True)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
 class Phase2Result(Base):
@@ -53,9 +72,7 @@ class TradingSignal(Base):
     id = Column(INTEGER, primary_key=True, autoincrement=True)
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'))
     generation_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
-
     updated_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
-
     status = Column(VARCHAR(50), default='PENDING') 
     entry_price = Column(NUMERIC(12, 2), nullable=True)
     stop_loss = Column(NUMERIC(12, 2), nullable=True)
@@ -65,24 +82,15 @@ class TradingSignal(Base):
     entry_zone_bottom = Column(NUMERIC(12, 2), nullable=True)
     entry_zone_top = Column(NUMERIC(12, 2), nullable=True)
     notes = Column(TEXT, nullable=True)
-    
     highest_price_since_entry = Column(NUMERIC(12, 2), nullable=True)
     is_trailing_active = Column(Boolean, default=False)
     earnings_date = Column(DATE, nullable=True)
-    
-    expiration_date = Column(PG_TIMESTAMP(timezone=True), nullable=True, comment="Data wygaśnięcia sygnału (Max Hold)")
-    
-    # === RE-CHECK DATA (Oczekiwania Optymalizatora) ===
-    expected_profit_factor = Column(NUMERIC(10, 4), nullable=True, comment="PF z backtestu dla użytych parametrów")
-    expected_win_rate = Column(NUMERIC(10, 4), nullable=True, comment="Win Rate z backtestu dla użytych parametrów")
+    expiration_date = Column(PG_TIMESTAMP(timezone=True), nullable=True)
+    expected_profit_factor = Column(NUMERIC(10, 4), nullable=True)
+    expected_win_rate = Column(NUMERIC(10, 4), nullable=True)
     
     __table_args__ = (
-        Index(
-            'uq_active_pending_ticker',
-            'ticker',
-            unique=True,
-            postgresql_where=status.in_(['ACTIVE', 'PENDING'])
-        ),
+        Index('uq_active_pending_ticker', 'ticker', unique=True, postgresql_where=status.in_(['ACTIVE', 'PENDING'])),
     )
 
 class SystemControl(Base):
@@ -101,9 +109,9 @@ class ProcessedNews(Base):
     __tablename__ = 'processed_news'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), nullable=False, index=True)
-    news_hash = Column(VARCHAR(64), nullable=False, index=True, comment="SHA-256 hash of the news URL or headline")
+    news_hash = Column(VARCHAR(64), nullable=False, index=True)
     processed_at = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
-    sentiment = Column(VARCHAR(50), nullable=False, comment="'POSITIVE', 'NEGATIVE', 'NEUTRAL'")
+    sentiment = Column(VARCHAR(50), nullable=False)
     headline = Column(TEXT, nullable=True)
     source_url = Column(TEXT, nullable=True)
     __table_args__ = (UniqueConstraint('ticker', 'news_hash', name='uq_ticker_news_hash'),)
@@ -142,7 +150,6 @@ class VirtualTrade(Base):
     close_price = Column(NUMERIC(12, 2), nullable=True)
     final_profit_loss_percent = Column(NUMERIC(8, 2), nullable=True)
     
-    # Metryki Strategiczne
     metric_atr_14 = Column(NUMERIC(10, 4), nullable=True)
     metric_time_dilation = Column(NUMERIC(10, 4), nullable=True)
     metric_price_gravity = Column(NUMERIC(10, 4), nullable=True)
@@ -157,14 +164,17 @@ class VirtualTrade(Base):
     metric_m_sq_norm = Column(NUMERIC(10, 4), nullable=True)
     metric_J = Column(NUMERIC(10, 4), nullable=True)
     metric_J_threshold_2sigma = Column(NUMERIC(10, 4), nullable=True)
-
-    # === MODUŁ RE-CHECK (AUDIT) ===
-    expected_profit_factor = Column(NUMERIC(10, 4), nullable=True, comment="Oczekiwany PF (kopia z sygnału)")
-    expected_win_rate = Column(NUMERIC(10, 4), nullable=True, comment="Oczekiwany WR (kopia z sygnału)")
     
-    ai_audit_report = Column(TEXT, nullable=True, comment="Raport tekstowy 'Re-check' od Gemini")
+    expected_profit_factor = Column(NUMERIC(10, 4), nullable=True)
+    expected_win_rate = Column(NUMERIC(10, 4), nullable=True)
+    ai_audit_report = Column(TEXT, nullable=True)
     ai_audit_date = Column(PG_TIMESTAMP(timezone=True), nullable=True)
-    ai_optimization_suggestion = Column(JSONB, nullable=True, comment="Strukturalne wnioski dla Optymalizatora (Machine Learning)")
+    ai_optimization_suggestion = Column(JSONB, nullable=True)
+    
+    # === H4 METRICS ===
+    # To też powodowało błąd w crud.py
+    metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True)
+    metric_elasticity = Column(NUMERIC(10, 4), nullable=True)
 
 class AlphaVantageCache(Base):
     __tablename__ = 'alpha_vantage_cache'
