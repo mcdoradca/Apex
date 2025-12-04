@@ -17,7 +17,9 @@ import {
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
     // Importy BioX
-    showPhaseX, handleRunPhaseXScan
+    showPhaseX, handleRunPhaseXScan,
+    // === IMPORT FAZY 4 (H4 Kinetic Alpha) ===
+    showPhase4, handleRunPhase4Scan
 } from './logic.js';
 
 // Tworzymy lokalny obiekt Logic dla kompatybilności z resztą kodu
@@ -36,7 +38,9 @@ const Logic = {
     showQuantumModal, hideQuantumModal, handleStartQuantumOptimization,
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
-    showPhaseX, handleRunPhaseXScan
+    showPhaseX, handleRunPhaseXScan,
+    // Dodajemy H4 do obiektu Logic
+    showPhase4, handleRunPhase4Scan
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -78,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const prevBtn = target.closest('#report-prev-btn');
                 const nextBtn = target.closest('#report-next-btn');
                 
-                // === NOWOŚĆ: OBSŁUGA PRZYCISKU RE-CHECK ===
+                // === OBSŁUGA PRZYCISKU RE-CHECK ===
                 const recheckBtn = target.closest('.recheck-btn');
                 
                 if (recheckBtn) {
@@ -87,7 +91,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         handleShowAuditModal(tradeId, UI);
                     }
                 }
-                // ===========================================
                 
                 // 1. Backtest i Konfiguracja
                 else if (target.closest('#run-backtest-year-btn')) Logic.handleYearBacktestRequest();
@@ -156,6 +159,14 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.btnPhaseX.addEventListener('click', (e) => {
                 e.preventDefault();
                 Logic.showPhaseX();
+            });
+        }
+
+        // === OBSŁUGA PRZYCISKU FAZY 4 (H4) W SIDEBARZE - NOWOŚĆ ===
+        if (UI.btnPhase4) {
+            UI.btnPhase4.addEventListener('click', (e) => {
+                e.preventDefault();
+                Logic.showPhase4();
             });
         }
         
