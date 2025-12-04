@@ -66,7 +66,9 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         'metric_J_norm', 'metric_nabla_sq_norm', 'metric_m_sq_norm',
         'metric_J', 'metric_J_threshold_2sigma',
         # === RE-CHECK METRICS ===
-        'expected_profit_factor', 'expected_win_rate'
+        'expected_profit_factor', 'expected_win_rate',
+        # === H4 METRICS ===
+        'metric_kinetic_energy', 'metric_elasticity'
     ]
     
     for field in optional_fields_to_clean:
@@ -283,7 +285,7 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
         } for c in candidates_from_db
     ]
 
-# === CRUD DLA FAZY X (BioX) - NAPRAWA SORTOWANIA ===
+# === CRUD DLA FAZY X (BioX) ===
 def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
     # Sortowanie: Najpierw te z najwyższym %, potem te z 0/NULL
     candidates = db.query(models.PhaseXCandidate).order_by(
@@ -299,6 +301,34 @@ def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
             "pump_count_1y": c.pump_count_1y,
             "last_pump_date": c.last_pump_date,
             "last_pump_percent": float(c.last_pump_percent) if c.last_pump_percent is not None else 0.0,
+            "analysis_date": c.analysis_date
+        }
+        for c in candidates
+    ]
+
+# === CRUD DLA FAZY 4 (H4 Kinetic Alpha) - NOWOŚĆ ===
+def get_phase4_candidates(db: Session) -> List[Dict[str, Any]]:
+    """
+    Pobiera kandydatów H4 posortowanych malejąco według Kinetic Score (najlepsze petardy).
+    """
+    candidates = db.query(models.Phase4Candidate).order_by(
+        desc(models.Phase4Candidate.kinetic_score),
+        desc(models.Phase4Candidate.max_daily_shots) # Drugie kryterium: rekord dzienny
+    ).all()
+    
+    return [
+        {
+            "ticker": c.ticker,
+            "price": float(c.price) if c.price is not None else 0.0,
+            "kinetic_score": c.kinetic_score,
+            "elasticity": float(c.elasticity) if c.elasticity is not None else 0.0,
+            "shots_30d": c.shots_30d,
+            "avg_intraday_volatility": float(c.avg_intraday_volatility) if c.avg_intraday_volatility is not None else 0.0,
+            "max_daily_shots": c.max_daily_shots,
+            "total_2pct_shots_ytd": c.total_2pct_shots_ytd,
+            "avg_swing_size": float(c.avg_swing_size) if c.avg_swing_size is not None else 0.0,
+            "hard_floor_violations": c.hard_floor_violations,
+            "last_shot_date": c.last_shot_date,
             "analysis_date": c.analysis_date
         }
         for c in candidates
