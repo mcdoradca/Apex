@@ -28,7 +28,7 @@ class AlphaVantageClient:
         self.backoff_factor = backoff_factor
         self.requests_per_minute = requests_per_minute
         
-        # Pacing
+        # Pacing (Rolling Window)
         self.request_interval = 60.0 / requests_per_minute
         self.request_timestamps = deque()
         
@@ -75,8 +75,8 @@ class AlphaVantageClient:
                 try:
                     data = response.json()
                 except json.JSONDecodeError:
-                    response.raise_for_status() 
                     if params.get('datatype') == 'csv':
+                        response.raise_for_status() 
                         return response.text
                     raise requests.exceptions.RequestException("Response was not valid JSON.")
 
@@ -86,7 +86,7 @@ class AlphaVantageClient:
                     if "frequency" in info_text or "api call volume" in info_text or "please contact premium" in info_text:
                         is_rate_limit_json = True
                 
-                is_error_msg = "Error Message" in data
+                is_error_msg = isinstance(data, dict) and "Error Message" in data
 
                 if is_rate_limit_json:
                     wait_time = 5 * (attempt + 1)
@@ -108,6 +108,28 @@ class AlphaVantageClient:
 
         return None
 
+    # === NARZĘDZIA POMOCNICZE ===
+
+    @staticmethod
+    def _safe_float(value) -> float | None:
+        if value is None: return None
+        try:
+            if isinstance(value, str):
+                value = value.replace(',', '').replace('%', '')
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+            
+    def _parse_bulk_quotes_csv(self, csv_text: str, ticker: str) -> dict | None:
+        if not csv_text or "symbol" not in csv_text:
+            return None
+        csv_file = StringIO(csv_text)
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            if row.get('symbol') == ticker:
+                return row
+        return None
+
     # === DANE RYNKOWE ===
 
     def get_market_status(self):
@@ -115,6 +137,9 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_bulk_quotes(self, symbols: list[str]):
+        """
+        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
+        """
         params = {
             "function": "REALTIME_BULK_QUOTES",
             "symbol": ",".join(symbols),
@@ -122,8 +147,70 @@ class AlphaVantageClient:
         }
         text_response = self._make_request(params)
         if isinstance(text_response, str) and "symbol" in text_response:
-            return text_response
+             return text_response
         return None
+
+    def get_bulk_quotes_parsed(self, symbols: list[str]) -> list[dict]:
+        """
+        NOWOŚĆ DLA WORKERA: Pobiera i parsuje dane Bulk do listy słowników.
+        Obsługuje pola Bid/Ask wymagane przez Fazę 5 (Radar/OFP).
+        """
+        csv_text = self.get_bulk_quotes(symbols)
+        if not csv_text: 
+            return []
+            
+        results = []
+        try:
+            f = StringIO(csv_text)
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Wyciągamy dane potrzebne do OFP
+                data = {
+                    'symbol': row.get('symbol'),
+                    'price': self._safe_float(row.get('close')),
+                    'volume': self._safe_float(row.get('volume')),
+                    # Dane Premium (Bid/Ask) - jeśli dostępne w CSV
+                    'bid': self._safe_float(row.get('bid')),
+                    'ask': self._safe_float(row.get('ask')),
+                    'bid_size': self._safe_float(row.get('bid_size')),
+                    'ask_size': self._safe_float(row.get('ask_size'))
+                }
+                # Tylko poprawne wiersze
+                if data['symbol']:
+                    results.append(data)
+        except Exception as e:
+            logger.error(f"Błąd parsowania Bulk CSV w Workerze: {e}")
+            
+        return results
+
+    def get_global_quote(self, symbol: str):
+        bulk_csv = self.get_bulk_quotes([symbol])
+        if not bulk_csv: return None
+        quote_data = self._parse_bulk_quotes_csv(bulk_csv, symbol)
+        if not quote_data: return None
+
+        try:
+            formatted_quote = {
+                "01. symbol": quote_data.get("symbol"),
+                "02. open": quote_data.get("open"),
+                "03. high": quote_data.get("high"),
+                "04. low": quote_data.get("low"),
+                "05. price": quote_data.get("close"), 
+                "06. volume": quote_data.get("volume"),
+                "07. latest trading day": None,
+                "08. previous close": quote_data.get("previous_close"),
+                "09. change": quote_data.get("change"),
+                "10. change percent": f'{quote_data.get("change_percent")}%'
+            }
+            ext_price = self._safe_float(quote_data.get("extended_hours_quote"))
+            if ext_price and ext_price > 0:
+                formatted_quote["05. price"] = quote_data.get("extended_hours_quote")
+                formatted_quote["09. change"] = quote_data.get("extended_hours_change")
+                formatted_quote["10. change percent"] = f'{quote_data.get("extended_hours_change_percent")}%'
+                formatted_quote["_price_source"] = "extended_hours"
+            return formatted_quote
+        except Exception:
+            return None
 
     def get_company_overview(self, symbol: str):
         params = {"function": "OVERVIEW", "symbol": symbol}
@@ -134,13 +221,10 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_time_series_daily(self, symbol: str, outputsize: str = 'full'):
-        """Pobiera nieskorygowane dane dzienne (OHLC)."""
         params = {"function": "TIME_SERIES_DAILY", "symbol": symbol, "outputsize": outputsize}
         return self._make_request(params)
     
-    # === NOWOŚĆ DO AQM: DANE TYGODNIOWE ===
     def get_weekly_adjusted(self, symbol: str):
-        """Pobiera dane tygodniowe (potrzebne do Quantum Prime Score)."""
         params = {"function": "TIME_SERIES_WEEKLY_ADJUSTED", "symbol": symbol}
         return self._make_request(params)
         
@@ -155,8 +239,6 @@ class AlphaVantageClient:
         if month:
             params['month'] = month
         return self._make_request(params)
-
-    # === WSKAŹNIKI TECHNICZNE ===
 
     def get_atr(self, symbol: str, time_period: int = 14, interval: str = 'daily'):
         params = {"function": "ATR", "symbol": symbol, "interval": "daily", "time_period": str(time_period)}
@@ -190,96 +272,29 @@ class AlphaVantageClient:
         }
         return self._make_request(params)
     
-    # === NOWOŚĆ DO AQM: ON BALANCE VOLUME (OBV) ===
     def get_obv(self, symbol: str, interval: str = 'daily'):
-        """Pobiera wskaźnik OBV (Kluczowy dla Volume Entropy Score)."""
         params = {"function": "OBV", "symbol": symbol, "interval": interval}
         return self._make_request(params)
 
-    # === SENTYMENT I NEWSY ===
-
     def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None, time_to: str = None):
-        """
-        Pobiera sentyment newsów. Obsługuje filtry czasowe dla BioX History.
-        """
         params = {
             "function": "NEWS_SENTIMENT", 
             "tickers": ticker, 
             "limit": str(limit)
         }
-        if time_from:
-            params["time_from"] = time_from
-        if time_to:
-            params["time_to"] = time_to
-        return self._make_request(params)
-
-    # === DANE FUNDAMENTALNE ===
-
-    def get_earnings(self, symbol: str):
-        params = {"function": "EARNINGS", "symbol": symbol}
+        if time_from: params["time_from"] = time_from
+        if time_to: params["time_to"] = time_to
         return self._make_request(params)
     
     def get_insider_transactions(self, symbol: str):
-        """
-        Pobiera transakcje insiderów.
-        KLUCZOWE DLA STRATEGII H3 (Institutional Sync).
-        """
         params = {"function": "INSIDER_TRANSACTIONS", "symbol": symbol}
         return self._make_request(params)
-
-    # === NARZĘDZIA POMOCNICZE ===
-
-    @staticmethod
-    def _safe_float(value) -> float | None:
-        if value is None: return None
-        try:
-            if isinstance(value, str):
-                value = value.replace(',', '').replace('%', '')
-            return float(value)
-        except (ValueError, TypeError):
-            return None
     
-    def _parse_bulk_quotes_csv(self, csv_text: str, ticker: str) -> dict | None:
-        if not csv_text or "symbol" not in csv_text:
-            return None
-        csv_file = StringIO(csv_text)
-        reader = csv.DictReader(csv_file)
-        for row in reader:
-            if row.get('symbol') == ticker:
-                return row
-        return None
+    def get_earnings(self, symbol: str):
+        params = {"function": "EARNINGS", "symbol": symbol}
+        return self._make_request(params)
 
-    def get_global_quote(self, symbol: str):
-        bulk_csv = self.get_bulk_quotes([symbol])
-        if not bulk_csv: return None
-        quote_data = self._parse_bulk_quotes_csv(bulk_csv, symbol)
-        if not quote_data: return None
-
-        try:
-            formatted_quote = {
-                "01. symbol": quote_data.get("symbol"),
-                "02. open": quote_data.get("open"),
-                "03. high": quote_data.get("high"),
-                "04. low": quote_data.get("low"),
-                "05. price": quote_data.get("close"), 
-                "06. volume": quote_data.get("volume"),
-                "07. latest trading day": None,
-                "08. previous close": quote_data.get("previous_close"),
-                "09. change": quote_data.get("change"),
-                "10. change percent": f'{quote_data.get("change_percent")}%'
-            }
-            ext_price = self._safe_float(quote_data.get("extended_hours_quote"))
-            if ext_price and ext_price > 0:
-                formatted_quote["05. price"] = quote_data.get("extended_hours_quote")
-                formatted_quote["09. change"] = quote_data.get("extended_hours_change")
-                formatted_quote["10. change percent"] = f'{quote_data.get("extended_hours_change_percent")}%'
-                formatted_quote["_price_source"] = "extended_hours"
-            return formatted_quote
-        except Exception:
-            return None
-
-    # === DANE MAKROEKONOMICZNE ===
-    
+    # === DANE MAKRO ===
     def get_inflation_rate(self, interval: str = 'monthly'):
         params = {"function": "INFLATION", "interval": interval, "datatype": "json"}
         return self._make_request(params)
