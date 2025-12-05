@@ -280,7 +280,8 @@ export const renderers = {
             } 
             // 2. ŻÓŁTA STREFA (READY)
             // Jeśli jest blisko (Score > 40) lub Velocity rośnie lub OFP > 0.2
-            else if (score >= 40 || vel > 1.5 || abs(ofp) > 0.2) {
+            // === FIX: Zamiana abs() na Math.abs() ===
+            else if (score >= 40 || vel > 1.5 || Math.abs(ofp) > 0.2) {
                 cardState = "flux-state-ready";
                 actionText = "GOTOWY";
                 actionColor = "text-action-yellow";
