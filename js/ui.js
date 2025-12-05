@@ -235,7 +235,7 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (ZMODYFIKOWANY UI) ===
+    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (Zaktualizowany o wizualizację OFP) ===
     phase5View: (poolData) => {
         const activeSlots = poolData.slice(0, 8); 
         
@@ -244,12 +244,26 @@ export const renderers = {
             const vel = item.velocity || 0;
             const score = item.flux_score || 0;
             const price = item.price || 0;
+            const ofp = item.ofp || 0.0;
             
             // --- LOGIKA WIZUALNA "ACTION FIRST" ---
             let cardState = "flux-state-wait";
             let actionText = "CZEKAJ";
             let actionColor = "text-action-gray";
             let actionDescription = "Monitorowanie...";
+            let ofpColor = "text-gray-500";
+            let ofpIcon = "";
+
+            // Wizualizacja OFP (Strzałki Presji)
+            if (ofp > 0.1) {
+                ofpColor = "text-green-400";
+                ofpIcon = "↑";
+            } else if (ofp < -0.1) {
+                ofpColor = "text-red-400";
+                ofpIcon = "↓";
+            } else {
+                ofpIcon = "—";
+            }
             
             // 1. ZIELONA STREFA (ACTION)
             // Jeśli Score > 65 lub Elasticity sugeruje silne wybicie/dip
@@ -265,12 +279,15 @@ export const renderers = {
                 
             } 
             // 2. ŻÓŁTA STREFA (READY)
-            // Jeśli jest blisko (Score > 40) lub Velocity rośnie
-            else if (score >= 40 || vel > 1.5) {
+            // Jeśli jest blisko (Score > 40) lub Velocity rośnie lub OFP > 0.2
+            else if (score >= 40 || vel > 1.5 || abs(ofp) > 0.2) {
                 cardState = "flux-state-ready";
                 actionText = "GOTOWY";
                 actionColor = "text-action-yellow";
                 actionDescription = "Szukam wejścia...";
+                
+                if (ofp > 0.3) actionDescription = "Silna Presja Popytu!";
+                else if (ofp < -0.3) actionDescription = "Silna Presja Podaży!";
             }
             
             const isActive = item.fails === 0;
@@ -298,8 +315,14 @@ export const renderers = {
                 </div>
                 
                 <!-- ŚRODEK: WIELKA KOMENDA -->
-                <div class="flux-action-text ${actionColor} py-4">
+                <div class="flux-action-text ${actionColor} py-2">
                     ${actionText}
+                </div>
+                
+                <!-- OFP INDICATOR (NOWOŚĆ) -->
+                <div class="flex justify-center items-center mb-2">
+                    <span class="text-[10px] uppercase text-gray-500 font-bold mr-2">Presja (OFP):</span>
+                    <span class="text-sm font-black font-mono ${ofpColor}">${ofpIcon} ${ofp.toFixed(2)}</span>
                 </div>
                 
                 <!-- DÓŁ: OPIS I PASEK -->
@@ -332,7 +355,7 @@ export const renderers = {
                         <i data-lucide="waves" class="w-8 h-8 mr-3 text-emerald-500"></i>
                         OMNI-FLUX MONITOR
                     </h2>
-                    <p class="text-sm text-gray-500 mt-1 font-mono">REAL-TIME ACTIVE POOL | <span class="text-emerald-400">LIVE CYCLE: ~4.0s</span></p>
+                    <p class="text-sm text-gray-500 mt-1 font-mono">RADAR MODE: BULK SCAN | <span class="text-emerald-400">OFP ENABLED</span></p>
                 </div>
                 
                 <div class="flex items-center gap-4">
@@ -359,9 +382,9 @@ export const renderers = {
             <div class="mt-4 p-3 bg-[#161B22] border border-gray-700 rounded text-xs text-gray-400 flex items-center justify-between">
                 <div class="flex items-center">
                     <i data-lucide="info" class="w-4 h-4 mr-2 text-blue-400"></i>
-                    <span>System automatycznie rotuje spółki. Obserwuj kafelki <span class="text-emerald-400 font-bold">ZIELONE</span> (Sygnał) i <span class="text-yellow-400 font-bold">ŻÓŁTE</span> (Obserwuj).</span>
+                    <span>System automatycznie rotuje spółki. OFP (Order Flow Pressure) wskazuje przewagę <span class="text-green-400">Kupujących (↑)</span> lub <span class="text-red-400">Sprzedających (↓)</span>.</span>
                 </div>
-                <div class="font-mono text-gray-600">v5.0.1 Flux Engine</div>
+                <div class="font-mono text-gray-600">v5.1 Radar Engine</div>
             </div>
         </div>`;
     },
