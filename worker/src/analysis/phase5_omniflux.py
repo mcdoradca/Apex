@@ -21,16 +21,18 @@ from .flux_physics import calculate_flux_vectors, calculate_ofp
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA OMNI-FLUX (V5.1 - RADAR & SNIPER) ===
+# === KONFIGURACJA OMNI-FLUX (V5.2 - SL/TP W KAFLU) ===
 CAROUSEL_SIZE = 8          # Rozmiar aktywnej puli
 RADAR_DELAY = 2.0          # Co ile sekund skanujemy wszystkich (Bulk)
 SNIPER_COOLDOWN = 60       # Co ile sekund wymuszamy odświeżenie Intraday (VWAP)
 FLUX_THRESHOLD_ENTRY = 70  # Min. score do sygnału
 MACRO_CACHE_DURATION = 300 
+DEFAULT_RR = 2.5           # Domyślny stosunek Risk:Reward dla Flux
+DEFAULT_SL_PCT = 0.015     # Domyślny SL 1.5% ceny dla Intraday
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.1)
+    APEX OMNI-FLUX ENGINE (V5.2)
     Architektura: Radar (Bulk) + Sniper (Intraday on Trigger)
     """
 
@@ -114,7 +116,10 @@ class OmniFluxAnalyzer:
                     'elasticity': 0.0, 
                     'velocity': 0.0, 
                     'flux_score': 0,
-                    'ofp': 0.0
+                    'ofp': 0.0,
+                    'stop_loss': None,      # NOWOŚĆ
+                    'take_profit': None,    # NOWOŚĆ
+                    'risk_reward': None     # NOWOŚĆ
                 })
             
             msg = f"🌊 Faza 5 (Radar & Sniper): Inicjalizacja. Aktywne: {len(self.active_pool)}"
@@ -216,19 +221,34 @@ class OmniFluxAnalyzer:
                         # Przekazujemy OFP do fizyki
                         metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
                         
+                        # DYNAMICZNE OBLICZENIE SL/TP
+                        price = item['price']
+                        # SL na podstawie % ceny (np. 1.5%)
+                        sl_price = price * (1 - DEFAULT_SL_PCT)
+                        # Ryzyko w USD
+                        risk_usd = price - sl_price 
+                        # TP na podstawie RR
+                        tp_price = price + (risk_usd * DEFAULT_RR)
+                        
                         # Aktualizacja pełnego stanu
                         item['elasticity'] = float(metrics.get('elasticity', 0.0))
                         item['velocity'] = float(metrics.get('velocity', 0.0))
                         item['flux_score'] = int(metrics.get('flux_score', 0))
                         item['last_sniper_check'] = time.time() # Reset licznika snipera
+                        item['stop_loss'] = sl_price             # NOWOŚĆ
+                        item['take_profit'] = tp_price           # NOWOŚĆ
+                        item['risk_reward'] = DEFAULT_RR         # NOWOŚĆ
                         
                         # D. SYGNAŁY
+                        # Generujemy sygnał w bazie *tylko*, jeśli jest akcja i spełnione warunki makro
                         if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
                             if self.macro_context['bias'] != 'BEARISH':
                                 metrics['price'] = item['price']
-                                if self._generate_signal(ticker, metrics):
+                                # Zrezygnujemy z usuwania z puli tutaj,
+                                # aby kafel był widoczny jako aktywny dopóki jest w puli.
+                                if self._generate_signal(ticker, metrics, sl_price, tp_price):
                                     signals_generated += 1
-                                    tickers_to_remove.append(ticker) # Wyjmij z karuzeli po sygnale
+                                    # NIE USUWAJ STĄD: tickers_to_remove.append(ticker)
                     
                 except Exception as e:
                     logger.error(f"Faza 5 Sniper ({ticker}): {e}")
@@ -261,7 +281,8 @@ class OmniFluxAnalyzer:
             new_ticker = self.reserve_pool.pop(0)
             self.active_pool.append({
                 'ticker': new_ticker, 'fails': 0, 'added_at': time.time(), 'last_sniper_check': 0,
-                'price': 0.0, 'elasticity': 0.0, 'velocity': 0.0, 'flux_score': 0, 'ofp': 0.0
+                'price': 0.0, 'elasticity': 0.0, 'velocity': 0.0, 'flux_score': 0, 'ofp': 0.0,
+                'stop_loss': None, 'take_profit': None, 'risk_reward': None
             })
 
     def _save_state(self):
@@ -277,31 +298,57 @@ class OmniFluxAnalyzer:
         except Exception as e:
             logger.error(f"Faza 5: Błąd zapisu stanu: {e}")
 
-    def _generate_signal(self, ticker: str, metrics: dict) -> bool:
+    # === ZMIENIONA FUNKCJA GENEROWANIA SYGNAŁU ===
+    def _generate_signal(self, ticker: str, metrics: dict, sl_price: float, tp_price: float) -> bool:
+        """
+        Generuje sygnał w bazie. ZAUWAŻ: Nie usuwamy już stąd sygnałów FLUX,
+        będą one aktywne dopóki nie zostaną zamknięte przez Strażnika lub ręcznie.
+        """
         try:
             price = metrics.get('price', 0)
             if price == 0: return False
 
-            elasticity_abs = abs(metrics.get('elasticity', 1.0))
-            # Dynamiczny SL na podstawie zmienności
-            sl_pct = 0.01 + (elasticity_abs * 0.005) 
-            
-            sl_price = price * (1 - sl_pct)
-            tp_price = price * (1 + (sl_pct * 2.5)) # R:R 2.5
-            
-            score = int(metrics.get('flux_score', 0))
             reason = metrics.get('signal_type', 'FLUX')
+            score = int(metrics.get('flux_score', 0))
             ofp_val = metrics.get('ofp', 0.0)
             
-            note = f"STRATEGIA: FLUX V5.1\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
+            note = f"STRATEGIA: FLUX V5.2\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
 
+            # Sprawdzamy czy sygnał FLUX już istnieje (żeby nie dodawać duplikatów)
             exists = self.session.execute(
-                text("SELECT 1 FROM trading_signals WHERE ticker=:t AND status IN ('ACTIVE', 'PENDING')"), 
+                text("""
+                    SELECT 1 FROM trading_signals 
+                    WHERE ticker=:t 
+                    AND status IN ('ACTIVE', 'PENDING') 
+                    AND notes LIKE '%STRATEGIA: FLUX%'
+                """), 
                 {'t': ticker}
             ).fetchone()
             
-            if exists: return False
-
+            if exists: 
+                # Jeśli sygnał FLUX już istnieje, aktualizujemy go, zamiast tworzyć nowy!
+                update_stmt = text("""
+                    UPDATE trading_signals SET
+                        updated_at = NOW(),
+                        notes = :note,
+                        entry_price = :entry,
+                        stop_loss = :sl,
+                        take_profit = :tp
+                    WHERE ticker = :ticker 
+                    AND status IN ('ACTIVE', 'PENDING') 
+                    AND notes LIKE '%STRATEGIA: FLUX%'
+                """)
+                self.session.execute(update_stmt, {
+                    'ticker': ticker, 
+                    'entry': price, 
+                    'sl': sl_price, 
+                    'tp': tp_price, 
+                    'note': note
+                })
+                self.session.commit()
+                return True
+            
+            # Jeśli nie istnieje, tworzymy nowy
             stmt = text("""
                 INSERT INTO trading_signals (
                     ticker, status, generation_date, updated_at, 
@@ -309,11 +356,11 @@ class OmniFluxAnalyzer:
                     notes, expiration_date, expected_profit_factor, expected_win_rate
                 ) VALUES (
                     :ticker, 'PENDING', NOW(), NOW(),
-                    :entry, :sl, :tp, 2.5,
+                    :entry, :sl, :tp, :rr,
                     :note, NOW() + INTERVAL '1 day', 3.5, 60.0
                 )
             """)
-            self.session.execute(stmt, {'ticker': ticker, 'entry': price, 'sl': sl_price, 'tp': tp_price, 'note': note})
+            self.session.execute(stmt, {'ticker': ticker, 'entry': price, 'sl': sl_price, 'tp': tp_price, 'rr': DEFAULT_RR, 'note': note})
             self.session.commit()
             
             msg = f"🌊 FLUX SYGNAŁ: {ticker} ({reason}) OFP:{ofp_val:.2f}"
@@ -323,7 +370,7 @@ class OmniFluxAnalyzer:
             return True
 
         except Exception as e:
-            logger.error(f"Faza 5: Błąd generowania sygnału: {e}")
+            logger.error(f"Faza 5: Błąd generowania/aktualizacji sygnału: {e}")
             self.session.rollback()
             return False
 
