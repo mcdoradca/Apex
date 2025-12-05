@@ -89,7 +89,7 @@ style.textContent = `
     /* H4 Kinetic Badge */
     .strat-badge-h4 { background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 5px rgba(245, 158, 11, 0.2); }
     
-    /* V5 Flux Badge (NOWOŚĆ) */
+    /* V5 Flux Badge */
     .strat-badge-flux { background-color: rgba(16, 185, 129, 0.2); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.4); box-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
     
     .strat-badge-unknown { background-color: rgba(75, 85, 99, 0.3); color: #9ca3af; border-color: rgba(75, 85, 99, 0.5); }
@@ -235,21 +235,32 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (ZMODYFIKOWANY UI - DODANO SL/TP) ===
     phase5View: (poolData) => {
         const activeSlots = poolData.slice(0, 8); 
         
         const slotsHtml = activeSlots.map((item, index) => {
-            const elast = item.elasticity || 0;
-            const vel = item.velocity || 0;
-            const score = item.flux_score || 0;
-            const price = item.price || 0;
-            const ofp = item.ofp || 0.0;
+            // Bezpieczne odczytywanie wartości (Safe Guards)
+            const elast = (item && typeof item.elasticity === 'number') ? item.elasticity : 0;
+            const vel = (item && typeof item.velocity === 'number') ? item.velocity : 0;
+            const score = (item && typeof item.flux_score === 'number') ? item.flux_score : 0;
+            const price = (item && typeof item.price === 'number') ? item.price : 0;
+            const ofp = (item && typeof item.ofp === 'number') ? item.ofp : 0.0;
             
-            const slPrice = item.stop_loss || 0.0;
-            const tpPrice = item.take_profit || 0.0;
-            const rrRatio = item.risk_reward || 0.0;
+            // NOWOŚĆ: Bezpieczne pobieranie SL/TP z obiektu item
+            // Sprawdzamy czy pole istnieje i jest liczbą > 0
+            const slVal = (item && typeof item.stop_loss === 'number' && item.stop_loss > 0) ? item.stop_loss : 0;
+            const tpVal = (item && typeof item.take_profit === 'number' && item.take_profit > 0) ? item.take_profit : 0;
             
+            // R:R obliczamy na froncie dla pewności (lub bierzemy z backendu)
+            let rrDisplay = "---";
+            if (slVal > 0 && tpVal > 0 && price > 0) {
+                const risk = Math.abs(price - slVal);
+                const reward = Math.abs(tpVal - price);
+                if (risk > 0) {
+                    rrDisplay = (reward / risk).toFixed(1) + "R";
+                }
+            }
+
             let cardState = "flux-state-wait";
             let actionText = "CZEKAJ";
             let actionColor = "text-action-gray";
@@ -287,10 +298,15 @@ export const renderers = {
                 else if (ofp < -0.3) actionDescription = "Silna Presja Podaży!";
             }
             
-            const isActive = item.fails === 0;
+            const isActive = (item && item.fails === 0);
             const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
             
-            // === NOWOŚĆ: Wyświetlanie SL i TP w kafelku ===
+            // Formatowanie cen z zabezpieczeniem
+            const priceStr = price > 0 ? price.toFixed(2) : "---";
+            const slStr = slVal > 0 ? slVal.toFixed(2) : "---";
+            const tpStr = tpVal > 0 ? tpVal.toFixed(2) : "---";
+            const tickerStr = (item && item.ticker) ? item.ticker : "???";
+
             return `
             <div class="pool-slot ${cardState} relative overflow-hidden group">
                 <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
@@ -298,9 +314,9 @@ export const renderers = {
                     <div>
                         <div class="flex items-center gap-2 mb-1">
                             ${statusIcon}
-                            <span class="font-black text-2xl text-white tracking-wide">${item.ticker}</span>
+                            <span class="font-black text-2xl text-white tracking-wide">${tickerStr}</span>
                         </div>
-                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${price.toFixed(2)}</span></div>
+                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${priceStr}</span></div>
                     </div>
                     <div class="text-right">
                         <div class="text-[10px] uppercase text-gray-500 font-bold">Flux Score</div>
@@ -311,20 +327,20 @@ export const renderers = {
                 <div class="flux-action-text ${actionColor} py-2">
                     ${actionText}
                 </div>
-
-                <!-- SEKCJA RYZYKA (DODANE) -->
+                
+                <!-- SEKCJA RYZYKA (SL/TP) - TERAZ WIDOCZNA -->
                 <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5">
                     <div class="flex justify-between items-center">
                         <span class="text-[10px] uppercase text-red-500 font-bold">SL (Stop)</span>
-                        <span class="text-sm font-bold text-red-400 font-mono">${slPrice > 0 ? slPrice.toFixed(2) : '---'}</span>
+                        <span class="text-sm font-bold text-red-400 font-mono">${slStr}</span>
                     </div>
                     <div class="flex justify-between items-center">
                         <span class="text-[10px] uppercase text-green-500 font-bold">TP (Target)</span>
-                        <span class="text-sm font-bold text-green-400 font-mono">${tpPrice > 0 ? tpPrice.toFixed(2) : '---'}</span>
+                        <span class="text-sm font-bold text-green-400 font-mono">${tpStr}</span>
                     </div>
                      <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
                         <span class="text-[9px] uppercase text-gray-500">R:R</span>
-                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${rrRatio > 0 ? rrRatio.toFixed(1) : '-'}R</span>
+                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${rrDisplay}</span>
                     </div>
                 </div>
 
