@@ -235,37 +235,20 @@ export const renderers = {
     },
 
     phase5View: (poolData) => {
-        const activeSlots = (poolData && Array.isArray(poolData)) ? poolData.slice(0, 8) : [];
+        const activeSlots = (poolData ?? []).slice(0, 8); // Bezpieczne slice
         
         const slotsHtml = activeSlots.map((item, index) => {
-            // Bezpieczne odczytywanie wartości (Safe Guards)
-            const safeNum = (v) => (typeof v === 'number' && !isNaN(v)) ? v : 0;
+            // Bezpieczne odczytywanie wartości (0 zamiast błędów)
+            const elast = item?.elasticity ?? 0;
+            const vel = item?.velocity ?? 0;
+            const score = item?.flux_score ?? 0;
+            const price = item?.price ?? 0;
+            const ofp = item?.ofp ?? 0.0;
             
-            const elast = safeNum(item.elasticity);
-            const vel = safeNum(item.velocity);
-            const score = safeNum(item.flux_score);
-            const price = safeNum(item.price);
-            const ofp = safeNum(item.ofp);
-            const ticker = item.ticker || "???";
-            const fails = safeNum(item.fails);
-            
-            // SL / TP / RR - NOWOŚĆ Z ZABEZPIECZENIEM
-            const sl = safeNum(item.stop_loss);
-            const tp = safeNum(item.take_profit);
-            
-            let rrStr = "---";
-            if (sl > 0 && tp > 0 && price > 0) {
-                const risk = Math.abs(price - sl);
-                const reward = Math.abs(tp - price);
-                if (risk > 0.0001) {
-                     rrStr = (reward / risk).toFixed(1) + "R";
-                }
-            }
-            
-            // Formatowanie stringów z gwarancją, że działamy na liczbie
-            const priceStr = price > 0 ? price.toFixed(2) : "---";
-            const slStr = sl > 0 ? sl.toFixed(2) : "---";
-            const tpStr = tp > 0 ? tp.toFixed(2) : "---";
+            // === NOWA LOGIKA SL/TP (BEZPIECZNA) ===
+            const slPrice = item?.stop_loss ?? 0;
+            const tpPrice = item?.take_profit ?? 0;
+            const rrRatio = item?.risk_reward ?? 0;
             
             let cardState = "flux-state-wait";
             let actionText = "CZEKAJ";
@@ -304,7 +287,7 @@ export const renderers = {
                 else if (ofp < -0.3) actionDescription = "Silna Presja Podaży!";
             }
             
-            const isActive = (fails === 0);
+            const isActive = item?.fails === 0;
             const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
             
             return `
@@ -314,44 +297,44 @@ export const renderers = {
                     <div>
                         <div class="flex items-center gap-2 mb-1">
                             ${statusIcon}
-                            <span class="font-black text-2xl text-white tracking-wide">${ticker}</span>
+                            <span class="font-black text-2xl text-white tracking-wide">${item?.ticker || '???'}</span>
                         </div>
-                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${priceStr}</span></div>
+                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${typeof price === 'number' ? price.toFixed(2) : '0.00'}</span></div>
                     </div>
                     <div class="text-right">
                         <div class="text-[10px] uppercase text-gray-500 font-bold">Flux Score</div>
-                        <div class="text-xl font-black ${actionColor}">${score.toFixed(0)}</div>
+                        <div class="text-xl font-black ${actionColor}">${typeof score === 'number' ? score.toFixed(0) : '0'}</div>
                     </div>
                 </div>
                 <div class="flux-action-text ${actionColor} py-2">
                     ${actionText}
                 </div>
 
-                <!-- DODANA SEKCJA RYZYKA (SL/TP) -->
+                <!-- SEKCJA SL/TP (DODANA BEZPIECZNIE) -->
                 <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5">
                     <div class="flex justify-between items-center">
-                        <span class="text-[10px] uppercase text-red-500 font-bold">SL (Stop)</span>
-                        <span class="text-sm font-bold text-red-400 font-mono">${slStr}</span>
+                        <span class="text-[10px] uppercase text-red-500 font-bold">SL</span>
+                        <span class="text-sm font-bold text-red-400 font-mono">${typeof slPrice === 'number' && slPrice > 0 ? slPrice.toFixed(2) : '---'}</span>
                     </div>
                     <div class="flex justify-between items-center">
-                        <span class="text-[10px] uppercase text-green-500 font-bold">TP (Target)</span>
-                        <span class="text-sm font-bold text-green-400 font-mono">${tpStr}</span>
+                        <span class="text-[10px] uppercase text-green-500 font-bold">TP</span>
+                        <span class="text-sm font-bold text-green-400 font-mono">${typeof tpPrice === 'number' && tpPrice > 0 ? tpPrice.toFixed(2) : '---'}</span>
                     </div>
-                     <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
+                    <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
                         <span class="text-[9px] uppercase text-gray-500">R:R</span>
-                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${rrStr}</span>
+                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${typeof rrRatio === 'number' && rrRatio > 0 ? rrRatio.toFixed(1) + 'R' : '---'}</span>
                     </div>
                 </div>
-                <!-- KONIEC SEKCJI RYZYKA -->
+                <!-- KONIEC SEKCJI -->
 
                 <div class="flex justify-center items-center mb-2 mt-auto">
                     <span class="text-[10px] uppercase text-gray-500 font-bold mr-2">Presja (OFP):</span>
-                    <span class="text-sm font-black font-mono ${ofpColor}">${ofpIcon} ${ofp.toFixed(2)}</span>
+                    <span class="text-sm font-black font-mono ${ofpColor}">${ofpIcon} ${typeof ofp === 'number' ? ofp.toFixed(2) : '0.00'}</span>
                 </div>
                 <div class="mt-auto z-10">
                     <div class="flex justify-between items-end mb-1">
                         <span class="text-[10px] text-gray-400 font-mono uppercase">${actionDescription}</span>
-                        <span class="text-[10px] font-mono ${vel > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${vel.toFixed(1)}x</span>
+                        <span class="text-[10px] font-mono ${vel > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${typeof vel === 'number' ? vel.toFixed(1) : '0.0'}x</span>
                     </div>
                     <div class="h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-gray-700">
                         <div class="h-full ${score >= 65 ? 'bg-emerald-500' : (score >= 40 ? 'bg-yellow-500' : 'bg-gray-600')} transition-all duration-500" style="width: ${Math.min(100, score)}%"></div>
@@ -642,184 +625,6 @@ export const renderers = {
             return `<tr class="${rowClass}"><td class="p-2 text-center font-mono text-gray-500">#${t.trial_number}</td><td class="p-2 text-right font-bold ${t.profit_factor >= 1.5 ? 'text-green-400' : 'text-gray-300'}">${t.profit_factor ? t.profit_factor.toFixed(2) : '0.00'}</td><td class="p-2 text-right">${t.win_rate ? t.win_rate.toFixed(1) : '0.0'}%</td><td class="p-2 text-right">${t.total_trades || 0}</td><td class="p-2 text-xs font-mono">${paramsStr}</td><td class="p-2 text-right"><button class="use-params-btn bg-purple-600 hover:bg-purple-700 text-white text-xs px-2 py-1 rounded flex items-center ml-auto" data-params="${paramsJson}"><i data-lucide="play-circle" class="w-3 h-3 mr-1"></i> Użyj</button></td></tr>`;
         }).join('');
         return `<div class="space-y-6"><div class="flex justify-between items-center bg-[#0D1117] p-4 rounded border border-gray-700"><div><h4 class="text-sm text-gray-400 uppercase font-bold">Zadanie: ${job.target_year}</h4><p class="text-xs text-gray-500">ID: ${job.id}</p></div><div class="text-right"><div class="text-2xl font-bold ${job.best_score >= 2.0 ? 'text-green-400' : 'text-yellow-400'}">Best Score: ${job.best_score ? job.best_score.toFixed(4) : '---'}</div><div class="text-xs text-gray-500">Status: ${job.status}</div></div></div><h4 class="text-sm text-gray-400 uppercase font-bold border-b border-gray-700 pb-1">Ranking Prób (Top Wyniki)</h4><div class="overflow-x-auto max-h-64 border border-gray-700 rounded"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr><th class="p-2 text-center">#</th><th class="p-2 text-right">PF</th><th class="p-2 text-right">Win Rate</th><th class="p-2 text-right">Trades</th><th class="p-2">Parametry</th><th class="p-2 text-right">Akcja</th></tr></thead><tbody>${trialsRows}</tbody></table></div></div>`;
-    },
-    
-    phase5View: (poolData) => {
-        // Safe slice
-        const activeSlots = (poolData && Array.isArray(poolData)) ? poolData.slice(0, 8) : [];
-        
-        const slotsHtml = activeSlots.map((item, index) => {
-            // Safe extraction helper
-            const safeNum = (v) => (typeof v === 'number' && !isNaN(v)) ? v : 0;
-            
-            // Extract basic metrics
-            const elast = safeNum(item.elasticity);
-            const vel = safeNum(item.velocity);
-            const score = safeNum(item.flux_score);
-            const price = safeNum(item.price);
-            const ofp = safeNum(item.ofp);
-            const ticker = item.ticker || "???";
-            const fails = safeNum(item.fails);
-
-            // Extract Risk Metrics (SL/TP)
-            const sl = safeNum(item.stop_loss);
-            const tp = safeNum(item.take_profit);
-            const rr = safeNum(item.risk_reward); // If backend provides it
-
-            // Calculate/Format strings
-            const priceStr = price > 0 ? price.toFixed(2) : "---";
-            const slStr = sl > 0 ? sl.toFixed(2) : "---";
-            const tpStr = tp > 0 ? tp.toFixed(2) : "---";
-            
-            let rrStr = "---";
-            if (rr > 0) {
-                rrStr = rr.toFixed(1) + "R";
-            } else if (sl > 0 && tp > 0 && price > 0) {
-                const risk = Math.abs(price - sl);
-                const reward = Math.abs(tp - price);
-                if (risk > 0.0001) {
-                    rrStr = (reward / risk).toFixed(1) + "R";
-                }
-            }
-
-            // Logic for card styling/text
-            let cardState = "flux-state-wait";
-            let actionText = "CZEKAJ";
-            let actionColor = "text-action-gray";
-            let actionDescription = "Monitorowanie...";
-            let ofpColor = "text-gray-500";
-            let ofpIcon = "—";
-
-            if (ofp > 0.1) {
-                ofpColor = "text-green-400";
-                ofpIcon = "↑";
-            } else if (ofp < -0.1) {
-                ofpColor = "text-red-400";
-                ofpIcon = "↓";
-            }
-            
-            if (score >= 65) {
-                cardState = "flux-state-action";
-                actionText = "KUPUJ";
-                actionColor = "text-action-green";
-                actionDescription = "Setup Potwierdzony!";
-                
-                if (elast < -1.0) actionText = "DIP BUY";
-                else if (elast > 0.5) actionText = "BREAKOUT";
-                
-            } 
-            else if (score >= 40 || vel > 1.5 || Math.abs(ofp) > 0.2) {
-                cardState = "flux-state-ready";
-                actionText = "GOTOWY";
-                actionColor = "text-action-yellow";
-                actionDescription = "Szukam wejścia...";
-                
-                if (ofp > 0.3) actionDescription = "Silna Presja Popytu!";
-                else if (ofp < -0.3) actionDescription = "Silna Presja Podaży!";
-            }
-            
-            const isActive = (fails === 0);
-            const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
-            
-            return `
-            <div class="pool-slot ${cardState} relative overflow-hidden group">
-                <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
-                <div class="flex justify-between items-start z-10">
-                    <div>
-                        <div class="flex items-center gap-2 mb-1">
-                            ${statusIcon}
-                            <span class="font-black text-2xl text-white tracking-wide">${ticker}</span>
-                        </div>
-                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${priceStr}</span></div>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-[10px] uppercase text-gray-500 font-bold">Flux Score</div>
-                        <div class="text-xl font-black ${actionColor}">${score.toFixed(0)}</div>
-                    </div>
-                </div>
-                <div class="flux-action-text ${actionColor} py-2">
-                    ${actionText}
-                </div>
-                
-                <!-- SEKCJA RYZYKA (SL/TP) -->
-                <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5">
-                    <div class="flex justify-between items-center">
-                        <span class="text-[10px] uppercase text-red-500 font-bold">SL (Stop)</span>
-                        <span class="text-sm font-bold text-red-400 font-mono">${slStr}</span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-[10px] uppercase text-green-500 font-bold">TP (Target)</span>
-                        <span class="text-sm font-bold text-green-400 font-mono">${tpStr}</span>
-                    </div>
-                    <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
-                        <span class="text-[9px] uppercase text-gray-500">R:R</span>
-                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${rrStr}</span>
-                    </div>
-                </div>
-
-                <div class="flex justify-center items-center mb-2 mt-auto">
-                    <span class="text-[10px] uppercase text-gray-500 font-bold mr-2">Presja (OFP):</span>
-                    <span class="text-sm font-black font-mono ${ofpColor}">${ofpIcon} ${ofp.toFixed(2)}</span>
-                </div>
-                <div class="mt-auto z-10">
-                    <div class="flex justify-between items-end mb-1">
-                        <span class="text-[10px] text-gray-400 font-mono uppercase">${actionDescription}</span>
-                        <span class="text-[10px] font-mono ${vel > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${vel.toFixed(1)}x</span>
-                    </div>
-                    <div class="h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-gray-700">
-                        <div class="h-full ${score >= 65 ? 'bg-emerald-500' : (score >= 40 ? 'bg-yellow-500' : 'bg-gray-600')} transition-all duration-500" style="width: ${Math.min(100, score)}%"></div>
-                    </div>
-                </div>
-            </div>`;
-        }).join('');
-
-        const emptySlotsCount = 8 - activeSlots.length;
-        const emptySlotsHtml = Array(Math.max(0, emptySlotsCount)).fill(0).map((_, i) => `
-            <div class="pool-slot bg-[#0d1117] border border-gray-800 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-gray-600 opacity-50 min-h-[140px]">
-                <i data-lucide="loader" class="w-8 h-8 mb-2 animate-spin text-gray-700"></i>
-                <span class="text-xs font-mono">Slot Wolny</span>
-            </div>
-        `).join('');
-
-        return `
-        <div id="phase5-monitor-view" class="max-w-7xl mx-auto">
-            <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-gray-700 pb-4 gap-4">
-                <div>
-                    <h2 class="text-3xl font-black text-white flex items-center tracking-tight">
-                        <i data-lucide="waves" class="w-8 h-8 mr-3 text-emerald-500"></i>
-                        OMNI-FLUX MONITOR
-                    </h2>
-                    <p class="text-sm text-gray-500 mt-1 font-mono">RADAR MODE: BULK SCAN | <span class="text-emerald-400">OFP ENABLED</span></p>
-                </div>
-                
-                <div class="flex items-center gap-4">
-                    <div class="text-right mr-4">
-                        <p class="text-[10px] text-gray-500 uppercase font-bold">Market Bias</p>
-                        <p class="text-lg font-black font-mono ${state.macroBias === 'BEARISH' ? 'text-red-500' : 'text-green-500'}">
-                            ${state.macroBias || 'NEUTRAL'}
-                        </p>
-                    </div>
-                    <button id="stop-phase5-btn" class="bg-red-900/30 hover:bg-red-800/50 text-red-300 border border-red-800 px-4 py-3 rounded-lg text-xs font-bold flex items-center transition-colors shadow-lg">
-                        <i data-lucide="square" class="w-4 h-4 mr-2 fill-current"></i> ZATRZYMAJ
-                    </button>
-                </div>
-            </div>
-
-            <div class="mb-4">
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    ${slotsHtml}
-                    ${emptySlotsHtml}
-                </div>
-            </div>
-            
-            <div class="mt-4 p-3 bg-[#161B22] border border-gray-700 rounded text-xs text-gray-400 flex items-center justify-between">
-                <div class="flex items-center">
-                    <i data-lucide="info" class="w-4 h-4 mr-2 text-blue-400"></i>
-                    <span>System automatycznie rotuje spółki. OFP (Order Flow Pressure) wskazuje przewagę <span class="text-green-400">Kupujących (↑)</span> lub <span class="text-red-400">Sprzedających (↓)</span>.</span>
-                </div>
-                <div class="font-mono text-gray-600">v5.2 Radar Engine</div>
-            </div>
-        </div>`;
     }
 };
 
