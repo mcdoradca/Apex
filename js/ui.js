@@ -235,7 +235,6 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (Zaktualizowany o SL/TP) ===
     phase5View: (poolData) => {
         const activeSlots = poolData.slice(0, 8); 
         
@@ -246,12 +245,10 @@ export const renderers = {
             const price = item.price || 0;
             const ofp = item.ofp || 0.0;
             
-            // === NOWE: SL/TP (Z BACKENDU) ===
             const slPrice = item.stop_loss || 0.0;
             const tpPrice = item.take_profit || 0.0;
             const rrRatio = item.risk_reward || 0.0;
             
-            // --- LOGIKA WIZUALNA "ACTION FIRST" ---
             let cardState = "flux-state-wait";
             let actionText = "CZEKAJ";
             let actionColor = "text-action-gray";
@@ -259,7 +256,6 @@ export const renderers = {
             let ofpColor = "text-gray-500";
             let ofpIcon = "";
 
-            // Wizualizacja OFP (Strzałki Presji)
             if (ofp > 0.1) {
                 ofpColor = "text-green-400";
                 ofpIcon = "↑";
@@ -270,7 +266,6 @@ export const renderers = {
                 ofpIcon = "—";
             }
             
-            // 1. ZIELONA STREFA (ACTION)
             if (score >= 65) {
                 cardState = "flux-state-action";
                 actionText = "KUPUJ";
@@ -281,7 +276,6 @@ export const renderers = {
                 else if (elast > 0.5) actionText = "BREAKOUT";
                 
             } 
-            // 2. ŻÓŁTA STREFA (READY)
             else if (score >= 40 || vel > 1.5 || Math.abs(ofp) > 0.2) {
                 cardState = "flux-state-ready";
                 actionText = "GOTOWY";
@@ -297,10 +291,7 @@ export const renderers = {
             
             return `
             <div class="pool-slot ${cardState} relative overflow-hidden group">
-                <!-- TŁO NUMERU -->
                 <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
-                
-                <!-- GÓRA: TICKER + CENA -->
                 <div class="flex justify-between items-start z-10">
                     <div>
                         <div class="flex items-center gap-2 mb-1">
@@ -309,19 +300,14 @@ export const renderers = {
                         </div>
                         <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${price.toFixed(2)}</span></div>
                     </div>
-                    <!-- MAŁY SCORE (Dla detalu) -->
                     <div class="text-right">
                         <div class="text-[10px] uppercase text-gray-500 font-bold">Flux Score</div>
                         <div class="text-xl font-black ${actionColor}">${score.toFixed(0)}</div>
                     </div>
                 </div>
-                
-                <!-- ŚRODEK: WIELKA KOMENDA -->
                 <div class="flux-action-text ${actionColor} py-2">
                     ${actionText}
                 </div>
-                
-                <!-- === NOWA SEKCJA: SL/TP I OFP === -->
                 <div class="flex flex-col gap-1 my-2">
                     <div class="flex justify-between items-center">
                         <span class="text-[10px] uppercase text-red-500 font-bold">SL (${rrRatio.toFixed(1)}R)</span>
@@ -332,18 +318,13 @@ export const renderers = {
                         <span class="text-sm font-bold text-green-400 font-mono">${tpPrice > 0 ? tpPrice.toFixed(2) : '---'}</span>
                     </div>
                 </div>
-                
-                <!-- OFP INDICATOR -->
                 <div class="flex justify-center items-center mb-2 mt-auto">
                     <span class="text-[10px] uppercase text-gray-500 font-bold mr-2">Presja (OFP):</span>
                     <span class="text-sm font-black font-mono ${ofpColor}">${ofpIcon} ${ofp.toFixed(2)}</span>
                 </div>
-                
-                <!-- DÓŁ: OPIS I PASEK -->
                 <div class="mt-auto z-10">
                     <div class="flex justify-between items-end mb-1">
                         <span class="text-[10px] text-gray-400 font-mono uppercase">${actionDescription}</span>
-                        <!-- Velocity jako mały wskaźnik aktywności -->
                         <span class="text-[10px] font-mono ${vel > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${vel.toFixed(1)}x</span>
                     </div>
                     <div class="h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-gray-700">
@@ -354,7 +335,7 @@ export const renderers = {
         }).join('');
 
         const emptySlotsCount = 8 - activeSlots.length;
-        const emptySlotsHtml = Array(emptySlotsCount).fill(0).map((_, i) => `
+        const emptySlotsHtml = Array(Math.max(0, emptySlotsCount)).fill(0).map((_, i) => `
             <div class="pool-slot bg-[#0d1117] border border-gray-800 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-gray-600 opacity-50 min-h-[140px]">
                 <i data-lucide="loader" class="w-8 h-8 mb-2 animate-spin text-gray-700"></i>
                 <span class="text-xs font-mono">Slot Wolny</span>
@@ -385,7 +366,6 @@ export const renderers = {
                 </div>
             </div>
 
-            <!-- Active Pool Grid -->
             <div class="mb-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     ${slotsHtml}
@@ -505,6 +485,28 @@ export const renderers = {
             
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
             return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}"><div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div><div class="flex justify-between items-start mb-3"><div><div class="flex items-center gap-2"><h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4><span class="strat-badge ${strat.class}">${strat.name}</span><i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i></div><div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div></div><div class="text-right"><div class="flex flex-col items-end"><span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span><span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span></div></div></div><div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2"><div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div><div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div><div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div></div><div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div><div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div></div>`;
+        }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`;
+
+        return `<div id="h3-signals-view" class="max-w-6xl mx-auto">
+            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                <h2 class="text-2xl font-bold text-white flex items-center">
+                    <i data-lucide="target" class="w-6 h-6 mr-3 text-sky-500"></i>
+                    Sygnały H3 Live
+                </h2>
+                <div class="flex gap-2">
+                    <select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-xs text-gray-300 rounded px-2 py-1 focus:outline-none">
+                        <option value="score">Sort: Score</option>
+                        <option value="rr">Sort: R:R</option>
+                        <option value="time">Sort: Czas</option>
+                        <option value="ticker">Sort: Ticker</option>
+                    </select>
+                    <button id="h3-refresh-btn" class="p-1 hover:bg-gray-800 rounded"><i data-lucide="refresh-cw" class="w-4 h-4 text-gray-400"></i></button>
+                </div>
+            </div>
+            <div class="space-y-4">
+                ${cardsHtml}
+            </div>
+        </div>`;
     },
 
     phaseXView: (candidates) => {
