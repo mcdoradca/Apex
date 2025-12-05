@@ -179,7 +179,7 @@ const getStrategyInfo = (notes) => {
 // === EXPORT 1: RENDERERS (Wyciągnięte na zewnątrz dla Logic.js) ===
 // =========================================================================
 export const renderers = {
-    loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
+    loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentColor"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
     
     phase1List: (candidates) => candidates.map(c => {
         let sectorBadge = "";
@@ -235,7 +235,7 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (ZMODYFIKOWANY UI) ===
+    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (ZMODYFIKOWANY UI - DODANO SL/TP) ===
     phase5View: (poolData) => {
         const activeSlots = poolData.slice(0, 8); 
         
@@ -244,44 +244,56 @@ export const renderers = {
             const vel = item.velocity || 0;
             const score = item.flux_score || 0;
             const price = item.price || 0;
+            const ofp = item.ofp || 0.0;
             
-            // --- LOGIKA WIZUALNA "ACTION FIRST" ---
+            const slPrice = item.stop_loss || 0.0;
+            const tpPrice = item.take_profit || 0.0;
+            const rrRatio = item.risk_reward || 0.0;
+            
             let cardState = "flux-state-wait";
             let actionText = "CZEKAJ";
             let actionColor = "text-action-gray";
             let actionDescription = "Monitorowanie...";
+            let ofpColor = "text-gray-500";
+            let ofpIcon = "";
+
+            if (ofp > 0.1) {
+                ofpColor = "text-green-400";
+                ofpIcon = "↑";
+            } else if (ofp < -0.1) {
+                ofpColor = "text-red-400";
+                ofpIcon = "↓";
+            } else {
+                ofpIcon = "—";
+            }
             
-            // 1. ZIELONA STREFA (ACTION)
-            // Jeśli Score > 65 lub Elasticity sugeruje silne wybicie/dip
             if (score >= 65) {
                 cardState = "flux-state-action";
                 actionText = "KUPUJ";
                 actionColor = "text-action-green";
                 actionDescription = "Setup Potwierdzony!";
                 
-                // Rozróżnienie strategii
                 if (elast < -1.0) actionText = "DIP BUY";
                 else if (elast > 0.5) actionText = "BREAKOUT";
                 
             } 
-            // 2. ŻÓŁTA STREFA (READY)
-            // Jeśli jest blisko (Score > 40) lub Velocity rośnie
-            else if (score >= 40 || vel > 1.5) {
+            else if (score >= 40 || vel > 1.5 || Math.abs(ofp) > 0.2) {
                 cardState = "flux-state-ready";
                 actionText = "GOTOWY";
                 actionColor = "text-action-yellow";
                 actionDescription = "Szukam wejścia...";
+                
+                if (ofp > 0.3) actionDescription = "Silna Presja Popytu!";
+                else if (ofp < -0.3) actionDescription = "Silna Presja Podaży!";
             }
             
             const isActive = item.fails === 0;
             const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
             
+            // === NOWOŚĆ: Wyświetlanie SL i TP w kafelku ===
             return `
             <div class="pool-slot ${cardState} relative overflow-hidden group">
-                <!-- TŁO NUMERU -->
                 <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
-                
-                <!-- GÓRA: TICKER + CENA -->
                 <div class="flex justify-between items-start z-10">
                     <div>
                         <div class="flex items-center gap-2 mb-1">
@@ -290,23 +302,39 @@ export const renderers = {
                         </div>
                         <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${price.toFixed(2)}</span></div>
                     </div>
-                    <!-- MAŁY SCORE (Dla detalu) -->
                     <div class="text-right">
                         <div class="text-[10px] uppercase text-gray-500 font-bold">Flux Score</div>
-                        <div class="text-xl font-black ${actionColor}">${score}</div>
+                        <div class="text-xl font-black ${actionColor}">${score.toFixed(0)}</div>
                     </div>
                 </div>
                 
-                <!-- ŚRODEK: WIELKA KOMENDA -->
-                <div class="flux-action-text ${actionColor} py-4">
+                <div class="flux-action-text ${actionColor} py-2">
                     ${actionText}
                 </div>
-                
-                <!-- DÓŁ: OPIS I PASEK -->
+
+                <!-- SEKCJA RYZYKA (DODANE) -->
+                <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[10px] uppercase text-red-500 font-bold">SL (Stop)</span>
+                        <span class="text-sm font-bold text-red-400 font-mono">${slPrice > 0 ? slPrice.toFixed(2) : '---'}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-[10px] uppercase text-green-500 font-bold">TP (Target)</span>
+                        <span class="text-sm font-bold text-green-400 font-mono">${tpPrice > 0 ? tpPrice.toFixed(2) : '---'}</span>
+                    </div>
+                     <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
+                        <span class="text-[9px] uppercase text-gray-500">R:R</span>
+                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${rrRatio > 0 ? rrRatio.toFixed(1) : '-'}R</span>
+                    </div>
+                </div>
+
+                <div class="flex justify-center items-center mb-2 mt-auto">
+                    <span class="text-[10px] uppercase text-gray-500 font-bold mr-2">Presja (OFP):</span>
+                    <span class="text-sm font-black font-mono ${ofpColor}">${ofpIcon} ${ofp.toFixed(2)}</span>
+                </div>
                 <div class="mt-auto z-10">
                     <div class="flex justify-between items-end mb-1">
                         <span class="text-[10px] text-gray-400 font-mono uppercase">${actionDescription}</span>
-                        <!-- Velocity jako mały wskaźnik aktywności -->
                         <span class="text-[10px] font-mono ${vel > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${vel.toFixed(1)}x</span>
                     </div>
                     <div class="h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-gray-700">
@@ -317,7 +345,7 @@ export const renderers = {
         }).join('');
 
         const emptySlotsCount = 8 - activeSlots.length;
-        const emptySlotsHtml = Array(emptySlotsCount).fill(0).map((_, i) => `
+        const emptySlotsHtml = Array(Math.max(0, emptySlotsCount)).fill(0).map((_, i) => `
             <div class="pool-slot bg-[#0d1117] border border-gray-800 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-gray-600 opacity-50 min-h-[140px]">
                 <i data-lucide="loader" class="w-8 h-8 mb-2 animate-spin text-gray-700"></i>
                 <span class="text-xs font-mono">Slot Wolny</span>
@@ -332,7 +360,7 @@ export const renderers = {
                         <i data-lucide="waves" class="w-8 h-8 mr-3 text-emerald-500"></i>
                         OMNI-FLUX MONITOR
                     </h2>
-                    <p class="text-sm text-gray-500 mt-1 font-mono">REAL-TIME ACTIVE POOL | <span class="text-emerald-400">LIVE CYCLE: ~4.0s</span></p>
+                    <p class="text-sm text-gray-500 mt-1 font-mono">RADAR MODE: BULK SCAN | <span class="text-emerald-400">OFP ENABLED</span></p>
                 </div>
                 
                 <div class="flex items-center gap-4">
@@ -348,7 +376,6 @@ export const renderers = {
                 </div>
             </div>
 
-            <!-- Active Pool Grid -->
             <div class="mb-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     ${slotsHtml}
@@ -359,9 +386,9 @@ export const renderers = {
             <div class="mt-4 p-3 bg-[#161B22] border border-gray-700 rounded text-xs text-gray-400 flex items-center justify-between">
                 <div class="flex items-center">
                     <i data-lucide="info" class="w-4 h-4 mr-2 text-blue-400"></i>
-                    <span>System automatycznie rotuje spółki. Obserwuj kafelki <span class="text-emerald-400 font-bold">ZIELONE</span> (Sygnał) i <span class="text-yellow-400 font-bold">ŻÓŁTE</span> (Obserwuj).</span>
+                    <span>System automatycznie rotuje spółki. OFP (Order Flow Pressure) wskazuje przewagę <span class="text-green-400">Kupujących (↑)</span> lub <span class="text-red-400">Sprzedających (↓)</span>.</span>
                 </div>
-                <div class="font-mono text-gray-600">v5.0.1 Flux Engine</div>
+                <div class="font-mono text-gray-600">v5.2 Radar Engine</div>
             </div>
         </div>`;
     },
@@ -468,8 +495,28 @@ export const renderers = {
             
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
             return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}"><div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div><div class="flex justify-between items-start mb-3"><div><div class="flex items-center gap-2"><h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4><span class="strat-badge ${strat.class}">${strat.name}</span><i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i></div><div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div></div><div class="text-right"><div class="flex flex-col items-end"><span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span><span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span></div></div></div><div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2"><div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div><div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div><div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div></div><div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div><div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div></div>`;
-        }).join('') : `<p class="text-center text-gray-500 col-span-full py-20">Brak aktywnych sygnałów H3. Uruchom skaner.</p>`;
-        return `<div id="h3-signals-view" class="max-w-7xl mx-auto"><div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-gray-700 pb-4 gap-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="target" class="w-6 h-6 mr-3 text-purple-500"></i>Sygnały H3 Live</h2><p class="text-sm text-gray-500 mt-1">Aktywne: <span class="text-green-400 font-bold">${activeCount}</span> | Oczekujące: <span class="text-yellow-400 font-bold">${pendingCount}</span></p></div><div class="flex items-center gap-3"><div class="relative"><select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-gray-300 text-sm rounded-md focus:ring-sky-500 focus:border-sky-500 block w-full p-2 pl-3 pr-8 appearance-none cursor-pointer hover:bg-gray-800 transition-colors"><option value="score">Wg AQM Score</option><option value="rr">Wg R-Factor (Najlepsze)</option><option value="time">Wg Czasu Wygaśnięcia</option><option value="ticker">Wg Ticker (A-Z)</option></select><div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400"><i data-lucide="arrow-up-down" class="w-4 h-4"></i></div></div><button id="h3-refresh-btn" class="p-2 bg-gray-800 hover:bg-gray-700 rounded-md border border-gray-700 text-gray-300 transition-colors" title="Odśwież"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></div></div><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">${cardsHtml}</div></div>`;
+        }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`;
+
+        return `<div id="h3-signals-view" class="max-w-6xl mx-auto">
+            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                <h2 class="text-2xl font-bold text-white flex items-center">
+                    <i data-lucide="target" class="w-6 h-6 mr-3 text-sky-500"></i>
+                    Sygnały H3 Live
+                </h2>
+                <div class="flex gap-2">
+                    <select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-xs text-gray-300 rounded px-2 py-1 focus:outline-none">
+                        <option value="score">Sort: Score</option>
+                        <option value="rr">Sort: R:R</option>
+                        <option value="time">Sort: Czas</option>
+                        <option value="ticker">Sort: Ticker</option>
+                    </select>
+                    <button id="h3-refresh-btn" class="p-1 hover:bg-gray-800 rounded"><i data-lucide="refresh-cw" class="w-4 h-4 text-gray-400"></i></button>
+                </div>
+            </div>
+            <div class="space-y-4">
+                ${cardsHtml}
+            </div>
+        </div>`;
     },
 
     phaseXView: (candidates) => {
@@ -523,14 +570,14 @@ export const renderers = {
         return `<div id="portfolio-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2 flex justify-between items-center">Portfel Inwestycyjny<span class="text-lg text-gray-400">Wartość: ${totalPortfolioValue.toFixed(2)} USD | Z/S: <span class="${totalProfitLossClass}">${totalProfitLoss.toFixed(2)} USD</span></span></h2>${holdings.length === 0 ? '<p class="text-center text-gray-500 py-10">Twój portfel jest pusty.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>` }</div>`;
     },
     
-    transactions: (transactions) => {
-            const rows = transactions.map(t => {
+    transactions: (txHistory) => {
+            const rows = txHistory.map(t => {
             const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
             const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
             const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL');
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${transactionDate}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${typeClass}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${profitLossClass}">${t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
         }).join('');
-        return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+        return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${txHistory.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
     },
     
     agentReport: (report) => {
@@ -540,30 +587,62 @@ export const renderers = {
         const totalPages = Math.ceil(total_trades_count / REPORT_PAGE_SIZE);
         const startTrade = (state.currentReportPage - 1) * REPORT_PAGE_SIZE + 1;
         const endTrade = Math.min(startTrade + REPORT_PAGE_SIZE - 1, total_trades_count);
+
+        // Helper functions for formatting
         const formatMetric = (val) => (typeof val !== 'number' || isNaN(val)) ? `<span class="text-gray-600">---</span>` : val.toFixed(3);
-        const formatPercent = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 0 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}%</span>`; };
-        const formatProfitFactor = (val) => { if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; const color = val >= 1 ? 'text-green-500' : 'text-red-500'; return `<span class="${color}">${val.toFixed(2)}</span>`; };
+        const formatPercent = (val) => { 
+            if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; 
+            const color = val >= 0 ? 'text-green-500' : 'text-red-500'; 
+            return `<span class="${color}">${val.toFixed(2)}%</span>`; 
+        };
+        const formatProfitFactor = (val) => { 
+            if (typeof val !== 'number' || isNaN(val)) return `<span class="text-gray-500">---</span>`; 
+            const color = val >= 1 ? 'text-green-500' : 'text-red-500'; 
+            return `<span class="${color}">${val.toFixed(2)}</span>`; 
+        };
         const formatNumber = (val) => (typeof val !== 'number' || isNaN(val)) ? `<span class="text-gray-500">---</span>` : val.toFixed(2);
         const createStatCard = (label, value, icon) => `<div class="bg-[#161B22] p-4 rounded-lg shadow-lg border border-gray-700"><h3 class="font-semibold text-gray-400 flex items-center text-sm"><i data-lucide="${icon}" class="w-4 h-4 mr-2 text-sky-400"></i>${label}</h3><p class="text-3xl font-extrabold mt-2 text-white">${value}</p></div>`;
-        const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-semibold text-sky-400">${setupName}</td><td class="p-3 text-right">${setupStats.total_trades}</td><td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td><td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td><td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td></tr>`).join('');
-        const setupTable = setupRows.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr><th scope="col" class="p-3">Strategia</th><th scope="col" class="p-3 text-right">Ilość Transakcji</th><th scope="col" class="p-3 text-right">Win Rate (%)</th><th scope="col" class="p-3 text-right">Całkowity P/L (%)</th><th scope="col" class="p-3 text-right">Profit Factor</th></tr></thead><tbody>${setupRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
+
+        // Setup Summary Table Rows
+        const setupRows = Object.entries(stats.by_setup).map(([setupName, setupStats]) => {
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 font-semibold text-sky-400">${setupName}</td><td class="p-3 text-right">${setupStats.total_trades}</td><td class="p-3 text-right">${formatPercent(setupStats.win_rate_percent)}</td><td class="p-3 text-right">${formatPercent(setupStats.total_p_l_percent)}</td><td class="p-3 text-right">${formatProfitFactor(setupStats.profit_factor)}</td></tr>`;
+        }).join('');
+
+        const setupTable = setupRows.length > 0 
+            ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-10"><tr><th scope="col" class="p-3">Strategia</th><th scope="col" class="p-3 text-right">Ilość Transakcji</th><th scope="col" class="p-3 text-right">Win Rate (%)</th><th scope="col" class="p-3 text-right">Całkowity P/L (%)</th><th scope="col" class="p-3 text-right">Profit Factor</th></tr></thead><tbody>${setupRows}</tbody></table></div>` 
+            : `<p class="text-center text-gray-500 py-10">Brak danych per strategia.</p>`;
+
+        // Trade History Table Headers
         const tradeHeaders = ['Akcja', 'Data Otwarcia', 'Ticker', 'Strategia', 'Status', 'Cena Wejścia', 'Cena Zamknięcia', 'P/L (%)', 'ATR', 'T. Dil.', 'P. Grav.', 'TD %tile', 'PG %tile', 'Inst. Sync', 'Retail Herd.', 'AQM H3', 'AQM %tile', 'J (Norm)', '∇² (Norm)', 'm² (Norm)', 'J (H4)', 'J Thresh.'];
         const headerClasses = ['sticky left-0 bg-[#0D1117] z-20', 'sticky left-[50px] bg-[#0D1117]', 'sticky left-[140px] bg-[#0D1117]', 'sticky left-[210px] bg-[#0D1117]', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right', 'text-right'];
+
+        // Trade History Rows
         const tradeRows = trades.map(t => {
             const statusClass = t.status === 'CLOSED_TP' ? 'text-green-400' : (t.status === 'CLOSED_SL' ? 'text-red-400' : 'text-yellow-400');
             const setupNameShort = (t.setup_type || 'UNKNOWN').replace('BACKTEST_', '').replace('_AQM_V3_', ' ').replace('QUANTUM_FIELD', 'H3').replace('INFO_THERMO', 'H4').replace('CONTRARIAN_ENTANGLEMENT', 'H2').replace('GRAVITY_MEAN_REVERSION', 'H1');
+            
             const auditBtn = t.ai_audit_report 
                 ? `<button class="text-xs bg-purple-600 hover:bg-purple-500 text-white px-2 py-1 rounded flex items-center gap-1 recheck-btn" data-trade-id="${t.id}"><i data-lucide="check-circle" class="w-3 h-3"></i>Wynik</button>`
                 : (t.expected_profit_factor ? `<button class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1 rounded recheck-btn" data-trade-id="${t.id}" title="Czekam na audyt...">🕒</button>` : `<span class="text-gray-600">-</span>`);
+
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono"><td class="p-2 whitespace-nowrap sticky left-0 bg-[#161B22] hover:bg-[#1f2937] z-10 border-r border-gray-700">${auditBtn}</td><td class="p-2 whitespace-nowrap text-gray-400 sticky left-[50px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td><td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[140px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${t.ticker}</td><td class="p-2 whitespace-nowrap text-gray-300 sticky left-[210px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${setupNameShort}</td><td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td><td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td><td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td><td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td></tr>`;
         }).join('');
-        const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-20"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
+
+        const tradeTable = trades.length > 0 
+            ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-20"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` 
+            : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
+
+        // UI Sections
         const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option><option value="BIOX">BioX (Pump Hunter >20%)</option></select></div><div class="flex items-start gap-3"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const quantumLabSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden"><div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none"><i data-lucide="atom" class="w-32 h-32 text-purple-500"></i></div><h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center"><i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i>Quantum Lab (Apex V4)</h4><p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p><div class="flex flex-wrap gap-3"><button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0"><i data-lucide="cpu" class="w-4 h-4 mr-2"></i>Konfiguruj Optymalizację</button><button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="list" class="w-4 h-4 mr-2"></i>Wyniki</button></div><div id="quantum-lab-status" class="text-sm mt-3 h-4"></div></div>`;
         const aiOptimizerSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4><p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane i zasugerował optymalizacje strategii.</p><div class="flex items-start gap-3"><button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>Analiza AI</button><button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="eye" class="w-4 h-4 mr-2"></i>Raport</button></div><div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const exportSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4><p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje jako CSV.</p><div class="flex items-start gap-3"><button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>Eksport CSV</button></div><div id="csv-export-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const h3DeepDiveSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Analiza "słabego roku" (Deep Dive).</p><div class="flex items-start gap-3"><button id="run-h3-deep-dive-modal-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i>Analiza Deep Dive</button></div><div id="h3-deep-dive-main-status" class="text-sm mt-3 h-4"></div></div>`;
-        const paginationControls = totalPages > 1 ? `<div class="flex justify-between items-center mt-4"><span class="text-sm text-gray-400">Wyświetlanie ${startTrade}-${endTrade} z ${total_trades_count} transakcji</span><div class="flex gap-2"><button id="report-prev-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === 1 ? 'disabled' : ''}><i data-lucide="arrow-left" class="w-4 h-4"></i></button><span class="text-sm text-gray-400 p-2">Strona ${state.currentReportPage} / ${totalPages}</span><button id="report-next-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === totalPages ? 'disabled' : ''}><i data-lucide="arrow-right" class="w-4 h-4"></i></button></div></div>` : '';
+        
+        const paginationControls = totalPages > 1 
+            ? `<div class="flex justify-between items-center mt-4"><span class="text-sm text-gray-400">Wyświetlanie ${startTrade}-${endTrade} z ${total_trades_count} transakcji</span><div class="flex gap-2"><button id="report-prev-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === 1 ? 'disabled' : ''}><i data-lucide="arrow-left" class="w-4 h-4"></i></button><span class="text-sm text-gray-400 p-2">Strona ${state.currentReportPage} / ${totalPages}</span><button id="report-next-btn" class="modal-button modal-button-secondary" ${state.currentReportPage === totalPages ? 'disabled' : ''}><i data-lucide="arrow-right" class="w-4 h-4"></i></button></div></div>` 
+            : '';
+
         return `<div id="agent-report-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Raport Wydajności Agenta</h2><h3 class="text-xl font-bold text-gray-300 mb-4">Kluczowe Wskaźniki (Wszystkie ${stats.total_trades} Transakcji)</h3><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">${createStatCard('Całkowity P/L (%)', formatPercent(stats.total_p_l_percent), 'percent')}${createStatCard('Win Rate (%)', formatPercent(stats.win_rate_percent), 'target')}${createStatCard('Profit Factor', formatProfitFactor(stats.profit_factor), 'ratio')}${createStatCard('Ilość Transakcji', stats.total_trades, 'bar-chart-2')}</div><h3 class="text-xl font-bold text-gray-300 mb-4">Podsumowanie wg Strategii</h3>${setupTable}<h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Narzędzia Analityczne</h3><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">${backtestSection}${quantumLabSection}${aiOptimizerSection}${h3DeepDiveSection}${exportSection}</div><h3 class="text-xl font-bold text-gray-300 mt-8 mb-4">Historia Zamkniętych Transakcji</h3>${paginationControls}${tradeTable}${paginationControls}</div>`;
     },
 
