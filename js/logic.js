@@ -936,7 +936,7 @@ const _injectRankingCard = (notes) => {
     const evMatch = notes.match(/EV:\s*([+\-]?\d+\.?\d*)%/i);
     const scoreMatch = notes.match(/SCORE:\s*(\d+)\/100/i);
     const recMatch = notes.match(/REKOMENDACJA:\s*(.*?)(?:\n|$)/i);
-    const detailsMatch = notes.match(/Tech:(\d+)\s*Mkt:(\d+)\s*RS:(\d+)\s*Ctx:(\d+)/i);
+    const detailsMatch = notes.match(/DETALE: Tech:(\d+)\s*Mkt:(\d+)\s*RS:(\d+)\s*Ctx:(\d+)/i);
 
     if (!evMatch || !scoreMatch) return;
 
