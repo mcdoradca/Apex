@@ -71,12 +71,16 @@ class OmniFluxAnalyzer:
             return
 
         try:
-            fx_data = self.client.get_intraday(symbol='EUR', market='USD', interval='60min', outputsize='compact')
+            # === POPRAWKA: Usunięto parametr 'market', zmieniono symbol na 'FXE' (Euro ETF) ===
+            # Alpha Vantage Intraday (Stocks) nie obsługuje par walutowych bezpośrednio ani parametru 'market'.
+            # FXE (Invesco CurrencyShares Euro Trust) jest proxy dla EUR/USD dostępnym w tym endpoincie.
+            fx_data = self.client.get_intraday(symbol='FXE', interval='60min', outputsize='compact')
+            
             if fx_data and 'Time Series (60min)' in fx_data:
                 df_fx = standardize_df_columns(pd.DataFrame.from_dict(fx_data.get('Time Series (60min)', {}), orient='index'))
                 if not df_fx.empty and len(df_fx) > 1:
                     df_fx = df_fx.sort_index()
-                    # EUR up = USD down = Risk On
+                    # EUR up (FXE up) = USD down = Risk On
                     if df_fx['close'].iloc[-1] > df_fx['close'].iloc[-2]: 
                         self.macro_context['bias'] = 'BULLISH'
                     else:
@@ -138,7 +142,7 @@ class OmniFluxAnalyzer:
         # 2. RADAR SCAN (1 API Call dla wszystkich)
         # Przygotuj listę tickerów
         tickers = [item['ticker'] for item in self.active_pool]
-        radar_hits = self.client.get_bulk_quotes_parsed(tickers) # Używamy nowej metody z Kroku 1
+        radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
         
         # Mapa wyników: {ticker: data}
         radar_map = {d['symbol']: d for d in radar_hits}
@@ -159,7 +163,7 @@ class OmniFluxAnalyzer:
                 bid_sz = radar_data.get('bid_size', 0.0)
                 ask_sz = radar_data.get('ask_size', 0.0)
                 
-                # Oblicz OFP (Order Flow Pressure) - Krok 2
+                # Oblicz OFP (Order Flow Pressure)
                 ofp = calculate_ofp(bid_sz, ask_sz)
                 
                 # Sprawdź zmianę ceny od ostatniego zapisanego stanu
@@ -202,8 +206,6 @@ class OmniFluxAnalyzer:
             if should_snipe:
                 try:
                     # Pobierz pełne świece (kosztuje 1 API call)
-                    # Używamy outputsize='compact' (100 świec) - wystarczy do VWAP(50) i Vel(20)
-                    # To oszczędza transfer i czas parsowania
                     raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
                     
                     if raw_intraday and 'Time Series (5min)' in raw_intraday:
@@ -211,7 +213,7 @@ class OmniFluxAnalyzer:
                         df.index = pd.to_datetime(df.index)
                         df.sort_index(inplace=True)
                         
-                        # Przekazujemy OFP do fizyki (Krok 2)
+                        # Przekazujemy OFP do fizyki
                         metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
                         
                         # Aktualizacja pełnego stanu
@@ -234,7 +236,6 @@ class OmniFluxAnalyzer:
             
             # E. ROTACJA (Stygnące spółki)
             # Jeśli Flux Score < 30 i siedzimy w puli > 20 min -> Wylot
-            # Ale tylko jeśli rezerwa nie jest pusta (żeby nie zostało puste miejsce)
             if self.reserve_pool and item.get('flux_score', 0) < 30 and (time.time() - item.get('added_at', 0)) > 1200:
                 tickers_to_remove.append(ticker)
 
