@@ -21,19 +21,22 @@ from .flux_physics import calculate_flux_vectors, calculate_ofp
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA OMNI-FLUX (V5.2 - SL/TP W KAFLU) ===
+# === KONFIGURACJA OMNI-FLUX (V5.3 - API SAFE MODE) ===
 CAROUSEL_SIZE = 8          # Rozmiar aktywnej puli
-RADAR_DELAY = 2.0          # Co ile sekund skanujemy wszystkich (Bulk)
-SNIPER_COOLDOWN = 60       # Co ile sekund wymuszamy odświeżenie Intraday (VWAP)
+RADAR_DELAY = 4.0          # ZWIĘKSZONO: Opóźnienie pętli (sekundy), aby dać oddech innym agentom
+SNIPER_COOLDOWN = 120      # ZWIĘKSZONO: Rzadsze odświeżanie "stale data" (co 2 min)
 FLUX_THRESHOLD_ENTRY = 70  # Min. score do sygnału
 MACRO_CACHE_DURATION = 300 
-DEFAULT_RR = 2.5           # Domyślny stosunek Risk:Reward dla Flux
-DEFAULT_SL_PCT = 0.015     # Domyślny SL 1.5% ceny dla Intraday
+DEFAULT_RR = 2.5           
+DEFAULT_SL_PCT = 0.015     
+
+# NOWOŚĆ: Limit zapytań Intraday na jeden cykl pętli
+MAX_SNIPES_PER_CYCLE = 2   
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.2)
-    Architektura: Radar (Bulk) + Sniper (Intraday on Trigger)
+    APEX OMNI-FLUX ENGINE (V5.3 - API Traffic Control)
+    Architektura: Radar (Bulk) + Prioritized Sniper Queue
     """
 
     def __init__(self, session: Session, api_client: AlphaVantageClient):
@@ -73,9 +76,7 @@ class OmniFluxAnalyzer:
             return
 
         try:
-            # === POPRAWKA: Usunięto parametr 'market', zmieniono symbol na 'FXE' (Euro ETF) ===
-            # Alpha Vantage Intraday (Stocks) nie obsługuje par walutowych bezpośrednio ani parametru 'market'.
-            # FXE (Invesco CurrencyShares Euro Trust) jest proxy dla EUR/USD dostępnym w tym endpoincie.
+            # FXE (Euro Trust) jako proxy dla EUR/USD
             fx_data = self.client.get_intraday(symbol='FXE', interval='60min', outputsize='compact')
             
             if fx_data and 'Time Series (60min)' in fx_data:
@@ -111,18 +112,18 @@ class OmniFluxAnalyzer:
                     'ticker': ticker, 
                     'fails': 0, 
                     'added_at': time.time(),
-                    'last_sniper_check': 0, # Timestamp ostatniego pełnego skanu intraday
+                    'last_sniper_check': 0,
                     'price': 0.0, 
                     'elasticity': 0.0, 
                     'velocity': 0.0, 
                     'flux_score': 0,
                     'ofp': 0.0,
-                    'stop_loss': None,      # NOWOŚĆ
-                    'take_profit': None,    # NOWOŚĆ
-                    'risk_reward': None     # NOWOŚĆ
+                    'stop_loss': None,      
+                    'take_profit': None,    
+                    'risk_reward': None     
                 })
             
-            msg = f"🌊 Faza 5 (Radar & Sniper): Inicjalizacja. Aktywne: {len(self.active_pool)}"
+            msg = f"🌊 Faza 5 (Traffic Control): Inicjalizacja. Aktywne: {len(self.active_pool)}"
             logger.info(msg)
             append_scan_log(self.session, msg)
             self._save_state()
@@ -132,10 +133,7 @@ class OmniFluxAnalyzer:
 
     def run_cycle(self):
         """
-        GŁÓWNA PĘTLA HYBRYDOWA.
-        1. Radar: Pobiera Bulk Quotes dla wszystkich.
-        2. Analiza: Liczy OFP i sprawdza triggery.
-        3. Sniper: Doczytuje Intraday tylko dla wybranych.
+        GŁÓWNA PĘTLA HYBRYDOWA Z LIMITAMI API.
         """
         # 1. Inicjalizacja
         if not self.active_pool:
@@ -144,136 +142,148 @@ class OmniFluxAnalyzer:
 
         self._refresh_macro_context()
         
-        # 2. RADAR SCAN (1 API Call dla wszystkich)
-        # Przygotuj listę tickerów
+        # 2. RADAR SCAN (1 API Call - Tani)
         tickers = [item['ticker'] for item in self.active_pool]
         radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
-        
-        # Mapa wyników: {ticker: data}
         radar_map = {d['symbol']: d for d in radar_hits}
         
         tickers_to_remove = []
         signals_generated = 0
         
-        # 3. ITERACJA PO SPÓŁKACH
+        # Lista kandydatów do "strzału snajperskiego" (Pobranie Intraday)
+        sniper_queue = []
+
+        # 3. AKTUALIZACJA RADARU I IDENTYFIKACJA KANDYDATÓW
         for item in self.active_pool:
             ticker = item['ticker']
             radar_data = radar_map.get(ticker)
             
-            should_snipe = False
-            
             if radar_data:
-                # A. Aktualizacja danych z Radaru (Lekkie)
+                # Aktualizacja lekkich danych
                 new_price = radar_data.get('price', 0.0)
                 bid_sz = radar_data.get('bid_size', 0.0)
                 ask_sz = radar_data.get('ask_size', 0.0)
                 
-                # Oblicz OFP (Order Flow Pressure)
+                # Oblicz OFP
                 ofp = calculate_ofp(bid_sz, ask_sz)
                 
-                # Sprawdź zmianę ceny od ostatniego zapisanego stanu
                 old_price = item.get('price', 0.0)
+                # Zwiększamy próg czułości zmiany ceny do 0.2%, żeby nie spamować API szumem
                 price_change_pct = abs((new_price - old_price) / old_price) if old_price > 0 else 0
                 
-                # Aktualizuj stan lokalny (dla UI)
                 item['price'] = new_price
                 item['ofp'] = ofp
                 item['fails'] = 0 
                 
-                # B. SNIPER TRIGGERS (Czy strzelać Intraday?)
-                # 1. Inicjalizacja: Brak Elasticity (pierwszy raz)
+                # OCENA PRIORYTETU DO POBRANIA INTRADAY
+                priority_score = 0
+                needs_update = False
+                
+                # Priorytet 1: Inicjalizacja (Brak danych)
                 if item.get('elasticity') == 0: 
-                    should_snipe = True
+                    priority_score += 100
+                    needs_update = True
                 
-                # 2. Pressure Trigger: Silne OFP sugeruje ruch
+                # Priorytet 2: Silna Presja (OFP)
                 elif abs(ofp) > 0.4: 
-                    should_snipe = True
+                    priority_score += 50
+                    needs_update = True
                 
-                # 3. Volatility Trigger: Cena ruszyła się > 0.1%
-                elif price_change_pct > 0.001: 
-                    should_snipe = True
+                # Priorytet 3: Ruch cenowy > 0.2%
+                elif price_change_pct > 0.002: 
+                    priority_score += 40
+                    needs_update = True
                 
-                # 4. Score Trigger: Jeśli setup był blisko (Score > 60), sprawdzaj częściej
+                # Priorytet 4: Blisko sygnału
                 elif item.get('flux_score', 0) > 60:
-                    should_snipe = True
+                    priority_score += 30
+                    needs_update = True
                     
-                # 5. Stale Data: Odśwież VWAP co minutę (nawet jak stoi)
+                # Priorytet 5: Przestarzałe dane (Cooldown)
                 elif (time.time() - item.get('last_sniper_check', 0)) > SNIPER_COOLDOWN:
-                    should_snipe = True
-            
+                    priority_score += 10
+                    needs_update = True
+                
+                if needs_update:
+                    sniper_queue.append({
+                        'item': item,
+                        'priority': priority_score
+                    })
             else:
-                # Brak danych w Radarze (błąd API lub ticker)
                 item['fails'] += 1
                 if item['fails'] >= 3: tickers_to_remove.append(ticker)
-                continue
 
-            # C. SNIPER EXECUTION (Ciężkie zapytanie)
-            if should_snipe:
-                try:
-                    # Pobierz pełne świece (kosztuje 1 API call)
-                    raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
-                    
-                    if raw_intraday and 'Time Series (5min)' in raw_intraday:
-                        df = standardize_df_columns(pd.DataFrame.from_dict(raw_intraday['Time Series (5min)'], orient='index'))
-                        df.index = pd.to_datetime(df.index)
-                        df.sort_index(inplace=True)
-                        
-                        # Przekazujemy OFP do fizyki
-                        metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
-                        
-                        # DYNAMICZNE OBLICZENIE SL/TP
-                        price = item['price']
-                        # SL na podstawie % ceny (np. 1.5%)
-                        sl_price = price * (1 - DEFAULT_SL_PCT)
-                        # Ryzyko w USD
-                        risk_usd = price - sl_price 
-                        # TP na podstawie RR
-                        tp_price = price + (risk_usd * DEFAULT_RR)
-                        
-                        # Aktualizacja pełnego stanu
-                        item['elasticity'] = float(metrics.get('elasticity', 0.0))
-                        item['velocity'] = float(metrics.get('velocity', 0.0))
-                        item['flux_score'] = int(metrics.get('flux_score', 0))
-                        item['last_sniper_check'] = time.time() # Reset licznika snipera
-                        item['stop_loss'] = sl_price             # NOWOŚĆ
-                        item['take_profit'] = tp_price           # NOWOŚĆ
-                        item['risk_reward'] = DEFAULT_RR         # NOWOŚĆ
-                        
-                        # D. SYGNAŁY
-                        # Generujemy sygnał w bazie *tylko*, jeśli jest akcja i spełnione warunki makro
-                        if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
-                            if self.macro_context['bias'] != 'BEARISH':
-                                metrics['price'] = item['price']
-                                # Zrezygnujemy z usuwania z puli tutaj,
-                                # aby kafel był widoczny jako aktywny dopóki jest w puli.
-                                if self._generate_signal(ticker, metrics, sl_price, tp_price):
-                                    signals_generated += 1
-                                    # NIE USUWAJ STĄD: tickers_to_remove.append(ticker)
-                    
-                except Exception as e:
-                    logger.error(f"Faza 5 Sniper ({ticker}): {e}")
-                    # Nie usuwamy od razu, może to chwilowy błąd
+        # 4. WYKONANIE "STRZAŁÓW" SNIGPERSKICH (LIMITOWANE!)
+        # Sortujemy kolejkę wg priorytetu (malejąco)
+        sniper_queue.sort(key=lambda x: x['priority'], reverse=True)
+        
+        # Bierzemy tylko top N z kolejki
+        targets = sniper_queue[:MAX_SNIPES_PER_CYCLE]
+        
+        if targets:
+            logger.info(f"Faza 5: Wybrano {len(targets)} celów do aktualizacji Intraday (z {len(sniper_queue)} oczekujących).")
+
+        for target_obj in targets:
+            item = target_obj['item']
+            ticker = item['ticker']
             
-            # E. ROTACJA (Stygnące spółki)
-            # Jeśli Flux Score < 30 i siedzimy w puli > 20 min -> Wylot
-            if self.reserve_pool and item.get('flux_score', 0) < 30 and (time.time() - item.get('added_at', 0)) > 1200:
-                tickers_to_remove.append(ticker)
+            try:
+                # CIĘŻKIE ZAPYTANIE API (Intraday)
+                raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
+                
+                if raw_intraday and 'Time Series (5min)' in raw_intraday:
+                    df = standardize_df_columns(pd.DataFrame.from_dict(raw_intraday['Time Series (5min)'], orient='index'))
+                    df.index = pd.to_datetime(df.index)
+                    df.sort_index(inplace=True)
+                    
+                    metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
+                    
+                    # Obliczenia SL/TP
+                    price = item['price']
+                    sl_price = price * (1 - DEFAULT_SL_PCT)
+                    risk_usd = price - sl_price 
+                    tp_price = price + (risk_usd * DEFAULT_RR)
+                    
+                    # Aktualizacja stanu
+                    item['elasticity'] = float(metrics.get('elasticity', 0.0))
+                    item['velocity'] = float(metrics.get('velocity', 0.0))
+                    item['flux_score'] = int(metrics.get('flux_score', 0))
+                    item['last_sniper_check'] = time.time() 
+                    item['stop_loss'] = sl_price             
+                    item['take_profit'] = tp_price           
+                    item['risk_reward'] = DEFAULT_RR         
+                    
+                    # Generowanie sygnału
+                    if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
+                        if self.macro_context['bias'] != 'BEARISH':
+                            metrics['price'] = item['price']
+                            if self._generate_signal(ticker, metrics, sl_price, tp_price):
+                                signals_generated += 1
+                
+            except Exception as e:
+                logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
 
-        # 4. Zarządzanie Pulą
+        # 5. ROTACJA (Stygnące spółki)
+        for item in self.active_pool:
+            # Jeśli Flux Score < 30 i siedzimy w puli > 25 min -> Wylot
+            if self.reserve_pool and item.get('flux_score', 0) < 30 and (time.time() - item.get('added_at', 0)) > 1500:
+                if item['ticker'] not in tickers_to_remove:
+                    tickers_to_remove.append(item['ticker'])
+
+        # 6. Zarządzanie Pulą
         if tickers_to_remove:
             self._rotate_pool(tickers_to_remove)
             if signals_generated > 0:
                 append_scan_log(self.session, f"🌊 Faza 5: Wygenerowano {signals_generated} sygnałów.")
 
-        # 5. Zapis Stanu (dla UI)
+        # 7. Zapis Stanu
         self._save_state()
         
-        # Pacing pętli (dla Radaru)
+        # Pacing pętli
         time.sleep(RADAR_DELAY)
 
     def _rotate_pool(self, remove_list):
         """Usuwa zużyte tickery i dobiera nowe z rezerwy."""
-        # Usuń duplikaty
         remove_list = list(set(remove_list))
         self.active_pool = [x for x in self.active_pool if x['ticker'] not in remove_list]
         
@@ -298,12 +308,8 @@ class OmniFluxAnalyzer:
         except Exception as e:
             logger.error(f"Faza 5: Błąd zapisu stanu: {e}")
 
-    # === ZMIENIONA FUNKCJA GENEROWANIA SYGNAŁU ===
     def _generate_signal(self, ticker: str, metrics: dict, sl_price: float, tp_price: float) -> bool:
-        """
-        Generuje sygnał w bazie. ZAUWAŻ: Nie usuwamy już stąd sygnałów FLUX,
-        będą one aktywne dopóki nie zostaną zamknięte przez Strażnika lub ręcznie.
-        """
+        """Generuje sygnał w bazie (Upsert)."""
         try:
             price = metrics.get('price', 0)
             if price == 0: return False
@@ -312,43 +318,24 @@ class OmniFluxAnalyzer:
             score = int(metrics.get('flux_score', 0))
             ofp_val = metrics.get('ofp', 0.0)
             
-            note = f"STRATEGIA: FLUX V5.2\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
+            note = f"STRATEGIA: FLUX V5.3\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
 
-            # Sprawdzamy czy sygnał FLUX już istnieje (żeby nie dodawać duplikatów)
             exists = self.session.execute(
-                text("""
-                    SELECT 1 FROM trading_signals 
-                    WHERE ticker=:t 
-                    AND status IN ('ACTIVE', 'PENDING') 
-                    AND notes LIKE '%STRATEGIA: FLUX%'
-                """), 
+                text("SELECT 1 FROM trading_signals WHERE ticker=:t AND status IN ('ACTIVE', 'PENDING') AND notes LIKE '%STRATEGIA: FLUX%'"), 
                 {'t': ticker}
             ).fetchone()
             
             if exists: 
-                # Jeśli sygnał FLUX już istnieje, aktualizujemy go, zamiast tworzyć nowy!
                 update_stmt = text("""
                     UPDATE trading_signals SET
-                        updated_at = NOW(),
-                        notes = :note,
-                        entry_price = :entry,
-                        stop_loss = :sl,
-                        take_profit = :tp
-                    WHERE ticker = :ticker 
-                    AND status IN ('ACTIVE', 'PENDING') 
-                    AND notes LIKE '%STRATEGIA: FLUX%'
+                        updated_at = NOW(), notes = :note,
+                        entry_price = :entry, stop_loss = :sl, take_profit = :tp
+                    WHERE ticker = :ticker AND status IN ('ACTIVE', 'PENDING') AND notes LIKE '%STRATEGIA: FLUX%'
                 """)
-                self.session.execute(update_stmt, {
-                    'ticker': ticker, 
-                    'entry': price, 
-                    'sl': sl_price, 
-                    'tp': tp_price, 
-                    'note': note
-                })
+                self.session.execute(update_stmt, {'ticker': ticker, 'entry': price, 'sl': sl_price, 'tp': tp_price, 'note': note})
                 self.session.commit()
                 return True
             
-            # Jeśli nie istnieje, tworzymy nowy
             stmt = text("""
                 INSERT INTO trading_signals (
                     ticker, status, generation_date, updated_at, 
@@ -375,6 +362,5 @@ class OmniFluxAnalyzer:
             return False
 
 def run_phase5_cycle(session: Session, api_client: AlphaVantageClient):
-    # Wrapper dla workera
     analyzer = OmniFluxAnalyzer(session, api_client)
     analyzer.run_cycle()
