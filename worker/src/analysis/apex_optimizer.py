@@ -6,13 +6,14 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import os 
 
 # Importy wewnętrzne
 from .. import models
 from . import backtest_engine
+# Importujemy klienta bezpośrednio, żeby uniknąć błędów importu
+from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .utils import (
     update_system_control, 
     append_scan_log, 
@@ -32,8 +33,8 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V14 - PERSISTENT MEMORY MODE (SAFE)
-    Naprawiona wersja: Zarządzanie sesjami DB w wątkach + Obsługa błędów AQM.
+    SERCE SYSTEMU APEX V14 - STABLE SEQUENTIAL MODE
+    Wersja jednowątkowa - gwarantuje stabilność połączenia z DB.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -46,9 +47,8 @@ class QuantumOptimizer:
         self.tickers_count = 0
         
         self.storage_url = os.getenv("DATABASE_URL")
-        if not self.storage_url:
-            logger.warning("Brak DATABASE_URL. Optuna będzie działać w trybie ulotnym (bez zapisu).")
-            self.storage_url = None
+        if self.storage_url and self.storage_url.startswith("postgres://"):
+            self.storage_url = self.storage_url.replace("postgres://", "postgresql://", 1)
         
         self.job_config = {}
         try:
@@ -60,37 +60,35 @@ class QuantumOptimizer:
         self.strategy_mode = self.job_config.get('strategy', 'H3')
         self.scan_period = self.job_config.get('scan_period', 'FULL') 
         
-        logger.info(f"QuantumOptimizer V14 initialized for Job {job_id} (Mode: {self.strategy_mode}, Period: {self.scan_period})")
+        logger.info(f"QuantumOptimizer initialized: Job {job_id}, Mode {self.strategy_mode}")
 
     def run(self, n_trials: int = 50):
-        start_msg = f"🚀 OPTIMIZER V14 ({self.strategy_mode}): Start {self.job_id} (Rok: {self.target_year}, Okres: {self.scan_period}, Próby: {n_trials})"
+        start_msg = f"🚀 OPTIMIZER: Start Zadania {self.job_id} (Strategia: {self.strategy_mode})..."
         logger.info(start_msg)
         append_scan_log(self.session, start_msg)
         
+        # Aktualizacja statusu
         job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
         if job:
             job.status = 'RUNNING'
             self.session.commit()
         
         try:
+            # 1. Makro
             self.macro_data = self._load_macro_context()
-            self._preload_data_to_cache()
             
-            # === DIAGNOSTYKA CACHE ===
+            # 2. Cache Danych (SEKWENCYJNIE)
+            self._preload_data_to_cache_sequential()
+            
             if not self.data_cache:
-                raise Exception("Brak danych w cache! (Pusty słownik data_cache). Sprawdź logi pod kątem błędów ładowania.")
-            
-            first_ticker = list(self.data_cache.keys())[0]
-            first_df = self.data_cache[first_ticker]
-            logger.info(f"DIAGNOSTYKA: Cache zawiera {len(self.data_cache)} tickerów.")
-            logger.info(f"DIAGNOSTYKA: Przykładowy ticker {first_ticker}: {len(first_df)} wierszy.")
-            # ========================
+                err_msg = "⛔ BŁĄD KRYTYCZNY: Cache danych jest pusty. Sprawdź tabelę companies/phase1_candidates."
+                append_scan_log(self.session, err_msg)
+                raise Exception(err_msg)
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
             
             study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}_{self.scan_period}"
-            
-            logger.info(f"Podłączanie do badania Optuny: {study_name} w bazie danych...")
+            append_scan_log(self.session, f"⚙️ Inicjalizacja Optuny: {study_name}...")
 
             sampler = optuna.samplers.TPESampler(
                 n_startup_trials=min(10, max(5, int(n_trials/5))), 
@@ -106,7 +104,7 @@ class QuantumOptimizer:
                 sampler=sampler
             )
             
-            logger.info(f"Optuna załadowana. Liczba dotychczasowych prób w historii: {len(self.study.trials)}")
+            append_scan_log(self.session, f"🔥 Start symulacji ({n_trials} prób)...")
             
             self.study.optimize(
                 self._objective, 
@@ -121,16 +119,12 @@ class QuantumOptimizer:
             best_trial = self.study.best_trial
             best_value = float(best_trial.value)
             
-            end_msg = f"🏁 ZAKOŃCZONO! Najlepszy PF ({self.strategy_mode}/{self.scan_period}): {best_value:.4f}"
-            logger.info(end_msg)
+            end_msg = f"🏁 SUKCES! Najlepszy PF: {best_value:.4f}"
             append_scan_log(self.session, end_msg)
             
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
             safe_params['strategy_mode'] = self.strategy_mode
-            safe_params['scan_period'] = self.scan_period
             
-            append_scan_log(self.session, f"🏆 Zwycięskie Parametry:\n{json.dumps(safe_params, indent=2)}")
-
             trials_data = self._collect_trials_data()
             sensitivity_report = self._run_sensitivity_analysis(trials_data)
             
@@ -138,20 +132,19 @@ class QuantumOptimizer:
 
         except Exception as e:
             self.session.rollback()
-            error_msg = f"❌ OPTIMIZER V14 AWARIA: {str(e)}"
+            error_msg = f"❌ OPTIMIZER AWARIA: {str(e)}"
             logger.error(error_msg, exc_info=True)
             append_scan_log(self.session, error_msg)
             self._mark_job_failed()
             raise
 
     def _load_macro_context(self):
-        append_scan_log(self.session, "📊 Pobieranie danych Makro (Nasdaq Benchmark)...")
+        append_scan_log(self.session, "📊 Ładowanie tła makroekonomicznego...")
         macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
         
-        # Używamy osobnej sesji dla makro, aby nie blokować głównej
         local_session = get_db_session()
         try:
-            client = backtest_engine.AlphaVantageClient()
+            client = AlphaVantageClient()
             spy_raw = get_raw_data_with_cache(local_session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
             if spy_raw:
                 macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -168,11 +161,166 @@ class QuantumOptimizer:
                     try: macro['inflation'] = float(inf_raw['data'][0]['value'])
                     except: pass
         except Exception as e:
-            logger.warning(f"Błąd ładowania makro: {e}")
+            append_scan_log(self.session, f"⚠️ Warning Makro: {e}")
         finally:
             local_session.close()
             
         return macro
+
+    def _preload_data_to_cache_sequential(self):
+        """
+        Wersja sekwencyjna (bezpieczna dla bazy).
+        """
+        update_system_control(self.session, 'worker_status', 'OPTIMIZING_DATA_LOAD')
+        tickers = self._get_all_tickers()
+        
+        if not tickers:
+            append_scan_log(self.session, "⚠️ Brak tickerów do analizy.")
+            return
+
+        total_tickers = len(tickers)
+        msg = f"🔄 Ładowanie danych dla {total_tickers} spółek (Tryb Stabilny)..."
+        logger.info(msg)
+        append_scan_log(self.session, msg)
+        
+        loaded = 0
+        errors = 0
+        
+        # Używamy jednej sesji do odczytu danych
+        load_session = get_db_session()
+        client = AlphaVantageClient()
+        
+        try:
+            for i, ticker in enumerate(tickers):
+                try:
+                    success = self._load_single_ticker_data(load_session, client, ticker)
+                    if success:
+                        loaded += 1
+                    else:
+                        errors += 1
+                except Exception as e:
+                    errors += 1
+                    # logger.error(f"Błąd ładowania {ticker}: {e}")
+                
+                # Raportowanie postępu co 10 sztuk
+                if (i + 1) % 10 == 0:
+                    prog_msg = f"📥 Pobrano: {i+1}/{total_tickers}..."
+                    update_system_control(self.session, 'scan_progress_processed', str(i+1))
+                    update_system_control(self.session, 'scan_progress_total', str(total_tickers))
+                    # logger.info(prog_msg) 
+        
+        except Exception as e:
+            append_scan_log(self.session, f"❌ Błąd pętli ładowania: {e}")
+        finally:
+            load_session.close()
+        
+        self.tickers_count = len(self.data_cache)
+        summary = f"✅ Cache gotowy. Załadowano: {self.tickers_count}/{total_tickers} (Pominięto: {errors})"
+        logger.info(summary)
+        append_scan_log(self.session, summary)
+
+    def _load_single_ticker_data(self, session, client, ticker):
+        """
+        Ładuje dane dla jednego tickera używając przekazanej sesji.
+        """
+        daily_data = get_raw_data_with_cache(session, client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
+        if not daily_data: return False
+        
+        h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, client, session)
+        
+        weekly_df = pd.DataFrame()
+        obv_df = pd.DataFrame()
+        
+        if self.strategy_mode == 'AQM':
+            w_raw = get_raw_data_with_cache(session, client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
+            if w_raw: 
+                weekly_df = standardize_df_columns(pd.DataFrame.from_dict(w_raw.get('Weekly Adjusted Time Series', {}), orient='index'))
+            
+            obv_raw = get_raw_data_with_cache(session, client, ticker, 'OBV', 'get_obv')
+            if obv_raw:
+                obv_df = pd.DataFrame.from_dict(obv_raw.get('Technical Analysis: OBV', {}), orient='index')
+                if not obv_df.empty:
+                    obv_df.index = pd.to_datetime(obv_df.index)
+                    obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
+        
+        processed_df = self._preprocess_ticker_unified(daily_data, h2_data, weekly_df, obv_df)
+        
+        if not processed_df.empty:
+            self.data_cache[ticker] = processed_df
+            return True
+        return False
+
+    def _preprocess_ticker_unified(self, daily_data, h2_data, weekly_df, obv_df) -> pd.DataFrame:
+        try:
+            daily_df = standardize_df_columns(pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index'))
+            if len(daily_df) < 100: return pd.DataFrame()
+            
+            if not isinstance(daily_df.index, pd.DatetimeIndex):
+                daily_df.index = pd.to_datetime(daily_df.index)
+            daily_df.index = daily_df.index.tz_localize(None) 
+            
+            daily_df.sort_index(inplace=True)
+            daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
+
+            if self.strategy_mode == 'H3':
+                daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
+                insider_df = h2_data.get('insider_df')
+                news_df = h2_data.get('news_df')
+                daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
+                daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
+                daily_df['daily_returns'] = daily_df['close'].pct_change()
+                daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std()
+                if not news_df.empty:
+                    nc = news_df.groupby(news_df.index.date).size() 
+                    nc.index = pd.to_datetime(nc.index)
+                    nc = nc.reindex(daily_df.index, fill_value=0)
+                    daily_df['information_entropy'] = nc.rolling(window=10).sum()
+                else: daily_df['information_entropy'] = 0.0
+                daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean()
+                daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200).mean()
+                daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200).std()
+                daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
+                daily_df['normalized_news'] = 0.0 
+                daily_df['m_sq'] = daily_df['normalized_volume'] 
+                daily_df['nabla_sq'] = daily_df['price_gravity']
+                daily_df = calculate_h3_metrics_v4(daily_df, {}) 
+                daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
+                return daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].dropna()
+
+            elif self.strategy_mode == 'AQM':
+                # Fix dat dla AQM
+                if not weekly_df.empty and isinstance(weekly_df.index, pd.DatetimeIndex):
+                    weekly_df.index = weekly_df.index.tz_localize(None)
+                if not obv_df.empty and isinstance(obv_df.index, pd.DatetimeIndex):
+                    obv_df.index = obv_df.index.tz_localize(None)
+
+                aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
+                    daily_df=daily_df,
+                    weekly_df=weekly_df,
+                    intraday_60m_df=pd.DataFrame(), 
+                    obv_df=obv_df,
+                    macro_data=self.macro_data,
+                    earnings_days_to=None
+                )
+                
+                if aqm_df.empty: return pd.DataFrame()
+                
+                if 'atr' in aqm_df.columns: 
+                    aqm_df['atr_14'] = aqm_df['atr']
+                elif 'atr_14' not in aqm_df.columns:
+                    aqm_df['atr_14'] = daily_df['atr_14']
+
+                req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
+                
+                # Bezpiecznik: jeśli brakuje kolumn, zwróć puste
+                if not all(col in aqm_df.columns for col in req_cols):
+                    return pd.DataFrame()
+                    
+                return aqm_df[req_cols].dropna()
+            
+            return pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
 
     def _objective(self, trial):
         params = {}
@@ -196,7 +344,6 @@ class QuantumOptimizer:
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15), 
             }
 
-        # === OBSŁUGA OKRESÓW CZASOWYCH ===
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
         end_ts = pd.Timestamp(f"{self.target_year}-12-31")
 
@@ -211,7 +358,7 @@ class QuantumOptimizer:
         trades = result['total_trades']
         
         if trial.number % 5 == 0:
-            logger.info(f"⚡ Trial {trial.number} ({self.scan_period}): PF={pf:.2f} (Trades: {trades})")
+            logger.info(f"⚡ Trial {trial.number}: PF={pf:.2f} (T: {trades})")
 
         if pf > self.best_score_so_far:
             self.best_score_so_far = pf
@@ -231,9 +378,6 @@ class QuantumOptimizer:
         for ticker, df in self.data_cache.items():
             if df.empty: continue
             
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-                
             mask_date = (df.index >= start_ts) & (df.index <= end_ts)
             sim_df = df[mask_date]
             
@@ -248,8 +392,11 @@ class QuantumOptimizer:
                 min_score = params['aqm_min_score']
                 comp_min = params['aqm_component_min']
                 cond_main = (sim_df['aqm_score'] > min_score)
-                cond_comps = ((sim_df['qps'] > comp_min) & (sim_df['ves'] > comp_min) & (sim_df['mrs'] > comp_min))
-                entry_mask = cond_main & cond_comps
+                if 'qps' in sim_df.columns:
+                    cond_comps = ((sim_df['qps'] > comp_min) & (sim_df['ves'] > comp_min) & (sim_df['mrs'] > comp_min))
+                    entry_mask = cond_main & cond_comps
+                else:
+                    entry_mask = cond_main
             
             if entry_mask is None: continue
 
@@ -305,9 +452,12 @@ class QuantumOptimizer:
             res_p1 = self.session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
             tickers_p1 = [r[0] for r in res_p1]
             if len(tickers_p1) > 0: return tickers_p1
+            
             res_all = self.session.execute(text("SELECT ticker FROM companies LIMIT 100")).fetchall()
             return [r[0] for r in res_all]
-        except Exception: return []
+        except Exception as e:
+            logger.error(f"Błąd pobierania tickerów: {e}")
+            return []
 
     def _collect_trials_data(self):
         trials_data = []
@@ -360,7 +510,7 @@ class QuantumOptimizer:
             job.configuration = {
                 'best_params': best_params, 
                 'sensitivity_analysis': sensitivity_report, 
-                'version': 'V14_PERSISTENT', 
+                'version': 'V14_SEQUENTIAL', 
                 'strategy': self.strategy_mode,
                 'scan_period': self.scan_period, 
                 'tickers_analyzed': self.tickers_count
@@ -372,150 +522,3 @@ class QuantumOptimizer:
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job: job.status = 'FAILED'; self.session.commit()
         except: self.session.rollback()
-    
-    def _preload_data_to_cache(self):
-        update_system_control(self.session, 'worker_status', 'OPTIMIZING_DATA_LOAD')
-        msg = f"🔄 V13 PRELOAD: Pobieranie danych dla trybu {self.strategy_mode}..."
-        logger.info(msg)
-        append_scan_log(self.session, msg)
-        tickers = self._get_all_tickers()
-        tickers_to_load = tickers 
-        total_tickers = len(tickers_to_load)
-        if total_tickers == 0: return
-        max_workers = 4 
-        processed = 0
-        loaded = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as executor: 
-            futures = {executor.submit(self._load_ticker_data, ticker): ticker for ticker in tickers_to_load}
-            for f in as_completed(futures):
-                processed += 1
-                try:
-                    if f.result(): loaded += 1
-                except Exception as e:
-                    logger.error(f"Data Load Error for ticker: {e}")
-                
-                if processed % 10 == 0:
-                    update_system_control(self.session, 'scan_progress_processed', str(processed))
-                    update_system_control(self.session, 'scan_progress_total', str(total_tickers))
-        self.tickers_count = len(self.data_cache)
-        append_scan_log(self.session, f"✅ Cache gotowy: {self.tickers_count} / {total_tickers} spółek.")
-
-    def _load_ticker_data(self, ticker):
-        # === NAPRAWA WYCIEKU SESJI ===
-        # Tworzymy sesję i GWARANTUJEMY jej zamknięcie.
-        thread_session = get_db_session()
-        try:
-            # Pacing dla API (żeby nie zabić rate limitu od razu)
-            time.sleep(0.1) 
-            api_client = backtest_engine.AlphaVantageClient()
-            
-            daily_data = get_raw_data_with_cache(thread_session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
-            if not daily_data: return False
-            
-            h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, thread_session)
-            
-            weekly_df = pd.DataFrame()
-            obv_df = pd.DataFrame()
-            
-            if self.strategy_mode == 'AQM':
-                w_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
-                if w_raw: 
-                    weekly_df = standardize_df_columns(pd.DataFrame.from_dict(w_raw.get('Weekly Adjusted Time Series', {}), orient='index'))
-                
-                obv_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'OBV', 'get_obv')
-                if obv_raw:
-                    obv_df = pd.DataFrame.from_dict(obv_raw.get('Technical Analysis: OBV', {}), orient='index')
-                    if not obv_df.empty:
-                        obv_df.index = pd.to_datetime(obv_df.index)
-                        obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
-            
-            processed_df = self._preprocess_ticker_unified(daily_data, h2_data, weekly_df, obv_df)
-            
-            if not processed_df.empty:
-                self.data_cache[ticker] = processed_df
-                return True
-            return False
-            
-        except Exception as e:
-            logger.error(f"Load Error ({ticker}): {e}")
-            return False
-        finally:
-            thread_session.close() # <--- KLUCZOWA POPRAWKA
-
-    def _preprocess_ticker_unified(self, daily_data, h2_data, weekly_df, obv_df) -> pd.DataFrame:
-        try:
-            daily_df = standardize_df_columns(pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index'))
-            if len(daily_df) < 100: return pd.DataFrame()
-            
-            if not isinstance(daily_df.index, pd.DatetimeIndex):
-                daily_df.index = pd.to_datetime(daily_df.index)
-            daily_df.index = daily_df.index.tz_localize(None) 
-            
-            daily_df.sort_index(inplace=True)
-            daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
-
-            if self.strategy_mode == 'H3':
-                # Logika H3 (bez zmian)
-                daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
-                insider_df = h2_data.get('insider_df')
-                news_df = h2_data.get('news_df')
-                daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
-                daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
-                daily_df['daily_returns'] = daily_df['close'].pct_change()
-                daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std()
-                if not news_df.empty:
-                    nc = news_df.groupby(news.index.date).size()
-                    nc.index = pd.to_datetime(nc.index)
-                    nc = nc.reindex(daily_df.index, fill_value=0)
-                    daily_df['information_entropy'] = nc.rolling(window=10).sum()
-                else: daily_df['information_entropy'] = 0.0
-                daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean()
-                daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200).mean()
-                daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200).std()
-                daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
-                daily_df['normalized_news'] = 0.0 
-                daily_df['m_sq'] = daily_df['normalized_volume'] 
-                daily_df['nabla_sq'] = daily_df['price_gravity']
-                daily_df = calculate_h3_metrics_v4(daily_df, {}) 
-                daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
-                return daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].dropna()
-
-            elif self.strategy_mode == 'AQM':
-                # === FIX DLA DANYCH WEEKLY/OBV ===
-                if not weekly_df.empty and isinstance(weekly_df.index, pd.DatetimeIndex):
-                    weekly_df.index = weekly_df.index.tz_localize(None)
-                if not obv_df.empty and isinstance(obv_df.index, pd.DatetimeIndex):
-                    obv_df.index = obv_df.index.tz_localize(None)
-                # ==================================
-
-                aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
-                    daily_df=daily_df,
-                    weekly_df=weekly_df,
-                    intraday_60m_df=pd.DataFrame(), 
-                    obv_df=obv_df,
-                    macro_data=self.macro_data,
-                    earnings_days_to=None
-                )
-                
-                # Zabezpieczenie: jeśli aqm_df puste lub brak ATR
-                if aqm_df.empty: return pd.DataFrame()
-                
-                if 'atr' in aqm_df.columns: 
-                    aqm_df['atr_14'] = aqm_df['atr']
-                elif 'atr_14' not in aqm_df.columns:
-                    # Fallback jeśli ATR nie został policzony w logice V4
-                    aqm_df['atr_14'] = daily_df['atr_14']
-
-                req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
-                
-                # Sprawdź czy mamy wszystkie kolumny, jeśli nie, zwróć puste (bezpiecznik)
-                if not all(col in aqm_df.columns for col in req_cols):
-                    logger.warning("AQM Preprocess: Brakujące kolumny w wyniku.")
-                    return pd.DataFrame()
-                    
-                return aqm_df[req_cols].dropna()
-            
-            return pd.DataFrame()
-        except Exception as e:
-            logger.error(f"Preprocess Error: {e}")
-            return pd.DataFrame()
