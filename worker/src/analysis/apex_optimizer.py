@@ -12,7 +12,7 @@ import os
 # Importy wewnętrzne
 from .. import models
 from . import backtest_engine
-# Importujemy klienta bezpośrednio, żeby uniknąć błędów importu
+# Importujemy klienta bezpośrednio
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .utils import (
     update_system_control, 
@@ -140,6 +140,7 @@ class QuantumOptimizer:
 
     def _load_macro_context(self):
         append_scan_log(self.session, "📊 Ładowanie tła makroekonomicznego...")
+        # Domyślne wartości, gdyby API zawiodło
         macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
         
         local_session = get_db_session()
@@ -151,6 +152,7 @@ class QuantumOptimizer:
                 macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
                 macro['spy_df'].sort_index(inplace=True)
             
+            # Pobieramy resztę tylko dla AQM
             if self.strategy_mode == 'AQM':
                 yield_raw = get_raw_data_with_cache(local_session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
                 if yield_raw and 'data' in yield_raw:
@@ -168,9 +170,6 @@ class QuantumOptimizer:
         return macro
 
     def _preload_data_to_cache_sequential(self):
-        """
-        Wersja sekwencyjna (bezpieczna dla bazy).
-        """
         update_system_control(self.session, 'worker_status', 'OPTIMIZING_DATA_LOAD')
         tickers = self._get_all_tickers()
         
@@ -186,7 +185,6 @@ class QuantumOptimizer:
         loaded = 0
         errors = 0
         
-        # Używamy jednej sesji do odczytu danych
         load_session = get_db_session()
         client = AlphaVantageClient()
         
@@ -200,14 +198,10 @@ class QuantumOptimizer:
                         errors += 1
                 except Exception as e:
                     errors += 1
-                    # logger.error(f"Błąd ładowania {ticker}: {e}")
                 
-                # Raportowanie postępu co 10 sztuk
-                if (i + 1) % 10 == 0:
-                    prog_msg = f"📥 Pobrano: {i+1}/{total_tickers}..."
+                if (i + 1) % 20 == 0:
                     update_system_control(self.session, 'scan_progress_processed', str(i+1))
                     update_system_control(self.session, 'scan_progress_total', str(total_tickers))
-                    # logger.info(prog_msg) 
         
         except Exception as e:
             append_scan_log(self.session, f"❌ Błąd pętli ładowania: {e}")
@@ -220,9 +214,6 @@ class QuantumOptimizer:
         append_scan_log(self.session, summary)
 
     def _load_single_ticker_data(self, session, client, ticker):
-        """
-        Ładuje dane dla jednego tickera używając przekazanej sesji.
-        """
         daily_data = get_raw_data_with_cache(session, client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
         if not daily_data: return False
         
@@ -263,6 +254,7 @@ class QuantumOptimizer:
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
             if self.strategy_mode == 'H3':
+                # (Kod H3 bez zmian - działał dobrze)
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
@@ -313,11 +305,11 @@ class QuantumOptimizer:
                 req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
                 
                 # Bezpiecznik: jeśli brakuje kolumn, zwróć puste
-                # ALE: aqm_v4_logic.py już teraz robi fillna(0.0), więc req_cols powinny być
                 if not all(col in aqm_df.columns for col in req_cols):
                     return pd.DataFrame()
                     
-                # Usuwamy dropna(), ponieważ zrobiliśmy fillna() w logice V4
+                # USUNIĘTO dropna(), bo `aqm_v4_logic` teraz robi bezpieczne fillna(0.5)
+                # Dzięki temu nie tracimy całej historii przez jeden brakujący dzień/wskaźnik
                 return aqm_df[req_cols]
             
             return pd.DataFrame()
@@ -377,8 +369,10 @@ class QuantumOptimizer:
         sl_mult = params['h3_sl_multiplier']
         max_hold = params['h3_max_hold']
         
-        # === DIAGNOSTYKA (Co 500 iteracji) ===
-        should_debug = (len(trades_pnl) == 0 and np.random.rand() < 0.001) # Rzadkie logowanie
+        # === DIAGNOSTYKA ===
+        # Rejestrujemy stan TYLKO jeśli nie mamy żadnych transakcji po sprawdzeniu kilku spółek
+        debug_check_limit = 5 
+        debug_counter = 0
         
         for ticker, df in self.data_cache.items():
             if df.empty: continue
@@ -402,16 +396,21 @@ class QuantumOptimizer:
                 cond_main = (sim_df['aqm_score'] > min_score)
                 
                 # Zabezpieczenie: jeśli qps/ves/mrs zostały wypełnione zerami w fillna(), to warunek > comp_min je odrzuci
-                # Ale przynajmniej nie wywali błędu.
                 if 'qps' in sim_df.columns:
                     cond_comps = ((sim_df['qps'] > comp_min) & (sim_df['ves'] > comp_min) & (sim_df['mrs'] > comp_min))
                     entry_mask = cond_main & cond_comps
                     
-                    if should_debug:
+                    # === DEBUG DIAGNOSTIC ===
+                    if debug_counter < debug_check_limit and not entry_mask.any():
+                        debug_counter += 1
+                        # Logujemy maksymalne wartości, aby sprawdzić, czy w ogóle coś przekracza próg
+                        max_aqm = sim_df['aqm_score'].max()
                         max_qps = sim_df['qps'].max()
                         max_ves = sim_df['ves'].max()
-                        logger.info(f"DEBUG {ticker}: Max QPS={max_qps:.2f}, Max VES={max_ves:.2f} vs Min={comp_min}")
-                        should_debug = False
+                        if max_aqm < min_score:
+                            logger.info(f"DEBUG {ticker}: Max AQM={max_aqm:.2f} < Min={min_score:.2f} (To dlatego brak transakcji)")
+                        elif max_ves < comp_min:
+                            logger.info(f"DEBUG {ticker}: Max VES={max_ves:.2f} < CompMin={comp_min:.2f} (Brak wolumenu?)")
                 else:
                     entry_mask = cond_main
             
