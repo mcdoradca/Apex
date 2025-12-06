@@ -221,8 +221,11 @@ class QuantumOptimizer:
         max_hold = params['h3_max_hold']
         for ticker, df in self.data_cache.items():
             if df.empty: continue
+            
+            # Filtrowanie dat - df.index jest teraz pewny jako datetime
             mask_date = (df.index >= start_ts) & (df.index <= end_ts)
             sim_df = df[mask_date]
+            
             if len(sim_df) < 2: continue
             entry_mask = None
             if self.strategy_mode == 'H3':
@@ -409,11 +412,18 @@ class QuantumOptimizer:
         try:
             daily_df = standardize_df_columns(pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index'))
             if len(daily_df) < 100: return pd.DataFrame()
-            daily_df.index = pd.to_datetime(daily_df.index)
+            
+            # === CRITICAL FIX: Zawsze konwertujemy indeks na datetime i usuwamy strefy czasowe ===
+            if not isinstance(daily_df.index, pd.DatetimeIndex):
+                daily_df.index = pd.to_datetime(daily_df.index)
+            daily_df.index = daily_df.index.tz_localize(None) # Usunięcie strefy czasowej
+            # ===================================================================================
+            
             daily_df.sort_index(inplace=True)
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
             if self.strategy_mode == 'H3':
+                # (Logika H3 bez zmian, bo korzysta z daily_df, które już jest naprawione powyżej)
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
@@ -439,10 +449,18 @@ class QuantumOptimizer:
                 return daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].dropna()
 
             elif self.strategy_mode == 'AQM':
+                # === FIX DLA DANYCH WEEKLY/OBV ===
+                # Upewniamy się, że też nie mają stref czasowych
+                if not weekly_df.empty and isinstance(weekly_df.index, pd.DatetimeIndex):
+                    weekly_df.index = weekly_df.index.tz_localize(None)
+                if not obv_df.empty and isinstance(obv_df.index, pd.DatetimeIndex):
+                    obv_df.index = obv_df.index.tz_localize(None)
+                # ==================================
+
                 aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
                     daily_df=daily_df,
                     weekly_df=weekly_df,
-                    intraday_60m_df=pd.DataFrame(),
+                    intraday_60m_df=pd.DataFrame(), 
                     obv_df=obv_df,
                     macro_data=self.macro_data,
                     earnings_days_to=None
