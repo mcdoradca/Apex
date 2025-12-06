@@ -63,22 +63,17 @@ def _run_schema_and_index_migration(session: Session):
         safe_add_column('phasex_candidates', 'volume_avg', 'BIGINT')
 
         # === 5. PHASE 4 CANDIDATES (H4 KINETIC ALPHA) ===
-        # Tabela phase4_candidates powinna zostać utworzona automatycznie przez SQLAlchemy create_all,
-        # ale na wszelki wypadek dodajemy tutaj kolumny, jeśli tabela już istnieje (migracja w przód).
         safe_add_column('phase4_candidates', 'kinetic_score', 'INTEGER')
         safe_add_column('phase4_candidates', 'elasticity', 'NUMERIC(10, 4)')
         safe_add_column('phase4_candidates', 'shots_30d', 'INTEGER DEFAULT 0')
         safe_add_column('phase4_candidates', 'avg_intraday_volatility', 'NUMERIC(10, 4)')
-        
-        # Nowe kolumny statystyczne H4 (zgodnie z najnowszym modelem)
         safe_add_column('phase4_candidates', 'max_daily_shots', 'INTEGER DEFAULT 0')
         safe_add_column('phase4_candidates', 'total_2pct_shots_ytd', 'INTEGER DEFAULT 0')
         safe_add_column('phase4_candidates', 'avg_swing_size', 'NUMERIC(10, 2)')
         safe_add_column('phase4_candidates', 'hard_floor_violations', 'INTEGER DEFAULT 0')
-        
         safe_add_column('phase4_candidates', 'last_shot_date', 'DATE')
 
-        # === 6. VIRTUAL TRADES (Metryki H4 dla Backtestu) ===
+        # === 6. VIRTUAL TRADES (Metryki H4 i H5 Flux) ===
         metrics_cols = [
             ("metric_atr_14", "NUMERIC(12, 6)"),
             ("metric_time_dilation", "NUMERIC(12, 6)"),
@@ -99,9 +94,13 @@ def _run_schema_and_index_migration(session: Session):
             ("ai_audit_report", "TEXT"),
             ("ai_audit_date", "TIMESTAMP WITH TIME ZONE"),
             ("ai_optimization_suggestion", "JSONB"),
-            # Nowe kolumny dla H4
+            # Metryki H4
             ("metric_kinetic_energy", "NUMERIC(10, 4)"),
-            ("metric_elasticity", "NUMERIC(10, 4)")
+            ("metric_elasticity", "NUMERIC(10, 4)"),
+            # === NOWOŚĆ: Metryki H5 (Flux) ===
+            ("metric_flux_score", "NUMERIC(10, 4)"),
+            ("metric_flux_velocity", "NUMERIC(10, 4)"),
+            ("metric_flux_ofp", "NUMERIC(10, 4)")
         ]
         for col, type_def in metrics_cols:
             safe_add_column('virtual_trades', col, type_def)
