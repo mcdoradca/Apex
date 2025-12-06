@@ -75,8 +75,16 @@ class QuantumOptimizer:
             self.macro_data = self._load_macro_context()
             self._preload_data_to_cache()
             
+            # === DIAGNOSTYKA CACHE ===
             if not self.data_cache:
-                raise Exception("Brak danych w cache.")
+                raise Exception("Brak danych w cache! (Pusty słownik data_cache)")
+            
+            first_ticker = list(self.data_cache.keys())[0]
+            first_df = self.data_cache[first_ticker]
+            logger.info(f"DIAGNOSTYKA: Cache zawiera {len(self.data_cache)} tickerów.")
+            logger.info(f"DIAGNOSTYKA: Przykładowy ticker {first_ticker}: {len(first_df)} wierszy. Kolumny: {list(first_df.columns)}")
+            logger.info(f"DIAGNOSTYKA: Zakres dat {first_ticker}: {first_df.index.min()} - {first_df.index.max()}")
+            # ========================
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
             
@@ -219,10 +227,15 @@ class QuantumOptimizer:
         tp_mult = params['h3_tp_multiplier']
         sl_mult = params['h3_sl_multiplier']
         max_hold = params['h3_max_hold']
+        
         for ticker, df in self.data_cache.items():
             if df.empty: continue
             
-            # Filtrowanie dat - df.index jest teraz pewny jako datetime
+            # === POPRAWKA: Filtrowanie dat (Hard Reset) ===
+            # Upewniamy się, że index nie ma strefy czasowej, tak jak start_ts/end_ts
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+                
             mask_date = (df.index >= start_ts) & (df.index <= end_ts)
             sim_df = df[mask_date]
             
@@ -416,14 +429,13 @@ class QuantumOptimizer:
             # === CRITICAL FIX: Zawsze konwertujemy indeks na datetime i usuwamy strefy czasowe ===
             if not isinstance(daily_df.index, pd.DatetimeIndex):
                 daily_df.index = pd.to_datetime(daily_df.index)
-            daily_df.index = daily_df.index.tz_localize(None) # Usunięcie strefy czasowej
+            daily_df.index = daily_df.index.tz_localize(None) 
             # ===================================================================================
             
             daily_df.sort_index(inplace=True)
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
             if self.strategy_mode == 'H3':
-                # (Logika H3 bez zmian, bo korzysta z daily_df, które już jest naprawione powyżej)
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
@@ -450,7 +462,6 @@ class QuantumOptimizer:
 
             elif self.strategy_mode == 'AQM':
                 # === FIX DLA DANYCH WEEKLY/OBV ===
-                # Upewniamy się, że też nie mają stref czasowych
                 if not weekly_df.empty and isinstance(weekly_df.index, pd.DatetimeIndex):
                     weekly_df.index = weekly_df.index.tz_localize(None)
                 if not obv_df.empty and isinstance(obv_df.index, pd.DatetimeIndex):
