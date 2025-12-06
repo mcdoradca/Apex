@@ -173,6 +173,11 @@ class VirtualTrade(Base):
     metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True)
     metric_elasticity = Column(NUMERIC(10, 4), nullable=True)
 
+    # === H5 (OMNI-FLUX) METRICS ===
+    metric_flux_score = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_velocity = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_ofp = Column(NUMERIC(10, 4), nullable=True)
+
 class AlphaVantageCache(Base):
     __tablename__ = 'alpha_vantage_cache'
     ticker = Column(VARCHAR(50), primary_key=True, nullable=False, index=True)
