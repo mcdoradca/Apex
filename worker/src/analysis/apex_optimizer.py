@@ -33,6 +33,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 class QuantumOptimizer:
     """
     SERCE SYSTEMU APEX V14 - PERSISTENT MEMORY MODE (SAFE)
+    Naprawiona wersja: Zarządzanie sesjami DB w wątkach + Obsługa błędów AQM.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -77,13 +78,12 @@ class QuantumOptimizer:
             
             # === DIAGNOSTYKA CACHE ===
             if not self.data_cache:
-                raise Exception("Brak danych w cache! (Pusty słownik data_cache)")
+                raise Exception("Brak danych w cache! (Pusty słownik data_cache). Sprawdź logi pod kątem błędów ładowania.")
             
             first_ticker = list(self.data_cache.keys())[0]
             first_df = self.data_cache[first_ticker]
             logger.info(f"DIAGNOSTYKA: Cache zawiera {len(self.data_cache)} tickerów.")
-            logger.info(f"DIAGNOSTYKA: Przykładowy ticker {first_ticker}: {len(first_df)} wierszy. Kolumny: {list(first_df.columns)}")
-            logger.info(f"DIAGNOSTYKA: Zakres dat {first_ticker}: {first_df.index.min()} - {first_df.index.max()}")
+            logger.info(f"DIAGNOSTYKA: Przykładowy ticker {first_ticker}: {len(first_df)} wierszy.")
             # ========================
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
@@ -147,23 +147,31 @@ class QuantumOptimizer:
     def _load_macro_context(self):
         append_scan_log(self.session, "📊 Pobieranie danych Makro (Nasdaq Benchmark)...")
         macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
-        with get_db_session() as session:
+        
+        # Używamy osobnej sesji dla makro, aby nie blokować głównej
+        local_session = get_db_session()
+        try:
             client = backtest_engine.AlphaVantageClient()
-            # === FIX: SPY -> QQQ (NASDAQ) ===
-            spy_raw = get_raw_data_with_cache(session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+            spy_raw = get_raw_data_with_cache(local_session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
             if spy_raw:
                 macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
                 macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
                 macro['spy_df'].sort_index(inplace=True)
+            
             if self.strategy_mode == 'AQM':
-                yield_raw = get_raw_data_with_cache(session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
+                yield_raw = get_raw_data_with_cache(local_session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
                 if yield_raw and 'data' in yield_raw:
                     try: macro['yield_10y'] = float(yield_raw['data'][0]['value'])
                     except: pass
-                inf_raw = get_raw_data_with_cache(session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
+                inf_raw = get_raw_data_with_cache(local_session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
                 if inf_raw and 'data' in inf_raw:
                     try: macro['inflation'] = float(inf_raw['data'][0]['value'])
                     except: pass
+        except Exception as e:
+            logger.warning(f"Błąd ładowania makro: {e}")
+        finally:
+            local_session.close()
+            
         return macro
 
     def _objective(self, trial):
@@ -189,21 +197,13 @@ class QuantumOptimizer:
             }
 
         # === OBSŁUGA OKRESÓW CZASOWYCH ===
-        if self.scan_period == 'Q1':
-            start_ts = pd.Timestamp(f"{self.target_year}-01-01")
-            end_ts = pd.Timestamp(f"{self.target_year}-03-31")
-        elif self.scan_period == 'Q2':
-            start_ts = pd.Timestamp(f"{self.target_year}-04-01")
-            end_ts = pd.Timestamp(f"{self.target_year}-06-30")
-        elif self.scan_period == 'Q3':
-            start_ts = pd.Timestamp(f"{self.target_year}-07-01")
-            end_ts = pd.Timestamp(f"{self.target_year}-09-30")
-        elif self.scan_period == 'Q4':
-            start_ts = pd.Timestamp(f"{self.target_year}-10-01")
-            end_ts = pd.Timestamp(f"{self.target_year}-12-31")
-        else: # FULL YEAR
-            start_ts = pd.Timestamp(f"{self.target_year}-01-01")
-            end_ts = pd.Timestamp(f"{self.target_year}-12-31")
+        start_ts = pd.Timestamp(f"{self.target_year}-01-01")
+        end_ts = pd.Timestamp(f"{self.target_year}-12-31")
+
+        if self.scan_period == 'Q1': end_ts = pd.Timestamp(f"{self.target_year}-03-31")
+        elif self.scan_period == 'Q2': start_ts = pd.Timestamp(f"{self.target_year}-04-01"); end_ts = pd.Timestamp(f"{self.target_year}-06-30")
+        elif self.scan_period == 'Q3': start_ts = pd.Timestamp(f"{self.target_year}-07-01"); end_ts = pd.Timestamp(f"{self.target_year}-09-30")
+        elif self.scan_period == 'Q4': start_ts = pd.Timestamp(f"{self.target_year}-10-01")
         
         result = self._run_simulation_unified(params, start_ts, end_ts)
         
@@ -231,8 +231,6 @@ class QuantumOptimizer:
         for ticker, df in self.data_cache.items():
             if df.empty: continue
             
-            # === POPRAWKA: Filtrowanie dat (Hard Reset) ===
-            # Upewniamy się, że index nie ma strefy czasowej, tak jak start_ts/end_ts
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
                 
@@ -252,8 +250,12 @@ class QuantumOptimizer:
                 cond_main = (sim_df['aqm_score'] > min_score)
                 cond_comps = ((sim_df['qps'] > comp_min) & (sim_df['ves'] > comp_min) & (sim_df['mrs'] > comp_min))
                 entry_mask = cond_main & cond_comps
+            
+            if entry_mask is None: continue
+
             entry_indices = np.where(entry_mask)[0]
             last_exit_idx = -1
+            
             for idx in entry_indices:
                 if idx <= last_exit_idx: continue
                 if idx + 1 >= len(sim_df): break 
@@ -389,7 +391,9 @@ class QuantumOptimizer:
                 processed += 1
                 try:
                     if f.result(): loaded += 1
-                except: pass
+                except Exception as e:
+                    logger.error(f"Data Load Error for ticker: {e}")
+                
                 if processed % 10 == 0:
                     update_system_control(self.session, 'scan_progress_processed', str(processed))
                     update_system_control(self.session, 'scan_progress_total', str(total_tickers))
@@ -397,45 +401,61 @@ class QuantumOptimizer:
         append_scan_log(self.session, f"✅ Cache gotowy: {self.tickers_count} / {total_tickers} spółek.")
 
     def _load_ticker_data(self, ticker):
-        with get_db_session() as thread_session:
-            try:
-                time.sleep(0.1) 
-                api_client = backtest_engine.AlphaVantageClient()
-                daily_data = get_raw_data_with_cache(thread_session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
-                if not daily_data: return False
-                h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, thread_session)
-                weekly_df = pd.DataFrame()
-                obv_df = pd.DataFrame()
-                if self.strategy_mode == 'AQM':
-                    w_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
-                    if w_raw: weekly_df = standardize_df_columns(pd.DataFrame.from_dict(w_raw.get('Weekly Adjusted Time Series', {}), orient='index'))
-                    obv_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'OBV', 'get_obv')
-                    if obv_raw:
-                        obv_df = pd.DataFrame.from_dict(obv_raw.get('Technical Analysis: OBV', {}), orient='index')
+        # === NAPRAWA WYCIEKU SESJI ===
+        # Tworzymy sesję i GWARANTUJEMY jej zamknięcie.
+        thread_session = get_db_session()
+        try:
+            # Pacing dla API (żeby nie zabić rate limitu od razu)
+            time.sleep(0.1) 
+            api_client = backtest_engine.AlphaVantageClient()
+            
+            daily_data = get_raw_data_with_cache(thread_session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
+            if not daily_data: return False
+            
+            h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, api_client, thread_session)
+            
+            weekly_df = pd.DataFrame()
+            obv_df = pd.DataFrame()
+            
+            if self.strategy_mode == 'AQM':
+                w_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
+                if w_raw: 
+                    weekly_df = standardize_df_columns(pd.DataFrame.from_dict(w_raw.get('Weekly Adjusted Time Series', {}), orient='index'))
+                
+                obv_raw = get_raw_data_with_cache(thread_session, api_client, ticker, 'OBV', 'get_obv')
+                if obv_raw:
+                    obv_df = pd.DataFrame.from_dict(obv_raw.get('Technical Analysis: OBV', {}), orient='index')
+                    if not obv_df.empty:
                         obv_df.index = pd.to_datetime(obv_df.index)
                         obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
-                processed_df = self._preprocess_ticker_unified(daily_data, h2_data, weekly_df, obv_df)
-                if not processed_df.empty:
-                    self.data_cache[ticker] = processed_df
-                    return True
-                return False
-            except: return False
+            
+            processed_df = self._preprocess_ticker_unified(daily_data, h2_data, weekly_df, obv_df)
+            
+            if not processed_df.empty:
+                self.data_cache[ticker] = processed_df
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Load Error ({ticker}): {e}")
+            return False
+        finally:
+            thread_session.close() # <--- KLUCZOWA POPRAWKA
 
     def _preprocess_ticker_unified(self, daily_data, h2_data, weekly_df, obv_df) -> pd.DataFrame:
         try:
             daily_df = standardize_df_columns(pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index'))
             if len(daily_df) < 100: return pd.DataFrame()
             
-            # === CRITICAL FIX: Zawsze konwertujemy indeks na datetime i usuwamy strefy czasowe ===
             if not isinstance(daily_df.index, pd.DatetimeIndex):
                 daily_df.index = pd.to_datetime(daily_df.index)
             daily_df.index = daily_df.index.tz_localize(None) 
-            # ===================================================================================
             
             daily_df.sort_index(inplace=True)
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
             if self.strategy_mode == 'H3':
+                # Logika H3 (bez zmian)
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
@@ -476,8 +496,26 @@ class QuantumOptimizer:
                     macro_data=self.macro_data,
                     earnings_days_to=None
                 )
-                if 'atr' in aqm_df.columns: aqm_df['atr_14'] = aqm_df['atr']
+                
+                # Zabezpieczenie: jeśli aqm_df puste lub brak ATR
+                if aqm_df.empty: return pd.DataFrame()
+                
+                if 'atr' in aqm_df.columns: 
+                    aqm_df['atr_14'] = aqm_df['atr']
+                elif 'atr_14' not in aqm_df.columns:
+                    # Fallback jeśli ATR nie został policzony w logice V4
+                    aqm_df['atr_14'] = daily_df['atr_14']
+
                 req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
+                
+                # Sprawdź czy mamy wszystkie kolumny, jeśli nie, zwróć puste (bezpiecznik)
+                if not all(col in aqm_df.columns for col in req_cols):
+                    logger.warning("AQM Preprocess: Brakujące kolumny w wyniku.")
+                    return pd.DataFrame()
+                    
                 return aqm_df[req_cols].dropna()
+            
             return pd.DataFrame()
-        except: return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"Preprocess Error: {e}")
+            return pd.DataFrame()
