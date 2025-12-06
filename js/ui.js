@@ -235,89 +235,114 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (ZMODYFIKOWANY UI) ===
+    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (ZMODYFIKOWANY UI Z SL/TP) ===
     phase5View: (poolData) => {
+        // --- SAFE GUARD: Sprawdź czy poolData to tablica ---
+        if (!Array.isArray(poolData)) {
+            return `<div class="p-4 text-center text-red-400">Błąd danych F5 (Data Stream Error)</div>`;
+        }
+
         const activeSlots = poolData.slice(0, 8); 
         
         const slotsHtml = activeSlots.map((item, index) => {
-            const elast = item.elasticity || 0;
-            const vel = item.velocity || 0;
-            const score = item.flux_score || 0;
-            const price = item.price || 0;
+            // --- WARSTWA SANITYZACJI DANYCH (CRITICAL FIX) ---
+            // Wszystkie zmienne przygotowujemy TUTAJ, jako bezpieczne stringi lub liczby.
+            // HTML dostaje tylko gotowe wartości.
             
-            // --- LOGIKA WIZUALNA "ACTION FIRST" ---
+            // 1. Podstawowe dane
+            const priceVal = typeof item.price === 'number' ? item.price : 0;
+            const scoreVal = typeof item.flux_score === 'number' ? item.flux_score : 0;
+            const velVal = typeof item.velocity === 'number' ? item.velocity : 0;
+            const elastVal = typeof item.elasticity === 'number' ? item.elasticity : 0;
+            const tickerStr = item.ticker || "???";
+
+            // 2. Dane SL/TP/RR (Obsługa NULL z backendu)
+            const slRaw = item.stop_loss;
+            const tpRaw = item.take_profit;
+            const rrRaw = item.risk_reward;
+
+            // Logika wyświetlania: jeśli wartość > 0, to formatujemy, inaczej "---"
+            const slText = (typeof slRaw === 'number' && slRaw > 0) ? slRaw.toFixed(2) : "---";
+            const tpText = (typeof tpRaw === 'number' && tpRaw > 0) ? tpRaw.toFixed(2) : "---";
+            const rrText = (typeof rrRaw === 'number' && rrRaw > 0) ? rrRaw.toFixed(1) + "R" : "---";
+
+            // 3. Logika kolorów i akcji
             let cardState = "flux-state-wait";
             let actionText = "CZEKAJ";
             let actionColor = "text-action-gray";
             let actionDescription = "Monitorowanie...";
             
-            // 1. ZIELONA STREFA (ACTION)
-            // Jeśli Score > 65 lub Elasticity sugeruje silne wybicie/dip
-            if (score >= 65) {
+            if (scoreVal >= 65) {
                 cardState = "flux-state-action";
                 actionText = "KUPUJ";
                 actionColor = "text-action-green";
                 actionDescription = "Setup Potwierdzony!";
-                
-                // Rozróżnienie strategii
-                if (elast < -1.0) actionText = "DIP BUY";
-                else if (elast > 0.5) actionText = "BREAKOUT";
-                
+                if (elastVal < -1.0) actionText = "DIP BUY";
+                else if (elastVal > 0.5) actionText = "BREAKOUT";
             } 
-            // 2. ŻÓŁTA STREFA (READY)
-            // Jeśli jest blisko (Score > 40) lub Velocity rośnie
-            else if (score >= 40 || vel > 1.5) {
+            else if (scoreVal >= 40 || velVal > 1.5) {
                 cardState = "flux-state-ready";
                 actionText = "GOTOWY";
                 actionColor = "text-action-yellow";
                 actionDescription = "Szukam wejścia...";
             }
             
-            const isActive = item.fails === 0;
+            const isActive = (item.fails || 0) === 0;
             const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
             
+            // --- BEZPIECZNY TEMPLATE STRING (Same zmienne) ---
             return `
             <div class="pool-slot ${cardState} relative overflow-hidden group">
-                <!-- TŁO NUMERU -->
                 <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
                 
-                <!-- GÓRA: TICKER + CENA -->
                 <div class="flex justify-between items-start z-10">
                     <div>
                         <div class="flex items-center gap-2 mb-1">
                             ${statusIcon}
-                            <span class="font-black text-2xl text-white tracking-wide">${item.ticker}</span>
+                            <span class="font-black text-2xl text-white tracking-wide">${tickerStr}</span>
                         </div>
-                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${price.toFixed(2)}</span></div>
+                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${priceVal.toFixed(2)}</span></div>
                     </div>
-                    <!-- MAŁY SCORE (Dla detalu) -->
                     <div class="text-right">
                         <div class="text-[10px] uppercase text-gray-500 font-bold">Flux Score</div>
-                        <div class="text-xl font-black ${actionColor}">${score}</div>
+                        <div class="text-xl font-black ${actionColor}">${scoreVal}</div>
                     </div>
                 </div>
                 
-                <!-- ŚRODEK: WIELKA KOMENDA -->
-                <div class="flux-action-text ${actionColor} py-4">
+                <div class="flux-action-text ${actionColor} py-2">
                     ${actionText}
                 </div>
                 
-                <!-- DÓŁ: OPIS I PASEK -->
+                <!-- SEKCJA SL/TP (BEZPIECZNA) -->
+                <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[10px] uppercase text-red-500 font-bold">SL</span>
+                        <span class="text-sm font-bold text-red-400 font-mono">${slText}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-[10px] uppercase text-green-500 font-bold">TP</span>
+                        <span class="text-sm font-bold text-green-400 font-mono">${tpText}</span>
+                    </div>
+                    <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
+                        <span class="text-[9px] uppercase text-gray-500">R:R</span>
+                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${rrText}</span>
+                    </div>
+                </div>
+                
                 <div class="mt-auto z-10">
                     <div class="flex justify-between items-end mb-1">
                         <span class="text-[10px] text-gray-400 font-mono uppercase">${actionDescription}</span>
-                        <!-- Velocity jako mały wskaźnik aktywności -->
-                        <span class="text-[10px] font-mono ${vel > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${vel.toFixed(1)}x</span>
+                        <span class="text-[10px] font-mono ${velVal > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${velVal.toFixed(1)}x</span>
                     </div>
                     <div class="h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-gray-700">
-                        <div class="h-full ${score >= 65 ? 'bg-emerald-500' : (score >= 40 ? 'bg-yellow-500' : 'bg-gray-600')} transition-all duration-500" style="width: ${Math.min(100, score)}%"></div>
+                        <div class="h-full ${scoreVal >= 65 ? 'bg-emerald-500' : (scoreVal >= 40 ? 'bg-yellow-500' : 'bg-gray-600')} transition-all duration-500" style="width: ${Math.min(100, scoreVal)}%"></div>
                     </div>
                 </div>
             </div>`;
         }).join('');
 
         const emptySlotsCount = 8 - activeSlots.length;
-        const emptySlotsHtml = Array(emptySlotsCount).fill(0).map((_, i) => `
+        const emptySlotsHtml = Array(Math.max(0, emptySlotsCount)).fill(0).map((_, i) => `
             <div class="pool-slot bg-[#0d1117] border border-gray-800 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-gray-600 opacity-50 min-h-[140px]">
                 <i data-lucide="loader" class="w-8 h-8 mb-2 animate-spin text-gray-700"></i>
                 <span class="text-xs font-mono">Slot Wolny</span>
@@ -348,7 +373,6 @@ export const renderers = {
                 </div>
             </div>
 
-            <!-- Active Pool Grid -->
             <div class="mb-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     ${slotsHtml}
@@ -361,7 +385,7 @@ export const renderers = {
                     <i data-lucide="info" class="w-4 h-4 mr-2 text-blue-400"></i>
                     <span>System automatycznie rotuje spółki. Obserwuj kafelki <span class="text-emerald-400 font-bold">ZIELONE</span> (Sygnał) i <span class="text-yellow-400 font-bold">ŻÓŁTE</span> (Obserwuj).</span>
                 </div>
-                <div class="font-mono text-gray-600">v5.0.1 Flux Engine</div>
+                <div class="font-mono text-gray-600">v5.0.2 Flux SafeView</div>
             </div>
         </div>`;
     },
