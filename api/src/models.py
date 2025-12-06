@@ -37,8 +37,6 @@ class PhaseXCandidate(Base):
     last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
-# === FAZA 4: KINETIC ALPHA (H4) ===
-# To jest klasa, której brakowało w API i powodowała błąd 500
 class Phase4Candidate(Base):
     __tablename__ = 'phase4_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -172,9 +170,13 @@ class VirtualTrade(Base):
     ai_optimization_suggestion = Column(JSONB, nullable=True)
     
     # === H4 METRICS ===
-    # To też powodowało błąd w crud.py
     metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True)
     metric_elasticity = Column(NUMERIC(10, 4), nullable=True)
+
+    # === H5 (OMNI-FLUX) METRICS ===
+    metric_flux_score = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_velocity = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_ofp = Column(NUMERIC(10, 4), nullable=True)
 
 class AlphaVantageCache(Base):
     __tablename__ = 'alpha_vantage_cache'
