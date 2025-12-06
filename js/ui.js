@@ -235,7 +235,7 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (ZMODYFIKOWANY UI Z SL/TP) ===
+    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (BEZ R:R) ===
     phase5View: (poolData) => {
         // --- SAFE GUARD: Sprawdź czy poolData to tablica ---
         if (!Array.isArray(poolData)) {
@@ -245,28 +245,22 @@ export const renderers = {
         const activeSlots = poolData.slice(0, 8); 
         
         const slotsHtml = activeSlots.map((item, index) => {
-            // --- WARSTWA SANITYZACJI DANYCH (CRITICAL FIX) ---
-            // Wszystkie zmienne przygotowujemy TUTAJ, jako bezpieczne stringi lub liczby.
-            // HTML dostaje tylko gotowe wartości.
-            
-            // 1. Podstawowe dane
+            // --- WARSTWA SANITYZACJI DANYCH ---
             const priceVal = typeof item.price === 'number' ? item.price : 0;
             const scoreVal = typeof item.flux_score === 'number' ? item.flux_score : 0;
             const velVal = typeof item.velocity === 'number' ? item.velocity : 0;
             const elastVal = typeof item.elasticity === 'number' ? item.elasticity : 0;
             const tickerStr = item.ticker || "???";
 
-            // 2. Dane SL/TP/RR (Obsługa NULL z backendu)
+            // Obsługa NULL z backendu dla SL/TP
             const slRaw = item.stop_loss;
             const tpRaw = item.take_profit;
-            const rrRaw = item.risk_reward;
 
-            // Logika wyświetlania: jeśli wartość > 0, to formatujemy, inaczej "---"
             const slText = (typeof slRaw === 'number' && slRaw > 0) ? slRaw.toFixed(2) : "---";
             const tpText = (typeof tpRaw === 'number' && tpRaw > 0) ? tpRaw.toFixed(2) : "---";
-            const rrText = (typeof rrRaw === 'number' && rrRaw > 0) ? rrRaw.toFixed(1) + "R" : "---";
+            // R:R ZOSTAŁO USUNIĘTE Z WIDOKU
 
-            // 3. Logika kolorów i akcji
+            // Logika kolorów i akcji
             let cardState = "flux-state-wait";
             let actionText = "CZEKAJ";
             let actionColor = "text-action-gray";
@@ -290,7 +284,6 @@ export const renderers = {
             const isActive = (item.fails || 0) === 0;
             const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
             
-            // --- BEZPIECZNY TEMPLATE STRING (Same zmienne) ---
             return `
             <div class="pool-slot ${cardState} relative overflow-hidden group">
                 <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
@@ -313,19 +306,15 @@ export const renderers = {
                     ${actionText}
                 </div>
                 
-                <!-- SEKCJA SL/TP (BEZPIECZNA) -->
+                <!-- SEKCJA SL/TP (BEZ R:R) -->
                 <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5">
                     <div class="flex justify-between items-center">
                         <span class="text-[10px] uppercase text-red-500 font-bold">SL</span>
                         <span class="text-sm font-bold text-red-400 font-mono">${slText}</span>
                     </div>
-                    <div class="flex justify-between items-center">
+                    <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
                         <span class="text-[10px] uppercase text-green-500 font-bold">TP</span>
                         <span class="text-sm font-bold text-green-400 font-mono">${tpText}</span>
-                    </div>
-                    <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
-                        <span class="text-[9px] uppercase text-gray-500">R:R</span>
-                        <span class="text-[10px] font-bold text-yellow-500 font-mono">${rrText}</span>
                     </div>
                 </div>
                 
@@ -385,7 +374,7 @@ export const renderers = {
                     <i data-lucide="info" class="w-4 h-4 mr-2 text-blue-400"></i>
                     <span>System automatycznie rotuje spółki. Obserwuj kafelki <span class="text-emerald-400 font-bold">ZIELONE</span> (Sygnał) i <span class="text-yellow-400 font-bold">ŻÓŁTE</span> (Obserwuj).</span>
                 </div>
-                <div class="font-mono text-gray-600">v5.0.2 Flux SafeView</div>
+                <div class="font-mono text-gray-600">v5.0.3 Flux SafeView (No RR)</div>
             </div>
         </div>`;
     },
@@ -494,7 +483,6 @@ export const renderers = {
             return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}"><div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div><div class="flex justify-between items-start mb-3"><div><div class="flex items-center gap-2"><h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4><span class="strat-badge ${strat.class}">${strat.name}</span><i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i></div><div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div></div><div class="text-right"><div class="flex flex-col items-end"><span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span><span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span></div></div></div><div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2"><div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div><div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div><div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div></div><div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div><div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div></div>`;
         }).join('') : `<p class="text-center text-gray-500 col-span-full py-20">Brak aktywnych sygnałów H3. Uruchom skaner.</p>`;
         
-        // Zmiana: flex-wrap + mniejszy padding + mniejszy rozmiar tytułu dla lepszego skalowania
         return `<div id="h3-signals-view" class="max-w-7xl mx-auto"><div class="flex flex-wrap justify-between items-center mb-4 border-b border-gray-700 pb-4 gap-2"><div><h2 class="text-xl font-bold text-white flex items-center"><i data-lucide="target" class="w-5 h-5 mr-2 text-purple-500"></i>Sygnały H3 Live</h2><p class="text-xs text-gray-500 mt-1">Aktywne: <span class="text-green-400 font-bold">${activeCount}</span> | Oczekujące: <span class="text-yellow-400 font-bold">${pendingCount}</span></p></div><div class="flex items-center gap-2 mt-2 sm:mt-0"><div class="relative"><select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-gray-300 text-xs rounded-md focus:ring-sky-500 focus:border-sky-500 block w-full p-1.5 pl-2 pr-6 appearance-none cursor-pointer hover:bg-gray-800 transition-colors"><option value="score">Wg AQM Score</option><option value="rr">Wg R-Factor (Najlepsze)</option><option value="time">Wg Czasu Wygaśnięcia</option><option value="ticker">Wg Ticker (A-Z)</option></select><div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400"><i data-lucide="arrow-up-down" class="w-3 h-3"></i></div></div><button id="h3-refresh-btn" class="p-1.5 bg-gray-800 hover:bg-gray-700 rounded-md border border-gray-700 text-gray-300 transition-colors" title="Odśwież"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></div></div><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">${cardsHtml}</div></div>`;
     },
 
