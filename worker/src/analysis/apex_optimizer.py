@@ -313,10 +313,12 @@ class QuantumOptimizer:
                 req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
                 
                 # Bezpiecznik: jeśli brakuje kolumn, zwróć puste
+                # ALE: aqm_v4_logic.py już teraz robi fillna(0.0), więc req_cols powinny być
                 if not all(col in aqm_df.columns for col in req_cols):
                     return pd.DataFrame()
                     
-                return aqm_df[req_cols].dropna()
+                # Usuwamy dropna(), ponieważ zrobiliśmy fillna() w logice V4
+                return aqm_df[req_cols]
             
             return pd.DataFrame()
         except Exception:
@@ -375,6 +377,9 @@ class QuantumOptimizer:
         sl_mult = params['h3_sl_multiplier']
         max_hold = params['h3_max_hold']
         
+        # === DIAGNOSTYKA (Co 500 iteracji) ===
+        should_debug = (len(trades_pnl) == 0 and np.random.rand() < 0.001) # Rzadkie logowanie
+        
         for ticker, df in self.data_cache.items():
             if df.empty: continue
             
@@ -382,19 +387,31 @@ class QuantumOptimizer:
             sim_df = df[mask_date]
             
             if len(sim_df) < 2: continue
+            
             entry_mask = None
             if self.strategy_mode == 'H3':
                 h3_p = params['h3_percentile']
                 h3_m = params['h3_m_sq_threshold']
                 h3_min = params['h3_min_score']
                 entry_mask = ((sim_df['aqm_rank'] > h3_p) & (sim_df['m_sq_norm'] < h3_m) & (sim_df['aqm_score_h3'] > h3_min))
+            
             elif self.strategy_mode == 'AQM':
                 min_score = params['aqm_min_score']
                 comp_min = params['aqm_component_min']
+                
                 cond_main = (sim_df['aqm_score'] > min_score)
+                
+                # Zabezpieczenie: jeśli qps/ves/mrs zostały wypełnione zerami w fillna(), to warunek > comp_min je odrzuci
+                # Ale przynajmniej nie wywali błędu.
                 if 'qps' in sim_df.columns:
                     cond_comps = ((sim_df['qps'] > comp_min) & (sim_df['ves'] > comp_min) & (sim_df['mrs'] > comp_min))
                     entry_mask = cond_main & cond_comps
+                    
+                    if should_debug:
+                        max_qps = sim_df['qps'].max()
+                        max_ves = sim_df['ves'].max()
+                        logger.info(f"DEBUG {ticker}: Max QPS={max_qps:.2f}, Max VES={max_ves:.2f} vs Min={comp_min}")
+                        should_debug = False
                 else:
                     entry_mask = cond_main
             
