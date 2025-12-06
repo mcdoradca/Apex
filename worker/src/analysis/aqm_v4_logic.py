@@ -62,6 +62,103 @@ def _resample_to_daily(source_df: pd.DataFrame, rule='1D', method='last') -> pd.
     return resampled.ffill()
 
 # ==================================================================================
+# LOGIKA H4: KINETIC ALPHA (PULSE HUNTER) - PRZYWRÓCONA!
+# ==================================================================================
+
+def analyze_intraday_kinetics(intraday_df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    MÓZG STRATEGII H4: KINETIC ALPHA
+    Analizuje dane 5-minutowe w poszukiwaniu 'Kinetycznych Strzałów' (>2% ruchu w górę).
+    """
+    stats = {
+        'kinetic_score': 0,
+        'elasticity': 0.0,
+        'total_2pct_shots': 0,
+        'max_daily_shots': 0,
+        'avg_swing_size': 0.0,
+        'hard_floor_violations': 0,
+        'avg_intraday_volatility': 0.0,
+        'last_shot_date': None
+    }
+
+    if intraday_df is None or intraday_df.empty:
+        return stats
+
+    try:
+        df = _ensure_numeric(intraday_df.copy(), ['open', 'high', 'low', 'close', 'volume'])
+        df = _harden_index(df)
+        df.sort_index(inplace=True)
+
+        daily_groups = df.groupby(df.index.date)
+        
+        daily_shots_list = []
+        swing_sizes = []
+        volatilities = []
+        elasticity_scores = []
+        last_shot_dt = None
+
+        for date, day_data in daily_groups:
+            if len(day_data) < 10: continue 
+
+            day_open = day_data['open'].iloc[0]
+            day_high = day_data['high'].max()
+            day_low = day_data['low'].min()
+            
+            if day_open > 0 and (day_low - day_open) / day_open < -0.05:
+                stats['hard_floor_violations'] += 1
+            
+            if day_low > 0:
+                vol = (day_high - day_low) / day_low
+                volatilities.append(vol)
+
+            if (day_high - day_low) > 0:
+                day_close = day_data['close'].iloc[-1]
+                elast = (day_close - day_low) / (day_high - day_low)
+                elasticity_scores.append(elast)
+
+            shots_today = 0
+            current_low = day_data['low'].iloc[0]
+            
+            for i in range(1, len(day_data)):
+                candle = day_data.iloc[i]
+                price_high = candle['high']
+                price_low = candle['low']
+                
+                if current_low > 0:
+                    potential_gain = (price_high - current_low) / current_low
+                    if potential_gain >= 0.02: 
+                        shots_today += 1
+                        swing_sizes.append(potential_gain * 100)
+                        last_shot_dt = date
+                        current_low = price_low 
+                    elif price_low < current_low:
+                        current_low = price_low
+            
+            daily_shots_list.append(shots_today)
+
+        stats['total_2pct_shots'] = sum(daily_shots_list)
+        stats['max_daily_shots'] = max(daily_shots_list) if daily_shots_list else 0
+        stats['avg_swing_size'] = np.mean(swing_sizes) if swing_sizes else 0.0
+        stats['avg_intraday_volatility'] = np.mean(volatilities) if volatilities else 0.0
+        stats['elasticity'] = np.mean(elasticity_scores) if elasticity_scores else 0.0
+        stats['last_shot_date'] = last_shot_dt
+
+        base_score = 0
+        base_score += min(50, stats['total_2pct_shots'] * 1.5)
+        base_score += min(20, stats['max_daily_shots'] * 4)
+        if stats['avg_swing_size'] > 0:
+            base_score += min(30, (stats['avg_swing_size'] / 3.0) * 30)
+        penalty = stats['hard_floor_violations'] * 20
+        final_score = int(max(0, min(100, base_score - penalty)))
+        stats['kinetic_score'] = final_score
+
+        return stats
+
+    except Exception as e:
+        logger.error(f"H4 Logic Error: {e}", exc_info=True)
+        return stats
+
+# ==================================================================================
 # GŁÓWNA LOGIKA AQM (V4) - FIX: NEUTRAL FILLNA
 # ==================================================================================
 
