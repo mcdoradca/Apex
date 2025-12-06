@@ -365,7 +365,13 @@ def calculate_aqm_full_vector(
         df['aqm_score'] = df['qps'] * df['ves'] * df['mrs'] * df['tcs']
         
         cols = ['open', 'high', 'low', 'close', 'volume', 'atr', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
-        return df[cols].dropna()
+        
+        # === POPRAWKA: FAIL-SAFE FILL ===
+        # Zamiast usuwać wiersze z brakami (co zeruje historię, jeśli np. brakuje OBV),
+        # wypełniamy je zerami (neutralny/brak wpływu), aby symulacja mogła trwać.
+        df[cols] = df[cols].fillna(0.0)
+        
+        return df[cols]
 
     except Exception as e:
         logger.error(f"Krytyczny błąd w jądrze AQM v4: {e}", exc_info=True)
