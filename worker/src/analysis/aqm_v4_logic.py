@@ -62,7 +62,7 @@ def _resample_to_daily(source_df: pd.DataFrame, rule='1D', method='last') -> pd.
     return resampled.ffill()
 
 # ==================================================================================
-# LOGIKA H4: KINETIC ALPHA (PULSE HUNTER) - PRZYWRÓCONA!
+# LOGIKA H4: KINETIC ALPHA (PULSE HUNTER) - PRZYWRÓCONA
 # ==================================================================================
 
 def analyze_intraday_kinetics(intraday_df: pd.DataFrame) -> Dict[str, Any]:
