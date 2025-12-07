@@ -33,10 +33,9 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V16.0 - AQM V2 EARTHED
-    Dostosowano do specyfikacji "Wersja Uziemiona" (AQM v2.0):
-    1. Obsługa warstw: QPS, RAS, VMS, TCS.
-    2. Optymalizacja progów wejścia zgodnie z wytycznymi PDF.
+    SERCE SYSTEMU APEX V18.0 - CACHE SYNC FIX & H3 HARDENING
+    Naprawiono krytyczny błąd braku synchronizacji cache między Fazą 1 a Optymalizatorem.
+    Wzmocniono logikę H3, aby nie odrzucała pochopnie danych.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -79,13 +78,14 @@ class QuantumOptimizer:
             # 1. Makro
             self.macro_data = self._load_macro_context()
             
-            # 2. Cache Danych (SEKWENCYJNIE)
+            # 2. Cache Danych (SEKWENCYJNIE Z PRIORYTETEM CACHE FAZY 1)
             self._preload_data_to_cache_sequential()
             
             if not self.data_cache:
-                err_msg = "⛔ BŁĄD KRYTYCZNY: Cache danych jest pusty. Sprawdź tabelę companies/phase1_candidates."
+                err_msg = "⛔ BŁĄD KRYTYCZNY: Cache danych jest pusty! Sprawdź F1 lub limity API."
                 append_scan_log(self.session, err_msg)
-                raise Exception(err_msg)
+                self._mark_job_failed()
+                return
 
             update_system_control(self.session, 'worker_status', 'OPTIMIZING_CALC')
             
@@ -143,12 +143,13 @@ class QuantumOptimizer:
 
     def _load_macro_context(self):
         append_scan_log(self.session, "📊 Ładowanie tła makroekonomicznego...")
-        # Domyślne wartości
-        macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'fed_rate': 5.0, 'spy_df': pd.DataFrame()}
+        # Domyślne wartości (SAFE DEFAULTS)
+        macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 2.5, 'fed_rate': 5.0, 'spy_df': pd.DataFrame()}
         
         local_session = get_db_session()
         try:
             client = AlphaVantageClient()
+            # Próba pobrania QQQ z cache (Faza 1 często to ma)
             spy_raw = get_raw_data_with_cache(local_session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
             if spy_raw:
                 macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
@@ -156,6 +157,7 @@ class QuantumOptimizer:
                 macro['spy_df'].sort_index(inplace=True)
             
             if self.strategy_mode == 'AQM':
+                # Pobieranie wskaźników makro (z fallbackiem na brak danych)
                 yield_raw = get_raw_data_with_cache(local_session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
                 if yield_raw and 'data' in yield_raw:
                     try: macro['yield_10y'] = float(yield_raw['data'][0]['value'])
@@ -183,11 +185,11 @@ class QuantumOptimizer:
         tickers = self._get_all_tickers()
         
         if not tickers:
-            append_scan_log(self.session, "⚠️ Brak tickerów do analizy.")
+            append_scan_log(self.session, "⚠️ Brak tickerów w bazie (Faza 1 pusta?).")
             return
 
         total_tickers = len(tickers)
-        msg = f"🔄 Ładowanie danych dla {total_tickers} spółek (Tryb Stabilny)..."
+        msg = f"🔄 Ładowanie danych dla {total_tickers} spółek (Smart Cache Sync)..."
         logger.info(msg)
         append_scan_log(self.session, msg)
         
@@ -207,8 +209,9 @@ class QuantumOptimizer:
                         errors += 1
                 except Exception as e:
                     errors += 1
+                    logger.error(f"Critical error loading {ticker}: {e}")
                 
-                if (i + 1) % 20 == 0:
+                if (i + 1) % 10 == 0:
                     update_system_control(self.session, 'scan_progress_processed', str(i+1))
                     update_system_control(self.session, 'scan_progress_total', str(total_tickers))
         
@@ -223,14 +226,25 @@ class QuantumOptimizer:
         append_scan_log(self.session, summary)
 
     def _load_single_ticker_data(self, session, client, ticker):
-        daily_data = get_raw_data_with_cache(session, client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
-        if not daily_data: return False
+        # === KLUCZOWA POPRAWKA ===
+        # Najpierw próbujemy DAILY_ADJUSTED, bo to pobiera Faza 1. 
+        # Dzięki temu trafiamy w cache i nie marnujemy API.
+        daily_data = get_raw_data_with_cache(session, client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
         
+        # Fallback: Jeśli nie ma adjusted, próbujemy OHLCV (Unadjusted)
+        if not daily_data:
+            daily_data = get_raw_data_with_cache(session, client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
+        
+        if not daily_data: 
+            return False
+        
+        # 2. Pobierz dane H2 (Insider/News)
         h2_data = aqm_v3_h2_loader.load_h2_data_into_cache(ticker, client, session)
         
         weekly_df = pd.DataFrame()
         obv_df = pd.DataFrame()
         
+        # 3. Pobierz dane dodatkowe (tylko dla AQM)
         if self.strategy_mode == 'AQM':
             w_raw = get_raw_data_with_cache(session, client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
             if w_raw: 
@@ -253,7 +267,8 @@ class QuantumOptimizer:
     def _preprocess_ticker_unified(self, daily_data, h2_data, weekly_df, obv_df) -> pd.DataFrame:
         try:
             daily_df = standardize_df_columns(pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index'))
-            if len(daily_df) < 100: return pd.DataFrame()
+            
+            if len(daily_df) < 50: return pd.DataFrame()
             
             if not isinstance(daily_df.index, pd.DatetimeIndex):
                 daily_df.index = pd.to_datetime(daily_df.index)
@@ -263,36 +278,53 @@ class QuantumOptimizer:
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
             if self.strategy_mode == 'H3':
-                # Legacy H3 Logic (dla wstecznej kompatybilności)
+                # === H3 LOGIC HARDENING ===
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
-                daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
-                daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
-                daily_df['daily_returns'] = daily_df['close'].pct_change()
-                daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std()
+                
+                # Obliczenia z fallbackiem na 0.0
+                daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name) or 0.0, axis=1)
+                daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name) or 0.0, axis=1)
+                
+                daily_df['daily_returns'] = daily_df['close'].pct_change().fillna(0)
+                daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std().fillna(0) # Fix NaN
+                
                 if not news_df.empty:
                     nc = news_df.groupby(news_df.index.date).size() 
                     nc.index = pd.to_datetime(nc.index)
                     nc = nc.reindex(daily_df.index, fill_value=0)
-                    daily_df['information_entropy'] = nc.rolling(window=10).sum()
+                    daily_df['information_entropy'] = nc.rolling(window=10).sum().fillna(0)
                 else: daily_df['information_entropy'] = 0.0
-                daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean()
-                daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200).mean()
-                daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200).std()
+                
+                daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean().fillna(0)
+                
+                # POPRAWKA DLA 200D: Jeśli mało danych, użyj min_periods
+                daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200, min_periods=20).mean().fillna(0)
+                daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200, min_periods=20).std().fillna(1)
+                
                 daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
                 daily_df['m_sq'] = daily_df['normalized_volume'] 
                 daily_df['nabla_sq'] = daily_df['price_gravity']
+                
                 daily_df = calculate_h3_metrics_v4(daily_df, {}) 
-                daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
-                return daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].dropna()
+                daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100, min_periods=20).rank(pct=True).fillna(0)
+                
+                # Zamiast agresywnego dropna, zwracamy co mamy
+                return daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].fillna(0)
 
             elif self.strategy_mode == 'AQM':
-                # === AQM V2.0 (Uziemiona) ===
+                # === AQM V2.0 Logic ===
                 if not weekly_df.empty and isinstance(weekly_df.index, pd.DatetimeIndex):
                     weekly_df.index = weekly_df.index.tz_localize(None)
                 if not obv_df.empty and isinstance(obv_df.index, pd.DatetimeIndex):
                     obv_df.index = obv_df.index.tz_localize(None)
+
+                # Fallback dla Weekly/OBV
+                if weekly_df.empty:
+                    weekly_df = daily_df.resample('W').agg({
+                        'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                    }).dropna()
 
                 aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
                     daily_df=daily_df,
@@ -305,19 +337,17 @@ class QuantumOptimizer:
                 
                 if aqm_df.empty: return pd.DataFrame()
                 
-                # Standaryzacja nazwy ATR
                 if 'atr' in aqm_df.columns: 
                     aqm_df['atr_14'] = aqm_df['atr']
                 elif 'atr_14' not in aqm_df.columns:
                     aqm_df['atr_14'] = daily_df['atr_14']
 
-                # Nowe kolumny z logiki V2 (ras, vms, tcs)
                 req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ras', 'vms', 'tcs']
                 
                 if not all(col in aqm_df.columns for col in req_cols):
                     return pd.DataFrame()
                     
-                return aqm_df[req_cols]
+                return aqm_df[req_cols].fillna(0)
             
             return pd.DataFrame()
         except Exception:
@@ -337,18 +367,13 @@ class QuantumOptimizer:
             }
             
         elif self.strategy_mode == 'AQM':
-            # === OPTYMALIZACJA AQM V2 (Parametry z PDF) ===
+            # === OPTYMALIZACJA AQM V2 ===
             params = {
-                # Próg wejścia (PDF sugeruje 0.85, sprawdzamy okolice)
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.75, 0.95),
-                
-                # Próg potwierdzenia wolumenowego (PDF sugeruje 0.6)
                 'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.40, 0.80),
-                
-                # Parametry wyjścia (ATR Multipliers)
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0), # PDF mówi o TP=4.0
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0), # PDF mówi o SL=2.0
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 5, 20), # PDF mówi o 7 dniach
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0),
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 5, 20),
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
@@ -398,15 +423,8 @@ class QuantumOptimizer:
                 entry_mask = ((sim_df['aqm_rank'] > h3_p) & (sim_df['m_sq_norm'] < h3_m) & (sim_df['aqm_score_h3'] > h3_min))
             
             elif self.strategy_mode == 'AQM':
-                # === LOGIKA WEJŚCIA AQM V2 ===
                 min_score = params['aqm_min_score']
                 vms_min = params['aqm_vms_min']
-                
-                # Warunki z PDF:
-                # 1. RAS > 0.5 (Reżim RISK_ON, RAS przyjmuje 0.1 lub 1.0)
-                # 2. TCS > 0.5 (Poza Earnings, TCS przyjmuje 0.1 lub 1.0)
-                # 3. AQM Score > próg
-                # 4. VMS > próg
                 
                 if 'ras' in sim_df.columns:
                     entry_mask = (
@@ -416,7 +434,6 @@ class QuantumOptimizer:
                         (sim_df['vms'] > vms_min)
                     )
                 else:
-                    # Fallback gdyby kolumny nie istniały (mało prawdopodobne po pre-process)
                     entry_mask = (sim_df['aqm_score'] > min_score)
             
             if entry_mask is None: continue
@@ -531,7 +548,7 @@ class QuantumOptimizer:
             job.configuration = {
                 'best_params': best_params, 
                 'sensitivity_analysis': sensitivity_report, 
-                'version': 'V16_AQM_EARTHED', 
+                'version': 'V18_CACHE_SYNC', 
                 'strategy': self.strategy_mode,
                 'scan_period': self.scan_period, 
                 'tickers_analyzed': self.tickers_count
