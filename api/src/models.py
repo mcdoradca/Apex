@@ -5,6 +5,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TIMESTAMP as PG_TIMESTAMP, JSONB
 from .database import Base
 
+# === TABELA SPÓŁEK (FUNDAMENTALNA) ===
 class Company(Base):
     __tablename__ = 'companies'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -15,6 +16,7 @@ class Company(Base):
     sector_etf = Column(VARCHAR(10), nullable=True)
     last_updated = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
+# === FAZA 1: KANDYDACI EOD ===
 class Phase1Candidate(Base):
     __tablename__ = 'phase1_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -27,16 +29,18 @@ class Phase1Candidate(Base):
     days_to_earnings = Column(INTEGER, nullable=True)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# === FAZA X: KANDYDACI BIOX (PUMP HUNTER) ===
 class PhaseXCandidate(Base):
     __tablename__ = 'phasex_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
     price = Column(NUMERIC(12, 4))
     volume_avg = Column(BIGINT, nullable=True)
-    pump_count_1y = Column(INTEGER, default=0, comment="Ile razy urosła >50% w ciągu roku")
-    last_pump_date = Column(DATE, nullable=True, comment="Data ostatniego skoku >50%")
+    pump_count_1y = Column(INTEGER, default=0, comment="Ile razy urosła >20% w ciągu roku")
+    last_pump_date = Column(DATE, nullable=True, comment="Data ostatniego skoku")
     last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# === FAZA 4: KANDYDACI KINETIC ALPHA (H4) ===
 class Phase4Candidate(Base):
     __tablename__ = 'phase4_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -55,6 +59,7 @@ class Phase4Candidate(Base):
     last_shot_date = Column(DATE, nullable=True)
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# === FAZA 2: WYNIKI (KOMPATYBILNOŚĆ WSTECZNA) ===
 class Phase2Result(Base):
     __tablename__ = 'phase2_results'
     ticker = Column(VARCHAR(50), primary_key=True)
@@ -65,6 +70,7 @@ class Phase2Result(Base):
     total_score = Column(INTEGER)
     is_qualified = Column(Boolean)
 
+# === SYGNAŁY TRADINGOWE (LIVE) ===
 class TradingSignal(Base):
     __tablename__ = 'trading_signals'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
@@ -77,13 +83,20 @@ class TradingSignal(Base):
     take_profit = Column(NUMERIC(12, 2), nullable=True)
     risk_reward_ratio = Column(NUMERIC(5, 2), nullable=True)
     signal_candle_timestamp = Column(PG_TIMESTAMP(timezone=True), nullable=True)
+    
+    # Strefy wejścia (dla setupów, które nie są 'punktowe')
     entry_zone_bottom = Column(NUMERIC(12, 2), nullable=True)
     entry_zone_top = Column(NUMERIC(12, 2), nullable=True)
+    
     notes = Column(TEXT, nullable=True)
+    
+    # Zarządzanie pozycją
     highest_price_since_entry = Column(NUMERIC(12, 2), nullable=True)
     is_trailing_active = Column(Boolean, default=False)
     earnings_date = Column(DATE, nullable=True)
     expiration_date = Column(PG_TIMESTAMP(timezone=True), nullable=True)
+    
+    # Oczekiwania (dla Re-check Audytora)
     expected_profit_factor = Column(NUMERIC(10, 4), nullable=True)
     expected_win_rate = Column(NUMERIC(10, 4), nullable=True)
     
@@ -91,6 +104,7 @@ class TradingSignal(Base):
         Index('uq_active_pending_ticker', 'ticker', unique=True, postgresql_where=status.in_(['ACTIVE', 'PENDING'])),
     )
 
+# === STEROWANIE SYSTEMEM I STAN ===
 class SystemControl(Base):
     __tablename__ = 'system_control'
     key = Column(VARCHAR(50), primary_key=True)
@@ -114,6 +128,7 @@ class ProcessedNews(Base):
     source_url = Column(TEXT, nullable=True)
     __table_args__ = (UniqueConstraint('ticker', 'news_hash', name='uq_ticker_news_hash'),)
 
+# === PORTFEL INWESTYCYJNY (LIVE) ===
 class PortfolioHolding(Base):
     __tablename__ = 'portfolio_holdings'
     ticker = Column(VARCHAR(50), ForeignKey('companies.ticker', ondelete='CASCADE'), primary_key=True)
@@ -133,6 +148,7 @@ class TransactionHistory(Base):
     related_portfolio_ticker = Column(VARCHAR(50), nullable=True)
     profit_loss_usd = Column(NUMERIC(14, 2), nullable=True)
 
+# === WIRTUALNY PORTFEL I BACKTEST (SYMULACJA) ===
 class VirtualTrade(Base):
     __tablename__ = 'virtual_trades'
     id = Column(INTEGER, primary_key=True, autoincrement=True)
@@ -148,6 +164,7 @@ class VirtualTrade(Base):
     close_price = Column(NUMERIC(12, 2), nullable=True)
     final_profit_loss_percent = Column(NUMERIC(8, 2), nullable=True)
     
+    # Metryki H1-H3 (AQM Legacy & V3)
     metric_atr_14 = Column(NUMERIC(10, 4), nullable=True)
     metric_time_dilation = Column(NUMERIC(10, 4), nullable=True)
     metric_price_gravity = Column(NUMERIC(10, 4), nullable=True)
@@ -163,21 +180,23 @@ class VirtualTrade(Base):
     metric_J = Column(NUMERIC(10, 4), nullable=True)
     metric_J_threshold_2sigma = Column(NUMERIC(10, 4), nullable=True)
     
+    # Metryki H4 (Kinetic Alpha)
+    metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True)
+    metric_elasticity = Column(NUMERIC(10, 4), nullable=True)
+
+    # Metryki F5 (Omni-Flux)
+    metric_flux_score = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_velocity = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_ofp = Column(NUMERIC(10, 4), nullable=True)
+
+    # Audyt AI (Re-check)
     expected_profit_factor = Column(NUMERIC(10, 4), nullable=True)
     expected_win_rate = Column(NUMERIC(10, 4), nullable=True)
     ai_audit_report = Column(TEXT, nullable=True)
     ai_audit_date = Column(PG_TIMESTAMP(timezone=True), nullable=True)
     ai_optimization_suggestion = Column(JSONB, nullable=True)
-    
-    # === H4 METRICS ===
-    metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True)
-    metric_elasticity = Column(NUMERIC(10, 4), nullable=True)
 
-    # === H5 (OMNI-FLUX) METRICS ===
-    metric_flux_score = Column(NUMERIC(10, 4), nullable=True)
-    metric_flux_velocity = Column(NUMERIC(10, 4), nullable=True)
-    metric_flux_ofp = Column(NUMERIC(10, 4), nullable=True)
-
+# === CACHE ALPHA VANTAGE ===
 class AlphaVantageCache(Base):
     __tablename__ = 'alpha_vantage_cache'
     ticker = Column(VARCHAR(50), primary_key=True, nullable=False, index=True)
@@ -186,6 +205,7 @@ class AlphaVantageCache(Base):
     last_fetched = Column(PG_TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
     __table_args__ = (UniqueConstraint('ticker', 'data_type', name='uq_av_cache_entry'),)
 
+# === OPTYMALIZATOR (QUANTUM JOB) ===
 class OptimizationJob(Base):
     __tablename__ = 'optimization_jobs'
     id = Column(String(36), primary_key=True)
