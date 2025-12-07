@@ -35,9 +35,8 @@ API_CALLS_LIMIT_PER_MIN = 120
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.5 - Non-Blocking)
-    Zaprojektowany do pracy w pętli głównej bez blokowania workera na długi czas.
-    Wykonuje jeden cykl 'radaru' i zwraca sterowanie.
+    APEX OMNI-FLUX ENGINE (V5.6 - Stable & Sanitized)
+    Naprawiono błąd 'NoneType > int' poprzez wymuszanie typów liczbowych.
     """
 
     def __init__(self, session: Session, api_client: AlphaVantageClient):
@@ -138,10 +137,11 @@ class OmniFluxAnalyzer:
             # Napełnianie aktywnej puli (Karuzela)
             while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
                 ticker = self.reserve_pool.pop(0)
+                # Inicjalizacja ZERAMI, nie None
                 self.active_pool.append({
                     'ticker': ticker, 'fails': 0, 'added_at': time.time(), 'last_sniper_check': 0,
                     'price': 0.0, 'elasticity': 0.0, 'velocity': 0.0, 'flux_score': 0, 'ofp': 0.0,
-                    'stop_loss': None, 'take_profit': None, 'risk_reward': None     
+                    'stop_loss': 0.0, 'take_profit': 0.0, 'risk_reward': 0.0     
                 })
                 
             msg = f"🌊 Faza 5 (Init): Aktywne: {len(self.active_pool)}, Rezerwa: {len(self.reserve_pool)}"
@@ -155,7 +155,6 @@ class OmniFluxAnalyzer:
     def run_cycle_step(self):
         """
         Pojedynczy krok cyklu.
-        Nie zawiera pętli while True. Wykonuje pracę i kończy działanie.
         """
         if not self.active_pool:
             self._initialize_pools()
@@ -164,11 +163,10 @@ class OmniFluxAnalyzer:
 
         self._refresh_macro_context()
         
-        # Sprawdzenie limitu przed strzałem radaru
         if not self._can_make_api_call():
-            return # Limit osiągnięty, oddajemy sterowanie
+            return 
 
-        # 1. RADAR (Bulk Quotes) - Aktualizacja cen dla całej puli
+        # 1. RADAR (Bulk Quotes)
         tickers = [item['ticker'] for item in self.active_pool]
         self._record_api_call()
         radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
@@ -184,56 +182,59 @@ class OmniFluxAnalyzer:
             radar_data = radar_map.get(ticker)
             
             if radar_data:
-                new_price = radar_data.get('price', 0.0)
-                bid_sz = radar_data.get('bid_size', 0.0)
-                ask_sz = radar_data.get('ask_size', 0.0)
-                volume = radar_data.get('volume', 0.0)
+                # Sanityzacja danych z radaru
+                new_price = float(radar_data.get('price') or 0.0)
+                bid_sz = float(radar_data.get('bid_size') or 0.0)
+                ask_sz = float(radar_data.get('ask_size') or 0.0)
+                volume = float(radar_data.get('volume') or 0.0)
                 
-                # Filtr płynności
                 if volume < 1000:
-                     item['fails'] += 1
+                     item['fails'] = (item.get('fails') or 0) + 1
                      continue
 
-                # Obliczenie OFP (Order Flow Pressure)
                 ofp = 0.0
                 if bid_sz > 0 and ask_sz > 0:
                     ofp = calculate_ofp(bid_sz, ask_sz)
                 
-                old_price = item.get('price', 0.0)
+                old_price = float(item.get('price') or 0.0)
                 price_change_pct = abs((new_price - old_price) / old_price) if old_price > 0 else 0
                 
                 item['price'] = new_price
                 item['ofp'] = ofp
                 item['fails'] = 0 
                 
-                # Ocena priorytetu dla Snipera (czy warto marnować zapytanie Intraday?)
+                # === SANITYZACJA WARTOŚCI PRZED PORÓWNANIEM (FIX) ===
+                # Używamy (val or 0) aby zamienić None na 0 przed porównaniem
+                
+                elasticity = float(item.get('elasticity') or 0.0)
+                flux_score = float(item.get('flux_score') or 0.0)
+                current_ofp = float(item.get('ofp') or 0.0)
+                last_check = float(item.get('last_sniper_check') or 0.0)
+
                 priority_score = 0
                 needs_update = False
                 
-                if item.get('elasticity') == 0: 
-                    priority_score += 100; needs_update = True # Pierwsze sprawdzenie
+                if elasticity == 0: 
+                    priority_score += 100; needs_update = True 
                 elif price_change_pct > 0.003: 
-                    priority_score += 40; needs_update = True # Ruch ceny > 0.3%
-                elif item.get('flux_score', 0) > 60:
-                    priority_score += 30; needs_update = True # Obiecujący setup
-                elif abs(ofp) > 0.4: 
-                    priority_score += 20; needs_update = True # Silna presja OFP
-                elif (time.time() - item.get('last_sniper_check', 0)) > SNIPER_COOLDOWN:
-                    priority_score += 10; needs_update = True # Rutynowe sprawdzenie
+                    priority_score += 40; needs_update = True 
+                elif flux_score > 60:  # <--- TU BYŁ BŁĄD (None > 60)
+                    priority_score += 30; needs_update = True 
+                elif abs(current_ofp) > 0.4: 
+                    priority_score += 20; needs_update = True 
+                elif (time.time() - last_check) > SNIPER_COOLDOWN:
+                    priority_score += 10; needs_update = True 
                 
                 if needs_update:
                     sniper_queue.append({'item': item, 'priority': priority_score})
             else:
-                item['fails'] += 1
+                item['fails'] = (item.get('fails') or 0) + 1
                 if item['fails'] >= 3: tickers_to_remove.append(ticker)
 
-        # 3. SNIPER (Precyzyjna Analiza)
-        # Sortujemy po priorytecie i bierzemy top X w zależności od budżetu API
+        # 3. SNIPER
         sniper_queue.sort(key=lambda x: x['priority'], reverse=True)
         
-        # Ile zapytań nam zostało w tej minucie?
         api_budget = max(0, API_CALLS_LIMIT_PER_MIN - len(self.api_call_timestamps))
-        # Nie zużywamy wszystkiego na raz - max 2 strzały na cykl
         max_snipes = min(api_budget, 2) 
         
         targets = sniper_queue[:max_snipes]
@@ -250,16 +251,19 @@ class OmniFluxAnalyzer:
                     df.index = pd.to_datetime(df.index)
                     df.sort_index(inplace=True)
                     
-                    metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
+                    # Sanityzacja OFP przed przekazaniem
+                    safe_ofp = float(item.get('ofp') or 0.0)
+                    metrics = calculate_flux_vectors(df, current_ofp=safe_ofp)
                     
-                    price = item['price']
+                    price = float(item.get('price') or df['close'].iloc[-1])
                     sl_price = price * (1 - DEFAULT_SL_PCT)
                     risk_usd = price - sl_price 
                     tp_price = price + (risk_usd * DEFAULT_RR)
                     
-                    item['elasticity'] = float(metrics.get('elasticity', 0.0))
-                    item['velocity'] = float(metrics.get('velocity', 0.0))
-                    item['flux_score'] = int(metrics.get('flux_score', 0))
+                    # Zapisywanie z wymuszeniem float
+                    item['elasticity'] = float(metrics.get('elasticity') or 0.0)
+                    item['velocity'] = float(metrics.get('velocity') or 0.0)
+                    item['flux_score'] = int(metrics.get('flux_score') or 0)
                     item['last_sniper_check'] = time.time() 
                     item['stop_loss'] = sl_price             
                     item['take_profit'] = tp_price           
@@ -268,16 +272,18 @@ class OmniFluxAnalyzer:
                     # Generowanie sygnału
                     if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
                         if self.macro_context['bias'] != 'BEARISH':
-                            metrics['price'] = item['price']
+                            metrics['price'] = price
                             if self._generate_signal(ticker, metrics, sl_price, tp_price):
                                 signals_generated += 1
             except Exception as e:
                 logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
 
-        # 4. ROTACJA (Usuwanie słabych ogniw)
+        # 4. ROTACJA
         for item in self.active_pool:
-            # Jeśli wynik słaby i siedzi w puli długo -> out
-            if self.reserve_pool and item.get('flux_score', 0) < 30 and (time.time() - item.get('added_at', 0)) > 1500:
+            score = float(item.get('flux_score') or 0.0)
+            added_at = float(item.get('added_at') or 0.0)
+            
+            if self.reserve_pool and score < 30 and (time.time() - added_at) > 1500:
                 if item['ticker'] not in tickers_to_remove: tickers_to_remove.append(item['ticker'])
 
         if tickers_to_remove:
@@ -285,11 +291,8 @@ class OmniFluxAnalyzer:
             if signals_generated > 0: 
                 append_scan_log(self.session, f"🌊 Faza 5: Wygenerowano {signals_generated} sygnałów.")
 
-        # 5. ZAPIS STANU (Krytyczne dla "Odcięcia Tlenu")
+        # 5. ZAPIS
         self._save_state()
-        
-        # Pętla główna Workera ma swój sleep, ale tutaj możemy dodać mikro-opóźnienie
-        # aby zasymulować czas przetwarzania radaru (nie blokujące)
         time.sleep(0.5)
 
     def _rotate_pool(self, remove_list):
@@ -300,7 +303,7 @@ class OmniFluxAnalyzer:
             self.active_pool.append({
                 'ticker': new_ticker, 'fails': 0, 'added_at': time.time(), 'last_sniper_check': 0,
                 'price': 0.0, 'elasticity': 0.0, 'velocity': 0.0, 'flux_score': 0, 'ofp': 0.0,
-                'stop_loss': None, 'take_profit': None, 'risk_reward': None
+                'stop_loss': 0.0, 'take_profit': 0.0, 'risk_reward': 0.0
             })
         if not self.reserve_pool and len(self.active_pool) < CAROUSEL_SIZE:
              self._initialize_pools()
@@ -368,7 +371,6 @@ class OmniFluxAnalyzer:
 def run_phase5_cycle(session: Session, api_client: AlphaVantageClient):
     """
     Wrapper wywoływany przez main.py.
-    Inicjalizuje klasę (która ładuje stan z DB) i wykonuje JEDEN krok.
     """
     analyzer = OmniFluxAnalyzer(session, api_client)
     analyzer.run_cycle_step()
