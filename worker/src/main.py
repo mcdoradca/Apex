@@ -6,432 +6,283 @@ import sys
 import json
 from datetime import datetime, timezone, timedelta 
 from dotenv import load_dotenv
-from sqlalchemy import text, select, func
+from sqlalchemy import text
 
+# Importy bazodanowe
 from .models import Base, OptimizationJob 
 from .database import get_db_session, engine
 from .data_ingestion.data_initializer import initialize_database_if_empty
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
-from .config import ANALYSIS_SCHEDULE_TIME_CET, COMMAND_CHECK_INTERVAL_SECONDS
+from .config import COMMAND_CHECK_INTERVAL_SECONDS
 
 # Importy analityczne
 from .analysis import (
-    phase1_scanner, phase3_sniper, ai_agents, utils, news_agent,
-    phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, h3_deep_dive_agent,
-    signal_monitor, apex_optimizer, phasex_scanner, biox_agent, recheck_agent,
-    phase4_kinetic,
-    # === NOWOŚĆ: FAZA 5 (OMNI-FLUX) ===
+    phase1_scanner, phase3_sniper, utils, news_agent,
+    phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, 
+    h3_deep_dive_agent, signal_monitor, apex_optimizer, phasex_scanner, 
+    biox_agent, recheck_agent, phase4_kinetic,
+    # === FAZA 5 (OMNI-FLUX) ===
     phase5_omniflux
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 load_dotenv()
+
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 if not API_KEY: sys.exit(1)
 
-current_state = "IDLE" 
+# Globalne instancje
 api_client = AlphaVantageClient(api_key=API_KEY)
+current_state = "IDLE" 
 
-# === STRAŻNIK PROCESÓW ===
-def can_run_background_task():
+# === ZARZĄDCA STANU (RESOURCE GOVERNOR) ===
+# Definiuje tryby pracy Workera
+MODE_MONITORING = "MONITORING"   # Faza 5 + Newsy (Niskie zużycie API)
+MODE_OPERATION = "OPERATION"     # Skanery / Optymalizacja (Wysokie zużycie API - Wyłączność)
+
+active_mode = MODE_MONITORING 
+
+def run_monitoring_tasks(session):
+    """
+    Tryb Wartownika: Utrzymuje przy życiu Fazę 5 i lekkie procesy tła.
+    Przerywany natychmiast, gdy pojawi się zlecenie priorytetowe.
+    """
     global current_state
-    HEAVY_DUTY_STATES = [
-        'RUNNING', 
-        'BUSY_BACKTEST', 
-        'BUSY_OPTIMIZING', 
-        'BUSY_AI_OPTIMIZER', 
-        'BUSY_DEEP_DIVE',
-        'PHASE_1_SCAN', 
-        'PHASE_3_LIVE',
-        'PHASE_X_SCAN',
-        'PHASE_4_KINETIC',
-        # === NOWY STAN DLA FAZY 5 ===
-        'PHASE_5_FLUX'
-    ]
-    if any(s in current_state for s in HEAVY_DUTY_STATES):
-        return False
-    return True
-
-# === WRAPPERY DLA ZADAŃ W TLE ===
-
-def safe_run_news_agent():
-    if can_run_background_task():
-        with get_db_session() as session:
-            try:
-                news_agent.run_news_agent_cycle(session, api_client)
-            except Exception as e:
-                logger.error(f"News Agent Error: {e}")
-
-def safe_run_signal_monitor():
-    if can_run_background_task():
-        with get_db_session() as session:
-            try:
-                signal_monitor.run_signal_monitor_cycle(session, api_client)
-            except Exception as e:
-                logger.error(f"Signal Monitor Error: {e}")
-
-def safe_run_virtual_agent():
-    if can_run_background_task():
-        with get_db_session() as session:
-            try:
-                virtual_agent.run_virtual_trade_monitor(session, api_client)
-            except Exception as e:
-                logger.error(f"Virtual Agent Error: {e}")
-
-def safe_run_biox_monitor():
-    if can_run_background_task():
-        with get_db_session() as session:
-            try:
-                biox_agent.run_biox_live_monitor(session, api_client)
-            except Exception as e:
-                logger.error(f"BioX Monitor Error: {e}")
-
-def safe_run_recheck_audit():
-    if can_run_background_task():
-        with get_db_session() as session:
-            try:
-                recheck_agent.run_recheck_audit_cycle(session)
-            except Exception as e:
-                logger.error(f"Re-check Agent Error: {e}")
-
-# === GŁÓWNE PROCESY ===
-
-def run_phase_1_cycle(session):
-    global current_state
-    session.rollback() 
-    try:
-        logger.info("Starting Phase 1 Cycle (Macro + Scan)...")
-        utils.append_scan_log(session, ">>> Rozpoczynanie Fazy 1...") 
-        
-        current_state = 'RUNNING'
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
-        
-        utils.update_system_control(session, 'current_phase', 'PHASE_0_MACRO')
-        macro_sentiment = phase0_macro_agent.run_macro_analysis(session, api_client)
-        if macro_sentiment == 'RISK_OFF':
-            utils.append_scan_log(session, "Faza 0: RISK_OFF. Skanowanie przerwane.")
-            return
-
-        utils.append_scan_log(session, "Czyszczenie tabeli kandydatów Fazy 1...")
-        session.execute(text("DELETE FROM phase1_candidates"))
-        session.commit()
-
-        utils.update_system_control(session, 'current_phase', 'PHASE_1_SCAN')
-        candidates = phase1_scanner.run_scan(session, lambda: current_state, api_client)
-        
-        if candidates:
-            utils.append_scan_log(session, f"Faza 1 zakończona. Znaleziono {len(candidates)} kandydatów.")
-        else:
-            utils.append_scan_log(session, "Faza 1: Brak kandydatów.")
-            
-    except Exception as e:
-        logger.error(f"Error in Phase 1 Cycle: {e}", exc_info=True)
-        utils.append_scan_log(session, f"BŁĄD Fazy 1: {e}")
-    finally:
-        current_state = 'IDLE'
-        utils.update_system_control(session, 'worker_status', 'IDLE')
-        utils.update_system_control(session, 'current_phase', 'NONE')
-
-def run_phase_3_cycle(session):
-    global current_state
-    session.rollback()
-    try:
-        logger.info("Starting Phase 3 Cycle (H3 Live)...")
-        
-        current_state = 'RUNNING'
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
-        
-        params_json = utils.get_system_control_value(session, 'h3_live_parameters')
-        params = {}
-        if params_json and params_json != '{}':
-             try: params = json.loads(params_json)
-             except: pass
-
-        utils.append_scan_log(session, f">>> Rozpoczynanie Fazy 3. Params: {params}")
-        
-        candidates_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
-        candidates = [row[0] for row in candidates_rows]
-        
-        if not candidates:
-            utils.append_scan_log(session, "BŁĄD: Brak kandydatów z Fazy 1.")
-            return
-
-        utils.update_system_control(session, 'current_phase', 'PHASE_3_LIVE')
-        phase3_sniper.run_h3_live_scan(session, candidates, api_client, parameters=params)
-        
-        utils.append_scan_log(session, "Faza 3 zakończona.")
-        
-    except Exception as e:
-        logger.error(f"Error in Phase 3 Cycle: {e}", exc_info=True)
-        utils.append_scan_log(session, f"BŁĄD Fazy 3: {e}")
-    finally:
-        current_state = 'IDLE'
-        utils.update_system_control(session, 'worker_status', 'IDLE')
-        utils.update_system_control(session, 'current_phase', 'NONE')
-
-def run_phase_x_cycle(session):
-    global current_state
-    session.rollback()
-    try:
-        logger.info("Starting Phase X Cycle (BioX)...")
-        current_state = 'RUNNING'
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
-        utils.update_system_control(session, 'current_phase', 'PHASE_X_SCAN')
-        utils.append_scan_log(session, ">>> Start Fazy X (BioX Pump Hunter)...")
-        
-        found_candidates = phasex_scanner.run_phasex_scan(session, api_client)
-        
-        utils.update_system_control(session, 'current_phase', 'PHASE_X_AUDIT')
-        
-        biox_agent.run_historical_catalyst_scan(session, api_client, candidates=found_candidates)
-        
-        utils.append_scan_log(session, "Faza X zakończona pomyślnie.")
-
-    except Exception as e:
-        logger.error(f"Error in Phase X Cycle: {e}", exc_info=True)
-        utils.append_scan_log(session, f"BŁĄD Fazy X: {e}")
-    finally:
-        current_state = 'IDLE'
-        utils.update_system_control(session, 'worker_status', 'IDLE')
-        utils.update_system_control(session, 'current_phase', 'NONE')
-
-def run_phase_4_cycle(session):
-    global current_state
-    session.rollback()
-    try:
-        logger.info("Starting Phase 4 Cycle (Kinetic Alpha)...")
-        current_state = 'RUNNING'
-        utils.update_system_control(session, 'worker_status', 'RUNNING')
-        utils.update_system_control(session, 'current_phase', 'PHASE_4_KINETIC')
-        utils.append_scan_log(session, ">>> Start Fazy 4 (H4: Kinetic Alpha)...")
-        
-        phase4_kinetic.run_phase4_scan(session, api_client)
-        
-        utils.append_scan_log(session, "Faza 4 zakończona pomyślnie.")
-
-    except Exception as e:
-        logger.error(f"Error in Phase 4 Cycle: {e}", exc_info=True)
-        utils.append_scan_log(session, f"BŁĄD Fazy 4: {e}")
-    finally:
-        current_state = 'IDLE'
-        utils.update_system_control(session, 'worker_status', 'IDLE')
-        utils.update_system_control(session, 'current_phase', 'NONE')
-
-# === NOWOŚĆ: FAZA 5 (OMNI-FLUX) ===
-def run_phase_5_cycle(session):
-    global current_state
-    # Uwaga: Faza 5 w trybie ciągłym (Karuzela) nie powinna blokować workera na zawsze w jednej funkcji,
-    # ale tutaj uruchamiamy 'run_cycle' które robi jeden obrót karuzeli.
-    # Pętla główna workera zajmie się powtarzaniem tego.
     
-    # Jeśli stan nie jest ustawiony na Flux, ustawiamy go
-    if current_state != 'PHASE_5_FLUX':
-        current_state = 'PHASE_5_FLUX' # Specjalny stan, który nie jest 'RUNNING' (dla odróżnienia)
-        utils.update_system_control(session, 'worker_status', 'RUNNING_FLUX')
-        utils.update_system_control(session, 'current_phase', 'PHASE_5_OMNI_FLUX')
-        utils.append_scan_log(session, ">>> Start Fazy 5 (Omni-Flux Active Loop)...")
-
+    # 1. Omni-Flux (Faza 5) - "Serce systemu"
+    # Wykonujemy jeden cykl (obrót karuzeli) i oddajemy sterowanie
     try:
-        # Uruchamiamy jeden cykl karuzeli (sprawdzenie 8 spółek)
+        if current_state != 'PHASE_5_FLUX':
+            utils.update_system_control(session, 'worker_status', 'RUNNING_FLUX')
+            utils.update_system_control(session, 'current_phase', 'PHASE_5_OMNI_FLUX')
+            current_state = 'PHASE_5_FLUX'
+            
         phase5_omniflux.run_phase5_cycle(session, api_client)
         
-        # W Fazie 5 nie kończymy po jednym przebiegu, worker powinien trzymać ten stan
-        # dopóki nie przyjdzie komenda STOP/PAUSE.
-        # Ale w architekturze Apex, worker sprawdza komendy w każdej iteracji pętli głównej.
-        # Więc funkcja musi zwrócić sterowanie.
+    except Exception as e:
+        logger.error(f"Monitoring Error (F5): {e}")
+        # W razie błędu F5, nie zabijamy workera, tylko logujemy
+        utils.append_scan_log(session, f"Błąd Monitora F5: {e}")
+
+    # 2. Zadania w tle (Schedule) - Newsy, Re-check, Wirtualny Portfel
+    # Uruchamiamy je tylko w trybie monitoringu
+    try:
+        schedule.run_pending()
+    except Exception as e:
+        logger.error(f"Schedule Error: {e}")
+
+def execute_high_priority_operation(session, operation_func, *args, **kwargs):
+    """
+    Tryb Operacji: "Odcięcie Tlenu".
+    Zawiesza monitoring, wykonuje ciężkie zadanie, a potem przywraca system.
+    """
+    global active_mode, current_state
+    
+    logger.info(">>> PRZEŁĄCZANIE TRYBU: MONITORING -> OPERACJA (High Priority)")
+    active_mode = MODE_OPERATION
+    
+    # 1. Zapisz stan Fazy 5 (jeśli była aktywna) i wstrzymaj
+    # Faza 5 zapisuje swój stan automatycznie w run_phase5_cycle, więc tu wystarczy zmienić flagę statusu
+    utils.update_system_control(session, 'worker_status', 'BUSY_OPERATION')
+    utils.append_scan_log(session, "SYSTEM: Wstrzymanie monitoringu. Start operacji priorytetowej...")
+    
+    start_time = time.time()
+    
+    try:
+        # 2. Wykonaj Operację (Skan/Optymalizacja)
+        operation_func(session, *args, **kwargs)
         
     except Exception as e:
-        logger.error(f"Error in Phase 5 Cycle: {e}", exc_info=True)
-        utils.append_scan_log(session, f"BŁĄD Fazy 5: {e}")
-        # W razie błędu resetujemy stan, żeby nie pętlił błędu w nieskończoność
-        current_state = 'IDLE'
+        logger.error(f"Critical Operation Error: {e}", exc_info=True)
+        utils.append_scan_log(session, f"BŁĄD KRYTYCZNY OPERACJI: {e}")
+        
+    finally:
+        # 3. Przywróć system do życia (Resuscytacja)
+        duration = time.time() - start_time
+        logger.info(f"<<< OPERACJA ZAKOŃCZONA ({duration:.1f}s). POWRÓT DO MONITORINGU.")
+        utils.append_scan_log(session, f"SYSTEM: Operacja zakończona. Wznawianie monitoringu F5.")
+        
+        active_mode = MODE_MONITORING
+        current_state = "IDLE" # Reset stanu, aby monitoring zainicjował się ponownie
         utils.update_system_control(session, 'worker_status', 'IDLE')
+        utils.update_system_control(session, 'current_phase', 'NONE')
 
-def run_full_analysis_cycle():
+# === WRAPPERY ZADAŃ TŁA (Dla Schedule) ===
+
+def safe_run_news_agent():
+    if active_mode == MODE_MONITORING:
+        with get_db_session() as session:
+            try: news_agent.run_news_agent_cycle(session, api_client)
+            except: pass
+
+def safe_run_signal_monitor():
+    if active_mode == MODE_MONITORING:
+        with get_db_session() as session:
+            try: signal_monitor.run_signal_monitor_cycle(session, api_client)
+            except: pass
+
+def safe_run_virtual_agent():
+    # Ten agent może działać zawsze, bo operuje na bazie danych, a nie API (zazwyczaj)
     with get_db_session() as session:
-        run_phase_1_cycle(session)
-        run_phase_3_cycle(session)
+        try: virtual_agent.run_virtual_trade_monitor(session, api_client)
+        except: pass
 
-# === OBSŁUGA ZLECEŃ ZEWNĘTRZNYCH ===
+def safe_run_biox_monitor():
+    if active_mode == MODE_MONITORING:
+        with get_db_session() as session:
+            try: biox_agent.run_biox_live_monitor(session, api_client)
+            except: pass
 
-def handle_backtest_request(session, api_client) -> str:
+def safe_run_recheck_audit():
+    if active_mode == MODE_MONITORING:
+        with get_db_session() as session:
+            try: recheck_agent.run_recheck_audit_cycle(session)
+            except: pass
+
+# === OBSŁUGA ZLECEŃ (HANDLERS) ===
+
+def run_phase_1_task(session):
+    utils.update_system_control(session, 'current_phase', 'PHASE_1_SCAN')
+    phase0_macro_agent.run_macro_analysis(session, api_client)
+    session.execute(text("DELETE FROM phase1_candidates"))
+    session.commit()
+    phase1_scanner.run_scan(session, lambda: "RUNNING", api_client)
+
+def run_phase_3_task(session):
+    utils.update_system_control(session, 'current_phase', 'PHASE_3_SNIPER')
+    params_json = utils.get_system_control_value(session, 'h3_live_parameters')
+    params = json.loads(params_json) if params_json else {}
+    candidates = [r[0] for r in session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()]
+    if not candidates: candidates = [r[0] for r in session.execute(text("SELECT ticker FROM companies LIMIT 50")).fetchall()]
+    phase3_sniper.run_h3_live_scan(session, candidates, api_client, parameters=params)
+
+def run_phase_x_task(session):
+    utils.update_system_control(session, 'current_phase', 'PHASE_X_SCAN')
+    cands = phasex_scanner.run_phasex_scan(session, api_client)
+    biox_agent.run_historical_catalyst_scan(session, api_client, candidates=cands)
+
+def run_phase_4_task(session):
+    utils.update_system_control(session, 'current_phase', 'PHASE_4_KINETIC')
+    phase4_kinetic.run_phase4_scan(session, api_client)
+
+def run_backtest_task(session):
     req = utils.get_system_control_value(session, 'backtest_request')
-    if req and req not in ['NONE', 'PROCESSING']:
-        utils.update_system_control(session, 'worker_status', 'BUSY_BACKTEST')
-        utils.update_system_control(session, 'current_phase', 'BACKTESTING')
-        utils.update_system_control(session, 'backtest_request', 'PROCESSING')
-        
-        params = {}
-        try: params = json.loads(utils.get_system_control_value(session, 'backtest_parameters') or '{}')
-        except: pass
-        
-        try: backtest_engine.run_historical_backtest(session, api_client, req, parameters=params)
-        except Exception as e: logger.error(f"BT Error: {e}")
-        finally:
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE')
-            utils.update_system_control(session, 'backtest_request', 'NONE')
-            return 'IDLE'
-    elif req == 'PROCESSING': return 'BUSY'
-    return 'IDLE'
+    params = json.loads(utils.get_system_control_value(session, 'backtest_parameters') or '{}')
+    utils.update_system_control(session, 'current_phase', 'BACKTESTING')
+    backtest_engine.run_historical_backtest(session, api_client, req, parameters=params)
+    utils.update_system_control(session, 'backtest_request', 'NONE')
 
-def handle_ai_optimizer_request(session) -> str:
-    req = utils.get_system_control_value(session, 'ai_optimizer_request')
-    if req == 'REQUESTED':
-        utils.update_system_control(session, 'worker_status', 'BUSY_AI_OPTIMIZER')
-        utils.update_system_control(session, 'current_phase', 'AI_ANALYSIS')
-        utils.update_system_control(session, 'ai_optimizer_request', 'PROCESSING')
-        try: ai_optimizer.run_ai_optimization_analysis(session)
-        except: pass
-        finally:
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE')
-            utils.update_system_control(session, 'ai_optimizer_request', 'NONE')
-            return 'IDLE'
-    elif req == 'PROCESSING': return 'BUSY'
-    return 'IDLE'
+def run_ai_optimizer_task(session):
+    utils.update_system_control(session, 'current_phase', 'AI_ANALYSIS')
+    ai_optimizer.run_ai_optimization_analysis(session)
+    utils.update_system_control(session, 'ai_optimizer_request', 'NONE')
 
-def handle_h3_deep_dive_request(session) -> str:
+def run_h3_deep_dive_task(session):
     req = utils.get_system_control_value(session, 'h3_deep_dive_request')
-    if req and req not in ['NONE', 'PROCESSING']:
-        utils.update_system_control(session, 'worker_status', 'BUSY_DEEP_DIVE')
-        utils.update_system_control(session, 'current_phase', 'DEEP_DIVE')
-        utils.update_system_control(session, 'h3_deep_dive_request', 'PROCESSING')
-        try: h3_deep_dive_agent.run_h3_deep_dive_analysis(session, int(req))
-        except: pass
-        finally:
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE')
-            utils.update_system_control(session, 'h3_deep_dive_request', 'NONE')
-            return 'IDLE'
-    elif req == 'PROCESSING': return 'BUSY'
-    return 'IDLE'
+    utils.update_system_control(session, 'current_phase', 'DEEP_DIVE')
+    h3_deep_dive_agent.run_h3_deep_dive_analysis(session, int(req))
+    utils.update_system_control(session, 'h3_deep_dive_request', 'NONE')
 
-def handle_optimization_request(session) -> str:
+def run_optimization_task(session):
     job_id = utils.get_system_control_value(session, 'optimization_request')
-    if job_id and job_id not in ['NONE', 'PROCESSING']:
-        logger.info(f"Optimization Job: {job_id}")
-        utils.update_system_control(session, 'worker_status', 'BUSY_OPTIMIZING')
-        utils.update_system_control(session, 'current_phase', 'QUANTUM_OPT')
-        utils.update_system_control(session, 'optimization_request', 'PROCESSING')
-        
-        try:
-            job = session.query(OptimizationJob).filter(OptimizationJob.id == job_id).first()
-            if job:
-                optimizer = apex_optimizer.QuantumOptimizer(session, job_id, job.target_year)
-                optimizer.run(n_trials=job.total_trials)
-                utils.append_scan_log(session, f"Optymalizacja zakończona. Wynik: {job.best_score}")
-        except Exception as e:
-            logger.error(f"Optimization Error: {e}", exc_info=True)
-            utils.append_scan_log(session, f"BŁĄD OPTYMALIZACJI: {e}")
-        finally:
-            utils.update_system_control(session, 'worker_status', 'IDLE')
-            utils.update_system_control(session, 'current_phase', 'NONE')
-            utils.update_system_control(session, 'optimization_request', 'NONE')
-            return 'IDLE'
-    elif job_id == 'PROCESSING': return 'BUSY'
-    return 'IDLE'
+    utils.update_system_control(session, 'current_phase', 'QUANTUM_OPT')
+    job = session.query(OptimizationJob).filter(OptimizationJob.id == job_id).first()
+    if job:
+        # UWAGA: Optimizer tworzy własną sesję wewnątrz, ale przekazujemy mu kontrolę
+        optimizer = apex_optimizer.QuantumOptimizer(session, job_id, job.target_year)
+        optimizer.run(n_trials=job.total_trials)
+    utils.update_system_control(session, 'optimization_request', 'NONE')
+
+
+# === GŁÓWNA PĘTLA WORKERA ===
 
 def main_loop():
-    global current_state, api_client
-    logger.info("Worker main loop started with FORCED DATABASE INIT.")
+    global current_state, api_client, active_mode
+    logger.info("Worker V6.0 (Resource Governor) STARTED.")
     
+    # Inicjalizacja bazy
     try:
         with get_db_session() as session:
-            logger.info("Executing Pre-Flight Database Check & Migration...")
-            Base.metadata.create_all(bind=engine)
             initialize_database_if_empty(session, api_client)
-            logger.info("Pre-Flight Check Completed Successfully.")
+            utils.append_scan_log(session, "SYSTEM: Worker Uruchomiony. Tryb: MONITORING.")
     except Exception as e:
-        logger.critical(f"CRITICAL STARTUP ERROR: Database initialization failed: {e}", exc_info=True)
+        logger.error(f"Startup Error: {e}")
         time.sleep(5)
-    
-    # Schedule
+
+    # Harmonogram zadań tła (działają tylko w trybie Monitoring)
     schedule.every(2).minutes.do(safe_run_news_agent)
-    schedule.every().day.at("23:00", "Europe/Warsaw").do(safe_run_virtual_agent)
-    schedule.every(3).seconds.do(safe_run_signal_monitor)
+    schedule.every(5).seconds.do(safe_run_signal_monitor) # Częstsze sprawdzanie w trybie live
     schedule.every(5).minutes.do(safe_run_biox_monitor)
     schedule.every(10).minutes.do(safe_run_recheck_audit)
-
-    try:
-        with get_db_session() as initial_session:
-            utils.update_system_control(initial_session, 'worker_status', 'IDLE')
-            utils.update_system_control(initial_session, 'current_phase', 'NONE')
-            utils.update_system_control(initial_session, 'worker_command', 'NONE')
-            utils.report_heartbeat(initial_session)
-            utils.append_scan_log(initial_session, "SYSTEM: Worker Gotowy (V5: Omni-Flux Ready).")
-    except Exception as e:
-        logger.error(f"Startup status init failed: {e}")
+    schedule.every().day.at("23:00", "Europe/Warsaw").do(safe_run_virtual_agent)
 
     while True:
         with get_db_session() as session:
             try:
-                # 1. Standardowe sprawdzanie komend (z utils.py)
-                run_action, new_state = utils.check_for_commands(session, current_state)
+                # 1. Sprawdź, czy są jakieś ROZKAZY od użytkownika (Priorytet Absolutny)
+                cmd = utils.get_system_control_value(session, 'worker_command')
                 
-                # 2. Manualny Override dla Fazy 5 (obejście braku edycji utils.py w tym kroku)
-                # Sprawdzamy surową wartość w bazie, jeśli utils.py zwrócił NONE
-                if run_action == "NONE":
-                    raw_cmd = utils.get_system_control_value(session, 'worker_command')
-                    if raw_cmd == "START_PHASE_5_REQUESTED":
+                # Zmienne pomocnicze do wykrywania zleceń
+                backtest_req = utils.get_system_control_value(session, 'backtest_request')
+                ai_req = utils.get_system_control_value(session, 'ai_optimizer_request')
+                deep_dive_req = utils.get_system_control_value(session, 'h3_deep_dive_request')
+                opt_req = utils.get_system_control_value(session, 'optimization_request')
+
+                operation_to_run = None
+                
+                # Mapowanie komend na funkcje
+                if cmd == "START_PHASE_1_REQUESTED": operation_to_run = run_phase_1_task
+                elif cmd == "START_PHASE_3_REQUESTED": operation_to_run = run_phase_3_task
+                elif cmd == "START_PHASE_X_REQUESTED": operation_to_run = run_phase_x_task
+                elif cmd == "START_PHASE_4_REQUESTED": operation_to_run = run_phase_4_task
+                
+                # Mapowanie żądań analitycznych (jeśli nie są w stanie NONE/PROCESSING)
+                elif backtest_req and backtest_req not in ['NONE', 'PROCESSING']: operation_to_run = run_backtest_task
+                elif ai_req == 'REQUESTED': operation_to_run = run_ai_optimizer_task
+                elif deep_dive_req and deep_dive_req not in ['NONE', 'PROCESSING']: operation_to_run = run_h3_deep_dive_task
+                elif opt_req and opt_req not in ['NONE', 'PROCESSING']: operation_to_run = run_optimization_task
+
+                # Obsługa specjalna dla Fazy 5 (Start/Stop Ręczny)
+                if cmd == "START_PHASE_5_REQUESTED":
+                    # F5 to po prostu powrót do Monitoringu
+                    utils.update_system_control(session, 'worker_command', 'NONE')
+                    utils.append_scan_log(session, "SYSTEM: Ręczne wymuszenie Fazy 5.")
+                    current_state = 'IDLE' # To spowoduje wejście w blok else (Monitoring)
+                    
+                elif cmd == "PAUSE_REQUESTED":
+                    utils.update_system_control(session, 'worker_status', 'PAUSED')
+                    utils.update_system_control(session, 'worker_command', 'NONE')
+                    utils.append_scan_log(session, "SYSTEM: Zatrzymano pracę (PAUSE).")
+                    time.sleep(2)
+                    continue # Pomiń resztę pętli
+
+                # 2. DECYZJA: ALBO OPERACJA, ALBO MONITORING
+                if operation_to_run:
+                    # Czyścimy flagę komendy
+                    if cmd and "REQUESTED" in cmd:
                         utils.update_system_control(session, 'worker_command', 'NONE')
-                        run_action = "PHASE_5_RUN"
-                    # Obsługa STOP dla Fazy 5
-                    elif raw_cmd == "PAUSE_REQUESTED" and current_state == 'PHASE_5_FLUX':
-                        current_state = "IDLE"
-                        utils.update_system_control(session, 'worker_status', 'IDLE')
-                        utils.update_system_control(session, 'current_phase', 'NONE')
-                        utils.update_system_control(session, 'worker_command', 'NONE')
-                        utils.append_scan_log(session, "Faza 5: Zatrzymano ręcznie.")
-
-                # Obsługa zmiany stanu
-                if new_state != current_state and new_state != "PHASE_5_FLUX": # Nie nadpisuj specjalnego stanu Flux
-                    current_state = new_state
-
-                # Wykonanie akcji
-                if run_action == "FULL_RUN": run_full_analysis_cycle()
-                elif run_action == "PHASE_1_RUN": run_phase_1_cycle(session)
-                elif run_action == "PHASE_3_RUN": run_phase_3_cycle(session)
-                elif run_action == "PHASE_X_RUN": run_phase_x_cycle(session)
-                elif run_action == "PHASE_4_RUN": run_phase_4_cycle(session)
+                    
+                    # Wykonujemy operację z "Odcięciem Tlenu"
+                    execute_high_priority_operation(session, operation_to_run)
                 
-                # === URUCHOMIENIE FAZY 5 ===
-                elif run_action == "PHASE_5_RUN":
-                    run_phase_5_cycle(session) # Inicjalizacja stanu Flux
-                
-                # === PĘTLA CIĄGŁA DLA FAZY 5 ===
-                # Jeśli worker jest w stanie Flux, kontynuuj kręcenie karuzelą w każdej iteracji
-                if current_state == 'PHASE_5_FLUX':
-                    run_phase_5_cycle(session)
+                else:
+                    # Brak zadań specjalnych -> Działa WARTOWNIK (F5 + Tło)
+                    # Sprawdzamy czy nie jesteśmy spauzowani
+                    current_status_val = utils.get_system_control_value(session, 'worker_status')
+                    if current_status_val != 'PAUSED':
+                        run_monitoring_tasks(session)
+                    
+                # Raportowanie życia workera
+                utils.report_heartbeat(session)
 
-                # Obsługa innych zadań (tylko gdy IDLE)
-                status = 'IDLE'
-                if current_state == 'IDLE':
-                    status = handle_backtest_request(session, api_client)
-                if current_state == 'IDLE' and status == 'IDLE':
-                    status = handle_ai_optimizer_request(session)
-                if current_state == 'IDLE' and status == 'IDLE':
-                    status = handle_h3_deep_dive_request(session)
-                if current_state == 'IDLE' and status == 'IDLE':
-                    status = handle_optimization_request(session)
-                
-                if status != 'IDLE':
-                    current_state = 'BUSY'
-
-                schedule.run_pending()
-                utils.report_heartbeat(session) 
-                
             except Exception as e:
-                logger.error(f"Loop error: {e}")
-                current_state = 'IDLE'
-        
-        # W trybie Flux (Faza 5) opóźnienie jest kontrolowane wewnątrz silnika (Cycle Delay),
-        # ale tutaj dodajemy minimalny sleep dla pętli głównej.
-        time.sleep(COMMAND_CHECK_INTERVAL_SECONDS)
+                logger.error(f"Main Loop Error: {e}")
+                time.sleep(5) # Odczekaj chwilę po błędzie krytycznym
+
+        # Krótki sleep, żeby nie zarżnąć CPU, ale na tyle krótki, by F5 było płynne
+        # W F5 sama funkcja robi sleepa wewnątrz tylko jeśli nic nie robi, tutaj dodajemy mikro-opóźnienie
+        time.sleep(0.5)
 
 if __name__ == "__main__":
-    if engine:
-        main_loop()
-    else:
-        sys.exit(1)
+    main_loop()
