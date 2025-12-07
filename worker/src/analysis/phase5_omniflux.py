@@ -33,14 +33,20 @@ DEFAULT_SL_PCT = 0.015
 # Dynamiczny limit zapytań (dostosowany do współdzielenia)
 API_CALLS_LIMIT_PER_MIN = 120 
 
+# Globalna instancja analityka (Singleton)
+# Zapewnia trwałość licznika zapytań API i stanu puli między cyklami workera
+_GLOBAL_FLUX_ANALYZER = None
+
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.6 - Stable & Sanitized)
-    Naprawiono błąd 'NoneType > int' poprzez wymuszanie typów liczbowych.
+    APEX OMNI-FLUX ENGINE (V5.7 - Singleton & Session Injection)
+    Poprawiono zarządzanie sesją i rate-limiterem.
     """
 
-    def __init__(self, session: Session, api_client: AlphaVantageClient):
-        self.session = session
+    def __init__(self, api_client: AlphaVantageClient):
+        # UWAGA: Nie przechowujemy sesji w __init__, bo sesja w main.py jest odnawiana.
+        # Sesja będzie wstrzykiwana w run_cycle_step.
+        self.session = None 
         self.client = api_client
         
         # Stan wewnętrzny
@@ -49,9 +55,10 @@ class OmniFluxAnalyzer:
         self.macro_context = {'bias': 'NEUTRAL', 'last_updated': 0}
         
         # Pamięć podręczna zapytań (dla lokalnego limitera)
+        # Dzięki Singletonowi ta lista nie kasuje się co cykl!
         self.api_call_timestamps = deque() 
-
-        self._load_state()
+        
+        self.state_loaded = False
 
     def _record_api_call(self):
         self.api_call_timestamps.append(time.time())
@@ -61,11 +68,17 @@ class OmniFluxAnalyzer:
         now = time.time()
         while self.api_call_timestamps and self.api_call_timestamps[0] < now - 60:
             self.api_call_timestamps.popleft()
+        
+        # Logika debugująca (opcjonalna)
+        # if len(self.api_call_timestamps) >= API_CALLS_LIMIT_PER_MIN:
+        #     logger.debug("Faza 5: Lokalny limit API osiągnięty. Skipping cycle.")
+            
         return len(self.api_call_timestamps) < API_CALLS_LIMIT_PER_MIN
 
     def _load_state(self):
         """Odtwarza stan z bazy danych (trwałość po restarcie/skanie)"""
         try:
+            if not self.session: return
             raw_json = get_system_control_value(self.session, 'phase5_monitor_state')
             if raw_json:
                 state = json.loads(raw_json)
@@ -85,6 +98,7 @@ class OmniFluxAnalyzer:
     def _save_state(self):
         """Zapisuje stan do bazy, aby przetrwać 'Odcięcie Tlenu'"""
         try:
+            if not self.session: return
             state_data = {
                 "active_pool": self.active_pool,
                 "reserve_pool": self.reserve_pool,
@@ -152,148 +166,166 @@ class OmniFluxAnalyzer:
         except Exception as e:
             logger.error(f"Faza 5: Błąd inicjalizacji: {e}")
 
-    def run_cycle_step(self):
+    def run_cycle_step(self, session: Session):
         """
         Pojedynczy krok cyklu.
+        Przyjmuje 'session' jako argument, aby używać aktualnej sesji z main.py.
         """
-        if not self.active_pool:
-            self._initialize_pools()
-            if not self.active_pool: 
-                return # Brak kandydatów, czekamy
-
-        self._refresh_macro_context()
+        # 1. Wstrzyknięcie sesji
+        self.session = session
         
-        if not self._can_make_api_call():
-            return 
+        try:
+            # 2. Lazy loading stanu (tylko przy pierwszym uruchomieniu singletona)
+            if not self.state_loaded:
+                self._load_state()
+                self.state_loaded = True
 
-        # 1. RADAR (Bulk Quotes)
-        tickers = [item['ticker'] for item in self.active_pool]
-        self._record_api_call()
-        radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
-        radar_map = {d['symbol']: d for d in radar_hits}
-        
-        tickers_to_remove = []
-        signals_generated = 0
-        sniper_queue = []
+            if not self.active_pool:
+                self._initialize_pools()
+                if not self.active_pool: 
+                    return # Brak kandydatów, czekamy
 
-        # 2. ANALIZA RADARU
-        for item in self.active_pool:
-            ticker = item['ticker']
-            radar_data = radar_map.get(ticker)
+            self._refresh_macro_context()
             
-            if radar_data:
-                # Sanityzacja danych z radaru
-                new_price = float(radar_data.get('price') or 0.0)
-                bid_sz = float(radar_data.get('bid_size') or 0.0)
-                ask_sz = float(radar_data.get('ask_size') or 0.0)
-                volume = float(radar_data.get('volume') or 0.0)
-                
-                if volume < 1000:
-                     item['fails'] = (item.get('fails') or 0) + 1
-                     continue
+            # Sprawdzenie limitu przed próbą wykonania zapytań
+            if not self._can_make_api_call():
+                return 
 
-                ofp = 0.0
-                if bid_sz > 0 and ask_sz > 0:
-                    ofp = calculate_ofp(bid_sz, ask_sz)
-                
-                old_price = float(item.get('price') or 0.0)
-                price_change_pct = abs((new_price - old_price) / old_price) if old_price > 0 else 0
-                
-                item['price'] = new_price
-                item['ofp'] = ofp
-                item['fails'] = 0 
-                
-                # === SANITYZACJA WARTOŚCI PRZED PORÓWNANIEM (FIX) ===
-                # Używamy (val or 0) aby zamienić None na 0 przed porównaniem
-                
-                elasticity = float(item.get('elasticity') or 0.0)
-                flux_score = float(item.get('flux_score') or 0.0)
-                current_ofp = float(item.get('ofp') or 0.0)
-                last_check = float(item.get('last_sniper_check') or 0.0)
-
-                priority_score = 0
-                needs_update = False
-                
-                if elasticity == 0: 
-                    priority_score += 100; needs_update = True 
-                elif price_change_pct > 0.003: 
-                    priority_score += 40; needs_update = True 
-                elif flux_score > 60:  # <--- TU BYŁ BŁĄD (None > 60)
-                    priority_score += 30; needs_update = True 
-                elif abs(current_ofp) > 0.4: 
-                    priority_score += 20; needs_update = True 
-                elif (time.time() - last_check) > SNIPER_COOLDOWN:
-                    priority_score += 10; needs_update = True 
-                
-                if needs_update:
-                    sniper_queue.append({'item': item, 'priority': priority_score})
-            else:
-                item['fails'] = (item.get('fails') or 0) + 1
-                if item['fails'] >= 3: tickers_to_remove.append(ticker)
-
-        # 3. SNIPER
-        sniper_queue.sort(key=lambda x: x['priority'], reverse=True)
-        
-        api_budget = max(0, API_CALLS_LIMIT_PER_MIN - len(self.api_call_timestamps))
-        max_snipes = min(api_budget, 2) 
-        
-        targets = sniper_queue[:max_snipes]
-        
-        for target_obj in targets:
-            item = target_obj['item']
-            ticker = item['ticker']
-            try:
-                self._record_api_call()
-                raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
-                
-                if raw_intraday and 'Time Series (5min)' in raw_intraday:
-                    df = standardize_df_columns(pd.DataFrame.from_dict(raw_intraday['Time Series (5min)'], orient='index'))
-                    df.index = pd.to_datetime(df.index)
-                    df.sort_index(inplace=True)
-                    
-                    # Sanityzacja OFP przed przekazaniem
-                    safe_ofp = float(item.get('ofp') or 0.0)
-                    metrics = calculate_flux_vectors(df, current_ofp=safe_ofp)
-                    
-                    price = float(item.get('price') or df['close'].iloc[-1])
-                    sl_price = price * (1 - DEFAULT_SL_PCT)
-                    risk_usd = price - sl_price 
-                    tp_price = price + (risk_usd * DEFAULT_RR)
-                    
-                    # Zapisywanie z wymuszeniem float
-                    item['elasticity'] = float(metrics.get('elasticity') or 0.0)
-                    item['velocity'] = float(metrics.get('velocity') or 0.0)
-                    item['flux_score'] = int(metrics.get('flux_score') or 0)
-                    item['last_sniper_check'] = time.time() 
-                    item['stop_loss'] = sl_price             
-                    item['take_profit'] = tp_price           
-                    item['risk_reward'] = DEFAULT_RR         
-                    
-                    # Generowanie sygnału
-                    if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
-                        if self.macro_context['bias'] != 'BEARISH':
-                            metrics['price'] = price
-                            if self._generate_signal(ticker, metrics, sl_price, tp_price):
-                                signals_generated += 1
-            except Exception as e:
-                logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
-
-        # 4. ROTACJA
-        for item in self.active_pool:
-            score = float(item.get('flux_score') or 0.0)
-            added_at = float(item.get('added_at') or 0.0)
+            # 3. RADAR (Bulk Quotes)
+            tickers = [item['ticker'] for item in self.active_pool]
             
-            if self.reserve_pool and score < 30 and (time.time() - added_at) > 1500:
-                if item['ticker'] not in tickers_to_remove: tickers_to_remove.append(item['ticker'])
+            # Zabezpieczenie na wypadek pustej listy (choć init powinien to obsłużyć)
+            if not tickers: return
 
-        if tickers_to_remove:
-            self._rotate_pool(tickers_to_remove)
-            if signals_generated > 0: 
-                append_scan_log(self.session, f"🌊 Faza 5: Wygenerowano {signals_generated} sygnałów.")
+            self._record_api_call()
+            radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
+            radar_map = {d['symbol']: d for d in radar_hits}
+            
+            tickers_to_remove = []
+            signals_generated = 0
+            sniper_queue = []
 
-        # 5. ZAPIS
-        self._save_state()
-        time.sleep(0.5)
+            # 4. ANALIZA RADARU
+            for item in self.active_pool:
+                ticker = item['ticker']
+                radar_data = radar_map.get(ticker)
+                
+                if radar_data:
+                    # Sanityzacja danych z radaru
+                    new_price = float(radar_data.get('price') or 0.0)
+                    bid_sz = float(radar_data.get('bid_size') or 0.0)
+                    ask_sz = float(radar_data.get('ask_size') or 0.0)
+                    volume = float(radar_data.get('volume') or 0.0)
+                    
+                    if volume < 1000:
+                         item['fails'] = (item.get('fails') or 0) + 1
+                         continue
+
+                    ofp = 0.0
+                    if bid_sz > 0 and ask_sz > 0:
+                        ofp = calculate_ofp(bid_sz, ask_sz)
+                    
+                    old_price = float(item.get('price') or 0.0)
+                    price_change_pct = abs((new_price - old_price) / old_price) if old_price > 0 else 0
+                    
+                    item['price'] = new_price
+                    item['ofp'] = ofp
+                    item['fails'] = 0 
+                    
+                    # === SANITYZACJA WARTOŚCI PRZED PORÓWNANIEM (FIX) ===
+                    elasticity = float(item.get('elasticity') or 0.0)
+                    flux_score = float(item.get('flux_score') or 0.0)
+                    current_ofp = float(item.get('ofp') or 0.0)
+                    last_check = float(item.get('last_sniper_check') or 0.0)
+
+                    priority_score = 0
+                    needs_update = False
+                    
+                    if elasticity == 0: 
+                        priority_score += 100; needs_update = True 
+                    elif price_change_pct > 0.003: 
+                        priority_score += 40; needs_update = True 
+                    elif flux_score > 60:
+                        priority_score += 30; needs_update = True 
+                    elif abs(current_ofp) > 0.4: 
+                        priority_score += 20; needs_update = True 
+                    elif (time.time() - last_check) > SNIPER_COOLDOWN:
+                        priority_score += 10; needs_update = True 
+                    
+                    if needs_update:
+                        sniper_queue.append({'item': item, 'priority': priority_score})
+                else:
+                    item['fails'] = (item.get('fails') or 0) + 1
+                    if item['fails'] >= 3: tickers_to_remove.append(ticker)
+
+            # 5. SNIPER
+            sniper_queue.sort(key=lambda x: x['priority'], reverse=True)
+            
+            # Sprawdzamy ile jeszcze możemy zrobić zapytań
+            api_budget = max(0, API_CALLS_LIMIT_PER_MIN - len(self.api_call_timestamps))
+            max_snipes = min(api_budget, 2) 
+            
+            targets = sniper_queue[:max_snipes]
+            
+            for target_obj in targets:
+                item = target_obj['item']
+                ticker = item['ticker']
+                try:
+                    self._record_api_call()
+                    raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
+                    
+                    if raw_intraday and 'Time Series (5min)' in raw_intraday:
+                        df = standardize_df_columns(pd.DataFrame.from_dict(raw_intraday['Time Series (5min)'], orient='index'))
+                        df.index = pd.to_datetime(df.index)
+                        df.sort_index(inplace=True)
+                        
+                        safe_ofp = float(item.get('ofp') or 0.0)
+                        metrics = calculate_flux_vectors(df, current_ofp=safe_ofp)
+                        
+                        price = float(item.get('price') or df['close'].iloc[-1])
+                        sl_price = price * (1 - DEFAULT_SL_PCT)
+                        risk_usd = price - sl_price 
+                        tp_price = price + (risk_usd * DEFAULT_RR)
+                        
+                        # Zapisywanie z wymuszeniem float
+                        item['elasticity'] = float(metrics.get('elasticity') or 0.0)
+                        item['velocity'] = float(metrics.get('velocity') or 0.0)
+                        item['flux_score'] = int(metrics.get('flux_score') or 0)
+                        item['last_sniper_check'] = time.time() 
+                        item['stop_loss'] = sl_price             
+                        item['take_profit'] = tp_price           
+                        item['risk_reward'] = DEFAULT_RR         
+                        
+                        # Generowanie sygnału
+                        if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
+                            if self.macro_context['bias'] != 'BEARISH':
+                                metrics['price'] = price
+                                if self._generate_signal(ticker, metrics, sl_price, tp_price):
+                                    signals_generated += 1
+                except Exception as e:
+                    logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
+
+            # 6. ROTACJA
+            for item in self.active_pool:
+                score = float(item.get('flux_score') or 0.0)
+                added_at = float(item.get('added_at') or 0.0)
+                
+                if self.reserve_pool and score < 30 and (time.time() - added_at) > 1500:
+                    if item['ticker'] not in tickers_to_remove: tickers_to_remove.append(item['ticker'])
+
+            if tickers_to_remove:
+                self._rotate_pool(tickers_to_remove)
+                if signals_generated > 0: 
+                    append_scan_log(self.session, f"🌊 Faza 5: Wygenerowano {signals_generated} sygnałów.")
+
+            # 7. ZAPIS
+            self._save_state()
+            # Nie robimy sleep tutaj, bo main.py zarządza pętlą.
+            
+        finally:
+            # Ważne: Czyścimy referencję do sesji, aby nie używać starej w następnym cyklu
+            # (choć w singletonie i tak zostanie nadpisana, to dobra praktyka)
+            self.session = None
 
     def _rotate_pool(self, remove_list):
         remove_list = list(set(remove_list))
@@ -310,6 +342,7 @@ class OmniFluxAnalyzer:
 
     def _generate_signal(self, ticker: str, metrics: dict, sl_price: float, tp_price: float) -> bool:
         try:
+            if not self.session: return False
             price = metrics.get('price', 0)
             if price == 0: return False
 
@@ -365,12 +398,19 @@ class OmniFluxAnalyzer:
 
         except Exception as e:
             logger.error(f"Faza 5: Błąd generowania/aktualizacji sygnału: {e}")
-            self.session.rollback()
+            if self.session: self.session.rollback()
             return False
 
 def run_phase5_cycle(session: Session, api_client: AlphaVantageClient):
     """
     Wrapper wywoływany przez main.py.
+    Używa wzorca Singleton, aby zachować stan Rate Limitera i Puli Aktywnych
+    pomiędzy wywołaniami pętli workera.
     """
-    analyzer = OmniFluxAnalyzer(session, api_client)
-    analyzer.run_cycle_step()
+    global _GLOBAL_FLUX_ANALYZER
+    
+    if _GLOBAL_FLUX_ANALYZER is None:
+        _GLOBAL_FLUX_ANALYZER = OmniFluxAnalyzer(api_client)
+    
+    # Przekazujemy aktualną sesję do trwałej instancji analityka
+    _GLOBAL_FLUX_ANALYZER.run_cycle_step(session)
