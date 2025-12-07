@@ -19,8 +19,9 @@ if not API_KEY:
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    # === OPTYMALIZACJA: Limit 150 zapytań/minuta (Premium) ===
-    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+    # === OPTYMALIZACJA (LIMITER) ===
+    # Ustawiamy sztywny limit na 145/min, aby zostawić margines bezpieczeństwa (Premium ma 150)
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 145, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             logger.error("API key is missing for AlphaVantageClient instance in WORKER.")
         self.api_key = api_key
@@ -32,23 +33,30 @@ class AlphaVantageClient:
         self.request_interval = 60.0 / requests_per_minute
         self.request_timestamps = deque()
         
-        # === OPTYMALIZACJA: Session Keep-Alive ===
+        # Session Keep-Alive dla wydajności
         self.session = requests.Session()
 
     def _rate_limiter(self):
-        """Zaawansowany Rate Limiter typu 'Rolling Window'."""
+        """
+        Zaawansowany Rate Limiter typu 'Rolling Window'.
+        Gwarantuje, że worker nigdy nie przekroczy limitu zapytań.
+        """
         if not self.api_key: return
              
         now = time.monotonic()
+        # Usuń stare wpisy spoza okna 60s
         while self.request_timestamps and (now - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
             
+        # Jeśli limit osiągnięty, czekamy aż zwolni się slot
         if len(self.request_timestamps) >= self.requests_per_minute:
             time_to_wait = 60 - (now - self.request_timestamps[0]) + 0.1
             if time_to_wait > 0:
+                # logger.warning(f"API Rate Limit Local (Safety). Waiting {time_to_wait:.2f}s...")
                 time.sleep(time_to_wait)
                 now = time.monotonic()
 
+        # Minimalny odstęp między zapytaniami (Burst Protection)
         if self.request_timestamps:
             time_since_last = now - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
@@ -67,7 +75,7 @@ class AlphaVantageClient:
         request_identifier = params.get('symbol') or params.get('tickers') or params.get('function')
         
         for attempt in range(self.retries):
-            self._rate_limiter()
+            self._rate_limiter() # Czekaj na pozwolenie
             
             try:
                 response = self.session.get(self.BASE_URL, params=request_params, timeout=30)
@@ -90,7 +98,7 @@ class AlphaVantageClient:
 
                 if is_rate_limit_json:
                     wait_time = 5 * (attempt + 1)
-                    logger.warning(f"API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
+                    logger.warning(f"API Rate Limit Hit (Server Side) for {request_identifier}. Sleeping {wait_time}s...")
                     time.sleep(wait_time)
                     continue
 
@@ -137,9 +145,6 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_bulk_quotes(self, symbols: list[str]):
-        """
-        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
-        """
         params = {
             "function": "REALTIME_BULK_QUOTES",
             "symbol": ",".join(symbols),
@@ -151,10 +156,6 @@ class AlphaVantageClient:
         return None
 
     def get_bulk_quotes_parsed(self, symbols: list[str]) -> list[dict]:
-        """
-        NOWOŚĆ DLA WORKERA: Pobiera i parsuje dane Bulk do listy słowników.
-        Obsługuje pola Bid/Ask wymagane przez Fazę 5 (Radar/OFP).
-        """
         csv_text = self.get_bulk_quotes(symbols)
         if not csv_text: 
             return []
@@ -164,22 +165,19 @@ class AlphaVantageClient:
             f = StringIO(csv_text)
             reader = csv.DictReader(f)
             for row in reader:
-                # Wyciągamy dane potrzebne do OFP
                 data = {
                     'symbol': row.get('symbol'),
                     'price': self._safe_float(row.get('close')),
                     'volume': self._safe_float(row.get('volume')),
-                    # Dane Premium (Bid/Ask) - jeśli dostępne w CSV
                     'bid': self._safe_float(row.get('bid')),
                     'ask': self._safe_float(row.get('ask')),
                     'bid_size': self._safe_float(row.get('bid_size')),
                     'ask_size': self._safe_float(row.get('ask_size'))
                 }
-                # Tylko poprawne wiersze
                 if data['symbol']:
                     results.append(data)
         except Exception as e:
-            logger.error(f"Błąd parsowania Bulk CSV w Workerze: {e}")
+            logger.error(f"Błąd parsowania Bulk CSV: {e}")
             
         return results
 
@@ -294,7 +292,6 @@ class AlphaVantageClient:
         params = {"function": "EARNINGS", "symbol": symbol}
         return self._make_request(params)
 
-    # === DANE MAKRO ===
     def get_inflation_rate(self, interval: str = 'monthly'):
         params = {"function": "INFLATION", "interval": interval, "datatype": "json"}
         return self._make_request(params)
