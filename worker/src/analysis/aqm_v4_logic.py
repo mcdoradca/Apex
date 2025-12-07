@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # ==================================================================================
-# NARZĘDZIA POMOCNICZE (Sanityzacja i Obliczenia)
+# NARZĘDZIA POMOCNICZE (INDICATORS)
 # ==================================================================================
 
 def _ensure_numeric(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
@@ -21,7 +21,7 @@ def _ensure_numeric(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
     return df
 
 def _harden_index(df: pd.DataFrame) -> pd.DataFrame:
-    """Upewnia się, że indeks to DatetimeIndex."""
+    """Upewnia się, że indeks to DatetimeIndex bez strefy czasowej."""
     if df is None or df.empty:
         return df
     try:
@@ -37,6 +37,9 @@ def _harden_index(df: pd.DataFrame) -> pd.DataFrame:
         logger.warning(f"Nie udało się naprawić indeksu: {e}")
     return df
 
+def _calculate_ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False).mean()
+
 def _calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -51,6 +54,19 @@ def _calculate_macd(series: pd.Series) -> tuple[pd.Series, pd.Series]:
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
+def _calculate_ad_line(df: pd.DataFrame) -> pd.Series:
+    """
+    Oblicza Chaikin A/D Line ręcznie, aby uniezależnić się od zewnętrznych bibliotek.
+    AD = CumSum(((Close - Low) - (High - Close)) / (High - Low) * Volume)
+    """
+    try:
+        clv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
+        clv = clv.fillna(0.0)  # Zabezpieczenie przed dzieleniem przez zero
+        ad_vol = clv * df['volume']
+        return ad_vol.cumsum()
+    except Exception:
+        return pd.Series(0, index=df.index)
+
 def _resample_to_daily(source_df: pd.DataFrame, rule='1D', method='last') -> pd.DataFrame:
     if source_df is None or source_df.empty:
         return pd.DataFrame()
@@ -62,7 +78,211 @@ def _resample_to_daily(source_df: pd.DataFrame, rule='1D', method='last') -> pd.
     return resampled.ffill()
 
 # ==================================================================================
+# IMPLEMENTACJA AQM V2.0 (WERSJA UZIEMIONA - ZGODNIE Z PDF)
+# ==================================================================================
+
+def calculate_aqm_full_vector(
+    daily_df: pd.DataFrame,
+    weekly_df: pd.DataFrame,
+    intraday_60m_df: pd.DataFrame, # Ignorowane w V2 (zgodnie z PDF, brak historii intraday)
+    obv_df: pd.DataFrame,
+    macro_data: Dict[str, Any], 
+    earnings_days_to: Optional[int] = None
+) -> pd.DataFrame:
+    """
+    Oblicza wynik AQM V2.0 (Wersja Uziemiona).
+    Struktura: QPS (40%) + RAS (20%) + VMS (30%) + TCS (10%)
+    """
+    try:
+        # Przygotowanie danych dziennych
+        df = daily_df.copy()
+        df = _ensure_numeric(df, ['open', 'high', 'low', 'close', 'volume'])
+        df = _harden_index(df)
+        
+        if len(df) < 200: # Wymagane min. 200 świec dla EMA(200)
+            return pd.DataFrame()
+
+        # Przygotowanie danych tygodniowych (dla QPS Weekly)
+        weekly_clean = _ensure_numeric(weekly_df.copy())
+        weekly_clean = _harden_index(weekly_clean)
+        
+        # Jeśli brak danych tygodniowych, resampluj z dziennych
+        if weekly_clean.empty and not df.empty:
+            weekly_clean = df.resample('W').agg({
+                'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+            })
+
+        # Wyrównanie tygodniowych do dziennych (ffill)
+        weekly_aligned = weekly_clean.reindex(df.index, method='ffill')
+
+        # === WARSTWA 1: QUANTUM PRIME SCORE (QPS) - Waga 40% ===
+        # Cel: Spójność momentum Daily + Weekly
+        
+        # 1. Analiza Daily (60% wagi QPS)
+        df['ema_50'] = _calculate_ema(df['close'], 50)
+        df['ema_200'] = _calculate_ema(df['close'], 200)
+        df['rsi_14'] = _calculate_rsi(df['close'], 14)
+        df['macd'], df['macd_signal'] = _calculate_macd(df['close'])
+        
+        # 2. Analiza Weekly (40% wagi QPS)
+        df['w_ema_20'] = _calculate_ema(weekly_aligned['close'], 20)
+        df['w_ema_50'] = _calculate_ema(weekly_aligned['close'], 50)
+        
+        # Obliczanie ATR dla celów SL/TP (wymagane przez PDF str. 22)
+        prev_close = df['close'].shift()
+        tr = pd.concat([
+            df['high'] - df['low'],
+            (df['high'] - prev_close).abs(),
+            (df['low'] - prev_close).abs()
+        ], axis=1).max(axis=1)
+        df['atr'] = tr.rolling(14).mean()
+
+        def calc_qps(row):
+            # Daily Logic
+            trend_score_d = 1.0 if (row['close'] > row['ema_50'] > row['ema_200']) else 0.0
+            momentum_score_d = 1.0 if (row['rsi_14'] > 55) else 0.0
+            macd_score_d = 1.0 if (row['macd'] > row['macd_signal']) else 0.0
+            
+            # Weekly Logic
+            # Używamy weekly_close z wyrównanego DF
+            w_close = row.get('w_close', row['close']) 
+            trend_score_w = 1.0 if (w_close > row['w_ema_20'] > row['w_ema_50']) else 0.0
+            
+            # Formula: (Avg(Daily) * 0.6) + (Weekly * 0.4)
+            daily_avg = (trend_score_d + momentum_score_d + macd_score_d) / 3.0
+            return (daily_avg * 0.6) + (trend_score_w * 0.4)
+
+        # Dodajemy kolumnę close z weekly dla funkcji apply
+        df['w_close'] = weekly_aligned['close']
+        df['qps'] = df.apply(calc_qps, axis=1)
+
+        # === WARSTWA 2: REGIME ADAPTATION SCORE (RAS) - Waga 20% ===
+        # Cel: Ocena reżimu (zastępstwo VIX). 
+        # Dane z `macro_data` (Inflation, Fed Rate, Yield 10y, SPY)
+        
+        spy_df = macro_data.get('spy_df', pd.DataFrame())
+        inflation_val = float(macro_data.get('inflation', 0.0))
+        fed_rate_val = float(macro_data.get('fed_rate', 0.0)) # Tu przydałaby się historia, używamy scalara jeśli brak
+        yield_10y_val = float(macro_data.get('yield_10y', 0.0))
+        
+        # Obliczanie SPY EMA 200
+        spy_ema_200 = pd.Series(dtype=float)
+        if not spy_df.empty:
+            spy_clean = _harden_index(spy_df)
+            spy_clean = _ensure_numeric(spy_clean, ['close'])
+            spy_reindexed = spy_clean.reindex(df.index, method='ffill')
+            spy_ema_200 = _calculate_ema(spy_reindexed['close'], 200)
+            df['spy_close'] = spy_reindexed['close']
+        else:
+            df['spy_close'] = np.nan
+
+        # RAS jest stały dla danego momentu w czasie (zależy od makro), ale SPY trend zmienia się codziennie
+        def calc_ras(row):
+            # Warunki RISK_OFF (zgodnie z PDF)
+            # 1. Inflation > 4.0
+            cond_inf = inflation_val > 4.0
+            # 2. Yield 10y > 4.5
+            cond_yield = yield_10y_val > 4.5
+            # 3. SPY Price < SPY EMA 200
+            cond_spy = False
+            if not pd.isna(row.get('spy_close')) and not pd.isna(spy_ema_200.get(row.name)):
+                 cond_spy = row['spy_close'] < spy_ema_200[row.name]
+            
+            # (Opcjonalnie Fed Rate Rising - zakładamy False jeśli brak historii w tym kroku)
+            cond_fed = False 
+            
+            is_risk_off = cond_inf or cond_yield or cond_spy or cond_fed
+            
+            # 0.1 (Kara) lub 1.0 (Brak Kary)
+            return 0.1 if is_risk_off else 1.0
+
+        df['ras'] = df.apply(calc_ras, axis=1)
+
+        # === WARSTWA 3: VOLUME/MICROSTRUCTURE SCORE (VMS) - Waga 30% ===
+        # Cel: Analiza przepływu kapitału (OBV, A/D, Wolumen)
+        
+        # 1. OBV
+        # Jeśli OBV nie przyszło z API, obliczamy ręcznie
+        if obv_df is not None and not obv_df.empty:
+            obv_clean = _ensure_numeric(obv_df.copy(), ['OBV'])
+            obv_clean = _harden_index(obv_clean)
+            df = df.join(obv_clean['OBV'], rsuffix='_api')
+            df['obv_final'] = df['OBV'].fillna(df.get('OBV_api', np.nan))
+        else:
+            # Manual calculation
+            direction = np.sign(df['close'].diff())
+            df['obv_final'] = (direction * df['volume']).fillna(0).cumsum()
+            
+        df['obv_ema_20'] = _calculate_ema(df['obv_final'], 20)
+        
+        # 2. A/D Line (Chaikin)
+        df['ad_line'] = _calculate_ad_line(df)
+        df['ad_ema_20'] = _calculate_ema(df['ad_line'], 20)
+        
+        # 3. Volume Anomaly
+        # Średni wolumen z 20 dni (z pominięciem zer)
+        df['vol_avg_20'] = df['volume'].replace(0, np.nan).rolling(20).mean()
+
+        def calc_vms(row):
+            # 1. OBV Trend (40%)
+            obv_score = 1.0 if (row['obv_final'] > row['obv_ema_20']) else 0.0
+            
+            # 2. A/D Trend (30%)
+            ad_score = 1.0 if (row['ad_line'] > row['ad_ema_20']) else 0.0
+            
+            # 3. Volume Anomaly (30%)
+            # Vol > Avg * 1.5
+            vol_score = 1.0 if (row['volume'] > (row['vol_avg_20'] * 1.5)) else 0.0
+            
+            return (obv_score * 0.4) + (ad_score * 0.3) + (vol_score * 0.3)
+
+        df['vms'] = df.apply(calc_vms, axis=1)
+
+        # === WARSTWA 4: TEMPORAL COHERENCE SCORE (TCS) - Waga 10% ===
+        # Cel: Unikanie earningsów (bufor +/- 5 dni)
+        
+        def calc_tcs(row):
+            # Jeśli to ostatnia świeca i znamy dni do wyników
+            if earnings_days_to is not None and row.name == df.index[-1]:
+                # Sprawdzamy czy jesteśmy w buforze +/- 5 dni
+                # earnings_days_to może być ujemne (dni po wynikach) lub dodatnie (dni przed)
+                if abs(earnings_days_to) <= 5:
+                    return 0.1 # Kara
+            return 1.0 # Brak kary
+
+        df['tcs'] = df.apply(calc_tcs, axis=1)
+
+        # === FINAL SCORE & ENTRY LOGIC ===
+        
+        # Wagi: QPS(40%), RAS(20%), VMS(30%), TCS(10%)
+        # Wyliczenie: (QPS * 0.4) + (RAS * 0.2) + (VMS * 0.3) + (TCS * 0.1)
+        # UWAGA: Wzór w PDF (str. 5, pkt 4.1) uwzględnia mnożenie przez kary (RAS, TCS).
+        # Jednak opis wag sugeruje sumę ważoną.
+        # Interpretacja "Wersja Uziemiona":
+        # Ponieważ RAS i TCS to binarni mnożnicy (0.1 lub 1.0), 
+        # w AQM v2 score jest sumą ważoną, gdzie niska wartość RAS/TCS drastycznie obniża ich udział.
+        
+        df['aqm_score'] = (
+            (df['qps'] * 0.40) +
+            (df['ras'] * 0.20) +
+            (df['vms'] * 0.30) +
+            (df['tcs'] * 0.10)
+        )
+        
+        # Uzupełnienie NaN
+        cols_to_fill = ['aqm_score', 'qps', 'ras', 'vms', 'tcs', 'atr']
+        df[cols_to_fill] = df[cols_to_fill].fillna(0.0)
+        
+        # Zwracamy pełny DataFrame z kolumnami wymaganymi przez system
+        return df[['open', 'high', 'low', 'close', 'volume', 'atr', 'aqm_score', 'qps', 'ras', 'vms', 'tcs']]
+
+    except Exception as e:
+        logger.error(f"Krytyczny błąd w jądrze AQM V2 (Wersja Uziemiona): {e}", exc_info=True)
+        return pd.DataFrame()
+
+# ==================================================================================
 # LOGIKA H4: KINETIC ALPHA (PULSE HUNTER)
+# Zachowana dla kompatybilności wstecznej z Phase 4
 # ==================================================================================
 
 def analyze_intraday_kinetics(intraday_df: pd.DataFrame) -> Dict[str, Any]:
@@ -156,201 +376,3 @@ def analyze_intraday_kinetics(intraday_df: pd.DataFrame) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"H4 Logic Error: {e}", exc_info=True)
         return stats
-
-# ==================================================================================
-# GŁÓWNA LOGIKA AQM (V4.1 - WEIGHTED MEAN FIX)
-# ==================================================================================
-
-def calculate_aqm_full_vector(
-    daily_df: pd.DataFrame,
-    weekly_df: pd.DataFrame,
-    intraday_60m_df: pd.DataFrame, 
-    obv_df: pd.DataFrame,
-    macro_data: Dict[str, Any], 
-    earnings_days_to: Optional[int] = None
-) -> pd.DataFrame:
-    """
-    Oblicza pełny wektor AQM V4.1.
-    POPRAWKA: Zamiast iloczynu (który zaniżał wyniki), używamy ŚREDNIEJ WAŻONEJ.
-    """
-    try:
-        df = daily_df.copy()
-        df = _ensure_numeric(df, ['open', 'high', 'low', 'close', 'volume'])
-        df = _harden_index(df)
-        
-        if len(df) < 50:
-            return pd.DataFrame()
-
-        weekly_clean = _ensure_numeric(weekly_df.copy())
-        weekly_clean = _harden_index(weekly_clean)
-        weekly_aligned = _resample_to_daily(weekly_clean).reindex(df.index, method='ffill')
-        
-        intraday_clean = _ensure_numeric(intraday_60m_df.copy())
-        intraday_clean = _harden_index(intraday_clean)
-        intraday_aligned = pd.DataFrame()
-        if not intraday_clean.empty:
-            intraday_aligned = _resample_to_daily(intraday_clean).reindex(df.index, method='ffill')
-
-        # === 1. QUANTUM PRIME SCORE (QPS) ===
-        df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
-        df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-        df['rsi'] = _calculate_rsi(df['close'])
-        df['macd'], df['macd_signal'] = _calculate_macd(df['close'])
-        
-        if not weekly_aligned.empty:
-            df['w_ema_20'] = weekly_aligned['close'].ewm(span=20, adjust=False).mean()
-            df['w_trend_up'] = weekly_aligned['close'] > df['w_ema_20']
-        else:
-            df['w_trend_up'] = False 
-
-        if not intraday_aligned.empty:
-            df['i_ema_20'] = intraday_aligned['close'].ewm(span=20, adjust=False).mean()
-            df['i_trend_up'] = intraday_aligned['close'] > df['i_ema_20']
-        else:
-            df['i_trend_up'] = df['close'] > df['ema_20']
-
-        prev_close = df['close'].shift()
-        tr1 = df['high'] - df['low']
-        tr2 = (df['high'] - prev_close).abs()
-        tr3 = (df['low'] - prev_close).abs()
-        df['tr'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        df['atr'] = df['tr'].rolling(14).mean()
-        df['atr_percent'] = (df['atr'] / df['close']).fillna(0.0)
-
-        def calc_qps_row(row):
-            score = 0.0
-            close = row.get('close', 0)
-            ema20 = row.get('ema_20', 0)
-            ema50 = row.get('ema_50', 0)
-            
-            if pd.isna(ema20) or pd.isna(ema50): return 0.5 
-
-            # Trend (40%)
-            daily_ok = (close > ema20) and (ema20 > ema50)
-            if daily_ok: score += 0.2
-            if row.get('w_trend_up'): score += 0.1
-            if row.get('i_trend_up'): score += 0.1
-            
-            # Momentum (30%)
-            rsi = row.get('rsi', 50)
-            if 50 < rsi < 75: score += 0.15
-            macd = row.get('macd', 0)
-            macd_sig = row.get('macd_signal', 0)
-            if macd > macd_sig: score += 0.15
-            
-            # Zmienność (30%)
-            atr_pct = row.get('atr_percent', 0.05)
-            if atr_pct < 0.03: score += 0.3
-            elif atr_pct < 0.06: score += 0.15
-            
-            return score
-
-        df['qps'] = df.apply(calc_qps_row, axis=1)
-
-        # === 2. VOLUME ENTROPY SCORE (VES) ===
-        if obv_df is not None and not obv_df.empty:
-            obv_clean = _ensure_numeric(obv_df.copy(), ['OBV'])
-            obv_clean = _harden_index(obv_clean)
-            df = df.join(obv_clean['OBV'], rsuffix='_api')
-            df['obv_final'] = df['OBV'].fillna(df.get('OBV_api', np.nan))
-        else:
-            df['obv_final'] = np.nan
-            
-        df['obv_calc'] = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
-        df['obv_final'] = df['obv_final'].fillna(df['obv_calc'])
-        df['obv_ma20'] = df['obv_final'].rolling(20).mean()
-        df['obv_slope'] = df['obv_final'].diff(5) 
-        df['vol_ma20'] = df['volume'].rolling(20).mean()
-        df['vol_ratio'] = df['volume'] / df['vol_ma20'].replace(0, 1)
-
-        def calc_ves_row(row):
-            score = 0.0
-            if pd.isna(row.get('obv_final')): return 0.5
-            
-            # OBV Trend (40%)
-            if row['obv_final'] > row.get('obv_ma20', 0): score += 0.2
-            if row.get('obv_slope', 0) > 0: score += 0.2
-            
-            # Volume Burst (30%)
-            vr = row.get('vol_ratio', 1)
-            if vr > 1.2: score += 0.3
-            elif vr > 0.9: score += 0.1
-            
-            # Cena rośnie na wolumenie (30%)
-            if row['close'] > row['open']: score += 0.3
-            
-            return score
-
-        df['ves'] = df.apply(calc_ves_row, axis=1)
-
-        # === 3. MARKET REGIME SCORE (MRS) ===
-        spy_df = macro_data.get('spy_df')
-        yield_10y_val = macro_data.get('yield_10y', 4.0)
-        
-        is_bull_market_spy = True
-        spy_vix_proxy = 20.0
-        
-        if spy_df is not None and not spy_df.empty:
-            spy_clean = _harden_index(spy_df)
-            spy_reindexed = spy_clean.reindex(df.index, method='ffill')
-            spy_ma200 = spy_reindexed['close'].rolling(200).mean()
-            is_bull_market_spy = spy_reindexed['close'] > spy_ma200
-            # VIX proxy z ATR SPY
-            spy_vix_proxy = (spy_reindexed['close'].pct_change().rolling(20).std() * np.sqrt(252) * 100).fillna(20.0)
-        else:
-            is_bull_market_spy = pd.Series(True, index=df.index)
-            spy_vix_proxy = pd.Series(20.0, index=df.index)
-
-        def calc_mrs_row(row):
-            idx = row.name
-            try:
-                curr_vix = spy_vix_proxy.loc[idx] if isinstance(spy_vix_proxy, pd.Series) else spy_vix_proxy
-                is_bull = is_bull_market_spy.loc[idx] if isinstance(is_bull_market_spy, pd.Series) else is_bull_market_spy
-            except:
-                curr_vix = 20.0
-                is_bull = True
-
-            score = 0.5 # Neutral start
-            
-            if is_bull: score += 0.3
-            if curr_vix < 20: score += 0.2
-            elif curr_vix > 30: score -= 0.2
-            
-            if yield_10y_val > 4.5: score -= 0.1
-            
-            return max(0.0, min(1.0, score))
-
-        df['mrs'] = df.apply(calc_mrs_row, axis=1)
-
-        # === 4. TEMPORAL COHERENCE SCORE (TCS) ===
-        def calc_tcs_row(row):
-            score = 0.8 # Neutral base
-            if earnings_days_to is not None and row.name == df.index[-1]:
-                if 0 <= earnings_days_to <= 5: return 0.2 # Risk
-                elif 14 <= earnings_days_to <= 30: score = 1.0 
-            return score
-
-        df['tcs'] = df.apply(calc_tcs_row, axis=1)
-        
-        # === FINAL AQM SCORE (Weighted Mean) ===
-        # Wagi zgodnie z dokumentacją: QPS(40%), VES(30%), MRS(20%), TCS(10%)
-        df['qps'] = df['qps'].fillna(0.5)
-        df['ves'] = df['ves'].fillna(0.5)
-        df['mrs'] = df['mrs'].fillna(0.5)
-        df['tcs'] = df['tcs'].fillna(0.8)
-
-        df['aqm_score'] = (
-            (df['qps'] * 0.40) +
-            (df['ves'] * 0.30) +
-            (df['mrs'] * 0.20) +
-            (df['tcs'] * 0.10)
-        )
-        
-        cols = ['open', 'high', 'low', 'close', 'volume', 'atr', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
-        df[cols] = df[cols].fillna(0.5)
-        
-        return df[cols]
-
-    except Exception as e:
-        logger.error(f"Krytyczny błąd w jądrze AQM v4: {e}", exc_info=True)
-        return pd.DataFrame()
