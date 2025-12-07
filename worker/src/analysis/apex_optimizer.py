@@ -33,8 +33,8 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V14.1 - FIXED SAMPLER & RANGES
-    Wersja jednowątkowa - naprawiono błędy TPE i zakresy AQM V4.
+    SERCE SYSTEMU APEX V14.2 - STABLE TPE & RANGE FIX
+    Wersja jednowątkowa - naprawiono błędy TPE Samplera i zakresy AQM.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -90,13 +90,14 @@ class QuantumOptimizer:
             study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}_{self.scan_period}"
             append_scan_log(self.session, f"⚙️ Inicjalizacja Optuny: {study_name}...")
 
-            # === POPRAWKA SAMPLERA ===
-            # Wyłączono multivariate=True, aby uniknąć degradacji do RandomSampler
-            # przy warunkowej przestrzeni parametrów.
+            # === POPRAWKA SAMPLERA (FIX CRITICAL ERROR) ===
+            # Wyłączamy multivariate=True, ponieważ przy warunkowej przestrzeni parametrów (if H3/AQM)
+            # powoduje to konflikty i błędy 'group option'.
+            # Klasyczny TPE (univariate) jest tu znacznie stabilniejszy.
             sampler = optuna.samplers.TPESampler(
                 n_startup_trials=min(10, max(5, int(n_trials/5))), 
-                multivariate=False, # FIX: False dla stabilności przy if/else w objective
-                group=True
+                multivariate=False, 
+                # group=True usunięte, bo wymaga multivariate=True
             )
             
             self.study = optuna.create_study(
@@ -334,10 +335,9 @@ class QuantumOptimizer:
             
         elif self.strategy_mode == 'AQM':
             # === POPRAWKA ZAKRESU (AQM SCORE) ===
-            # Logi wykazały, że wartości Max AQM wynoszą ok. 0.28.
-            # Poprzedni dolny limit 0.05 był OK, ale górny 0.40 sugerował Optunie
-            # szukanie zbyt wysoko (0.39).
-            # Obniżamy zakres do 0.01 - 0.30, aby objąć realne wyniki (iloczyn 4 składników).
+            # Logi wykazały, że wartości Max AQM wynoszą ok. 0.28 (iloczyn 4 składników <1.0).
+            # Poprzedni zakres (0.05 - 0.40) był zbyt wysoki, przez co Optuna szukała w próżni.
+            # Nowy zakres: 0.01 - 0.30 odpowiada realnym wartościom wskaźnika.
             params = {
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.01, 0.30),
                 'aqm_component_min': trial.suggest_float('aqm_component_min', 0.01, 0.50),
