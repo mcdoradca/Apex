@@ -6,27 +6,23 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # ==================================================================================
-# APEX FLUX PHYSICS (V5 CORE MATH + ORDER FLOW)
+# APEX FLUX PHYSICS (V5 CORE MATH + ORDER FLOW) - SANITIZED
 # ==================================================================================
 
 def calculate_ofp(bid_size: float, ask_size: float) -> float:
     """
-    Oblicza Order Flow Pressure (OFP) na podstawie wielkości zleceń.
-    Zwraca wartość z zakresu [-1.0, 1.0].
-    
-    > 0: Przewaga Kupujących (Bid > Ask) - Popyt
-    < 0: Przewaga Sprzedających (Ask > Bid) - Podaż
-    0: Równowaga
+    Oblicza Order Flow Pressure (OFP).
     """
     try:
-        total_size = bid_size + ask_size
+        # Sanityzacja wejścia
+        b = float(bid_size or 0.0)
+        a = float(ask_size or 0.0)
+        
+        total_size = b + a
         if total_size <= 0:
             return 0.0
         
-        # Wzór: (Bid - Ask) / (Bid + Ask)
-        # Jeśli Bid=1000, Ask=200 -> (800 / 1200) = +0.66 (Silne Kupno)
-        # Jeśli Bid=100, Ask=900 -> (-800 / 1000) = -0.80 (Silna Sprzedaż)
-        return (bid_size - ask_size) / total_size
+        return (b - a) / total_size
     except Exception:
         return 0.0
 
@@ -36,8 +32,7 @@ def calculate_flux_vectors(
     current_ofp: Optional[float] = None
 ) -> Dict[str, Any]:
     """
-    Oblicza wektory Flux (Przepływu) dla strategii Intraday V5.
-    Teraz uwzględnia również Order Flow Pressure (OFP) jeśli dostępne.
+    Oblicza wektory Flux. GWARANTUJE zwrócenie typów liczbowych (nie None).
     """
     metrics = {
         'flux_score': 0.0,
@@ -49,19 +44,17 @@ def calculate_flux_vectors(
         'ofp': 0.0
     }
     
-    # Wymagamy minimum 50 świec do VWAP
     if intraday_df is None or intraday_df.empty or len(intraday_df) < 50:
         return metrics
 
     try:
-        # Kopia robocza
         df = intraday_df.copy()
         
         # Konwersja na liczby
         for col in ['close', 'high', 'low', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
             
-        # 1. VWAP (Lokalny - 50 świec)
+        # 1. VWAP
         v = df['volume'].values
         tp = (df['high'] + df['low'] + df['close']) / 3
         
@@ -72,45 +65,41 @@ def calculate_flux_vectors(
         current_price = df['close'].iloc[-1]
         current_vwap = df['vwap'].iloc[-1]
         
-        if pd.isna(current_vwap): current_vwap = current_price
+        if pd.isna(current_vwap) or current_vwap == 0: 
+            current_vwap = current_price
         
-        # 2. Elasticity (Sprężystość)
-        # Odległość od VWAP w jednostkach odchylenia standardowego (Sigma)
+        # 2. Elasticity
         std_dev = df['close'].rolling(window=50).std().iloc[-1]
-        if std_dev == 0: std_dev = current_price * 0.01 
+        if pd.isna(std_dev) or std_dev == 0: 
+            std_dev = current_price * 0.01 
         
         elasticity = (current_price - current_vwap) / std_dev
-        metrics['elasticity'] = elasticity
-        metrics['vwap_gap_percent'] = ((current_price - current_vwap) / current_vwap) * 100
-
-        # 3. Velocity (Prędkość Wolumenu)
+        
+        # 3. Velocity
         current_vol = df['volume'].iloc[-1]
         avg_vol = df['volume'].rolling(window=20).mean().shift(1).iloc[-1]
         
+        velocity = 0.0
         if avg_vol > 0:
             velocity = current_vol / avg_vol
-        else:
-            velocity = 0.0
-            
-        metrics['velocity'] = velocity
 
-        # 4. Momentum (RSI 9 - szybki)
+        # 4. Momentum (RSI 9)
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         current_rsi = rsi.iloc[-1]
+        if pd.isna(current_rsi): current_rsi = 50.0
 
         # 5. OFP Integration
-        if current_ofp is not None:
-            metrics['ofp'] = current_ofp
+        safe_ofp = float(current_ofp or 0.0)
+        metrics['ofp'] = safe_ofp
 
-        # === LOGIKA DECYZYJNA (Flux Scoring) ===
+        # === LOGIKA DECYZYJNA ===
         score = 0.0
         sig_type = "WAIT"
         
-        # A. FLUX BREAKOUT (Wybicie z Momentum)
         if 0.5 < elasticity < 2.5: 
             if velocity > 1.8:
                 if 50 < current_rsi < 80:
@@ -119,7 +108,6 @@ def calculate_flux_vectors(
                     score = base + vol_bonus
                     sig_type = "FLUX_BREAKOUT"
         
-        # B. FLUX DIP BUY (Kupno w Korekcie)
         elif -2.5 < elasticity < -1.0:
             if velocity < 0.8: 
                 if current_rsi < 40:
@@ -128,33 +116,33 @@ def calculate_flux_vectors(
                     score = base + rsi_bonus
                     sig_type = "FLUX_DIP_BUY"
         
-        # C. FLUX MOMENTUM
         elif elasticity > 2.5:
             if velocity > 3.0:
                 score = 60 
                 sig_type = "FLUX_MOMENTUM"
 
-        # === MODYFIKACJA OFP (Order Flow Pressure) ===
-        # Jeśli mamy dane OFP, wpływają one na ostateczny Score
-        if current_ofp is not None:
-            # Pozytywne OFP (Bid > Ask) wspiera Longa
-            if current_ofp > 0.3:
-                score += 10 # Silne wsparcie popytu
-            elif current_ofp > 0.1:
-                score += 5  # Umiarkowane wsparcie
-            # Negatywne OFP (Ask > Bid) zabija Longa
-            elif current_ofp < -0.3:
-                score -= 20 # Silna ściana podaży (blokuje wzrost)
-                sig_type = "OFP_BLOCKED"
-            elif current_ofp < -0.1:
-                score -= 10
+        if safe_ofp > 0.3: score += 10
+        elif safe_ofp > 0.1: score += 5
+        elif safe_ofp < -0.3:
+            score -= 20
+            sig_type = "OFP_BLOCKED"
+        elif safe_ofp < -0.1: score -= 10
 
-        metrics['flux_score'] = min(100.0, max(0.0, score))
+        # Zapisz wyniki (zawsze float)
+        metrics['flux_score'] = float(min(100.0, max(0.0, score)))
+        metrics['elasticity'] = float(elasticity)
+        metrics['velocity'] = float(velocity)
         metrics['signal_type'] = sig_type
-        metrics['confidence'] = score / 100.0
+        metrics['confidence'] = float(score / 100.0)
+        
+        # Wypełnij ewentualne NaN
+        for k, v in metrics.items():
+            if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
+                metrics[k] = 0.0
 
         return metrics
 
     except Exception as e:
         logger.error(f"Flux Physics Error: {e}")
+        # Return neutral zeros on error
         return metrics
