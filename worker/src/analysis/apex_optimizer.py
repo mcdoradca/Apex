@@ -320,23 +320,32 @@ class QuantumOptimizer:
         params = {}
         
         if self.strategy_mode == 'H3':
+            # ==================================================================
+            # === POPRAWKA 2: ROZLUŹNIENIE PARAMETRU TŁOKU (m_sq) ===
+            # Wcześniej: max 0.5 (bardzo restrykcyjne). Teraz: max 3.0 (pozwalamy na FOMO)
+            # ==================================================================
             params = {
                 'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
-                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 0.5), 
+                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), # ZMIANA z 0.5 na 3.0
                 'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 5.0),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 15), 
             }
+            # ==================================================================
             
         elif self.strategy_mode == 'AQM':
+            # ==================================================================
+            # === POPRAWKA 1: ROZSZERZENIE ZAKRESU SCORE (Z POPRZEDNIEGO KROKU) ===
+            # ==================================================================
             params = {
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.50, 0.95),
-                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.2, 0.8),
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.10, 0.80), # 0.10 dolny próg
+                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.1, 0.7), # 0.1 dolny próg
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 5.0),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15), 
             }
+            # ==================================================================
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
         end_ts = pd.Timestamp(f"{self.target_year}-12-31")
@@ -407,6 +416,7 @@ class QuantumOptimizer:
                         max_aqm = sim_df['aqm_score'].max()
                         max_qps = sim_df['qps'].max()
                         max_ves = sim_df['ves'].max()
+                        # Logowanie tylko jeśli drastycznie brakuje do progu
                         if max_aqm < min_score:
                             logger.info(f"DEBUG {ticker}: Max AQM={max_aqm:.2f} < Min={min_score:.2f} (To dlatego brak transakcji)")
                         elif max_ves < comp_min:
