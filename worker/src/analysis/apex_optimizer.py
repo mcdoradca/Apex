@@ -33,10 +33,10 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V15.0 - FINAL FIX (Production Ready)
-    Wersja ostateczna:
-    1. Naprawiono konfigurację TPE Samplera (brak błędu 'group').
-    2. Dostosowano zakresy AQM do nowej logiki (średnia ważona zamiast iloczynu).
+    SERCE SYSTEMU APEX V16.0 - AQM V2 EARTHED
+    Dostosowano do specyfikacji "Wersja Uziemiona" (AQM v2.0):
+    1. Obsługa warstw: QPS, RAS, VMS, TCS.
+    2. Optymalizacja progów wejścia zgodnie z wytycznymi PDF.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -92,13 +92,11 @@ class QuantumOptimizer:
             study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}_{self.scan_period}"
             append_scan_log(self.session, f"⚙️ Inicjalizacja Optuny: {study_name}...")
 
-            # === POPRAWKA KRYTYCZNA SAMPLERA (V15) ===
-            # Usunięto 'group=True' i 'multivariate=True'.
-            # To jest konfiguracja w 100% stabilna dla dynamicznych przestrzeni parametrów.
+            # Konfiguracja Samplera TPE
             sampler = optuna.samplers.TPESampler(
                 n_startup_trials=min(10, max(5, int(n_trials/5))), 
                 multivariate=False,
-                group=False # JAWNE WYŁĄCZENIE grupowania, aby uniknąć błędu
+                group=False 
             )
             
             self.study = optuna.create_study(
@@ -146,7 +144,7 @@ class QuantumOptimizer:
     def _load_macro_context(self):
         append_scan_log(self.session, "📊 Ładowanie tła makroekonomicznego...")
         # Domyślne wartości
-        macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
+        macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'fed_rate': 5.0, 'spy_df': pd.DataFrame()}
         
         local_session = get_db_session()
         try:
@@ -162,10 +160,17 @@ class QuantumOptimizer:
                 if yield_raw and 'data' in yield_raw:
                     try: macro['yield_10y'] = float(yield_raw['data'][0]['value'])
                     except: pass
+                
                 inf_raw = get_raw_data_with_cache(local_session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
                 if inf_raw and 'data' in inf_raw:
                     try: macro['inflation'] = float(inf_raw['data'][0]['value'])
                     except: pass
+                
+                fed_raw = get_raw_data_with_cache(local_session, client, 'FEDERAL_FUNDS_RATE', 'FEDERAL_FUNDS_RATE', 'get_fed_funds_rate', interval='monthly')
+                if fed_raw and 'data' in fed_raw:
+                    try: macro['fed_rate'] = float(fed_raw['data'][0]['value'])
+                    except: pass
+
         except Exception as e:
             append_scan_log(self.session, f"⚠️ Warning Makro: {e}")
         finally:
@@ -258,6 +263,7 @@ class QuantumOptimizer:
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
             if self.strategy_mode == 'H3':
+                # Legacy H3 Logic (dla wstecznej kompatybilności)
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
@@ -275,7 +281,6 @@ class QuantumOptimizer:
                 daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200).mean()
                 daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200).std()
                 daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
-                daily_df['normalized_news'] = 0.0 
                 daily_df['m_sq'] = daily_df['normalized_volume'] 
                 daily_df['nabla_sq'] = daily_df['price_gravity']
                 daily_df = calculate_h3_metrics_v4(daily_df, {}) 
@@ -283,7 +288,7 @@ class QuantumOptimizer:
                 return daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].dropna()
 
             elif self.strategy_mode == 'AQM':
-                # Fix dat dla AQM
+                # === AQM V2.0 (Uziemiona) ===
                 if not weekly_df.empty and isinstance(weekly_df.index, pd.DatetimeIndex):
                     weekly_df.index = weekly_df.index.tz_localize(None)
                 if not obv_df.empty and isinstance(obv_df.index, pd.DatetimeIndex):
@@ -300,12 +305,14 @@ class QuantumOptimizer:
                 
                 if aqm_df.empty: return pd.DataFrame()
                 
+                # Standaryzacja nazwy ATR
                 if 'atr' in aqm_df.columns: 
                     aqm_df['atr_14'] = aqm_df['atr']
                 elif 'atr_14' not in aqm_df.columns:
                     aqm_df['atr_14'] = daily_df['atr_14']
 
-                req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
+                # Nowe kolumny z logiki V2 (ras, vms, tcs)
+                req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ras', 'vms', 'tcs']
                 
                 if not all(col in aqm_df.columns for col in req_cols):
                     return pd.DataFrame()
@@ -330,15 +337,18 @@ class QuantumOptimizer:
             }
             
         elif self.strategy_mode == 'AQM':
-            # === ZAKRESY AQM V4 (ŚREDNIA WAŻONA) ===
-            # Po zmianie logiki na średnią ważoną (w aqm_v4_logic), wyniki będą w zakresie 0.0 - 1.0.
-            # Ustawiamy zakres poszukiwań na 0.50 - 0.85, co jest standardem dla takich wskaźników.
+            # === OPTYMALIZACJA AQM V2 (Parametry z PDF) ===
             params = {
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.50, 0.85),
-                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.30, 0.60),
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 5.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15), 
+                # Próg wejścia (PDF sugeruje 0.85, sprawdzamy okolice)
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.75, 0.95),
+                
+                # Próg potwierdzenia wolumenowego (PDF sugeruje 0.6)
+                'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.40, 0.80),
+                
+                # Parametry wyjścia (ATR Multipliers)
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0), # PDF mówi o TP=4.0
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0), # PDF mówi o SL=2.0
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 5, 20), # PDF mówi o 7 dniach
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
@@ -372,10 +382,6 @@ class QuantumOptimizer:
         sl_mult = params['h3_sl_multiplier']
         max_hold = params['h3_max_hold']
         
-        # === DIAGNOSTYKA ===
-        debug_check_limit = 5 
-        debug_counter = 0
-        
         for ticker, df in self.data_cache.items():
             if df.empty: continue
             
@@ -392,22 +398,26 @@ class QuantumOptimizer:
                 entry_mask = ((sim_df['aqm_rank'] > h3_p) & (sim_df['m_sq_norm'] < h3_m) & (sim_df['aqm_score_h3'] > h3_min))
             
             elif self.strategy_mode == 'AQM':
+                # === LOGIKA WEJŚCIA AQM V2 ===
                 min_score = params['aqm_min_score']
-                comp_min = params['aqm_component_min']
+                vms_min = params['aqm_vms_min']
                 
-                cond_main = (sim_df['aqm_score'] > min_score)
+                # Warunki z PDF:
+                # 1. RAS > 0.5 (Reżim RISK_ON, RAS przyjmuje 0.1 lub 1.0)
+                # 2. TCS > 0.5 (Poza Earnings, TCS przyjmuje 0.1 lub 1.0)
+                # 3. AQM Score > próg
+                # 4. VMS > próg
                 
-                if 'qps' in sim_df.columns:
-                    cond_comps = ((sim_df['qps'] > comp_min) & (sim_df['ves'] > comp_min) & (sim_df['mrs'] > comp_min))
-                    entry_mask = cond_main & cond_comps
-                    
-                    if debug_counter < debug_check_limit and not entry_mask.any():
-                        debug_counter += 1
-                        max_aqm = sim_df['aqm_score'].max()
-                        if max_aqm < min_score:
-                            logger.info(f"DEBUG {ticker}: Max AQM={max_aqm:.2f} < Min={min_score:.2f} (Sprawdź, czy logika AQM zwraca wartości 0-1)")
+                if 'ras' in sim_df.columns:
+                    entry_mask = (
+                        (sim_df['aqm_score'] > min_score) &
+                        (sim_df['ras'] > 0.5) & 
+                        (sim_df['tcs'] > 0.5) &
+                        (sim_df['vms'] > vms_min)
+                    )
                 else:
-                    entry_mask = cond_main
+                    # Fallback gdyby kolumny nie istniały (mało prawdopodobne po pre-process)
+                    entry_mask = (sim_df['aqm_score'] > min_score)
             
             if entry_mask is None: continue
 
@@ -521,7 +531,7 @@ class QuantumOptimizer:
             job.configuration = {
                 'best_params': best_params, 
                 'sensitivity_analysis': sensitivity_report, 
-                'version': 'V15_FINAL', 
+                'version': 'V16_AQM_EARTHED', 
                 'strategy': self.strategy_mode,
                 'scan_period': self.scan_period, 
                 'tickers_analyzed': self.tickers_count
