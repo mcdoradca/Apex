@@ -2,6 +2,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime, date
 from typing import List, Optional, Any, Dict
 
+# === MODELE TRANSAKCYJNE (PORTFEL) ===
+
 class TransactionBase(BaseModel):
     ticker: str = Field(..., description="Ticker spółki")
     quantity: int = Field(..., gt=0, description="Liczba akcji (musi być > 0)")
@@ -39,6 +41,8 @@ class TransactionHistory(TransactionHistoryBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+# === MODELE STATUSU WORKERA ===
+
 class Progress(BaseModel):
     processed: int
     total: int
@@ -52,6 +56,8 @@ class WorkerStatus(BaseModel):
 
 class SystemAlert(BaseModel):
     message: str
+
+# === MODELE KANDYDATÓW (SCANNERY) ===
 
 class Phase1Candidate(BaseModel):
     ticker: str
@@ -77,7 +83,7 @@ class PhaseXCandidate(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-# === FAZA 4: KINETIC ALPHA (H4) - NOWOŚĆ ===
+# === FAZA 4: KINETIC ALPHA (H4) ===
 class Phase4Candidate(BaseModel):
     ticker: str
     price: Optional[float] = None
@@ -86,9 +92,8 @@ class Phase4Candidate(BaseModel):
     shots_30d: int
     avg_intraday_volatility: Optional[float] = None
     
-    # Nowe metryki analityczne
     max_daily_shots: int
-    total_2pct_shots_ytd: int # Tu mapujemy z kolumny total_2pct_shots_30d lub ytd w zależności od nazwy w DB
+    total_2pct_shots_ytd: int 
     avg_swing_size: Optional[float] = None
     hard_floor_violations: int
     
@@ -97,6 +102,7 @@ class Phase4Candidate(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+# === FAZA 2 (KOMPATYBILNOŚĆ) ===
 class Phase2Result(BaseModel):
     ticker: str
     analysis_date: date
@@ -108,6 +114,7 @@ class Phase2Result(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+# === SYGNAŁY TRADINGOWE (LIVE) ===
 class TradingSignal(BaseModel):
     id: int
     ticker: str
@@ -123,12 +130,13 @@ class TradingSignal(BaseModel):
     notes: Optional[str] = None
     expiration_date: Optional[datetime] = None
     
-    # === RE-CHECK DATA (Oczekiwania w Sygnale) ===
+    # Re-check Data
     expected_profit_factor: Optional[float] = None
     expected_win_rate: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
+# === WIRTUALNE TRANSAKCJE (BACKTEST & MONITOR) ===
 class VirtualTrade(BaseModel):
     id: int
     ticker: str
@@ -142,6 +150,7 @@ class VirtualTrade(BaseModel):
     close_price: Optional[float] = None
     final_profit_loss_percent: Optional[float] = None
     
+    # Metryki H3/AQM
     metric_atr_14: Optional[float] = None
     metric_time_dilation: Optional[float] = None
     metric_price_gravity: Optional[float] = None
@@ -157,13 +166,24 @@ class VirtualTrade(BaseModel):
     metric_J: Optional[float] = None
     metric_J_threshold_2sigma: Optional[float] = None
 
-    # === NOWOŚĆ: RE-CHECK RESULT (Raport Audytora) ===
+    # Metryki F5 (Flux) - KLUCZOWE DLA NAPRAWY
+    metric_flux_score: Optional[float] = None
+    metric_flux_velocity: Optional[float] = None
+    metric_flux_ofp: Optional[float] = None
+    
+    # Metryki H4
+    metric_kinetic_energy: Optional[float] = None
+    metric_elasticity: Optional[float] = None
+
+    # Re-check Audit
     expected_profit_factor: Optional[float] = None
     expected_win_rate: Optional[float] = None
     ai_audit_report: Optional[str] = None
     ai_optimization_suggestion: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+# === RAPORTY I STATYSTYKI ===
 
 class VirtualAgentSetupStats(BaseModel):
     total_trades: int
@@ -182,6 +202,8 @@ class VirtualAgentReport(BaseModel):
     stats: VirtualAgentStats 
     trades: List[VirtualTrade] 
     total_trades_count: int 
+
+# === ZLECENIA PRACY (WORKER CONTROL) ===
 
 class BacktestRequest(BaseModel):
     year: str = Field(..., description="Rok do przetestowania, np. '2010'")
