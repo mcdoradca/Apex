@@ -33,8 +33,8 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V14 - STABLE SEQUENTIAL MODE
-    Wersja jednowątkowa - gwarantuje stabilność połączenia z DB.
+    SERCE SYSTEMU APEX V14.1 - FIXED SAMPLER & RANGES
+    Wersja jednowątkowa - naprawiono błędy TPE i zakresy AQM V4.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -90,9 +90,12 @@ class QuantumOptimizer:
             study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}_{self.scan_period}"
             append_scan_log(self.session, f"⚙️ Inicjalizacja Optuny: {study_name}...")
 
+            # === POPRAWKA SAMPLERA ===
+            # Wyłączono multivariate=True, aby uniknąć degradacji do RandomSampler
+            # przy warunkowej przestrzeni parametrów.
             sampler = optuna.samplers.TPESampler(
                 n_startup_trials=min(10, max(5, int(n_trials/5))), 
-                multivariate=True,
+                multivariate=False, # FIX: False dla stabilności przy if/else w objective
                 group=True
             )
             
@@ -320,9 +323,6 @@ class QuantumOptimizer:
         params = {}
         
         if self.strategy_mode == 'H3':
-            # === POPRAWKA LOGICZNA DLA H3 (MASA) ===
-            # Zakres (-3.0, 0.5) był zbyt restrykcyjny. Hossa (tłok) może mieć m_sq > 0.
-            # Rozszerzam do (-3.0, 3.0), aby nie wycinać momentum.
             params = {
                 'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), 
@@ -333,12 +333,13 @@ class QuantumOptimizer:
             }
             
         elif self.strategy_mode == 'AQM':
-            # === POPRAWKA LOGICZNA DLA AQM (SCORE) ===
-            # AQM Score to iloczyn 4 wskaźników (0-1). 0.7*0.7*0.7*0.7 = 0.24.
-            # Poprzedni próg 0.50 był matematycznie nierealny dla iloczynu.
-            # Obniżam zakres do 0.05 - 0.40, co odpowiada realnym wartościom w logach.
+            # === POPRAWKA ZAKRESU (AQM SCORE) ===
+            # Logi wykazały, że wartości Max AQM wynoszą ok. 0.28.
+            # Poprzedni dolny limit 0.05 był OK, ale górny 0.40 sugerował Optunie
+            # szukanie zbyt wysoko (0.39).
+            # Obniżamy zakres do 0.01 - 0.30, aby objąć realne wyniki (iloczyn 4 składników).
             params = {
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.05, 0.40),
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.01, 0.30),
                 'aqm_component_min': trial.suggest_float('aqm_component_min', 0.01, 0.50),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 5.0),
@@ -412,13 +413,10 @@ class QuantumOptimizer:
                         debug_counter += 1
                         # Logujemy maksymalne wartości, aby sprawdzić, czy w ogóle coś przekracza próg
                         max_aqm = sim_df['aqm_score'].max()
-                        max_qps = sim_df['qps'].max()
-                        max_ves = sim_df['ves'].max()
-                        # Logowanie tylko jeśli drastycznie brakuje do progu
+                        
+                        # Logowanie tylko jeśli drastycznie brakuje do progu (diagnoza zakresów)
                         if max_aqm < min_score:
-                            logger.info(f"DEBUG {ticker}: Max AQM={max_aqm:.2f} < Min={min_score:.2f} (To dlatego brak transakcji)")
-                        elif max_ves < comp_min:
-                            logger.info(f"DEBUG {ticker}: Max VES={max_ves:.2f} < CompMin={comp_min:.2f} (Brak wolumenu?)")
+                            logger.info(f"DEBUG {ticker}: Max AQM={max_aqm:.2f} < Min={min_score:.2f} (Brak transakcji - zakres zbyt wysoki?)")
                 else:
                     entry_mask = cond_main
             
