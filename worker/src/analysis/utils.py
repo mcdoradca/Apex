@@ -21,7 +21,11 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CACHE_EXPIRY_DAYS = 7 
+
+# AGRESYWNY CACHE DLA DANYCH HISTORYCZNYCH
+# Dane dzienne (DAILY) są ważne przez 24h, ale jeśli są z weekendu, to dłużej.
+# Newsy i Insider są ważne przez 7 dni (bo to dane historyczne).
+CACHE_EXPIRY_DAYS_DEFAULT = 7 
 
 if not TELEGRAM_BOT_TOKEN:
     logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram alerts are DISABLED.")
@@ -37,40 +41,83 @@ def get_raw_data_with_cache(
     expiry_hours: Optional[int] = None, 
     **kwargs
 ) -> Dict[str, Any]:
+    """
+    Inteligentny Wrapper API z agresywnym cache.
+    Chroni limit API przed zbędnymi zapytaniami o te same dane.
+    """
     try:
+        # 1. Sprawdź Cache w DB
         cache_entry = session.query(models.AlphaVantageCache).filter(
             models.AlphaVantageCache.ticker == ticker,
             models.AlphaVantageCache.data_type == data_type
         ).first()
+        
         now = datetime.now(timezone.utc)
+        
         if cache_entry:
+            last_fetched = cache_entry.last_fetched
+            is_fresh = False
+            
+            # Logika wygasania
             if expiry_hours is not None:
-                is_fresh = (now - cache_entry.last_fetched) < timedelta(hours=expiry_hours)
+                # Jeśli podano konkretny limit godzin (np. dla Fazy 1 Live)
+                is_fresh = (now - last_fetched) < timedelta(hours=expiry_hours)
             else:
-                is_fresh = (now - cache_entry.last_fetched) < timedelta(days=CACHE_EXPIRY_DAYS)
-            if is_fresh and cache_entry.raw_data_json:
-                return cache_entry.raw_data_json 
-    except Exception: pass
+                # Domyślnie (np. dla Optymalizatora) - Agresywne Cache (7 dni)
+                is_fresh = (now - last_fetched) < timedelta(days=CACHE_EXPIRY_DAYS_DEFAULT)
+                
+                # Dodatkowa logika: Jeśli dzisiaj jest weekend, a dane są z piątku, to są świeże
+                if not is_fresh and now.weekday() >= 5: # Sobota/Niedziela
+                    if (now - last_fetched).days < 3:
+                        is_fresh = True
 
+            if is_fresh and cache_entry.raw_data_json:
+                # logger.debug(f"CACHE HIT: {ticker} ({data_type})")
+                return cache_entry.raw_data_json 
+                
+    except Exception as e:
+        logger.error(f"Cache Read Error: {e}")
+
+    # 2. Jeśli brak w cache lub stare -> Zapytaj API
+    # Ale najpierw sprawdź, czy klient API ma na to "budżet" (klient sam to obsłuży)
     client_method = getattr(api_client, api_func, None)
     if not client_method: return {}
+    
+    # Dostosuj argumenty
     if api_func == 'get_news_sentiment': kwargs['ticker'] = ticker
     elif api_func == 'get_bulk_quotes': kwargs['symbols'] = [ticker]
     else: kwargs['symbol'] = ticker
-    try: raw_data = client_method(**kwargs)
+    
+    try: 
+        raw_data = client_method(**kwargs)
     except TypeError: return {}
     
-    if not raw_data or raw_data.get("Error Message") or raw_data.get("Information"): return {}
+    # Walidacja odpowiedzi API
+    if not raw_data: return {}
+    if isinstance(raw_data, dict):
+        if raw_data.get("Error Message") or raw_data.get("Information"): return {}
 
+    # 3. Zapisz do Cache (Upsert)
     try:
+        # Używamy surowego JSON stringa
+        json_data = raw_data
+        if not isinstance(raw_data, str): # Jeśli to słownik, zrzuć do stringa (dla kompatybilności wstecznej json.dumps)
+             # Ale model oczekuje JSONB, który SQLAlchemy sam parsuje z dicta.
+             # Jeśli AlphaVantageClient zwraca dict, to jest OK.
+             pass
+
         upsert_stmt = text("""
             INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
             VALUES (:ticker, :data_type, :raw_data, NOW())
             ON CONFLICT (ticker, data_type) DO UPDATE SET raw_data_json = :raw_data, last_fetched = NOW();
         """)
+        # SQLAlchemy z psycopg2 automatycznie serializuje dict do JSONB
         session.execute(upsert_stmt, {'ticker': ticker, 'data_type': data_type, 'raw_data': json.dumps(raw_data)})
         session.commit()
-    except Exception: session.rollback()
+    except Exception as e:
+        logger.error(f"Cache Write Error: {e}")
+        session.rollback()
+        
     return raw_data
 
 _sent_alert_hashes = set()
@@ -133,46 +180,19 @@ def clear_scan_log(session: Session):
     update_system_control(session, 'scan_log', '')
 
 def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
-    """
-    Sprawdza, czy w bazie pojawiło się nowe polecenie dla Workera.
-    Zaktualizowano o obsługę Fazy 5 (Omni-Flux).
-    """
+    # Ta funkcja jest obecnie rzadziej używana, ponieważ main.py ma własną logikę
+    # ale zachowujemy ją dla kompatybilności wstecznej
     cmd = get_system_control_value(session, 'worker_command')
     
-    if cmd == "START_REQUESTED":
-        update_system_control(session, 'worker_command', 'NONE')
-        return "FULL_RUN", current_state
-    
-    if cmd == "START_PHASE_1_REQUESTED":
-        update_system_control(session, 'worker_command', 'NONE')
-        return "PHASE_1_RUN", current_state
-    
-    if cmd == "START_PHASE_3_REQUESTED":
-        update_system_control(session, 'worker_command', 'NONE')
-        return "PHASE_3_RUN", current_state
+    if cmd == "START_REQUESTED": return "FULL_RUN", current_state
+    if cmd == "START_PHASE_1_REQUESTED": return "PHASE_1_RUN", current_state
+    if cmd == "START_PHASE_3_REQUESTED": return "PHASE_3_RUN", current_state
+    if cmd == "START_PHASE_X_REQUESTED": return "PHASE_X_RUN", current_state
+    if cmd == "START_PHASE_4_REQUESTED": return "PHASE_4_RUN", current_state
+    if cmd == "START_PHASE_5_REQUESTED": return "PHASE_5_RUN", current_state
         
-    if cmd == "START_PHASE_X_REQUESTED":
-        update_system_control(session, 'worker_command', 'NONE')
-        return "PHASE_X_RUN", current_state
-
-    if cmd == "START_PHASE_4_REQUESTED":
-        update_system_control(session, 'worker_command', 'NONE')
-        return "PHASE_4_RUN", current_state
-
-    # === FAZA 5: OMNI-FLUX ===
-    if cmd == "START_PHASE_5_REQUESTED":
-        update_system_control(session, 'worker_command', 'NONE')
-        return "PHASE_5_RUN", current_state
-    # =========================
-        
-    if cmd == "PAUSE_REQUESTED":
-        update_system_control(session, 'worker_status', 'PAUSED')
-        update_system_control(session, 'worker_command', 'NONE')
-        return "NONE", "PAUSED"
-    if cmd == "RESUME_REQUESTED":
-        update_system_control(session, 'worker_status', 'RUNNING')
-        update_system_control(session, 'worker_command', 'NONE')
-        return "NONE", "RUNNING"
+    if cmd == "PAUSE_REQUESTED": return "NONE", "PAUSED"
+    if cmd == "RESUME_REQUESTED": return "NONE", "RUNNING"
     return "NONE", current_state
 
 def report_heartbeat(session: Session):
@@ -180,19 +200,12 @@ def report_heartbeat(session: Session):
         res = session.execute(text("SELECT value FROM system_control WHERE key = 'worker_status'")).fetchone()
         current_status = res[0] if res else 'UNKNOWN'
 
+        # Heartbeat wysyłamy tylko jeśli system nie jest w ciężkim stanie operacyjnym
+        # aby nie spowalniać bazy zbędnymi update'ami
         heavy_load_states = [
-            'RUNNING', 
-            'BUSY', 
-            'BUSY_BACKTEST', 
-            'BUSY_OPTIMIZING', 
-            'BUSY_AI_OPTIMIZER', 
-            'BUSY_DEEP_DIVE',
+            'BUSY_OPERATION',
             'OPTIMIZING_CALC',
-            'OPTIMIZING_DATA_LOAD',
-            'PHASE_4_KINETIC',
-            # Dodajemy F5, żeby worker nie tracił czasu na heartbeat w trakcie karuzeli
-            'PHASE_5_FLUX',
-            'RUNNING_FLUX'
+            'OPTIMIZING_DATA_LOAD'
         ]
 
         if any(s in current_status for s in heavy_load_states):
@@ -226,6 +239,9 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
     return series.ewm(span=period, adjust=False).mean()
 
+# --- Funkcje obliczeniowe dla symulatorów (H3/V4) ---
+# Są tu, aby unikać cyklicznych importów w modułach analitycznych
+
 def _safe_float_convert(value: Any) -> float | None:
     if value is None: return None
     try: return float(value)
@@ -238,11 +254,14 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         take_profit = setup['take_profit']
         close_price = entry_price
         status = 'CLOSED_EXPIRED'
+        
+        # Symulacja dzień po dniu
         for i in range(0, max_hold_days): 
             curr_idx = entry_index + i
             if curr_idx >= len(historical_data):
                 close_price = historical_data.iloc[-1]['close']
                 break
+            
             candle = historical_data.iloc[curr_idx]
             if direction == 'LONG':
                 if candle['low'] <= stop_loss:
@@ -257,7 +276,9 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             final_idx = min(entry_index + max_hold_days - 1, len(historical_data) - 1)
             close_price = historical_data.iloc[final_idx]['close']
             status = 'CLOSED_EXPIRED'
+            
         p_l_percent = 0.0 if entry_price == 0 else ((close_price - entry_price) / entry_price) * 100
+        
         return models.VirtualTrade(
             ticker=setup['ticker'], status=status, setup_type=f"BACKTEST_{year}_{setup['setup_type']}",
             entry_price=float(entry_price), stop_loss=float(stop_loss), take_profit=float(take_profit),
@@ -267,8 +288,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             metric_atr_14=_safe_float_convert(setup.get('metric_atr_14')),
             metric_time_dilation=_safe_float_convert(setup.get('metric_time_dilation')),
             metric_price_gravity=_safe_float_convert(setup.get('metric_price_gravity')),
-            metric_td_percentile_90=_safe_float_convert(setup.get('metric_td_percentile_90')),
-            metric_pg_percentile_90=_safe_float_convert(setup.get('metric_pg_percentile_90')),
             metric_inst_sync=_safe_float_convert(setup.get('metric_inst_sync')),
             metric_retail_herding=_safe_float_convert(setup.get('metric_retail_herding')),
             metric_aqm_score_h3=_safe_float_convert(setup.get('metric_aqm_score_h3')),
@@ -277,7 +296,6 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
             metric_nabla_sq_norm=_safe_float_convert(setup.get('metric_nabla_sq_norm')),
             metric_m_sq_norm=_safe_float_convert(setup.get('metric_m_sq_norm')),
             metric_J=_safe_float_convert(setup.get('metric_J')),
-            metric_J_threshold_2sigma=_safe_float_convert(setup.get('metric_J_threshold_2sigma')),
             metric_kinetic_energy=_safe_float_convert(setup.get('metric_kinetic_energy')),
             metric_elasticity=_safe_float_convert(setup.get('metric_elasticity'))
         )
@@ -292,7 +310,6 @@ def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.S
         normalized = (df['institutional_sync'] - rolling_mean) / rolling_std
         return normalized.replace([np.inf, -np.inf], 0).fillna(0)
     except Exception as e:
-        logger.error(f"Błąd normalizacji institutional_sync_v4: {e}")
         return pd.Series(0, index=df.index)
 
 def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
@@ -301,95 +318,13 @@ def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.S
     return retail_herding_series.clip(-1.0, 1.0)
 
 def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
+    # Wersja skrócona dla Utils, pełna logika w aqm_v4_logic.py
+    # Służy do podstawowych obliczeń, gdy pełny moduł nie jest potrzebny
     try:
-        required_cols = ['J', 'J_norm', 'nabla_sq_norm', 'm_sq_norm', 'aqm_score_h3', 'aqm_percentile_95']
-        for col in required_cols:
-            if col not in df.columns: df[col] = 0.0
-
-        Z_SCORE_WINDOW = 100
-        
         if 'institutional_sync' in df.columns:
-            df['mu_normalized'] = normalize_institutional_sync_v4(df, Z_SCORE_WINDOW)
-        else:
-            df['mu_normalized'] = 0.0
-        
+            df['mu_normalized'] = normalize_institutional_sync_v4(df)
         if 'retail_herding' in df.columns:
             df['retail_herding_capped'] = calculate_retail_herding_capped_v4(df['retail_herding'])
-        else:
-            df['retail_herding_capped'] = 0.0
-        
-        if 'information_entropy' not in df.columns: df['information_entropy'] = 0.0
-        if 'market_temperature' not in df.columns: df['market_temperature'] = 0.0001 
-
-        S = df['information_entropy']
-        Q = df['retail_herding_capped']
-        T = df['market_temperature'].replace(0, np.nan).fillna(0.0001) 
-        mu_norm = df['mu_normalized']
-        
-        df['J'] = S - (Q / T) + (mu_norm * 1.0)
-        df['J'] = df['J'].replace([np.inf, -np.inf], 0).fillna(0)
-        
-        j_mean = df['J'].rolling(window=Z_SCORE_WINDOW).mean()
-        j_std = df['J'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
-        df['J_norm'] = ((df['J'] - j_mean) / j_std).replace([np.inf, -np.inf], 0).fillna(0)
-        
-        if 'nabla_sq' not in df.columns: df['nabla_sq'] = 0.0
-        nabla_mean = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).mean()
-        nabla_std = df['nabla_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
-        df['nabla_sq_norm'] = ((df['nabla_sq'] - nabla_mean) / nabla_std).replace([np.inf, -np.inf], 0).fillna(0)
-        
-        if 'm_sq' not in df.columns: df['m_sq'] = 0.0
-        m_mean = df['m_sq'].rolling(window=Z_SCORE_WINDOW).mean()
-        m_std = df['m_sq'].rolling(window=Z_SCORE_WINDOW).std(ddof=1)
-        df['m_sq_norm'] = ((df['m_sq'] - m_mean) / m_std).replace([np.inf, -np.inf], 0).fillna(0)
-        
-        df['aqm_score_h3'] = df['J_norm'] - df['nabla_sq_norm'] - df['m_sq_norm']
-        
-        h3_percentile = 0.95
-        if params and 'h3_percentile' in params:
-             try: h3_percentile = float(params['h3_percentile'])
-             except: pass
-             
-        df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(window=Z_SCORE_WINDOW).quantile(h3_percentile).fillna(0)
-        
+            
         return df
-        
-    except Exception as e:
-        logger.error(f"Błąd calculate_h3_metrics_v4 (CRITICAL FIX): {e}", exc_info=True)
-        for col in ['aqm_score_h3', 'aqm_percentile_95', 'm_sq_norm']:
-            if col not in df.columns: df[col] = 0.0
-        return df
-
-def get_optimized_periods_v4(target_year: int) -> list:
-    return [
-        (f"{target_year}-01-01", f"{target_year}-06-30"),
-        (f"{target_year}-07-01", f"{target_year}-12-31")
-    ]
-
-def get_optimized_tickers_v4(session: Session, limit: int = 100) -> list:
-    try:
-        result = session.execute(text("""
-            SELECT DISTINCT ticker FROM (
-                SELECT ticker FROM phase1_candidates 
-                UNION 
-                SELECT ticker FROM portfolio_holdings
-                UNION
-                SELECT ticker FROM companies 
-            ) AS all_tickers
-            ORDER BY ticker LIMIT :limit
-        """), {'limit': limit})
-        return [r[0] for r in result]
-    except:
-        result = session.execute(text("SELECT ticker FROM companies LIMIT :limit"), {'limit': limit})
-        return [r[0] for r in result]
-
-def precompute_h3_metrics_v4(df: pd.DataFrame) -> pd.DataFrame:
-    df['m_sq'] = df['volume'].rolling(10).mean() / df['volume'].rolling(200).mean() - 1
-    df['nabla_sq'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
-    for col in ['m_sq', 'nabla_sq']:
-        mean = df[col].rolling(100).mean()
-        std = df[col].rolling(100).std()
-        df[f'{col}_norm'] = (df[col] - mean) / std.replace(0, 1)
-    df['aqm_score_h3'] = -df['m_sq_norm'] - df['nabla_sq_norm']
-    df['aqm_percentile_95'] = df['aqm_score_h3'].rolling(100).quantile(0.95)
-    return df.fillna(0)
+    except: return df
