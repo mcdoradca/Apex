@@ -13,7 +13,7 @@ from .. import models
 from .utils import (
     standardize_df_columns, 
     append_scan_log, 
-    send_telegram_alert,
+    send_telegram_alert, 
     update_system_control,
     get_system_control_value
 )
@@ -39,8 +39,8 @@ _GLOBAL_FLUX_ANALYZER = None
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.7 - Singleton & Session Injection)
-    Poprawiono zarządzanie sesją i rate-limiterem.
+    APEX OMNI-FLUX ENGINE (V5.8 - Fixed Pool Management)
+    Poprawiono zarządzanie sesją, rate-limiterem oraz logikę rotacji (Fix Duplicates & Starvation).
     """
 
     def __init__(self, api_client: AlphaVantageClient):
@@ -132,7 +132,10 @@ class OmniFluxAnalyzer:
             logger.warning(f"Faza 5: Błąd makro: {e}")
 
     def _initialize_pools(self):
-        """Ładuje kandydatów z Fazy 1 i BioX do puli rezerwowej"""
+        """
+        Ładuje kandydatów z Fazy 1 i BioX do puli rezerwowej.
+        NAPRAWA: Zapobiega duplikatom i poprawnie scala listy.
+        """
         try:
             # Bierzemy najlepszych z F1 (Sektor Trend)
             p1_rows = self.session.execute(text("SELECT ticker FROM phase1_candidates ORDER BY sector_trend_score DESC NULLS LAST LIMIT 40")).fetchall()
@@ -144,11 +147,26 @@ class OmniFluxAnalyzer:
             # Wykluczamy tych, którzy już są w portfelu lub mają aktywne sygnały
             active_sigs = [r[0] for r in self.session.execute(text("SELECT ticker FROM trading_signals WHERE status IN ('ACTIVE', 'PENDING')")).fetchall()]
             holdings = [r[0] for r in self.session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()]
-            exclude = set(active_sigs + holdings)
             
-            self.reserve_pool = [t for t in combined_tickers if t not in exclude]
+            # NAPRAWA: Wykluczamy też tych, którzy JUŻ SĄ w Active Pool (zapobiega duplikatom w karuzeli)
+            current_active = [x['ticker'] for x in self.active_pool]
             
-            # Napełnianie aktywnej puli (Karuzela)
+            exclude = set(active_sigs + holdings + current_active)
+            
+            new_candidates = [t for t in combined_tickers if t not in exclude]
+            
+            # NAPRAWA: Dopisywanie do rezerwy zamiast nadpisywania (zachowuje kolejkę)
+            # Używamy set do szybkiego sprawdzania duplikatów w samej rezerwie
+            current_reserve_set = set(self.reserve_pool)
+            added_count = 0
+            
+            for t in new_candidates:
+                if t not in current_reserve_set:
+                    self.reserve_pool.append(t)
+                    current_reserve_set.add(t)
+                    added_count += 1
+            
+            # Napełnianie aktywnej puli (Karuzela) - jeśli są wolne sloty
             while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
                 ticker = self.reserve_pool.pop(0)
                 # Inicjalizacja ZERAMI, nie None
@@ -157,11 +175,12 @@ class OmniFluxAnalyzer:
                     'price': 0.0, 'elasticity': 0.0, 'velocity': 0.0, 'flux_score': 0, 'ofp': 0.0,
                     'stop_loss': 0.0, 'take_profit': 0.0, 'risk_reward': 0.0     
                 })
-                
-            msg = f"🌊 Faza 5 (Init): Aktywne: {len(self.active_pool)}, Rezerwa: {len(self.reserve_pool)}"
-            logger.info(msg)
-            append_scan_log(self.session, msg)
-            self._save_state()
+            
+            if added_count > 0:
+                msg = f"🌊 Faza 5 (Refill): Dodano {added_count} kandydatów do rezerwy. Aktywne: {len(self.active_pool)}, Rezerwa: {len(self.reserve_pool)}"
+                logger.info(msg)
+                append_scan_log(self.session, msg)
+                self._save_state()
             
         except Exception as e:
             logger.error(f"Faza 5: Błąd inicjalizacji: {e}")
@@ -180,10 +199,13 @@ class OmniFluxAnalyzer:
                 self._load_state()
                 self.state_loaded = True
 
-            if not self.active_pool:
+            # NAPRAWA: Proaktywne uzupełnianie rezerwy, jeśli jest na wyczerpaniu (< 5)
+            # Zapobiega sytuacji, gdzie czekamy na całkowite opróżnienie puli aktywnej (starvation)
+            if not self.active_pool or len(self.reserve_pool) < 5:
                 self._initialize_pools()
-                if not self.active_pool: 
-                    return # Brak kandydatów, czekamy
+                
+            if not self.active_pool: 
+                return # Nadal brak kandydatów, czekamy
 
             self._refresh_macro_context()
             
@@ -310,6 +332,7 @@ class OmniFluxAnalyzer:
                 score = float(item.get('flux_score') or 0.0)
                 added_at = float(item.get('added_at') or 0.0)
                 
+                # Warunki usunięcia: Słaby wynik i minął czas ochrony (25 min)
                 if self.reserve_pool and score < 30 and (time.time() - added_at) > 1500:
                     if item['ticker'] not in tickers_to_remove: tickers_to_remove.append(item['ticker'])
 
@@ -330,6 +353,8 @@ class OmniFluxAnalyzer:
     def _rotate_pool(self, remove_list):
         remove_list = list(set(remove_list))
         self.active_pool = [x for x in self.active_pool if x['ticker'] not in remove_list]
+        
+        # Uzupełniamy z rezerwy
         while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
             new_ticker = self.reserve_pool.pop(0)
             self.active_pool.append({
@@ -337,6 +362,8 @@ class OmniFluxAnalyzer:
                 'price': 0.0, 'elasticity': 0.0, 'velocity': 0.0, 'flux_score': 0, 'ofp': 0.0,
                 'stop_loss': 0.0, 'take_profit': 0.0, 'risk_reward': 0.0
             })
+            
+        # Jeśli rezerwa pusta, próbujemy doładować
         if not self.reserve_pool and len(self.active_pool) < CAROUSEL_SIZE:
              self._initialize_pools()
 
@@ -353,7 +380,7 @@ class OmniFluxAnalyzer:
             elast_val = metrics.get('elasticity', 0.0)
             
             note = (
-                f"STRATEGIA: FLUX V5.5\n"
+                f"STRATEGIA: FLUX V5.8\n"
                 f"TYP: {reason} | SCORE: {score}/100\n"
                 f"OFP: {ofp_val:.2f} (Presja)\n"
                 f"ELASTICITY: {elast_val:.2f}σ\n"
