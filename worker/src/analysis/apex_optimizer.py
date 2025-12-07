@@ -33,8 +33,10 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V14.2 - STABLE TPE & RANGE FIX
-    Wersja jednowątkowa - naprawiono błędy TPE Samplera i zakresy AQM.
+    SERCE SYSTEMU APEX V15.0 - FINAL FIX (Production Ready)
+    Wersja ostateczna:
+    1. Naprawiono konfigurację TPE Samplera (brak błędu 'group').
+    2. Dostosowano zakresy AQM do nowej logiki (średnia ważona zamiast iloczynu).
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -90,14 +92,13 @@ class QuantumOptimizer:
             study_name = f"apex_opt_{self.strategy_mode}_{self.target_year}_{self.scan_period}"
             append_scan_log(self.session, f"⚙️ Inicjalizacja Optuny: {study_name}...")
 
-            # === POPRAWKA SAMPLERA (FIX CRITICAL ERROR) ===
-            # Wyłączamy multivariate=True, ponieważ przy warunkowej przestrzeni parametrów (if H3/AQM)
-            # powoduje to konflikty i błędy 'group option'.
-            # Klasyczny TPE (univariate) jest tu znacznie stabilniejszy.
+            # === POPRAWKA KRYTYCZNA SAMPLERA (V15) ===
+            # Usunięto 'group=True' i 'multivariate=True'.
+            # To jest konfiguracja w 100% stabilna dla dynamicznych przestrzeni parametrów.
             sampler = optuna.samplers.TPESampler(
                 n_startup_trials=min(10, max(5, int(n_trials/5))), 
-                multivariate=False, 
-                # group=True usunięte, bo wymaga multivariate=True
+                multivariate=False,
+                group=False # JAWNE WYŁĄCZENIE grupowania, aby uniknąć błędu
             )
             
             self.study = optuna.create_study(
@@ -144,7 +145,7 @@ class QuantumOptimizer:
 
     def _load_macro_context(self):
         append_scan_log(self.session, "📊 Ładowanie tła makroekonomicznego...")
-        # Domyślne wartości, gdyby API zawiodło
+        # Domyślne wartości
         macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 3.0, 'spy_df': pd.DataFrame()}
         
         local_session = get_db_session()
@@ -156,7 +157,6 @@ class QuantumOptimizer:
                 macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
                 macro['spy_df'].sort_index(inplace=True)
             
-            # Pobieramy resztę tylko dla AQM
             if self.strategy_mode == 'AQM':
                 yield_raw = get_raw_data_with_cache(local_session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
                 if yield_raw and 'data' in yield_raw:
@@ -258,7 +258,6 @@ class QuantumOptimizer:
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
             if self.strategy_mode == 'H3':
-                # (Kod H3 bez zmian - działał dobrze)
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
@@ -308,12 +307,9 @@ class QuantumOptimizer:
 
                 req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ves', 'mrs', 'tcs']
                 
-                # Bezpiecznik: jeśli brakuje kolumn, zwróć puste
                 if not all(col in aqm_df.columns for col in req_cols):
                     return pd.DataFrame()
                     
-                # USUNIĘTO dropna(), bo `aqm_v4_logic` teraz robi bezpieczne fillna(0.5)
-                # Dzięki temu nie tracimy całej historii przez jeden brakujący dzień/wskaźnik
                 return aqm_df[req_cols]
             
             return pd.DataFrame()
@@ -334,13 +330,12 @@ class QuantumOptimizer:
             }
             
         elif self.strategy_mode == 'AQM':
-            # === POPRAWKA ZAKRESU (AQM SCORE) ===
-            # Logi wykazały, że wartości Max AQM wynoszą ok. 0.28 (iloczyn 4 składników <1.0).
-            # Poprzedni zakres (0.05 - 0.40) był zbyt wysoki, przez co Optuna szukała w próżni.
-            # Nowy zakres: 0.01 - 0.30 odpowiada realnym wartościom wskaźnika.
+            # === ZAKRESY AQM V4 (ŚREDNIA WAŻONA) ===
+            # Po zmianie logiki na średnią ważoną (w aqm_v4_logic), wyniki będą w zakresie 0.0 - 1.0.
+            # Ustawiamy zakres poszukiwań na 0.50 - 0.85, co jest standardem dla takich wskaźników.
             params = {
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.01, 0.30),
-                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.01, 0.50),
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.50, 0.85),
+                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.30, 0.60),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 5.0),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15), 
@@ -378,7 +373,6 @@ class QuantumOptimizer:
         max_hold = params['h3_max_hold']
         
         # === DIAGNOSTYKA ===
-        # Rejestrujemy stan TYLKO jeśli nie mamy żadnych transakcji po sprawdzeniu kilku spółek
         debug_check_limit = 5 
         debug_counter = 0
         
@@ -403,20 +397,15 @@ class QuantumOptimizer:
                 
                 cond_main = (sim_df['aqm_score'] > min_score)
                 
-                # Zabezpieczenie: jeśli qps/ves/mrs zostały wypełnione zerami w fillna(), to warunek > comp_min je odrzuci
                 if 'qps' in sim_df.columns:
                     cond_comps = ((sim_df['qps'] > comp_min) & (sim_df['ves'] > comp_min) & (sim_df['mrs'] > comp_min))
                     entry_mask = cond_main & cond_comps
                     
-                    # === DEBUG DIAGNOSTIC ===
                     if debug_counter < debug_check_limit and not entry_mask.any():
                         debug_counter += 1
-                        # Logujemy maksymalne wartości, aby sprawdzić, czy w ogóle coś przekracza próg
                         max_aqm = sim_df['aqm_score'].max()
-                        
-                        # Logowanie tylko jeśli drastycznie brakuje do progu (diagnoza zakresów)
                         if max_aqm < min_score:
-                            logger.info(f"DEBUG {ticker}: Max AQM={max_aqm:.2f} < Min={min_score:.2f} (Brak transakcji - zakres zbyt wysoki?)")
+                            logger.info(f"DEBUG {ticker}: Max AQM={max_aqm:.2f} < Min={min_score:.2f} (Sprawdź, czy logika AQM zwraca wartości 0-1)")
                 else:
                     entry_mask = cond_main
             
@@ -532,7 +521,7 @@ class QuantumOptimizer:
             job.configuration = {
                 'best_params': best_params, 
                 'sensitivity_analysis': sensitivity_report, 
-                'version': 'V14_SEQUENTIAL', 
+                'version': 'V15_FINAL', 
                 'strategy': self.strategy_mode,
                 'scan_period': self.scan_period, 
                 'tickers_analyzed': self.tickers_count
