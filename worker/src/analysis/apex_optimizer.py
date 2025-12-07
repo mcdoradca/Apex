@@ -320,32 +320,30 @@ class QuantumOptimizer:
         params = {}
         
         if self.strategy_mode == 'H3':
-            # ==================================================================
-            # === POPRAWKA 2: ROZLUŹNIENIE PARAMETRU TŁOKU (m_sq) ===
-            # Wcześniej: max 0.5 (bardzo restrykcyjne). Teraz: max 3.0 (pozwalamy na FOMO)
-            # ==================================================================
+            # === POPRAWKA LOGICZNA DLA H3 (MASA) ===
+            # Zakres (-3.0, 0.5) był zbyt restrykcyjny. Hossa (tłok) może mieć m_sq > 0.
+            # Rozszerzam do (-3.0, 3.0), aby nie wycinać momentum.
             params = {
                 'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
-                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), # ZMIANA z 0.5 na 3.0
+                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), 
                 'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 5.0),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 15), 
             }
-            # ==================================================================
             
         elif self.strategy_mode == 'AQM':
-            # ==================================================================
-            # === POPRAWKA 1: ROZSZERZENIE ZAKRESU SCORE (Z POPRZEDNIEGO KROKU) ===
-            # ==================================================================
+            # === POPRAWKA LOGICZNA DLA AQM (SCORE) ===
+            # AQM Score to iloczyn 4 wskaźników (0-1). 0.7*0.7*0.7*0.7 = 0.24.
+            # Poprzedni próg 0.50 był matematycznie nierealny dla iloczynu.
+            # Obniżam zakres do 0.05 - 0.40, co odpowiada realnym wartościom w logach.
             params = {
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.10, 0.80), # 0.10 dolny próg
-                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.1, 0.7), # 0.1 dolny próg
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.05, 0.40),
+                'aqm_component_min': trial.suggest_float('aqm_component_min', 0.01, 0.50),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 5.0),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 15), 
             }
-            # ==================================================================
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
         end_ts = pd.Timestamp(f"{self.target_year}-12-31")
