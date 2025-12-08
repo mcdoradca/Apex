@@ -235,7 +235,7 @@ export const renderers = {
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
     },
 
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (BEZ R:R) ===
+    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (Z PRZYCISKIEM KUP) ===
     phase5View: (poolData) => {
         // --- SAFE GUARD: Sprawdź czy poolData to tablica ---
         if (!Array.isArray(poolData)) {
@@ -284,6 +284,13 @@ export const renderers = {
             const isActive = (item.fails || 0) === 0;
             const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
             
+            // === NOWOŚĆ: Przycisk KUP ===
+            const buyButtonHtml = priceVal > 0 ? `
+                <button class="flux-tile-buy-btn absolute bottom-3 right-3 z-30 bg-white hover:bg-gray-200 text-black text-xs font-bold py-1.5 px-3 rounded shadow-lg flex items-center gap-1 transition-transform hover:scale-105 active:scale-95" data-ticker="${tickerStr}">
+                    <i data-lucide="shopping-cart" class="w-3 h-3"></i> KUP
+                </button>
+            ` : '';
+
             return `
             <div class="pool-slot ${cardState} relative overflow-hidden group">
                 <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
@@ -306,8 +313,7 @@ export const renderers = {
                     ${actionText}
                 </div>
                 
-                <!-- SEKCJA SL/TP (BEZ R:R) -->
-                <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5">
+                <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5 relative z-10">
                     <div class="flex justify-between items-center">
                         <span class="text-[10px] uppercase text-red-500 font-bold">SL</span>
                         <span class="text-sm font-bold text-red-400 font-mono">${slText}</span>
@@ -318,7 +324,7 @@ export const renderers = {
                     </div>
                 </div>
                 
-                <div class="mt-auto z-10">
+                <div class="mt-auto z-10 mb-8">
                     <div class="flex justify-between items-end mb-1">
                         <span class="text-[10px] text-gray-400 font-mono uppercase">${actionDescription}</span>
                         <span class="text-[10px] font-mono ${velVal > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${velVal.toFixed(1)}x</span>
@@ -327,6 +333,9 @@ export const renderers = {
                         <div class="h-full ${scoreVal >= 65 ? 'bg-emerald-500' : (scoreVal >= 40 ? 'bg-yellow-500' : 'bg-gray-600')} transition-all duration-500" style="width: ${Math.min(100, scoreVal)}%"></div>
                     </div>
                 </div>
+
+                ${buyButtonHtml}
+
             </div>`;
         }).join('');
 
@@ -372,9 +381,9 @@ export const renderers = {
             <div class="mt-4 p-3 bg-[#161B22] border border-gray-700 rounded text-xs text-gray-400 flex items-center justify-between">
                 <div class="flex items-center">
                     <i data-lucide="info" class="w-4 h-4 mr-2 text-blue-400"></i>
-                    <span>System automatycznie rotuje spółki. Obserwuj kafelki <span class="text-emerald-400 font-bold">ZIELONE</span> (Sygnał) i <span class="text-yellow-400 font-bold">ŻÓŁTE</span> (Obserwuj).</span>
+                    <span>System automatycznie rotuje spółki. <span class="text-white font-bold">Użyj przycisku KUP na kafelku</span>, aby zachować strategię w portfelu.</span>
                 </div>
-                <div class="font-mono text-gray-600">v5.0.3 Flux SafeView (No RR)</div>
+                <div class="font-mono text-gray-600">v5.0.4 Flux SafeView</div>
             </div>
         </div>`;
     },
