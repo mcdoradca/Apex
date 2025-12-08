@@ -51,7 +51,7 @@ class OmniFluxAnalyzer:
         self._load_state()
 
     def _load_state(self):
-        """Odtwarza stan z bazy."""
+        """Odtwarza stan z bazy i SANITYZUJE DANE (Naprawa błędu NoneType)."""
         try:
             raw_json = get_system_control_value(self.session, 'phase5_monitor_state')
             if raw_json:
@@ -59,6 +59,16 @@ class OmniFluxAnalyzer:
                 self.active_pool = state.get('active_pool', [])
                 self.reserve_pool = state.get('reserve_pool', [])
                 self.macro_context['bias'] = state.get('macro_bias', 'NEUTRAL')
+                
+                # === FIX: Sanityzacja Active Pool ===
+                # Zapobiega błędom TypeError: '>' not supported between instances of 'NoneType' and 'int'
+                for item in self.active_pool:
+                    if item.get('flux_score') is None: item['flux_score'] = 0
+                    if item.get('elasticity') is None: item['elasticity'] = 0.0
+                    if item.get('velocity') is None: item['velocity'] = 0.0
+                    if item.get('last_sniper_check') is None: item['last_sniper_check'] = 0
+                    if item.get('fails') is None: item['fails'] = 0
+                    if item.get('added_at') is None: item['added_at'] = time.time()
                 
                 # Walidacja świeżości (reset po 15 min bezczynności)
                 if time.time() - state.get('last_updated', 0) > 900:
@@ -72,7 +82,10 @@ class OmniFluxAnalyzer:
     def _refresh_macro_context(self):
         """Sprawdza sentyment makro (EUR/USD) raz na 5 minut."""
         now = time.time()
-        if now - self.macro_context['last_updated'] < MACRO_CACHE_DURATION:
+        # Zabezpieczenie przed None w last_updated
+        last_upd = self.macro_context.get('last_updated') or 0
+        
+        if now - last_upd < MACRO_CACHE_DURATION:
             return
 
         try:
@@ -179,8 +192,13 @@ class OmniFluxAnalyzer:
                 priority_score = 0
                 needs_update = False
                 
+                # Bezpieczne pobieranie wartości (FIX NoneType > int)
+                elast = item.get('elasticity') or 0.0
+                flx_scr = item.get('flux_score') or 0
+                last_chk = item.get('last_sniper_check') or 0
+                
                 # Priorytet 1: Inicjalizacja (Brak danych)
-                if item.get('elasticity') == 0: 
+                if elast == 0: 
                     priority_score += 100
                     needs_update = True
                 
@@ -194,13 +212,13 @@ class OmniFluxAnalyzer:
                     priority_score += 40
                     needs_update = True
                 
-                # Priorytet 4: Blisko sygnału
-                elif item.get('flux_score', 0) > 60:
+                # Priorytet 4: Blisko sygnału (Safe Check)
+                elif flx_scr > 60:
                     priority_score += 30
                     needs_update = True
                     
                 # Priorytet 5: Przestarzałe dane (Cooldown)
-                elif (time.time() - item.get('last_sniper_check', 0)) > SNIPER_COOLDOWN:
+                elif (time.time() - last_chk) > SNIPER_COOLDOWN:
                     priority_score += 10
                     needs_update = True
                 
@@ -210,7 +228,7 @@ class OmniFluxAnalyzer:
                         'priority': priority_score
                     })
             else:
-                item['fails'] += 1
+                item['fails'] = (item.get('fails') or 0) + 1
                 if item['fails'] >= 3: tickers_to_remove.append(ticker)
 
         # 4. WYKONANIE "STRZAŁÓW" SNIGPERSKICH (LIMITOWANE!)
@@ -255,7 +273,9 @@ class OmniFluxAnalyzer:
                     
                     # Generowanie sygnału
                     if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
-                        if self.macro_context['bias'] != 'BEARISH':
+                        # Sprawdzenie makro (bezpieczne pobranie)
+                        bias = self.macro_context.get('bias', 'NEUTRAL')
+                        if bias != 'BEARISH':
                             metrics['price'] = item['price']
                             if self._generate_signal(ticker, metrics, sl_price, tp_price):
                                 signals_generated += 1
@@ -265,8 +285,12 @@ class OmniFluxAnalyzer:
 
         # 5. ROTACJA (Stygnące spółki)
         for item in self.active_pool:
+            # Bezpieczne pobranie wartości
+            flx = item.get('flux_score') or 0
+            added = item.get('added_at') or 0
+            
             # Jeśli Flux Score < 30 i siedzimy w puli > 25 min -> Wylot
-            if self.reserve_pool and item.get('flux_score', 0) < 30 and (time.time() - item.get('added_at', 0)) > 1500:
+            if self.reserve_pool and flx < 30 and (time.time() - added) > 1500:
                 if item['ticker'] not in tickers_to_remove:
                     tickers_to_remove.append(item['ticker'])
 
