@@ -136,7 +136,7 @@ def send_telegram_alert(message: str):
 
 def get_market_status_and_time(api_client) -> dict:
     """
-    Zwraca aktualny status rynku (USA/New York) oraz czas.
+    Zwraca aktualny status rynku (USA/New York) oraz czas lokalny NY.
     NAPRAWIONO: Obsługa Pre-Market (04:00-09:30) i After-Market (16:00-20:00).
     Zwraca poprawne stałe: MARKET_OPEN, PRE_MARKET, AFTER_MARKET, CLOSED.
     """
@@ -147,7 +147,7 @@ def get_market_status_and_time(api_client) -> dict:
         
         status = "CLOSED"
         
-        if ny_time.weekday() < 5:  # Monday-Friday
+        if ny_time.weekday() < 5:  # Poniedziałek-Piątek
             # Definicje godzin sesji (New York Time)
             # Pre-Market: 04:00 - 09:30
             pre_start = ny_time.replace(hour=4, minute=0, second=0, microsecond=0)
