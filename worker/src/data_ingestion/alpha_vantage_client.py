@@ -21,6 +21,7 @@ class AlphaVantageClient:
 
     # === OPTYMALIZACJA (LIMITER) ===
     # Ustawiamy sztywny limit na 145/min, aby zostawić margines bezpieczeństwa (Premium ma 150)
+    # Jeśli masz wyższy limit (np. 300/min), możesz zwiększyć tę wartość.
     def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 145, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             logger.error("API key is missing for AlphaVantageClient instance in WORKER.")
@@ -86,6 +87,10 @@ class AlphaVantageClient:
                     if params.get('datatype') == 'csv':
                         response.raise_for_status() 
                         return response.text
+                    # Czasami API zwraca błąd w CSV jako tekst, ale nie JSON
+                    if "Error Message" in response.text or "Information" in response.text:
+                         logger.warning(f"API Error (Text Response): {response.text[:100]}")
+                         return None
                     raise requests.exceptions.RequestException("Response was not valid JSON.")
 
                 is_rate_limit_json = False
@@ -103,6 +108,7 @@ class AlphaVantageClient:
                     continue
 
                 if not data or is_error_msg:
+                    logger.warning(f"API Error for {request_identifier}: {data}")
                     return None
                 
                 response.raise_for_status()
@@ -112,6 +118,7 @@ class AlphaVantageClient:
                 if attempt < self.retries - 1:
                     time.sleep(1)
                 else:
+                    logger.error(f"Failed request for {request_identifier}: {e}")
                     pass
 
         return None
@@ -123,16 +130,21 @@ class AlphaVantageClient:
         if value is None: return None
         try:
             if isinstance(value, str):
-                value = value.replace(',', '').replace('%', '')
+                value = value.replace(',', '').replace('%', '').strip()
+                if value == '-' or value == '': return None
             return float(value)
         except (ValueError, TypeError):
             return None
             
     def _parse_bulk_quotes_csv(self, csv_text: str, ticker: str) -> dict | None:
-        if not csv_text or "symbol" not in csv_text:
+        if not csv_text or "symbol" not in csv_text.lower():
             return None
         csv_file = StringIO(csv_text)
         reader = csv.DictReader(csv_file)
+        
+        # Normalizacja nagłówków (usunięcie spacji)
+        reader.fieldnames = [name.strip() for name in reader.fieldnames] if reader.fieldnames else []
+
         for row in reader:
             if row.get('symbol') == ticker:
                 return row
@@ -145,17 +157,31 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_bulk_quotes(self, symbols: list[str]):
+        """
+        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
+        Wymaga klucza PREMIUM.
+        """
         params = {
             "function": "REALTIME_BULK_QUOTES",
             "symbol": ",".join(symbols),
             "datatype": "csv",
         }
         text_response = self._make_request(params)
-        if isinstance(text_response, str) and "symbol" in text_response:
-             return text_response
+        
+        # Walidacja czy odpowiedź to faktycznie CSV z danymi, a nie błąd
+        if isinstance(text_response, str):
+            if "Error Message" in text_response:
+                logger.error(f"Bulk Quotes API Error: {text_response}")
+                return None
+            if "symbol" in text_response.lower():
+                return text_response
         return None
 
     def get_bulk_quotes_parsed(self, symbols: list[str]) -> list[dict]:
+        """
+        NAPRAWIONA WERSJA: Pobiera i parsuje dane Bulk do listy słowników.
+        Obsługuje różne formaty nagłówków CSV zwracanych przez Alpha Vantage.
+        """
         csv_text = self.get_bulk_quotes(symbols)
         if not csv_text: 
             return []
@@ -164,50 +190,109 @@ class AlphaVantageClient:
         try:
             f = StringIO(csv_text)
             reader = csv.DictReader(f)
+            
+            # Normalizacja nagłówków (API czasem zwraca ze spacjami)
+            if reader.fieldnames:
+                reader.fieldnames = [name.strip().lower() for name in reader.fieldnames]
+
             for row in reader:
-                data = {
-                    'symbol': row.get('symbol'),
-                    'price': self._safe_float(row.get('close')),
-                    'volume': self._safe_float(row.get('volume')),
-                    'bid': self._safe_float(row.get('bid')),
-                    'ask': self._safe_float(row.get('ask')),
-                    'bid_size': self._safe_float(row.get('bid_size')),
-                    'ask_size': self._safe_float(row.get('ask_size'))
-                }
-                if data['symbol']:
+                # Logika elastycznego pobierania wartości (obsługa różnych nazw kolumn)
+                # API AV czasem zmienia 'close' na '4. close' lub 'price'
+                
+                # 1. Cena
+                price = (
+                    self._safe_float(row.get('close')) or 
+                    self._safe_float(row.get('4. close')) or 
+                    self._safe_float(row.get('price')) or
+                    self._safe_float(row.get('5. price'))
+                )
+                
+                # 2. Wolumen
+                volume = (
+                    self._safe_float(row.get('volume')) or 
+                    self._safe_float(row.get('5. volume')) or
+                    self._safe_float(row.get('6. volume'))
+                )
+
+                # 3. Bid/Ask (Ważne dla Flux OFP)
+                bid = self._safe_float(row.get('bid')) or self._safe_float(row.get('8. bid price'))
+                ask = self._safe_float(row.get('ask')) or self._safe_float(row.get('9. ask price'))
+                bid_size = self._safe_float(row.get('bid_size')) or self._safe_float(row.get('bid size'))
+                ask_size = self._safe_float(row.get('ask_size')) or self._safe_float(row.get('ask size'))
+
+                symbol = row.get('symbol') or row.get('code')
+
+                if symbol:
+                    data = {
+                        'symbol': symbol,
+                        'price': price,
+                        'volume': volume,
+                        'bid': bid,
+                        'ask': ask,
+                        'bid_size': bid_size,
+                        'ask_size': ask_size
+                    }
                     results.append(data)
+                else:
+                    # Logowanie jeśli wiersz wydaje się pusty/błędny, żeby zdiagnozować format
+                    if any(row.values()): # Loguj tylko niepuste śmieci
+                        logger.debug(f"Pominięto wiersz (brak symbolu): {row}")
+
         except Exception as e:
-            logger.error(f"Błąd parsowania Bulk CSV: {e}")
+            logger.error(f"Błąd parsowania Bulk CSV: {e}", exc_info=True)
             
         return results
 
     def get_global_quote(self, symbol: str):
+        # Fallback na Bulk Quotes dla pojedynczego symbolu (często szybsze/dokładniejsze w Premium)
         bulk_csv = self.get_bulk_quotes([symbol])
         if not bulk_csv: return None
         quote_data = self._parse_bulk_quotes_csv(bulk_csv, symbol)
         if not quote_data: return None
 
         try:
+            # Pobieranie elastyczne (jak wyżej)
+            price = (
+                self._safe_float(quote_data.get('close')) or 
+                self._safe_float(quote_data.get('4. close')) or 
+                self._safe_float(quote_data.get('price'))
+            )
+            
+            volume = (
+                self._safe_float(quote_data.get('volume')) or 
+                self._safe_float(quote_data.get('5. volume'))
+            )
+            
+            prev_close = (
+                self._safe_float(quote_data.get('previous_close')) or
+                self._safe_float(quote_data.get('previous close'))
+            )
+            
+            change = self._safe_float(quote_data.get('change'))
+            change_pct = quote_data.get('change_percent') or quote_data.get('change percent')
+
             formatted_quote = {
                 "01. symbol": quote_data.get("symbol"),
                 "02. open": quote_data.get("open"),
                 "03. high": quote_data.get("high"),
                 "04. low": quote_data.get("low"),
-                "05. price": quote_data.get("close"), 
-                "06. volume": quote_data.get("volume"),
+                "05. price": price, 
+                "06. volume": volume,
                 "07. latest trading day": None,
-                "08. previous close": quote_data.get("previous_close"),
-                "09. change": quote_data.get("change"),
-                "10. change percent": f'{quote_data.get("change_percent")}%'
+                "08. previous close": prev_close,
+                "09. change": change,
+                "10. change percent": f'{change_pct}' if change_pct else "0%"
             }
+            # Obsługa Extended Hours (jeśli dostępne w CSV)
             ext_price = self._safe_float(quote_data.get("extended_hours_quote"))
             if ext_price and ext_price > 0:
-                formatted_quote["05. price"] = quote_data.get("extended_hours_quote")
+                formatted_quote["05. price"] = ext_price
                 formatted_quote["09. change"] = quote_data.get("extended_hours_change")
                 formatted_quote["10. change percent"] = f'{quote_data.get("extended_hours_change_percent")}%'
                 formatted_quote["_price_source"] = "extended_hours"
             return formatted_quote
-        except Exception:
+        except Exception as e:
+            logger.error(f"Global Quote Parsing Error: {e}")
             return None
 
     def get_company_overview(self, symbol: str):
@@ -292,6 +377,7 @@ class AlphaVantageClient:
         params = {"function": "EARNINGS", "symbol": symbol}
         return self._make_request(params)
 
+    # === DANE MAKRO ===
     def get_inflation_rate(self, interval: str = 'monthly'):
         params = {"function": "INFLATION", "interval": interval, "datatype": "json"}
         return self._make_request(params)
