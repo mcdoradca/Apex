@@ -135,23 +135,49 @@ def send_telegram_alert(message: str):
     except Exception: pass
 
 def get_market_status_and_time(api_client) -> dict:
+    """
+    Zwraca aktualny status rynku (USA/New York) oraz czas.
+    NAPRAWIONO: Obsługa Pre-Market (04:00-09:30) i After-Market (16:00-20:00).
+    Zwraca poprawne stałe: MARKET_OPEN, PRE_MARKET, AFTER_MARKET, CLOSED.
+    """
     try:
         now = datetime.now(timezone.utc)
         ny_tz = pytz.timezone('America/New_York')
         ny_time = now.astimezone(ny_tz)
         
-        is_market_open = False
+        status = "CLOSED"
+        
         if ny_time.weekday() < 5:  # Monday-Friday
+            # Definicje godzin sesji (New York Time)
+            # Pre-Market: 04:00 - 09:30
+            pre_start = ny_time.replace(hour=4, minute=0, second=0, microsecond=0)
+            
+            # Market Open: 09:30 - 16:00
             market_open = ny_time.replace(hour=9, minute=30, second=0, microsecond=0)
             market_close = ny_time.replace(hour=16, minute=0, second=0, microsecond=0)
-            is_market_open = market_open <= ny_time <= market_close
+            
+            # After-Market: 16:00 - 20:00
+            post_end = ny_time.replace(hour=20, minute=0, second=0, microsecond=0)
+
+            if pre_start <= ny_time < market_open:
+                status = "PRE_MARKET"
+            elif market_open <= ny_time <= market_close:
+                status = "MARKET_OPEN"
+            elif market_close < ny_time <= post_end:
+                status = "AFTER_MARKET"
+            else:
+                status = "CLOSED"
+        else:
+            status = "CLOSED"
         
         return {
-            "status": "OPEN" if is_market_open else "CLOSED",
+            "status": status,
             "time_ny": ny_time.strftime('%H:%M'),
             "date_ny": ny_time.strftime('%Y-%m-%d')
         }
-    except: return {"status": "UNKNOWN", "time_ny": "N/A", "date_ny": "N/A"}
+    except Exception as e:
+        logger.error(f"Error calculating market status: {e}")
+        return {"status": "UNKNOWN", "time_ny": "N/A", "date_ny": "N/A"}
 
 def update_system_control(session: Session, key: str, value: str):
     try:
