@@ -21,21 +21,21 @@ from .flux_physics import calculate_flux_vectors, calculate_ofp
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA OMNI-FLUX (V5.3 - API SAFE MODE) ===
-CAROUSEL_SIZE = 8          # Rozmiar aktywnej puli
-RADAR_DELAY = 4.0          # ZWIĘKSZONO: Opóźnienie pętli (sekundy), aby dać oddech innym agentom
-SNIPER_COOLDOWN = 120      # ZWIĘKSZONO: Rzadsze odświeżanie "stale data" (co 2 min)
-FLUX_THRESHOLD_ENTRY = 70  # Min. score do sygnału
+# === KONFIGURACJA OMNI-FLUX (V5.4 - SYNC FIX) ===
+CAROUSEL_SIZE = 8          
+RADAR_DELAY = 4.0          
+SNIPER_COOLDOWN = 120      
+# === FIX: OBNIŻONO PRÓG DO 65 (Zgodność z UI "Green Tile") ===
+FLUX_THRESHOLD_ENTRY = 65  
 MACRO_CACHE_DURATION = 300 
 DEFAULT_RR = 2.5           
 DEFAULT_SL_PCT = 0.015     
 
-# NOWOŚĆ: Limit zapytań Intraday na jeden cykl pętli
 MAX_SNIPES_PER_CYCLE = 2   
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.3 - API Traffic Control)
+    APEX OMNI-FLUX ENGINE (V5.4 - API Traffic Control)
     Architektura: Radar (Bulk) + Prioritized Sniper Queue
     """
 
@@ -51,7 +51,7 @@ class OmniFluxAnalyzer:
         self._load_state()
 
     def _load_state(self):
-        """Odtwarza stan z bazy i SANITYZUJE DANE (Naprawa błędu NoneType)."""
+        """Odtwarza stan z bazy i SANITYZUJE DANE."""
         try:
             raw_json = get_system_control_value(self.session, 'phase5_monitor_state')
             if raw_json:
@@ -60,8 +60,6 @@ class OmniFluxAnalyzer:
                 self.reserve_pool = state.get('reserve_pool', [])
                 self.macro_context['bias'] = state.get('macro_bias', 'NEUTRAL')
                 
-                # === FIX: Sanityzacja Active Pool ===
-                # Zapobiega błędom TypeError: '>' not supported between instances of 'NoneType' and 'int'
                 for item in self.active_pool:
                     if item.get('flux_score') is None: item['flux_score'] = 0
                     if item.get('elasticity') is None: item['elasticity'] = 0.0
@@ -70,7 +68,6 @@ class OmniFluxAnalyzer:
                     if item.get('fails') is None: item['fails'] = 0
                     if item.get('added_at') is None: item['added_at'] = time.time()
                 
-                # Walidacja świeżości (reset po 15 min bezczynności)
                 if time.time() - state.get('last_updated', 0) > 900:
                      logger.info("Faza 5: Stan przestarzały. Reset puli.")
                      self.active_pool = []
@@ -82,7 +79,6 @@ class OmniFluxAnalyzer:
     def _refresh_macro_context(self):
         """Sprawdza sentyment makro (EUR/USD) raz na 5 minut."""
         now = time.time()
-        # Zabezpieczenie przed None w last_updated
         last_upd = self.macro_context.get('last_updated') or 0
         
         if now - last_upd < MACRO_CACHE_DURATION:
@@ -96,7 +92,6 @@ class OmniFluxAnalyzer:
                 df_fx = standardize_df_columns(pd.DataFrame.from_dict(fx_data.get('Time Series (60min)', {}), orient='index'))
                 if not df_fx.empty and len(df_fx) > 1:
                     df_fx = df_fx.sort_index()
-                    # EUR up (FXE up) = USD down = Risk On
                     if df_fx['close'].iloc[-1] > df_fx['close'].iloc[-2]: 
                         self.macro_context['bias'] = 'BULLISH'
                     else:
@@ -136,7 +131,7 @@ class OmniFluxAnalyzer:
                     'risk_reward': None     
                 })
             
-            msg = f"🌊 Faza 5 (Traffic Control): Inicjalizacja. Aktywne: {len(self.active_pool)}"
+            msg = f"🌊 Faza 5: Inicjalizacja. Aktywne: {len(self.active_pool)}"
             logger.info(msg)
             append_scan_log(self.session, msg)
             self._save_state()
@@ -145,110 +140,72 @@ class OmniFluxAnalyzer:
             logger.error(f"Faza 5: Błąd inicjalizacji: {e}")
 
     def run_cycle(self):
-        """
-        GŁÓWNA PĘTLA HYBRYDOWA Z LIMITAMI API.
-        """
-        # 1. Inicjalizacja
         if not self.active_pool:
             self._initialize_pools()
             if not self.active_pool: return
 
         self._refresh_macro_context()
         
-        # 2. RADAR SCAN (1 API Call - Tani)
         tickers = [item['ticker'] for item in self.active_pool]
         radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
         radar_map = {d['symbol']: d for d in radar_hits}
         
         tickers_to_remove = []
         signals_generated = 0
-        
-        # Lista kandydatów do "strzału snajperskiego" (Pobranie Intraday)
         sniper_queue = []
 
-        # 3. AKTUALIZACJA RADARU I IDENTYFIKACJA KANDYDATÓW
         for item in self.active_pool:
             ticker = item['ticker']
             radar_data = radar_map.get(ticker)
             
             if radar_data:
-                # Aktualizacja lekkich danych
                 new_price = radar_data.get('price', 0.0)
                 bid_sz = radar_data.get('bid_size', 0.0)
                 ask_sz = radar_data.get('ask_size', 0.0)
-                
-                # Oblicz OFP
                 ofp = calculate_ofp(bid_sz, ask_sz)
-                
                 old_price = item.get('price', 0.0)
-                # Zwiększamy próg czułości zmiany ceny do 0.2%, żeby nie spamować API szumem
                 price_change_pct = abs((new_price - old_price) / old_price) if old_price > 0 else 0
                 
                 item['price'] = new_price
                 item['ofp'] = ofp
                 item['fails'] = 0 
                 
-                # OCENA PRIORYTETU DO POBRANIA INTRADAY
                 priority_score = 0
                 needs_update = False
                 
-                # Bezpieczne pobieranie wartości (FIX NoneType > int)
                 elast = item.get('elasticity') or 0.0
                 flx_scr = item.get('flux_score') or 0
                 last_chk = item.get('last_sniper_check') or 0
                 
-                # Priorytet 1: Inicjalizacja (Brak danych)
                 if elast == 0: 
-                    priority_score += 100
-                    needs_update = True
-                
-                # Priorytet 2: Silna Presja (OFP)
+                    priority_score += 100; needs_update = True
                 elif abs(ofp) > 0.4: 
-                    priority_score += 50
-                    needs_update = True
-                
-                # Priorytet 3: Ruch cenowy > 0.2%
+                    priority_score += 50; needs_update = True
                 elif price_change_pct > 0.002: 
-                    priority_score += 40
-                    needs_update = True
-                
-                # Priorytet 4: Blisko sygnału (Safe Check)
+                    priority_score += 40; needs_update = True
                 elif flx_scr > 60:
-                    priority_score += 30
-                    needs_update = True
-                    
-                # Priorytet 5: Przestarzałe dane (Cooldown)
+                    priority_score += 30; needs_update = True
                 elif (time.time() - last_chk) > SNIPER_COOLDOWN:
-                    priority_score += 10
-                    needs_update = True
+                    priority_score += 10; needs_update = True
                 
                 if needs_update:
-                    sniper_queue.append({
-                        'item': item,
-                        'priority': priority_score
-                    })
+                    sniper_queue.append({'item': item, 'priority': priority_score})
             else:
                 item['fails'] = (item.get('fails') or 0) + 1
                 if item['fails'] >= 3: tickers_to_remove.append(ticker)
 
-        # 4. WYKONANIE "STRZAŁÓW" SNIGPERSKICH (LIMITOWANE!)
-        # Sortujemy kolejkę wg priorytetu (malejąco)
         sniper_queue.sort(key=lambda x: x['priority'], reverse=True)
-        
-        # Bierzemy tylko top N z kolejki
         targets = sniper_queue[:MAX_SNIPES_PER_CYCLE]
         
         if targets:
-            logger.info(f"Faza 5: Wybrano {len(targets)} celów do aktualizacji Intraday (z {len(sniper_queue)} oczekujących).")
+            logger.info(f"Faza 5: Aktualizacja Intraday dla {len(targets)} celów.")
 
         for target_obj in targets:
             item = target_obj['item']
             ticker = item['ticker']
             
             try:
-                # CIĘŻKIE ZAPYTANIE API (Intraday)
                 raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
-                
                 if raw_intraday and 'Time Series (5min)' in raw_intraday:
                     df = standardize_df_columns(pd.DataFrame.from_dict(raw_intraday['Time Series (5min)'], orient='index'))
                     df.index = pd.to_datetime(df.index)
@@ -256,13 +213,11 @@ class OmniFluxAnalyzer:
                     
                     metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
                     
-                    # Obliczenia SL/TP
                     price = item['price']
                     sl_price = price * (1 - DEFAULT_SL_PCT)
                     risk_usd = price - sl_price 
                     tp_price = price + (risk_usd * DEFAULT_RR)
                     
-                    # Aktualizacja stanu
                     item['elasticity'] = float(metrics.get('elasticity', 0.0))
                     item['velocity'] = float(metrics.get('velocity', 0.0))
                     item['flux_score'] = int(metrics.get('flux_score', 0))
@@ -271,46 +226,33 @@ class OmniFluxAnalyzer:
                     item['take_profit'] = tp_price           
                     item['risk_reward'] = DEFAULT_RR         
                     
-                    # Generowanie sygnału
                     if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
-                        # Sprawdzenie makro (bezpieczne pobranie)
                         bias = self.macro_context.get('bias', 'NEUTRAL')
                         if bias != 'BEARISH':
                             metrics['price'] = item['price']
                             if self._generate_signal(ticker, metrics, sl_price, tp_price):
                                 signals_generated += 1
-                
             except Exception as e:
                 logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
 
-        # 5. ROTACJA (Stygnące spółki)
         for item in self.active_pool:
-            # Bezpieczne pobranie wartości
             flx = item.get('flux_score') or 0
             added = item.get('added_at') or 0
-            
-            # Jeśli Flux Score < 30 i siedzimy w puli > 25 min -> Wylot
             if self.reserve_pool and flx < 30 and (time.time() - added) > 1500:
                 if item['ticker'] not in tickers_to_remove:
                     tickers_to_remove.append(item['ticker'])
 
-        # 6. Zarządzanie Pulą
         if tickers_to_remove:
             self._rotate_pool(tickers_to_remove)
             if signals_generated > 0:
                 append_scan_log(self.session, f"🌊 Faza 5: Wygenerowano {signals_generated} sygnałów.")
 
-        # 7. Zapis Stanu
         self._save_state()
-        
-        # Pacing pętli
         time.sleep(RADAR_DELAY)
 
     def _rotate_pool(self, remove_list):
-        """Usuwa zużyte tickery i dobiera nowe z rezerwy."""
         remove_list = list(set(remove_list))
         self.active_pool = [x for x in self.active_pool if x['ticker'] not in remove_list]
-        
         while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
             new_ticker = self.reserve_pool.pop(0)
             self.active_pool.append({
@@ -333,7 +275,6 @@ class OmniFluxAnalyzer:
             logger.error(f"Faza 5: Błąd zapisu stanu: {e}")
 
     def _generate_signal(self, ticker: str, metrics: dict, sl_price: float, tp_price: float) -> bool:
-        """Generuje sygnał w bazie (Upsert)."""
         try:
             price = metrics.get('price', 0)
             if price == 0: return False
@@ -342,7 +283,7 @@ class OmniFluxAnalyzer:
             score = int(metrics.get('flux_score', 0))
             ofp_val = metrics.get('ofp', 0.0)
             
-            note = f"STRATEGIA: FLUX V5.3\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
+            note = f"STRATEGIA: FLUX V5.4\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
 
             exists = self.session.execute(
                 text("SELECT 1 FROM trading_signals WHERE ticker=:t AND status IN ('ACTIVE', 'PENDING') AND notes LIKE '%STRATEGIA: FLUX%'"), 
