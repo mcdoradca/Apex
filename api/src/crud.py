@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 # === FUNKCJE POMOCNICZE ===
 
 def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
-    """Konwertuje float lub str na Decimal z określoną precyzją."""
     if value is None:
         return None
     try:
@@ -28,7 +27,6 @@ def to_decimal(value, precision='0.0001') -> Optional[Decimal]:
         return None
 
 def _safe_float_stat(val) -> float:
-    """Bezpieczna konwersja na float (0.0 dla None/NaN/Inf)."""
     if val is None: return 0.0
     try:
         f = float(val)
@@ -38,9 +36,7 @@ def _safe_float_stat(val) -> float:
         return 0.0
 
 def _sanitize_trade_metrics(trade: models.VirtualTrade):
-    """Czyści metryki transakcji (in-place) przed serializacją Pydantic."""
     required_float_fields = ['entry_price', 'stop_loss', 'take_profit']
-    
     for field in required_float_fields:
         val = getattr(trade, field)
         try:
@@ -63,7 +59,6 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
         'expected_profit_factor', 'expected_win_rate',
         'metric_kinetic_energy', 'metric_elasticity'
     ]
-    
     for field in optional_fields_to_clean:
         val = getattr(trade, field)
         if val is not None:
@@ -76,7 +71,7 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
             except Exception:
                 setattr(trade, field, None)
 
-# === FUNKCJE OPTYMALIZACJI (APEX V4) ===
+# === FUNKCJE OPTYMALIZACJI ===
 
 def create_optimization_job(db: Session, request: schemas.OptimizationRequest) -> models.OptimizationJob:
     job_id = str(uuid.uuid4())
@@ -92,11 +87,9 @@ def create_optimization_job(db: Session, request: schemas.OptimizationRequest) -
     try:
         db.commit()
         db.refresh(new_job)
-        logger.info(f"Utworzono zadanie optymalizacji: {job_id}")
         return new_job
     except Exception as e:
         db.rollback()
-        logger.error(f"Błąd tworzenia zadania optymalizacji: {e}", exc_info=True)
         raise
 
 def get_optimization_job(db: Session, job_id: str) -> Optional[models.OptimizationJob]:
@@ -143,29 +136,21 @@ def record_buy_transaction(db: Session, buy_request: schemas.BuyRequest) -> mode
     if price_per_share is None:
         raise ValueError("Nieprawidłowa cena zakupu.")
 
+    # 1. Sprawdź czy spółka istnieje
     company_exists = db.query(models.Company).filter(models.Company.ticker == ticker).first()
     if not company_exists:
         logger.warning(f"Ticker {ticker} not found in 'companies'. Adding automatically.")
-        new_company = models.Company(
-            ticker=ticker,
-            company_name=f"{ticker} (Dodany przez Portfel)",
-            exchange="N/A", industry="N/A", sector="N/A"
-        )
+        new_company = models.Company(ticker=ticker, company_name=f"{ticker} (Added via Portfolio)", exchange="N/A", industry="N/A", sector="N/A")
         db.add(new_company)
 
+    # 2. Zapisz historię transakcji
     db_history = models.TransactionHistory(
         ticker=ticker, transaction_type='BUY', quantity=quantity_bought,
         price_per_share=price_per_share, transaction_date=datetime.now(timezone.utc)
     )
     db.add(db_history)
-    try:
-        db.commit()
-        db.refresh(db_history)
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Nie udało się zapisać historii BUY: {e}", exc_info=True)
-        raise
-
+    
+    # 3. Aktualizacja Portfela
     holding = db.query(models.PortfolioHolding).filter(models.PortfolioHolding.ticker == ticker).with_for_update().first()
 
     if holding:
@@ -187,6 +172,44 @@ def record_buy_transaction(db: Session, buy_request: schemas.BuyRequest) -> mode
             first_purchase_date=datetime.now(timezone.utc), last_updated=datetime.now(timezone.utc)
         )
         db.add(holding)
+
+    # === FIX: FORCE ACTIVATE SIGNAL ===
+    # Jeśli kupujemy, a sygnał jest PENDING -> ACTIVE.
+    # Jeśli sygnału brak -> Utwórz "MANUAL" ACTIVE, aby portfel miał skąd brać TP/SL.
+    
+    signal = db.query(models.TradingSignal).filter(
+        models.TradingSignal.ticker == ticker,
+        models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
+    ).order_by(desc(models.TradingSignal.generation_date)).first()
+
+    buy_price_float = float(price_per_share)
+
+    if signal:
+        # Aktualizujemy istniejący sygnał
+        signal.status = 'ACTIVE'
+        # Aktualizujemy cenę wejścia na tę, po której faktycznie kupiliśmy
+        signal.entry_price = buy_price_float
+        signal.updated_at = datetime.now(timezone.utc)
+        signal.notes = (signal.notes or "") + f"\n[AUTO] Aktywowano przez zakup portfelowy @ {buy_price_float}"
+    else:
+        # Tworzymy sygnał "MANUAL", żeby portfel nie pokazywał UNK/---
+        # Domyślny SL -2%, TP +5%
+        tp = buy_price_float * 1.05
+        sl = buy_price_float * 0.98
+        
+        new_signal = models.TradingSignal(
+            ticker=ticker,
+            status='ACTIVE',
+            entry_price=buy_price_float,
+            stop_loss=sl,
+            take_profit=tp,
+            risk_reward_ratio=2.5,
+            notes=f"STRATEGIA: MANUAL BUY\nAutomatycznie utworzony przy zakupie.",
+            generation_date=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            expiration_date=datetime.now(timezone.utc) + timedelta(days=7)
+        )
+        db.add(new_signal)
 
     try:
         db.commit()
@@ -223,24 +246,26 @@ def record_sell_transaction(db: Session, sell_request: schemas.SellRequest) -> O
         profit_loss_usd=profit_loss
     )
     db.add(db_history)
-    try:
-        db.commit()
-        db.refresh(db_history)
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Nie udało się zapisać historii SELL: {e}", exc_info=True)
-        raise
 
     remaining_quantity = holding.quantity - quantity_sold
 
     if remaining_quantity == 0:
         db.delete(holding)
+        # Jeśli sprzedajemy wszystko, zamykamy też sygnał (COMPLETED/MANUAL CLOSE)
+        signal = db.query(models.TradingSignal).filter(
+            models.TradingSignal.ticker == ticker,
+            models.TradingSignal.status == 'ACTIVE'
+        ).first()
+        if signal:
+            signal.status = 'COMPLETED'
+            signal.notes = (signal.notes or "") + "\n[AUTO] Zamknięto przez sprzedaż całkowitą."
+            signal.updated_at = datetime.now(timezone.utc)
+            
         try:
              db.commit()
              return None
         except Exception as e:
             db.rollback()
-            logger.error(f"Nie udało się usunąć pozycji: {e}", exc_info=True)
             raise
     else:
         holding.quantity = remaining_quantity
@@ -251,7 +276,6 @@ def record_sell_transaction(db: Session, sell_request: schemas.SellRequest) -> O
             return holding
         except Exception as e:
             db.rollback()
-            logger.error(f"Nie udało się zaktualizować pozycji: {e}", exc_info=True)
             raise
 
 # === FUNKCJE POBIERANIA KANDYDATÓW ===
@@ -362,18 +386,12 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
         } for signal in signals_from_db
     ]
 
-# === NOWA FUNKCJA DLA FAZY 5 (OMNI-FLUX) ===
 def get_flux_signals(db: Session) -> List[Dict[str, Any]]:
-    """
-    Zwraca tylko sygnały strategii Flux (F5) posortowane od najnowszych.
-    Używa filtra po notatkach (STRATEGIA: FLUX).
-    """
     signals = db.query(models.TradingSignal).filter(
         models.TradingSignal.status.in_(['ACTIVE', 'PENDING']),
         models.TradingSignal.notes.like('%STRATEGIA: FLUX%')
     ).order_by(desc(models.TradingSignal.generation_date)).all()
     
-    # Wersja zapasowa dla starszych notatek (jeśli byłoby inne nazewnictwo)
     if not signals:
         signals = db.query(models.TradingSignal).filter(
             models.TradingSignal.status.in_(['ACTIVE', 'PENDING']),
@@ -390,8 +408,6 @@ def get_flux_signals(db: Session) -> List[Dict[str, Any]]:
         "notes": s.notes,
         "generation_date": s.generation_date.isoformat() if s.generation_date else None
     } for s in signals]
-
-# === POZOSTAŁE FUNKCJE SYSTEMOWE ===
 
 def get_discarded_signals_count_24h(db: Session) -> int:
     try:
