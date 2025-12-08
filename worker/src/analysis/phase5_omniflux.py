@@ -21,11 +21,10 @@ from .flux_physics import calculate_flux_vectors, calculate_ofp
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA OMNI-FLUX (V5.4 - SYNC FIX) ===
+# === KONFIGURACJA OMNI-FLUX (V5.5 - ROTATION FIX & SORTING) ===
 CAROUSEL_SIZE = 8          
 RADAR_DELAY = 4.0          
 SNIPER_COOLDOWN = 120      
-# === FIX: OBNIŻONO PRÓG DO 65 (Zgodność z UI "Green Tile") ===
 FLUX_THRESHOLD_ENTRY = 65  
 MACRO_CACHE_DURATION = 300 
 DEFAULT_RR = 2.5           
@@ -33,10 +32,14 @@ DEFAULT_SL_PCT = 0.015
 
 MAX_SNIPES_PER_CYCLE = 2   
 
+# === NOWE LIMITY ROTACJI ===
+ROTATION_TIMEOUT_BORING = 60   # 1 minuta dla słabych (<30 pkt)
+ROTATION_TIMEOUT_WARM = 300    # 5 minut dla średnich (30-64 pkt)
+
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.4 - API Traffic Control)
-    Architektura: Radar (Bulk) + Prioritized Sniper Queue
+    APEX OMNI-FLUX ENGINE (V5.5 - Priority Display)
+    Architektura: Radar (Bulk) + Prioritized Sniper Queue + Aggressive Rotation
     """
 
     def __init__(self, session: Session, api_client: AlphaVantageClient):
@@ -47,6 +50,7 @@ class OmniFluxAnalyzer:
         self.active_pool = []       
         self.reserve_pool = []      
         self.macro_context = {'bias': 'NEUTRAL', 'last_updated': 0}
+        self.cycle_counter = 0 # Licznik do logowania
         
         self._load_state()
 
@@ -68,6 +72,7 @@ class OmniFluxAnalyzer:
                     if item.get('fails') is None: item['fails'] = 0
                     if item.get('added_at') is None: item['added_at'] = time.time()
                 
+                # Walidacja świeżości (reset po 15 min bezczynności)
                 if time.time() - state.get('last_updated', 0) > 900:
                      logger.info("Faza 5: Stan przestarzały. Reset puli.")
                      self.active_pool = []
@@ -103,6 +108,8 @@ class OmniFluxAnalyzer:
     def _initialize_pools(self):
         """Napełnia pulę startową z Fazy 1 i X."""
         try:
+            # Pobieramy kandydatów. Jeśli Faza 1 jest "pusta" (brak trend score), SQL zwróci alfabetycznie.
+            # To jest częste przy starcie.
             p1_rows = self.session.execute(text("SELECT ticker FROM phase1_candidates ORDER BY sector_trend_score DESC NULLS LAST LIMIT 40")).fetchall()
             px_rows = self.session.execute(text("SELECT ticker FROM phasex_candidates ORDER BY last_pump_percent DESC NULLS LAST LIMIT 20")).fetchall()
             
@@ -114,6 +121,7 @@ class OmniFluxAnalyzer:
             
             self.reserve_pool = [t for t in combined_tickers if t not in exclude]
             
+            # Wypełnij Active Pool
             while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
                 ticker = self.reserve_pool.pop(0)
                 self.active_pool.append({
@@ -140,12 +148,15 @@ class OmniFluxAnalyzer:
             logger.error(f"Faza 5: Błąd inicjalizacji: {e}")
 
     def run_cycle(self):
+        self.cycle_counter += 1
+        
         if not self.active_pool:
             self._initialize_pools()
             if not self.active_pool: return
 
         self._refresh_macro_context()
         
+        # 1. RADAR SCAN
         tickers = [item['ticker'] for item in self.active_pool]
         radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
         radar_map = {d['symbol']: d for d in radar_hits}
@@ -154,6 +165,7 @@ class OmniFluxAnalyzer:
         signals_generated = 0
         sniper_queue = []
 
+        # 2. UPDATE & SCORE
         for item in self.active_pool:
             ticker = item['ticker']
             radar_data = radar_map.get(ticker)
@@ -177,6 +189,7 @@ class OmniFluxAnalyzer:
                 flx_scr = item.get('flux_score') or 0
                 last_chk = item.get('last_sniper_check') or 0
                 
+                # Logika Priorytetów Odświeżania
                 if elast == 0: 
                     priority_score += 100; needs_update = True
                 elif abs(ofp) > 0.4: 
@@ -194,6 +207,7 @@ class OmniFluxAnalyzer:
                 item['fails'] = (item.get('fails') or 0) + 1
                 if item['fails'] >= 3: tickers_to_remove.append(ticker)
 
+        # 3. SNIPER SHOTS (Pobieranie Intraday)
         sniper_queue.sort(key=lambda x: x['priority'], reverse=True)
         targets = sniper_queue[:MAX_SNIPES_PER_CYCLE]
         
@@ -235,10 +249,33 @@ class OmniFluxAnalyzer:
             except Exception as e:
                 logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
 
+        # === 4. WYMUSZONE SORTOWANIE (TWOJA PROŚBA) ===
+        # Sortujemy aktywną pulę tak, aby spółki z Flux Score > 64 były ZAWSZE PIERWSZE.
+        # W drugiej kolejności decyduje wysokość wyniku.
+        self.active_pool.sort(key=lambda x: (
+            1 if (x.get('flux_score') or 0) >= 64 else 0, # Najpierw Zielone Kafelki
+            x.get('flux_score') or 0                      # Potem najwyższy wynik
+        ), reverse=True)
+
+        # === 5. AGRESYWNA ROTACJA (NAPRAWA KARUZELI) ===
         for item in self.active_pool:
             flx = item.get('flux_score') or 0
             added = item.get('added_at') or 0
-            if self.reserve_pool and flx < 30 and (time.time() - added) > 1500:
+            life_time = time.time() - added
+            
+            should_remove = False
+            
+            # Warunek A: Słabe spółki (<30) usuwamy po 60 sekundach
+            if flx < 30 and life_time > ROTATION_TIMEOUT_BORING:
+                should_remove = True
+            
+            # Warunek B: Średnie spółki (30-64) usuwamy po 5 minutach
+            elif flx < 64 and life_time > ROTATION_TIMEOUT_WARM:
+                should_remove = True
+            
+            # Spółki > 64 (Zielone) zostają, dopóki wynik nie spadnie!
+
+            if should_remove and self.reserve_pool:
                 if item['ticker'] not in tickers_to_remove:
                     tickers_to_remove.append(item['ticker'])
 
@@ -246,15 +283,33 @@ class OmniFluxAnalyzer:
             self._rotate_pool(tickers_to_remove)
             if signals_generated > 0:
                 append_scan_log(self.session, f"🌊 Faza 5: Wygenerowano {signals_generated} sygnałów.")
+            else:
+                # Logujemy rotację, żebyś widział że system działa
+                top_removed = tickers_to_remove[:3]
+                msg_more = f" (+{len(tickers_to_remove)-3} inni)" if len(tickers_to_remove) > 3 else ""
+                logger.info(f"Faza 5: Rotacja {', '.join(top_removed)}{msg_more}")
+
+        # === 6. PULS SYSTEMU (LOGOWANIE) ===
+        if self.cycle_counter % 15 == 0: # Co ok. 60 sekund
+            top_stocks = [f"{i['ticker']}({i.get('flux_score',0)})" for i in self.active_pool[:5]]
+            pulse_msg = f"🌊 F5 PULS: {', '.join(top_stocks)}... (Rezerwa: {len(self.reserve_pool)})"
+            append_scan_log(self.session, pulse_msg)
 
         self._save_state()
         time.sleep(RADAR_DELAY)
 
     def _rotate_pool(self, remove_list):
         remove_list = list(set(remove_list))
+        # Usuń stare
         self.active_pool = [x for x in self.active_pool if x['ticker'] not in remove_list]
+        
+        # Dodaj nowe z rezerwy
         while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
             new_ticker = self.reserve_pool.pop(0)
+            # Jeśli rezerwa się kończy, wrzucamy usuniętą spółkę na koniec kolejki (Recykling)
+            # aby uniknąć pustego ekranu
+            self.reserve_pool.append(new_ticker) 
+            
             self.active_pool.append({
                 'ticker': new_ticker, 'fails': 0, 'added_at': time.time(), 'last_sniper_check': 0,
                 'price': 0.0, 'elasticity': 0.0, 'velocity': 0.0, 'flux_score': 0, 'ofp': 0.0,
@@ -283,7 +338,7 @@ class OmniFluxAnalyzer:
             score = int(metrics.get('flux_score', 0))
             ofp_val = metrics.get('ofp', 0.0)
             
-            note = f"STRATEGIA: FLUX V5.4\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
+            note = f"STRATEGIA: FLUX V5.5\nTYP: {reason} | SCORE: {score}/100\nOFP: {ofp_val:.2f} (Presja)\nELASTICITY: {metrics.get('elasticity', 0):.2f}σ"
 
             exists = self.session.execute(
                 text("SELECT 1 FROM trading_signals WHERE ticker=:t AND status IN ('ACTIVE', 'PENDING') AND notes LIKE '%STRATEGIA: FLUX%'"), 
