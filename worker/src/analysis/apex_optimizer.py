@@ -295,7 +295,7 @@ class QuantumOptimizer:
                 
                 # 4. Entropy
                 if not news_df.empty:
-                    nc = news_df.groupby(news_df.index.date).size() 
+                    nc = news_df.groupby(news.index.date).size() 
                     nc.index = pd.to_datetime(nc.index)
                     nc = nc.reindex(daily_df.index, fill_value=0)
                     daily_df['information_entropy'] = nc.rolling(window=10).sum().fillna(0)
@@ -397,23 +397,24 @@ class QuantumOptimizer:
         params = {}
         
         if self.strategy_mode == 'H3':
+            # === POPRAWIONE ZAKRESY H3 (Max 9 dni, SL min 3.0) ===
             params = {
                 'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), 
                 'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 5.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 15), 
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Minimum 3.0
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 9), # Maksimum 9 dni
             }
             
         elif self.strategy_mode == 'AQM':
-            # === OPTYMALIZACJA AQM V2 ===
+            # === POPRAWIONE ZAKRESY AQM (Max 9 dni, SL min 3.0) ===
             params = {
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.75, 0.95),
                 'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.40, 0.80),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0),
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 5, 20),
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Minimum 3.0
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 9), # Maksimum 9 dni
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
