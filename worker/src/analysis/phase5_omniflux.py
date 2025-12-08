@@ -320,10 +320,12 @@ class OmniFluxAnalyzer:
                         
                         # Generowanie sygnału
                         if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
-                            if self.macro_context['bias'] != 'BEARISH':
-                                metrics['price'] = price
-                                if self._generate_signal(ticker, metrics, sl_price, tp_price):
-                                    signals_generated += 1
+                            # === ZMODYFIKOWANO: Wyłączono blokadę BEARISH ===
+                            # Użytkownik chce sam decydować o ryzyku
+                            # if self.macro_context['bias'] != 'BEARISH':
+                            metrics['price'] = price
+                            if self._generate_signal(ticker, metrics, sl_price, tp_price):
+                                signals_generated += 1
                 except Exception as e:
                     logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
 
