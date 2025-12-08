@@ -405,6 +405,19 @@ export const showPhase5Monitor = async () => {
                 newBtn.addEventListener('click', handleStopPhase5);
             }
 
+            // === NOWOŚĆ: PODPIĘCIE PRZYCISKÓW KUP NA KAFELKACH ===
+            const buyButtons = document.querySelectorAll('.flux-tile-buy-btn');
+            buyButtons.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    // Zapobiegamy propagacji, jeśli kafelek miałby inne akcje na kliknięcie
+                    e.stopPropagation();
+                    const ticker = btn.dataset.ticker;
+                    if (ticker) {
+                        showBuyModal(ticker);
+                    }
+                });
+            });
+
             if (window.lucide) window.lucide.createIcons();
         } catch (e) {
             // Jeśli błąd, nie nadpisuj całego widoku, tylko zaloguj
