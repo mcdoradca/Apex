@@ -397,24 +397,24 @@ class QuantumOptimizer:
         params = {}
         
         if self.strategy_mode == 'H3':
-            # === POPRAWIONE ZAKRESY H3 (Max 9 dni, SL min 3.0) ===
+            # === POPRAWIONE ZAKRESY H3 (Snajper: Top 5%, Score > 0.5) ===
             params = {
-                'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
+                'h3_percentile': trial.suggest_float('h3_percentile', 0.95, 0.999), # Tylko top 5%
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), 
-                'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
+                'h3_min_score': trial.suggest_float('h3_min_score', 0.5, 2.0), # Tylko silne sygnały
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Minimum 3.0
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 9), # Maksimum 9 dni
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Zachowane ograniczenie SL
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 9), # Zachowane ograniczenie czasu
             }
             
         elif self.strategy_mode == 'AQM':
-            # === POPRAWIONE ZAKRESY AQM (Max 9 dni, SL min 3.0) ===
+            # === POPRAWIONE ZAKRESY AQM (Snajper) ===
             params = {
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.75, 0.95),
                 'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.40, 0.80),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0),
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Minimum 3.0
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 9), # Maksimum 9 dni
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Zachowane ograniczenie SL
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 9), # Zachowane ograniczenie czasu
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
