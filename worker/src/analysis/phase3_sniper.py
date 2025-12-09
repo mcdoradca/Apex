@@ -439,16 +439,17 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                     curr_score = last_aqm['aqm_score']
                     comp_min = float(params.get('aqm_component_min', 0.5))
                     
+                    # === ZMIANA 1: NAPRAWA KLUCZY ===
                     metric_details = {
                         'aqm_score': curr_score,
-                        'qps': last_aqm['qps'], 'ves': last_aqm['ves'],
-                        'mrs': last_aqm['mrs'], 'tcs': last_aqm['tcs']
+                        'qps': last_aqm['qps'], 'vms': last_aqm['vms'],
+                        'ras': last_aqm['ras'], 'tcs': last_aqm['tcs']
                     }
                     
                     if (curr_score > min_score and
                         last_aqm['qps'] > comp_min and
-                        last_aqm['ves'] > comp_min and
-                        last_aqm['mrs'] > comp_min):
+                        last_aqm['vms'] > comp_min and # Poprawne: VMS
+                        last_aqm['ras'] > comp_min): # Poprawne: RAS
                         
                         is_signal = True
                         score = int(curr_score * 100) 
@@ -478,7 +479,8 @@ def run_h3_live_scan(session, candidates, client, parameters=None):
                 if strategy_mode == 'H3':
                     note = f"STRATEGIA: H3\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: Tech:{metric_details.get('tech_score',0)} Mkt:{metric_details.get('market_score',0)} RS:{metric_details.get('rs_score',0)}\nAQM H3:{metric_details['aqm_score']:.2f} (vs {metric_details['threshold']:.2f})"
                 else:
-                    note = f"STRATEGIA: AQM (V4)\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details.get('qps',0):.2f} VES:{metric_details.get('ves',0):.2f} MRS:{metric_details.get('mrs',0):.2f} TCS:{metric_details.get('tcs',0):.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
+                    # === ZMIANA 2: NAPRAWA FORMATOWANIA NOTATKI ===
+                    note = f"STRATEGIA: AQM (V4)\nEV: {float(ev):.2f}% | SCORE: {score}/100 | {rec}\nDETALE: QPS:{metric_details.get('qps',0):.2f} VMS:{metric_details.get('vms',0):.2f} RAS:{metric_details.get('ras',0):.2f} TCS:{metric_details.get('tcs',0):.2f}\nAQM Score:{metric_details['aqm_score']:.2f} (vs {min_score:.2f})"
 
                 ex = session.query(models.TradingSignal).filter(models.TradingSignal.ticker==ticker, models.TradingSignal.status.in_(['ACTIVE','PENDING'])).first()
                 if not ex:
