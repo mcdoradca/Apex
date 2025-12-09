@@ -38,8 +38,9 @@ ROTATION_TIMEOUT_WARM = 300    # 5 minut dla średnich (30-64 pkt)
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.6 - Bulletproof & Rotation Fix)
+    APEX OMNI-FLUX ENGINE (V5.7 - Crash Fix)
     Architektura: Radar (Bulk) + Prioritized Sniper Queue + Safe State Loading
+    Poprawka V5.7: Eliminacja błędu NoneType * float przy braku ceny.
     """
 
     def __init__(self, session: Session, api_client: AlphaVantageClient):
@@ -182,14 +183,16 @@ class OmniFluxAnalyzer:
                 radar_data = radar_map.get(ticker)
                 
                 if radar_data:
-                    new_price = radar_data.get('price', 0.0)
+                    # FIX: Bezpieczne pobranie ceny (wymuszenie float)
+                    new_price = float(radar_data.get('price') or 0.0)
+                    
                     bid_sz = radar_data.get('bid_size', 0.0)
                     ask_sz = radar_data.get('ask_size', 0.0)
                     ofp = calculate_ofp(bid_sz, ask_sz)
                     
-                    old_price = item.get('price') or 0.0
+                    old_price = float(item.get('price') or 0.0)
                     price_change_pct = 0.0
-                    if old_price > 0:
+                    if old_price > 0 and new_price > 0:
                         price_change_pct = abs((new_price - old_price) / old_price)
                     
                     item['price'] = new_price
@@ -204,6 +207,7 @@ class OmniFluxAnalyzer:
                     flx_scr = item.get('flux_score') or 0
                     last_chk = item.get('last_sniper_check') or 0.0
                     
+                    # Logika priorytetów
                     if elast == 0: 
                         priority_score += 100; needs_update = True
                     elif abs(ofp) > 0.4: 
@@ -237,6 +241,12 @@ class OmniFluxAnalyzer:
             ticker = item['ticker']
             
             try:
+                # FIX: Upewnij się, że cena jest poprawna PRZED kalkulacją
+                price = float(item.get('price') or 0.0)
+                if price <= 0:
+                    logger.warning(f"Faza 5: Pominiento {ticker} (brak ceny).")
+                    continue
+
                 raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
                 if raw_intraday and 'Time Series (5min)' in raw_intraday:
                     df = standardize_df_columns(pd.DataFrame.from_dict(raw_intraday['Time Series (5min)'], orient='index'))
@@ -245,7 +255,7 @@ class OmniFluxAnalyzer:
                     
                     metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
                     
-                    price = item['price']
+                    # Obliczenia SL/TP (Teraz bezpieczne dzięki sprawdzeniu ceny powyżej)
                     sl_price = price * (1 - DEFAULT_SL_PCT)
                     risk_usd = price - sl_price 
                     tp_price = price + (risk_usd * DEFAULT_RR)
@@ -261,7 +271,7 @@ class OmniFluxAnalyzer:
                     if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
                         bias = self.macro_context.get('bias', 'NEUTRAL')
                         if bias != 'BEARISH':
-                            metrics['price'] = item['price']
+                            metrics['price'] = price
                             if self._generate_signal(ticker, metrics, sl_price, tp_price):
                                 signals_generated += 1
             except Exception as e:
