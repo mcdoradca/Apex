@@ -21,7 +21,7 @@ from .flux_physics import calculate_flux_vectors, calculate_ofp
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA OMNI-FLUX (V5.6 - BULLETPROOF) ===
+# === KONFIGURACJA OMNI-FLUX (V5.7 - PRE-MARKET FIX) ===
 CAROUSEL_SIZE = 8          
 RADAR_DELAY = 4.0          
 SNIPER_COOLDOWN = 120      
@@ -38,9 +38,13 @@ ROTATION_TIMEOUT_WARM = 300    # 5 minut dla średnich (30-64 pkt)
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.7 - Crash Fix)
+    APEX OMNI-FLUX ENGINE (V5.7 - Pre-Market Fix & Crash Guard)
     Architektura: Radar (Bulk) + Prioritized Sniper Queue + Safe State Loading
-    Poprawka V5.7: Eliminacja błędu NoneType * float przy braku ceny.
+    
+    ZMIANY V5.7:
+    1. Agresywna sanityzacja typów (eliminacja błędu NoneType).
+    2. Priorytet aktualizacji dla spółek z ceną 0.00 (wymuszenie pobrania ceny z Intraday).
+    3. Nadpisywanie ceny 'Radar' dokładniejszą ceną 'Sniper' (Intraday Close).
     """
 
     def __init__(self, session: Session, api_client: AlphaVantageClient):
@@ -65,12 +69,10 @@ class OmniFluxAnalyzer:
                 self.reserve_pool = state.get('reserve_pool', [])
                 self.macro_context['bias'] = state.get('macro_bias', 'NEUTRAL')
                 
-                # Bezpieczne pobranie last_updated
                 last_upd = state.get('last_updated')
                 if last_upd is None: last_upd = 0
                 
-                # === FIX: AGRESYWNA SANITYZACJA ===
-                # Wymuszamy typy, aby uniknąć błędów porównań (None > int)
+                # === FIX 1: AGRESYWNA SANITYZACJA TYPÓW ===
                 sanitized_pool = []
                 for item in self.active_pool:
                     try:
@@ -80,14 +82,14 @@ class OmniFluxAnalyzer:
                         item['last_sniper_check'] = float(item.get('last_sniper_check') or 0.0)
                         item['fails'] = int(item.get('fails') or 0)
                         item['added_at'] = float(item.get('added_at') or time.time())
+                        # Wymuszamy float dla ceny, zamieniając None na 0.0
                         item['price'] = float(item.get('price') or 0.0)
                         sanitized_pool.append(item)
                     except Exception as e:
-                        logger.warning(f"Faza 5: Usunięto uszkodzony rekord ze stanu: {item.get('ticker')} ({e})")
+                        logger.warning(f"Faza 5: Usunięto uszkodzony rekord: {item.get('ticker')} ({e})")
                 
                 self.active_pool = sanitized_pool
 
-                # Walidacja świeżości (reset po 15 min bezczynności)
                 if time.time() - last_upd > 900:
                      logger.info("Faza 5: Stan przestarzały. Reset puli.")
                      self.active_pool = []
@@ -99,9 +101,7 @@ class OmniFluxAnalyzer:
 
     def _refresh_macro_context(self):
         now = time.time()
-        # Zabezpieczenie przed None
-        last_upd = self.macro_context.get('last_updated')
-        if last_upd is None: last_upd = 0
+        last_upd = self.macro_context.get('last_updated') or 0
         
         if now - last_upd < MACRO_CACHE_DURATION:
             return
@@ -122,7 +122,6 @@ class OmniFluxAnalyzer:
 
     def _initialize_pools(self):
         try:
-            # Pobieranie kandydatów z obsługą pustych wyników
             p1_rows = self.session.execute(text("SELECT ticker FROM phase1_candidates ORDER BY sector_trend_score DESC NULLS LAST LIMIT 40")).fetchall()
             px_rows = self.session.execute(text("SELECT ticker FROM phasex_candidates ORDER BY last_pump_percent DESC NULLS LAST LIMIT 20")).fetchall()
             
@@ -169,6 +168,8 @@ class OmniFluxAnalyzer:
         self._refresh_macro_context()
         
         tickers = [item['ticker'] for item in self.active_pool]
+        
+        # Pobieramy Bulk Quotes (mogą być 0 w Pre-Market)
         radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
         radar_map = {d['symbol']: d for d in radar_hits}
         
@@ -176,24 +177,32 @@ class OmniFluxAnalyzer:
         signals_generated = 0
         sniper_queue = []
 
-        # === 2. UPDATE & SCORE (Z IZOLACJĄ BŁĘDÓW) ===
+        # === 2. UPDATE & SCORE ===
         for item in self.active_pool:
             try:
                 ticker = item['ticker']
                 radar_data = radar_map.get(ticker)
                 
+                # Pobierz obecną cenę z pamięci (żeby nie nadpisać zerem, jeśli radar zawiedzie)
+                current_memory_price = float(item.get('price') or 0.0)
+                
                 if radar_data:
-                    # FIX: Bezpieczne pobranie ceny (wymuszenie float)
-                    new_price = float(radar_data.get('price') or 0.0)
+                    # Cena z Radaru
+                    radar_price = float(radar_data.get('price') or 0.0)
+                    
+                    # Logika aktualizacji ceny:
+                    # Jeśli radar ma cenę > 0, bierzemy ją.
+                    # Jeśli radar ma 0, ale mamy starą cenę > 0, trzymamy starą.
+                    # Jeśli obie 0, to 0 (i wzywamy Snipera).
+                    new_price = radar_price if radar_price > 0 else current_memory_price
                     
                     bid_sz = radar_data.get('bid_size', 0.0)
                     ask_sz = radar_data.get('ask_size', 0.0)
                     ofp = calculate_ofp(bid_sz, ask_sz)
                     
-                    old_price = float(item.get('price') or 0.0)
                     price_change_pct = 0.0
-                    if old_price > 0 and new_price > 0:
-                        price_change_pct = abs((new_price - old_price) / old_price)
+                    if current_memory_price > 0 and new_price > 0:
+                        price_change_pct = abs((new_price - current_memory_price) / current_memory_price)
                     
                     item['price'] = new_price
                     item['ofp'] = ofp
@@ -202,13 +211,16 @@ class OmniFluxAnalyzer:
                     priority_score = 0
                     needs_update = False
                     
-                    # Bezpieczne pobranie wartości
                     elast = item.get('elasticity') or 0.0
                     flx_scr = item.get('flux_score') or 0
                     last_chk = item.get('last_sniper_check') or 0.0
                     
-                    # Logika priorytetów
-                    if elast == 0: 
+                    # === FIX 2: PRIORYTET DLA BRAKUJĄCEJ CENY (PRE-MARKET FIX) ===
+                    if new_price == 0:
+                        # Jeśli cena to 0, MUSIMY użyć Snipera (Intraday), bo Bulk zawiódł.
+                        priority_score += 200 
+                        needs_update = True
+                    elif elast == 0: 
                         priority_score += 100; needs_update = True
                     elif abs(ofp) > 0.4: 
                         priority_score += 50; needs_update = True
@@ -229,7 +241,7 @@ class OmniFluxAnalyzer:
                 logger.error(f"Faza 5: Błąd przetwarzania spółki {item.get('ticker')}: {e}")
                 tickers_to_remove.append(item.get('ticker'))
 
-        # === 3. SNIPER SHOTS ===
+        # === 3. SNIPER SHOTS (Intraday Data) ===
         sniper_queue.sort(key=lambda x: x['priority'], reverse=True)
         targets = sniper_queue[:MAX_SNIPES_PER_CYCLE]
         
@@ -241,12 +253,7 @@ class OmniFluxAnalyzer:
             ticker = item['ticker']
             
             try:
-                # FIX: Upewnij się, że cena jest poprawna PRZED kalkulacją
-                price = float(item.get('price') or 0.0)
-                if price <= 0:
-                    logger.warning(f"Faza 5: Pominiento {ticker} (brak ceny).")
-                    continue
-
+                # Intraday obsługuje Pre-Market (extended_hours=true jest domyślne w kliencie)
                 raw_intraday = self.client.get_intraday(ticker, interval='5min', outputsize='compact')
                 if raw_intraday and 'Time Series (5min)' in raw_intraday:
                     df = standardize_df_columns(pd.DataFrame.from_dict(raw_intraday['Time Series (5min)'], orient='index'))
@@ -255,29 +262,38 @@ class OmniFluxAnalyzer:
                     
                     metrics = calculate_flux_vectors(df, current_ofp=item['ofp'])
                     
-                    # Obliczenia SL/TP (Teraz bezpieczne dzięki sprawdzeniu ceny powyżej)
-                    sl_price = price * (1 - DEFAULT_SL_PCT)
-                    risk_usd = price - sl_price 
-                    tp_price = price + (risk_usd * DEFAULT_RR)
+                    # === FIX 3: AKTUALIZACJA CENY Z INTRADAY ===
+                    # To naprawia "0.00" w UI, bo Intraday ma dane, gdy Bulk nie ma.
+                    current_close = df['close'].iloc[-1]
+                    item['price'] = float(current_close)
+                    
+                    price = item['price']
+                    
+                    # Teraz, gdy mamy cenę z Intraday, obliczenia są bezpieczne
+                    if price > 0:
+                        sl_price = price * (1 - DEFAULT_SL_PCT)
+                        risk_usd = price - sl_price 
+                        tp_price = price + (risk_usd * DEFAULT_RR)
+                        
+                        item['stop_loss'] = sl_price             
+                        item['take_profit'] = tp_price           
+                        item['risk_reward'] = DEFAULT_RR
                     
                     item['elasticity'] = float(metrics.get('elasticity', 0.0))
                     item['velocity'] = float(metrics.get('velocity', 0.0))
                     item['flux_score'] = int(metrics.get('flux_score', 0))
-                    item['last_sniper_check'] = time.time() 
-                    item['stop_loss'] = sl_price             
-                    item['take_profit'] = tp_price           
-                    item['risk_reward'] = DEFAULT_RR         
+                    item['last_sniper_check'] = time.time()
                     
-                    if item['flux_score'] >= FLUX_THRESHOLD_ENTRY:
+                    if item['flux_score'] >= FLUX_THRESHOLD_ENTRY and price > 0:
                         bias = self.macro_context.get('bias', 'NEUTRAL')
                         if bias != 'BEARISH':
                             metrics['price'] = price
-                            if self._generate_signal(ticker, metrics, sl_price, tp_price):
+                            if self._generate_signal(ticker, metrics, item['stop_loss'], item['take_profit']):
                                 signals_generated += 1
             except Exception as e:
                 logger.error(f"Faza 5 Sniper Error ({ticker}): {e}")
 
-        # === 4. SORTOWANIE (Bezpieczne lambda) ===
+        # === 4. SORTOWANIE (Bezpieczne) ===
         try:
             self.active_pool.sort(key=lambda x: (
                 1 if (x.get('flux_score') or 0) >= 64 else 0, 
@@ -286,7 +302,7 @@ class OmniFluxAnalyzer:
         except Exception as e:
             logger.error(f"Faza 5: Błąd sortowania: {e}")
 
-        # === 5. ROTACJA (Bezpieczna) ===
+        # === 5. ROTACJA ===
         for item in self.active_pool:
             try:
                 flx = item.get('flux_score') or 0
@@ -329,7 +345,6 @@ class OmniFluxAnalyzer:
         
         while len(self.active_pool) < CAROUSEL_SIZE and self.reserve_pool:
             new_ticker = self.reserve_pool.pop(0)
-            # Recykling na koniec kolejki
             self.reserve_pool.append(new_ticker) 
             
             self.active_pool.append({
