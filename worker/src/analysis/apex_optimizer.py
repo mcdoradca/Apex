@@ -32,10 +32,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V19.0 - TOTAL REPAIR
-    1. H3 LOGIC RESTORED: Pełna reimplementacja logiki H3 wewnątrz klasy (niezależność od aqm_v4_logic).
-    2. CACHE SYNC: Poprawiona kolejność ładowania danych (zgodność z Fazą 1).
-    3. DIAGNOSTICS: Szczegółowe raportowanie przyczyn odrzucenia tickerów.
+    SERCE SYSTEMU APEX V19.0 - TOTAL REPAIR (Logging + QQQ Fix)
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -75,7 +72,7 @@ class QuantumOptimizer:
             self.session.commit()
         
         try:
-            # 1. Makro
+            # 1. Makro (Teraz ładuje serie czasowe!)
             self.macro_data = self._load_macro_context()
             
             # 2. Cache Danych (SEKWENCYJNIE Z PEŁNĄ DIAGNOSTYKĄ)
@@ -142,36 +139,40 @@ class QuantumOptimizer:
             raise
 
     def _load_macro_context(self):
-        append_scan_log(self.session, "📊 Ładowanie tła makroekonomicznego...")
-        # Domyślne wartości (SAFE DEFAULTS)
-        macro = {'vix': 20.0, 'yield_10y': 4.0, 'inflation': 2.5, 'fed_rate': 5.0, 'spy_df': pd.DataFrame()}
+        append_scan_log(self.session, "📊 Ładowanie tła makroekonomicznego (Historycznego)...")
+        # Inicjalizacja struktury
+        macro = {
+            'qqq_df': pd.DataFrame(), 
+            'inflation_series': pd.Series(dtype=float),
+            'yield_series': pd.Series(dtype=float),
+            'fed_rate_series': pd.Series(dtype=float)
+        }
         
         local_session = get_db_session()
         try:
             client = AlphaVantageClient()
-            # Próba pobrania QQQ z cache (Faza 1 często to ma)
-            spy_raw = get_raw_data_with_cache(local_session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
-            if spy_raw:
-                macro['spy_df'] = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
-                macro['spy_df'].index = pd.to_datetime(macro['spy_df'].index)
-                macro['spy_df'].sort_index(inplace=True)
+            # QQQ (Zamiast SPY)
+            qqq_raw = get_raw_data_with_cache(local_session, client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+            if qqq_raw:
+                macro['qqq_df'] = standardize_df_columns(pd.DataFrame.from_dict(qqq_raw.get('Time Series (Daily)', {}), orient='index'))
+                macro['qqq_df'].index = pd.to_datetime(macro['qqq_df'].index)
+                macro['qqq_df'].sort_index(inplace=True)
             
             if self.strategy_mode == 'AQM':
-                # Pobieranie wskaźników makro (z fallbackiem na brak danych)
+                # Używamy helpera z backtest_engine do parsowania serii
+                from .backtest_engine import _parse_macro_to_series
+                
+                # Rentowność
                 yield_raw = get_raw_data_with_cache(local_session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
-                if yield_raw and 'data' in yield_raw:
-                    try: macro['yield_10y'] = float(yield_raw['data'][0]['value'])
-                    except: pass
+                macro['yield_series'] = _parse_macro_to_series(yield_raw)
                 
+                # Inflacja
                 inf_raw = get_raw_data_with_cache(local_session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
-                if inf_raw and 'data' in inf_raw:
-                    try: macro['inflation'] = float(inf_raw['data'][0]['value'])
-                    except: pass
+                macro['inflation_series'] = _parse_macro_to_series(inf_raw)
                 
+                # Stopy
                 fed_raw = get_raw_data_with_cache(local_session, client, 'FEDERAL_FUNDS_RATE', 'FEDERAL_FUNDS_RATE', 'get_fed_funds_rate', interval='monthly')
-                if fed_raw and 'data' in fed_raw:
-                    try: macro['fed_rate'] = float(fed_raw['data'][0]['value'])
-                    except: pass
+                macro['fed_rate_series'] = _parse_macro_to_series(fed_raw)
 
         except Exception as e:
             append_scan_log(self.session, f"⚠️ Warning Makro: {e}")
@@ -183,6 +184,9 @@ class QuantumOptimizer:
     def _preload_data_to_cache_sequential(self):
         update_system_control(self.session, 'worker_status', 'OPTIMIZING_DATA_LOAD')
         tickers = self._get_all_tickers()
+        
+        # Filtrujemy QQQ z listy kandydatów (Benchmark nie jest do handlu)
+        tickers = [t for t in tickers if t not in ['QQQ', 'SPY']]
         
         if not tickers:
             append_scan_log(self.session, "⚠️ Brak tickerów w bazie (Faza 1 pusta?).")
@@ -295,7 +299,7 @@ class QuantumOptimizer:
                 
                 # 4. Entropy
                 if not news_df.empty:
-                    nc = news_df.groupby(news.index.date).size() 
+                    nc = news_df.groupby(news_df.index.date).size() 
                     nc.index = pd.to_datetime(nc.index)
                     nc = nc.reindex(daily_df.index, fill_value=0)
                     daily_df['information_entropy'] = nc.rolling(window=10).sum().fillna(0)
@@ -348,7 +352,6 @@ class QuantumOptimizer:
                 
                 result = daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].fillna(0)
                 
-                # Verification (Optional logging could go here)
                 if result.empty: return pd.DataFrame()
                 return result
 
@@ -397,24 +400,23 @@ class QuantumOptimizer:
         params = {}
         
         if self.strategy_mode == 'H3':
-            # === POPRAWIONE ZAKRESY H3 (Snajper: Top 5%, Score > 0.5) ===
             params = {
-                'h3_percentile': trial.suggest_float('h3_percentile', 0.95, 0.999), # Tylko top 5%
+                'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), 
-                'h3_min_score': trial.suggest_float('h3_min_score', 0.5, 2.0), # Tylko silne sygnały
+                'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Zachowane ograniczenie SL
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 9), # Zachowane ograniczenie czasu
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 5.0),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 15), 
             }
             
         elif self.strategy_mode == 'AQM':
-            # === POPRAWIONE ZAKRESY AQM (Snajper) ===
+            # === OPTYMALIZACJA AQM V2 ===
             params = {
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.75, 0.95),
                 'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.40, 0.80),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0),
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 6.0), # Zachowane ograniczenie SL
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 3, 9), # Zachowane ograniczenie czasu
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 5, 20),
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
