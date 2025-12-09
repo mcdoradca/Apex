@@ -261,10 +261,29 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df['m_sq'] = df['normalized_volume'] 
                     df['nabla_sq'] = df['price_gravity']
 
-                    # Import nowej logiki V4 dla H3
-                    from .utils import calculate_h3_metrics_v4
-                    df = calculate_h3_metrics_v4(df, {}) 
-                    df['aqm_rank'] = df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
+                    # === FIX: PEŁNA IMPLEMENTACJA AQM H3 (Zastępstwo stuba z utils) ===
+                    # 1. Normalizacja Institutional Sync (Z-Score)
+                    df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(100, min_periods=20).mean()) / df['institutional_sync'].rolling(100, min_periods=20).std().fillna(1)
+                    df['mu_normalized'] = df['mu_normalized'].fillna(0)
+
+                    # 2. Cap Retail Herding
+                    df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
+
+                    # 3. Obliczenie J (Energia)
+                    # Zabezpieczenie T przed zerem
+                    T = df['market_temperature'].replace(0, np.nan)
+                    df['J'] = (df['information_entropy'] - (df['retail_herding_capped'] / T) + df['mu_normalized']).fillna(0)
+
+                    # 4. Normalizacja Komponentów (Z-Score)
+                    df['J_norm'] = ((df['J'] - df['J'].rolling(100, min_periods=20).mean()) / df['J'].rolling(100, min_periods=20).std().fillna(1)).fillna(0)
+                    df['nabla_sq_norm'] = ((df['nabla_sq'] - df['nabla_sq'].rolling(100, min_periods=20).mean()) / df['nabla_sq'].rolling(100, min_periods=20).std().fillna(1)).fillna(0)
+                    df['m_sq_norm'] = ((df['m_sq'] - df['m_sq'].rolling(100, min_periods=20).mean()) / df['m_sq'].rolling(100, min_periods=20).std().fillna(1)).fillna(0)
+
+                    # 5. Final AQM Score (To pole było brakujące i powodowało KeyError)
+                    df['aqm_score_h3'] = (df['J_norm'] * 1.0) - (df['nabla_sq_norm'] * 1.0) - (df['m_sq_norm'] * 1.0)
+                    
+                    # 6. Rank
+                    df['aqm_rank'] = df['aqm_score_h3'].rolling(window=100, min_periods=20).rank(pct=True).fillna(0)
                     
                     h3_p = float(parameters.get('h3_percentile', 0.95))
                     h3_m = float(parameters.get('h3_m_sq_threshold', -0.5))
@@ -420,9 +439,22 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                             p_l_percent = ((close_price - entry_price) / entry_price) * 100
                             
                             metric_score = 0.0
-                            if strategy_mode == 'H3': metric_score = float(row.get('aqm_score_h3', 0))
-                            elif strategy_mode == 'AQM': metric_score = float(row.get('aqm_score', 0))
-                            elif strategy_mode == 'BIOX': metric_score = float(row.get('aqm_score_h3', 0))
+                            
+                            # BEZPIECZNE POBIERANIE METRYK (Z Logowaniem Błędów)
+                            try:
+                                if strategy_mode == 'H3': 
+                                    if 'aqm_score_h3' in row:
+                                        metric_score = float(row['aqm_score_h3'])
+                                    else:
+                                        logger.warning(f"Brak aqm_score_h3 dla {ticker} w dniu {current_date}")
+                                        metric_score = 0.0
+                                elif strategy_mode == 'AQM': 
+                                    metric_score = float(row.get('aqm_score', 0))
+                                elif strategy_mode == 'BIOX': 
+                                    metric_score = float(row.get('aqm_score_h3', 0))
+                            except Exception as metric_err:
+                                logger.error(f"Błąd konwersji metryki dla {ticker}: {metric_err}")
+                                metric_score = 0.0
 
                             trade_data = {
                                 "ticker": ticker,
@@ -458,8 +490,8 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     session.commit()
 
             except Exception as e:
-                logger.error(f"Błąd backtestu dla {ticker}: {e}")
-                append_scan_log(session, f"Błąd {ticker}: {str(e)[:50]}")
+                logger.error(f"Błąd backtestu dla {ticker}: {e}", exc_info=True)
+                append_scan_log(session, f"Błąd {ticker}: {str(e)[:100]}")
                 session.rollback()
                 continue
 
