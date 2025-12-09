@@ -32,7 +32,11 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V19.0 - TOTAL REPAIR (Logging + QQQ Fix)
+    SERCE SYSTEMU APEX V19.2 - ELITE FILTERING
+    Zmiany: 
+    - Wymuszony SL >= 3.0 ATR
+    - Max Hold <= 7 dni
+    - Percentyle/Score >= 0.90 (Redukcja szumu)
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -61,7 +65,7 @@ class QuantumOptimizer:
         logger.info(f"QuantumOptimizer initialized: Job {job_id}, Mode {self.strategy_mode}")
 
     def run(self, n_trials: int = 50):
-        start_msg = f"🚀 OPTIMIZER V19: Start Zadania {self.job_id} (Strategia: {self.strategy_mode})..."
+        start_msg = f"🚀 OPTIMIZER V19.2: Start Zadania {self.job_id} (Strategia: {self.strategy_mode})..."
         logger.info(start_msg)
         append_scan_log(self.session, start_msg)
         
@@ -401,22 +405,28 @@ class QuantumOptimizer:
         
         if self.strategy_mode == 'H3':
             params = {
-                'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
+                # === ELITE FILTERING: Percentyl min 0.90 ===
+                'h3_percentile': trial.suggest_float('h3_percentile', 0.90, 0.99), 
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), 
                 'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.0, 5.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 15), 
+                
+                # === MODYFIKACJA: SL >= 3.0, Max Hold <= 7 ===
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 7.0),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 7), 
             }
             
         elif self.strategy_mode == 'AQM':
             # === OPTYMALIZACJA AQM V2 ===
             params = {
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.75, 0.95),
+                # === ELITE FILTERING: Score min 0.90 ===
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.90, 0.99),
                 'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.40, 0.80),
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0),
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 1.5, 4.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 5, 20),
+                
+                # === MODYFIKACJA: SL >= 3.0, Max Hold <= 7 ===
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 7.0),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 7),
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
@@ -595,7 +605,7 @@ class QuantumOptimizer:
             job.configuration = {
                 'best_params': best_params, 
                 'sensitivity_analysis': sensitivity_report, 
-                'version': 'V19_TOTAL_REPAIR', 
+                'version': 'V19.2_ELITE_FILTERING', 
                 'strategy': self.strategy_mode,
                 'scan_period': self.scan_period, 
                 'tickers_analyzed': self.tickers_count
