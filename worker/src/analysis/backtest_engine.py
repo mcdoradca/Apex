@@ -12,7 +12,6 @@ from .utils import (
     calculate_atr, 
     append_scan_log, 
     update_scan_progress,
-    calculate_h3_metrics_v4,
     _resolve_trade 
 )
 
@@ -35,20 +34,43 @@ BIOTECH_KEYWORDS = [
     'Drug', 'Bio'
 ]
 
-def _calculate_time_dilation_series(ticker_df: pd.DataFrame, spy_df: pd.DataFrame, window: int = 20) -> pd.Series:
+# === NARZĘDZIA POMOCNICZE DLA MAKRO ===
+def _parse_macro_to_series(raw_json: dict) -> pd.Series:
+    """Konwertuje surowy JSON z Alpha Vantage (data list) na Pandas Series z indeksem czasowym."""
+    try:
+        if not raw_json or 'data' not in raw_json:
+            return pd.Series(dtype=float)
+        
+        data_list = raw_json['data']
+        df = pd.DataFrame(data_list)
+        
+        # Konwersja kolumn
+        df['date'] = pd.to_datetime(df['date'])
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+        
+        # Ustawienie indeksu i sortowanie (najstarsze pierwsze, żeby .asof() działało poprawnie)
+        df.set_index('date', inplace=True)
+        df.sort_index(inplace=True)
+        
+        return df['value']
+    except Exception as e:
+        logger.error(f"Błąd parsowania danych makro do serii: {e}")
+        return pd.Series(dtype=float)
+
+def _calculate_time_dilation_series(ticker_df: pd.DataFrame, benchmark_df: pd.DataFrame, window: int = 20) -> pd.Series:
     try:
         if not isinstance(ticker_df.index, pd.DatetimeIndex): ticker_df.index = pd.to_datetime(ticker_df.index)
-        if not isinstance(spy_df.index, pd.DatetimeIndex): spy_df.index = pd.to_datetime(spy_df.index)
+        if not isinstance(benchmark_df.index, pd.DatetimeIndex): benchmark_df.index = pd.to_datetime(benchmark_df.index)
         
-        spy_aligned = spy_df['close'].reindex(ticker_df.index, method='ffill').fillna(0)
+        bench_aligned = benchmark_df['close'].reindex(ticker_df.index, method='ffill').fillna(0)
         
         ticker_returns = ticker_df['close'].pct_change()
-        spy_returns = spy_aligned.pct_change().fillna(0)
+        bench_returns = bench_aligned.pct_change().fillna(0)
 
         ticker_std = ticker_returns.rolling(window=window).std()
-        spy_std = spy_returns.rolling(window=window).std()
+        bench_std = bench_returns.rolling(window=window).std()
         
-        time_dilation = ticker_std / spy_std.replace(0, np.nan)
+        time_dilation = ticker_std / bench_std.replace(0, np.nan)
         return time_dilation.fillna(0)
     except Exception:
         return pd.Series(0, index=ticker_df.index)
@@ -61,39 +83,42 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
         elif parameters.get('strategy_mode') == 'BIOX':
             strategy_mode = 'BIOX'
         
-    logger.info(f"[Backtest] Start analizy historycznej {year} (Strategia: {strategy_mode})...")
-    append_scan_log(session, f"BACKTEST: Uruchamianie symulacji dla roku {year} (Strategia: {strategy_mode})...")
+    start_msg = f"[Backtest] Start analizy historycznej {year} (Strategia: {strategy_mode})..."
+    logger.info(start_msg)
+    append_scan_log(session, start_msg)
     
     return _run_historical_backtest_unified(session, api_client, year, parameters, strategy_mode)
 
 def _run_historical_backtest_unified(session: Session, api_client, year: str, parameters: dict = None, strategy_mode: str = 'H3'):
     try:
+        # Czyścimy stare wyniki backtestu
         session.execute(text("DELETE FROM virtual_trades WHERE setup_type LIKE 'BACKTEST_%'"))
         session.commit()
 
         # 1. SELEKCJA UNIWERSUM
         tickers = []
-        try:
-            phase1_rows = session.execute(text("SELECT ticker FROM phase1_candidates")).fetchall()
-            tickers += [r[0] for r in phase1_rows]
-        except Exception: pass
-
-        try:
-            phasex_rows = session.execute(text("SELECT ticker FROM phasex_candidates")).fetchall()
-            tickers += [r[0] for r in phasex_rows]
-        except Exception: pass
-        
-        try:
-            port_rows = session.execute(text("SELECT ticker FROM portfolio_holdings")).fetchall()
-            tickers += [r[0] for r in port_rows]
-        except Exception: pass
+        # Próba pobrania z różnych źródeł (F1, FX, Portfel)
+        for table in ["phase1_candidates", "phasex_candidates", "portfolio_holdings"]:
+            try:
+                rows = session.execute(text(f"SELECT ticker FROM {table}")).fetchall()
+                tickers += [r[0] for r in rows]
+            except Exception: pass
 
         tickers = list(set(tickers))
         
+        # Fallback
         if not tickers:
-            logger.warning("Brak kandydatów. Pobieram próbkę.")
+            append_scan_log(session, "⚠️ Brak kandydatów w F1/FX. Pobieram próbkę z tabeli companies.")
             tickers = [r[0] for r in session.execute(text("SELECT ticker FROM companies LIMIT 100")).fetchall()]
         
+        # === FILTRACJA BENCHMARKU (QQQ i SPY) ===
+        # Wykluczamy ticker QQQ z handlu, bo to nasz benchmark
+        tickers = [t for t in tickers if t not in ['QQQ', 'SPY', 'IWM', 'TQQQ', 'SQQQ']]
+        
+        logger.info(f"[Backtest] Wybrano {len(tickers)} tickerów do analizy.")
+        append_scan_log(session, f"BACKTEST: Analiza {len(tickers)} spółek...")
+
+        # Mapa sektorów
         company_sectors = {}
         try:
             rows = session.execute(text("SELECT ticker, sector, industry FROM companies")).fetchall()
@@ -101,8 +126,6 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                 company_sectors[r[0]] = (r[1] or '', r[2] or '')
         except Exception as e:
             logger.warning(f"Błąd pobierania sektorów: {e}")
-        
-        logger.info(f"[Backtest] Wybrano {len(tickers)} tickerów do analizy.")
         
         params = parameters or {}
         tp_mult = float(params.get('h3_tp_multiplier', 5.0))
@@ -116,34 +139,42 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         start_date_ts = pd.Timestamp(f"{year}-01-01").tz_localize(None)
         end_date_ts = pd.Timestamp(f"{year}-12-31").tz_localize(None)
 
-        # A. Pobranie QQQ (Nasdaq Benchmark dla H3/AQM)
-        # === FIX: SPY -> QQQ ===
-        spy_raw = get_raw_data_with_cache(session, api_client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
-        spy_df = pd.DataFrame()
-        if spy_raw:
-            spy_df = standardize_df_columns(pd.DataFrame.from_dict(spy_raw.get('Time Series (Daily)', {}), orient='index'))
-            spy_df.index = pd.to_datetime(spy_df.index).tz_localize(None)
-            spy_df.sort_index(inplace=True)
+        # === A. DANE BENCHMARKOWE (NASDAQ / QQQ) ===
+        append_scan_log(session, "BACKTEST: Pobieranie danych benchmarku (QQQ)...")
+        qqq_raw = get_raw_data_with_cache(session, api_client, 'QQQ', 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
+        qqq_df = pd.DataFrame()
+        if qqq_raw:
+            qqq_df = standardize_df_columns(pd.DataFrame.from_dict(qqq_raw.get('Time Series (Daily)', {}), orient='index'))
+            qqq_df.index = pd.to_datetime(qqq_df.index).tz_localize(None)
+            qqq_df.sort_index(inplace=True)
+        else:
+            append_scan_log(session, "⚠️ OSTRZEŻENIE: Nie udało się pobrać danych QQQ. Analiza relatywna może być błędna.")
 
-        # B. Przygotowanie Kontekstu Makro (Dla AQM)
+        # === B. KONTEKST MAKRO (Time-Travel Fix) ===
+        # Pobieramy PEŁNĄ historię, a nie tylko najnowszą wartość
+        append_scan_log(session, "BACKTEST: Pobieranie historycznych danych makro (Inflacja, Yields)...")
+        
         macro_data = {
-            'spy_df': spy_df, 
-            'vix': 20.0, 
-            'sector_trend': 0.0,
-            'yield_10y': 4.0, 
-            'inflation': 3.0  
+            'qqq_df': qqq_df, # Używamy QQQ zamiast SPY
+            'inflation_series': pd.Series(dtype=float),
+            'yield_series': pd.Series(dtype=float),
+            'fed_rate_series': pd.Series(dtype=float)
         }
 
-        if strategy_mode == 'AQM':
-            yield_raw = get_raw_data_with_cache(session, api_client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
-            if yield_raw and 'data' in yield_raw:
-                try: macro_data['yield_10y'] = float(yield_raw['data'][0]['value'])
-                except: pass
+        # Pobieranie Inflacji
+        inf_raw = get_raw_data_with_cache(session, api_client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
+        macro_data['inflation_series'] = _parse_macro_to_series(inf_raw)
+        
+        # Pobieranie Rentowności 10Y
+        yield_raw = get_raw_data_with_cache(session, api_client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
+        macro_data['yield_series'] = _parse_macro_to_series(yield_raw)
+        
+        # Pobieranie Stóp Procentowych
+        fed_raw = get_raw_data_with_cache(session, api_client, 'FEDERAL_FUNDS_RATE', 'FEDERAL_FUNDS_RATE', 'get_fed_funds_rate', interval='monthly')
+        macro_data['fed_rate_series'] = _parse_macro_to_series(fed_raw)
 
-            inf_raw = get_raw_data_with_cache(session, api_client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
-            if inf_raw and 'data' in inf_raw:
-                try: macro_data['inflation'] = float(inf_raw['data'][0]['value'])
-                except: pass
+        if macro_data['inflation_series'].empty:
+            append_scan_log(session, "⚠️ Brak danych inflacji. AQM RAS może być niedokładny.")
 
         total_tickers = len(tickers)
         processed_count = 0
@@ -151,10 +182,17 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         
         for ticker in tickers:
             try:
+                # Logowanie postępu co 10 sztuk
+                if processed_count % 10 == 0:
+                    append_scan_log(session, f"Backtest: Przetwarzam {processed_count}/{total_tickers} ({ticker})...")
+
                 daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
                 daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
                 
-                if not daily_raw: continue
+                if not daily_raw:
+                    # logger.debug(f"Brak danych OHLCV dla {ticker}")
+                    processed_count += 1
+                    continue
 
                 ohlcv = standardize_df_columns(pd.DataFrame.from_dict(daily_raw.get('Time Series (Daily)', {}), orient='index'))
                 ohlcv.index = pd.to_datetime(ohlcv.index).tz_localize(None)
@@ -164,6 +202,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     adj = standardize_df_columns(pd.DataFrame.from_dict(daily_adj_raw.get('Time Series (Daily)', {}), orient='index'))
                     adj.index = pd.to_datetime(adj.index).tz_localize(None)
                 
+                # Scalanie danych (Adj Close + Raw OHLC)
                 if not adj.empty:
                     df = adj.join(ohlcv[['open', 'high', 'low', 'close']], rsuffix='_raw')
                     trade_open_col = 'open_raw' if 'open_raw' in df.columns else 'open'
@@ -175,23 +214,31 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     trade_open_col, trade_high_col, trade_low_col, trade_close_col = 'open', 'high', 'low', 'close'
 
                 df.sort_index(inplace=True)
-                if len(df) < 100: continue 
+                
+                # Filtr na rok backtestu
+                if df.empty or df.index[-1] < start_date_ts or df.index[0] > end_date_ts:
+                    processed_count += 1
+                    continue 
                 
                 df['atr_14'] = calculate_atr(df).ffill().fillna(0)
 
                 signal_df = pd.DataFrame()
 
+                # === LOGIKA H3 (ELITE SNIPER) ===
                 if strategy_mode == 'H3':
-                    if len(df) < 201: continue
+                    if len(df) < 201: 
+                        processed_count += 1; continue
+                    
                     h2_data = load_h2_data_into_cache(ticker, api_client, session)
                     insider_df = h2_data.get('insider_df')
                     news_df = h2_data.get('news_df')
                     
+                    # Obliczenia metryk
                     df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
                     df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
                     
                     df['price_gravity'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
-                    df['time_dilation'] = _calculate_time_dilation_series(df, spy_df)
+                    df['time_dilation'] = _calculate_time_dilation_series(df, qqq_df) # QQQ jako benchmark
                     
                     df['daily_returns'] = df['close'].pct_change()
                     df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
@@ -205,6 +252,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     else:
                         df['information_entropy'] = 0.0
                     
+                    # Wolumen (m^2)
                     df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
                     df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
                     df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
@@ -213,6 +261,8 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df['m_sq'] = df['normalized_volume'] 
                     df['nabla_sq'] = df['price_gravity']
 
+                    # Import nowej logiki V4 dla H3
+                    from .utils import calculate_h3_metrics_v4
                     df = calculate_h3_metrics_v4(df, {}) 
                     df['aqm_rank'] = df['aqm_score_h3'].rolling(window=100).rank(pct=True).fillna(0)
                     
@@ -227,8 +277,11 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     )
                     signal_df = df
 
+                # === LOGIKA AQM (ADAPTIVE QUANTUM V4) ===
                 elif strategy_mode == 'AQM':
-                    if len(df) < 201: continue
+                    if len(df) < 201: 
+                        processed_count += 1; continue
+                        
                     w_raw = get_raw_data_with_cache(session, api_client, ticker, 'WEEKLY_ADJUSTED', 'get_weekly_adjusted')
                     weekly_df = pd.DataFrame()
                     if w_raw: 
@@ -242,37 +295,40 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                         obv_df.index = pd.to_datetime(obv_df.index).tz_localize(None)
                         obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
 
+                    # Obliczamy AQM z nową obsługą danych makro
                     aqm_metrics_df = aqm_v4_logic.calculate_aqm_full_vector(
                         daily_df=df,
                         weekly_df=weekly_df,
                         intraday_60m_df=pd.DataFrame(), 
                         obv_df=obv_df,
-                        macro_data=macro_data, 
+                        macro_data=macro_data, # Przekazujemy serie czasowe!
                         earnings_days_to=None
                     )
                     
                     if not aqm_metrics_df.empty:
-                        df = df.join(aqm_metrics_df[['aqm_score', 'qps', 'ves', 'mrs', 'tcs']], rsuffix='_dupl')
+                        df = df.join(aqm_metrics_df[['aqm_score', 'qps', 'ras', 'vms', 'tcs']], rsuffix='_dupl')
                         
                         min_score = float(parameters.get('aqm_min_score', 0.8))
                         comp_min = float(parameters.get('aqm_component_min', 0.5))
                         
+                        # AQM Signal Logic
                         df['is_signal'] = (
                             (df['aqm_score'] > min_score) &
                             (df['qps'] > comp_min) &
-                            (df['ves'] > comp_min) &
-                            (df['mrs'] > comp_min)
+                            (df['vms'] > comp_min) &
+                            (df['tcs'] > 0.1) # TCS musi być pozytywny (brak earnings)
                         )
                         signal_df = df
                     else:
                         signal_df = pd.DataFrame()
 
+                # === LOGIKA BIOX (PUMP HUNTER) ===
                 elif strategy_mode == 'BIOX':
                     sec, ind = company_sectors.get(ticker, ('',''))
                     is_biotech = any(k in sec or k in ind for k in BIOTECH_KEYWORDS)
                     
                     if not is_biotech:
-                        continue 
+                        processed_count += 1; continue 
 
                     df['prev_close'] = df['close'].shift(1)
                     df['intraday_change'] = (df['high'] - df['open']) / df['open']
@@ -291,6 +347,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df['aqm_score_h3'] = df[['intraday_change', 'session_change']].max(axis=1) * 100
                     signal_df = df
 
+                # === SYMULACJA TRANSAKCJI ===
                 if not signal_df.empty and 'is_signal' in signal_df.columns:
                     sim_start_idx = signal_df.index.searchsorted(start_date_ts)
                     i = sim_start_idx
@@ -339,6 +396,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                 days_held += 1
                                 close_date = day_candle.name
                                 
+                                # Symulacja intra-day (Najpierw sprawdzamy SL na otwarciu, potem w trakcie)
                                 if d_open <= sl_price:
                                     trade_status = 'CLOSED_SL'
                                     close_price = d_open
@@ -375,8 +433,8 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                 "metric_aqm_score_h3": metric_score,
                                 "metric_atr_14": float(atr),
                                 "metric_J_norm": float(row.get('J_norm', 0)) if strategy_mode == 'H3' else float(row.get('qps', 0)),
-                                "metric_nabla_sq_norm": float(row.get('nabla_sq_norm', 0)) if strategy_mode == 'H3' else float(row.get('ves', 0)),
-                                "metric_m_sq_norm": float(row.get('m_sq_norm', 0)) if strategy_mode == 'H3' else float(row.get('mrs', 0)),
+                                "metric_nabla_sq_norm": float(row.get('nabla_sq_norm', 0)) if strategy_mode == 'H3' else float(row.get('ras', 0)),
+                                "metric_m_sq_norm": float(row.get('m_sq_norm', 0)) if strategy_mode == 'H3' else float(row.get('vms', 0)),
                                 "status": trade_status,
                                 "close_price": float(close_price),
                                 "final_profit_loss_percent": float(p_l_percent),
@@ -401,6 +459,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
 
             except Exception as e:
                 logger.error(f"Błąd backtestu dla {ticker}: {e}")
+                append_scan_log(session, f"Błąd {ticker}: {str(e)[:50]}")
                 session.rollback()
                 continue
 
