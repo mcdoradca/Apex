@@ -14,15 +14,18 @@ logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 if not API_KEY:
-    logger.error("ALPHAVANTAGE_API_KEY not found in environment for WORKER's client.")
+    logger.error("ALPHAVANTAGE_API_KEY not found in environment for API's client.")
 
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    # === OPTYMALIZACJA: Limit 150 zapytań/minuta (Premium) ===
-    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+    # === OPTYMALIZACJA (TRAFFIC SHAPING) ===
+    # API Service (Frontend) otrzymuje gwarantowane 30 zapytań/minutę.
+    # To zapewnia płynne odświeżanie Dashboardu, Portfela i Detali Sygnałów,
+    # nawet gdy Worker jest w trakcie ciężkiej analizy (Faza 1/4).
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 30, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
-            logger.error("API key is missing for AlphaVantageClient instance in WORKER.")
+            logger.error("API key is missing for AlphaVantageClient instance in API.")
         self.api_key = api_key
         self.retries = retries
         self.backoff_factor = backoff_factor
@@ -32,7 +35,7 @@ class AlphaVantageClient:
         self.request_interval = 60.0 / requests_per_minute
         self.request_timestamps = deque()
         
-        # === OPTYMALIZACJA: Session Keep-Alive ===
+        # Session Keep-Alive
         self.session = requests.Session()
 
     def _rate_limiter(self):
@@ -76,12 +79,10 @@ class AlphaVantageClient:
                     data = response.json()
                 except json.JSONDecodeError:
                     if params.get('datatype') == 'csv':
-                        # Jeśli CSV jest poprawny, to nie jest JSON, więc OK
                         response.raise_for_status() 
                         return response.text
                     raise requests.exceptions.RequestException("Response was not valid JSON.")
 
-                # Obsługa błędów API w formacie JSON
                 is_rate_limit_json = False
                 if isinstance(data, dict) and "Information" in data:
                     info_text = data["Information"].lower()
@@ -91,7 +92,7 @@ class AlphaVantageClient:
                 is_error_msg = isinstance(data, dict) and "Error Message" in data
 
                 if is_rate_limit_json:
-                    wait_time = 5 * (attempt + 1)
+                    wait_time = 2 * (attempt + 1) # Krótszy czas oczekiwania dla Frontendu
                     logger.warning(f"API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
                     time.sleep(wait_time)
                     continue
@@ -154,8 +155,7 @@ class AlphaVantageClient:
 
     def get_bulk_quotes_parsed(self, symbols: list[str]) -> list[dict]:
         """
-        NOWOŚĆ: Pobiera i parsuje dane Bulk do listy słowników.
-        Obsługuje pola Bid/Ask wymagane przez Fazę 5 (Order Flow).
+        Pobiera i parsuje dane Bulk do listy słowników.
         """
         csv_text = self.get_bulk_quotes(symbols)
         if not csv_text: 
@@ -166,18 +166,15 @@ class AlphaVantageClient:
             f = StringIO(csv_text)
             reader = csv.DictReader(f)
             for row in reader:
-                # Wyciągamy dane potrzebne do OFP
                 data = {
                     'symbol': row.get('symbol'),
                     'price': self._safe_float(row.get('close')),
                     'volume': self._safe_float(row.get('volume')),
-                    # Dane Premium (Bid/Ask) - jeśli dostępne w CSV
                     'bid': self._safe_float(row.get('bid')),
                     'ask': self._safe_float(row.get('ask')),
                     'bid_size': self._safe_float(row.get('bid_size')),
                     'ask_size': self._safe_float(row.get('ask_size'))
                 }
-                # Tylko poprawne wiersze
                 if data['symbol']:
                     results.append(data)
         except Exception as e:
