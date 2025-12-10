@@ -26,7 +26,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="5.0.1") # V5.0.1: Omni-Flux + Login Fix
+app = FastAPI(title="APEX Predator API", version="5.1.0") # V5.1.0: Phase 5 Removed
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +41,7 @@ api_av_client = AlphaVantageClient()
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
     # === CRITICAL FIX: Słowo 'running' jest wymagane przez Frontend (js/app.js) ===
-    return {"status": "APEX Predator API V5 is running (Omni-Flux Ready)"}
+    return {"status": "APEX Predator API V5.1 is running"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
 async def read_root_head():
@@ -65,9 +65,7 @@ async def startup_event():
             'h3_deep_dive_report': 'NONE',
             'h3_live_parameters': '{}',
             'macro_sentiment': 'UNKNOWN',
-            'optimization_request': 'NONE',
-            # Inicjalizacja stanu dla Fazy 5
-            'phase5_monitor_state': '{}'
+            'optimization_request': 'NONE'
         }
         for key, value in initial_values.items():
             if crud.get_system_control_value(db, key) is None:
@@ -131,44 +129,8 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/signals/phase3", response_model=List[schemas.TradingSignal])
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
-    # Ten endpoint zwraca wszystkie aktywne/oczekujące sygnały (H3 + Flux)
-    # To poprawne dla głównego widoku sygnałów
+    # Ten endpoint zwraca wszystkie aktywne/oczekujące sygnały
     return crud.get_active_and_pending_signals(db)
-
-# === NOWOŚĆ: ENDPOINT STANU MONITORINGU FAZY 5 ===
-@app.get("/api/v1/monitor/phase5", response_model=Dict[str, Any])
-def get_phase5_monitor_state_endpoint(db: Session = Depends(get_db)):
-    """
-    Zwraca aktualny stan monitora Omni-Flux (Faza 5).
-    Używane przez Frontend do wizualizacji 'Karuzeli'.
-    """
-    try:
-        raw_state = crud.get_system_control_value(db, 'phase5_monitor_state')
-        if raw_state:
-            return json.loads(raw_state)
-        # Domyślny stan oczekiwania
-        return {
-            "active_pool": [],
-            "macro_bias": "WAITING",
-            "reserve_count": 0,
-            "last_updated": 0
-        }
-    except json.JSONDecodeError:
-        return {
-            "active_pool": [],
-            "macro_bias": "ERROR",
-            "reserve_count": 0,
-            "last_updated": 0,
-            "error": "Corrupted Data"
-        }
-    except Exception as e:
-        logger.error(f"Error fetching Phase 5 state: {e}", exc_info=True)
-        return {
-            "active_pool": [],
-            "macro_bias": "ERROR",
-            "reserve_count": 0,
-            "last_updated": 0
-        }
 
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
@@ -491,9 +453,7 @@ def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db:
         "start_phase1": "START_PHASE_1_REQUESTED", 
         "start_phase3": "START_PHASE_3_REQUESTED",
         "start_phasex": "START_PHASE_X_REQUESTED",
-        "start_phase4": "START_PHASE_4_REQUESTED",
-        # === NOWE POLECENIE DLA FAZY 5 ===
-        "start_phase5": "START_PHASE_5_REQUESTED"
+        "start_phase4": "START_PHASE_4_REQUESTED"
     }
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
