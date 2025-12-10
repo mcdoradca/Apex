@@ -5,12 +5,7 @@ import math
 from math import sqrt 
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
-# ==================================================================
-# === POPRAWKA BŁĘDU (TZ-NAIVE vs TZ-AWARE) ===
-# Dodajemy import 'timezone', aby móc ujednolicić strefy czasowe.
-# ==================================================================
 from datetime import datetime, timedelta, timezone
-# ==================================================================
 
 # Importujemy klienta AV tylko dla funkcji "na żywo",
 # funkcje "_from_data" nie będą go używać.
@@ -19,7 +14,9 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# === KROK 17: "Czyste" Funkcje dla Hipotezy H1 (Backtest) ===
+# CZĘŚĆ 1: Funkcje Pomocnicze (Pojedyncze punkty / API Live)
+# Te funkcje są zachowane dla kompatybilności z istniejącym kodem
+# i ewentualnych szybkich sprawdzeń.
 # ==================================================================
 
 def calculate_time_dilation_from_data(daily_df_view: pd.DataFrame, spy_df_view: pd.DataFrame) -> Optional[float]:
@@ -73,10 +70,6 @@ def calculate_price_gravity_from_data(daily_df_view: pd.DataFrame, vwap_df_view:
         logger.error(f"Błąd w 'calculate_price_gravity_from_data': {e}", exc_info=True)
         return None
 
-# ==================================================================
-# === KROK 21b: "Czyste" Funkcje dla Hipotezy H2 (Backtest) ===
-# ==================================================================
-
 def calculate_institutional_sync_from_data(insider_df_view: pd.DataFrame, current_date: datetime) -> Optional[float]:
     """
     (Wymiar 2.1) Oblicza 'institutional_sync'.
@@ -129,10 +122,6 @@ def calculate_retail_herding_from_data(news_df_view: pd.DataFrame, current_date:
     except Exception as e:
         logger.error(f"Błąd w 'calculate_retail_herding_from_data': {e}", exc_info=True)
         return None
-
-# ==================================================================
-# === KROK 22a: "Czyste" Funkcje dla Hipotezy H3 ===
-# ==================================================================
 
 def calculate_breakout_energy_from_data(bbands_df_view: pd.DataFrame, daily_df_view: pd.DataFrame) -> Optional[float]:
     try:
@@ -257,26 +246,34 @@ def calculate_attention_density_from_data(daily_df_view: pd.DataFrame, news_df_v
         return None
 
 # ==================================================================
-# === NOWE FUNKCJE WEKTOROWE (V4) - DLA SKANERA I OPTIMIZERA ===
+# CZĘŚĆ 2: SILNIK WEKTOROWY H3 (NOWOŚĆ - Zgodnie z Roadmapą)
+# Oblicza pełne równanie pola na całym DataFrame.
 # ==================================================================
 
-def calculate_aqm_h3_vectorized(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
+def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
+    """Helper dla cappingu."""
+    return retail_herding_series.clip(-1.0, 1.0)
+
+def calculate_aqm_h3_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Kompletna, wektorowa implementacja modelu H3 (AQM V3).
+    Kompletna, wektorowa implementacja równania pola H3 (AQM V3).
     Oblicza kolumny: aqm_score_h3, J_norm, nabla_sq_norm, m_sq_norm.
     
-    Wymagane kolumny wejściowe w df:
-    - institutional_sync, retail_herding (z H2)
-    - information_entropy, market_temperature, price_gravity
+    Wymagane kolumny wejściowe w df (obliczone wcześniej):
+    - institutional_sync (z H2)
+    - retail_herding (z H2)
+    - information_entropy (liczba newsów)
+    - market_temperature (zmienność)
+    - price_gravity
     - volume (lub normalized_volume)
     
-    Zastępuje logikę 'zaszytą' wcześniej w phase3_sniper.py.
+    ZASADA: Czysta matematyka. Żadnej adaptacji do VIX.
     """
     try:
-        # Kopia, aby nie modyfikować oryginału w nieoczekiwany sposób
+        # Pracujemy na kopii, aby nie psuć oryginału w pętlach
         d = df.copy()
         
-        # 1. Normalizacja Institutional Sync (Z-Score)
+        # 1. Normalizacja Institutional Sync (Z-Score w oknie 100 dni)
         if 'institutional_sync' in d.columns:
             rolling_mean = d['institutional_sync'].rolling(100, min_periods=20).mean()
             rolling_std = d['institutional_sync'].rolling(100, min_periods=20).std().fillna(1)
@@ -284,59 +281,62 @@ def calculate_aqm_h3_vectorized(df: pd.DataFrame, params: dict = None) -> pd.Dat
         else:
             d['mu_normalized'] = 0.0
 
-        # 2. Capping Retail Herding
+        # 2. Capping Retail Herding (Ograniczenie wpływu tłumu do -1..1)
         if 'retail_herding' in d.columns:
             d['retail_herding_capped'] = d['retail_herding'].clip(-1.0, 1.0)
         else:
             d['retail_herding_capped'] = 0.0
 
-        # 3. Obliczenie Energii J
-        # J = S - (Q/T) + mu
+        # 3. Obliczenie Energii J (Siła Napędowa)
+        #    Wzór: J = Entropia - (Sentyment / Temperatura) + Insiderzy
         S = d.get('information_entropy', 0.0)
         Q = d['retail_herding_capped']
-        T = d.get('market_temperature', pd.Series(1.0, index=d.index)).replace(0, np.nan) # Unikamy dzielenia przez 0
+        #    Zabezpieczenie przed dzieleniem przez zero w Temperaturze
+        T = d.get('market_temperature', pd.Series(1.0, index=d.index)).replace(0, np.nan)
         mu = d['mu_normalized']
         
-        d['J'] = (S - (Q/T) + (mu * 1.0)).fillna(0)
+        #    Jeśli T jest NaN (brak zmienności), Q/T traktujemy jako 0
+        term_QT = (Q / T).fillna(0)
+        
+        d['J'] = S - term_QT + (mu * 1.0)
+        d['J'] = d['J'].fillna(0)
 
-        # 4. Normalizacja Składników (Z-Score, okno 100)
+        # 4. Normalizacja Składników Pola (Z-Score, okno 100 dni)
+        #    Dzięki temu sprowadzamy wszystko do wspólnego mianownika (odchyleń standardowych)
+        
         # J_norm
         j_mean = d['J'].rolling(100, min_periods=20).mean()
         j_std = d['J'].rolling(100, min_periods=20).std().fillna(1)
         d['J_norm'] = ((d['J'] - j_mean) / j_std).fillna(0)
         
-        # Nabla_sq (Grawitacja)
+        # Nabla_sq (Grawitacja) -> Normalizacja
         d['nabla_sq'] = d.get('price_gravity', 0.0)
         nab_mean = d['nabla_sq'].rolling(100, min_periods=20).mean()
         nab_std = d['nabla_sq'].rolling(100, min_periods=20).std().fillna(1)
         d['nabla_sq_norm'] = ((d['nabla_sq'] - nab_mean) / nab_std).fillna(0)
         
-        # Masa m^2 (jeśli nie obliczona wcześniej)
-        if 'm_sq' not in d.columns:
-            if 'normalized_volume' in d.columns:
-                d['m_sq'] = d['normalized_volume']
-            else:
-                # Prosta aproksymacja jeśli brak pełnych danych
-                d['m_sq'] = 0.0
+        # Masa m^2 (Wolumen) -> Normalizacja
+        # Używamy znormalizowanego wolumenu jeśli jest, lub surowego
+        if 'normalized_volume' in d.columns:
+            d['m_sq'] = d['normalized_volume']
+        elif 'volume' in d.columns:
+             # Prosta normalizacja wolumenu w locie, jeśli brak wstępnej
+             v_mean = d['volume'].rolling(200, min_periods=50).mean()
+             v_std = d['volume'].rolling(200, min_periods=50).std().fillna(1)
+             d['m_sq'] = ((d['volume'] - v_mean) / v_std).fillna(0)
+        else:
+            d['m_sq'] = 0.0
         
         m_mean = d['m_sq'].rolling(100, min_periods=20).mean()
         m_std = d['m_sq'].rolling(100, min_periods=20).std().fillna(1)
         d['m_sq_norm'] = ((d['m_sq'] - m_mean) / m_std).fillna(0)
         
-        # 5. Finalny Wynik (AQM Field Equation)
-        # Score = J - ∇² - m²
+        # 5. FINALNY WYNIK H3 (Równanie Pola)
+        #    AQM Score = Energia - Opór Grawitacyjny - Masa Tłumu
         d['aqm_score_h3'] = (d['J_norm'] * 1.0) - (d['nabla_sq_norm'] * 1.0) - (d['m_sq_norm'] * 1.0)
         
         return d
         
     except Exception as e:
-        logger.error(f"Błąd w wektorowym obliczaniu AQM H3: {e}")
+        logger.error(f"Błąd w wektorowym obliczaniu AQM H3: {e}", exc_info=True)
         return df
-
-def calculate_h3_components_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
-    """Wrapper dla kompatybilności wstecznej."""
-    return calculate_aqm_h3_vectorized(df, params)
-
-def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
-    """Helper dla cappingu."""
-    return retail_herding_series.clip(-1.0, 1.0)
