@@ -184,10 +184,7 @@ class VirtualTrade(Base):
     metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True)
     metric_elasticity = Column(NUMERIC(10, 4), nullable=True)
 
-    # Metryki F5 (Omni-Flux)
-    metric_flux_score = Column(NUMERIC(10, 4), nullable=True)
-    metric_flux_velocity = Column(NUMERIC(10, 4), nullable=True)
-    metric_flux_ofp = Column(NUMERIC(10, 4), nullable=True)
+    # Usunięto Metryki F5 (Omni-Flux)
 
     # Audyt AI (Re-check)
     expected_profit_factor = Column(NUMERIC(10, 4), nullable=True)
