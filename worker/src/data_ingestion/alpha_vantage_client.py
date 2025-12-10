@@ -19,8 +19,10 @@ if not API_KEY:
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    # === OPTYMALIZACJA: Limit 150 zapytań/minuta (Premium) ===
-    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 150, retries: int = 3, backoff_factor: float = 0.5):
+    # === OPTYMALIZACJA (TRAFFIC SHAPING) - WORKER ===
+    # Worker otrzymuje 120 zapytań/minutę (80% pasma Premium).
+    # Pozostałe 30 zapytań/minutę jest zarezerwowane dla Frontendu.
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 120, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             logger.error("API key is missing for AlphaVantageClient instance in WORKER.")
         self.api_key = api_key
@@ -32,7 +34,7 @@ class AlphaVantageClient:
         self.request_interval = 60.0 / requests_per_minute
         self.request_timestamps = deque()
         
-        # === OPTYMALIZACJA: Session Keep-Alive ===
+        # Session Keep-Alive
         self.session = requests.Session()
 
     def _rate_limiter(self):
@@ -40,15 +42,18 @@ class AlphaVantageClient:
         if not self.api_key: return
              
         now = time.monotonic()
+        # Usuwamy stare znaczniki czasu (starsze niż 60s)
         while self.request_timestamps and (now - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
             
+        # Jeśli przekroczyliśmy limit w oknie 60s -> czekamy
         if len(self.request_timestamps) >= self.requests_per_minute:
             time_to_wait = 60 - (now - self.request_timestamps[0]) + 0.1
             if time_to_wait > 0:
                 time.sleep(time_to_wait)
                 now = time.monotonic()
 
+        # Pacing (odstęp między zapytaniami)
         if self.request_timestamps:
             time_since_last = now - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
@@ -90,7 +95,7 @@ class AlphaVantageClient:
 
                 if is_rate_limit_json:
                     wait_time = 5 * (attempt + 1)
-                    logger.warning(f"API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
+                    logger.warning(f"Worker API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
                     time.sleep(wait_time)
                     continue
 
@@ -137,9 +142,6 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_bulk_quotes(self, symbols: list[str]):
-        """
-        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
-        """
         params = {
             "function": "REALTIME_BULK_QUOTES",
             "symbol": ",".join(symbols),
@@ -152,8 +154,7 @@ class AlphaVantageClient:
 
     def get_bulk_quotes_parsed(self, symbols: list[str]) -> list[dict]:
         """
-        NOWOŚĆ DLA WORKERA: Pobiera i parsuje dane Bulk do listy słowników.
-        Obsługuje pola Bid/Ask wymagane przez Fazę 5 (Radar/OFP).
+        Pobiera i parsuje dane Bulk do listy słowników (Dla Workera/Faza 5).
         """
         csv_text = self.get_bulk_quotes(symbols)
         if not csv_text: 
@@ -164,18 +165,15 @@ class AlphaVantageClient:
             f = StringIO(csv_text)
             reader = csv.DictReader(f)
             for row in reader:
-                # Wyciągamy dane potrzebne do OFP
                 data = {
                     'symbol': row.get('symbol'),
                     'price': self._safe_float(row.get('close')),
                     'volume': self._safe_float(row.get('volume')),
-                    # Dane Premium (Bid/Ask) - jeśli dostępne w CSV
                     'bid': self._safe_float(row.get('bid')),
                     'ask': self._safe_float(row.get('ask')),
                     'bid_size': self._safe_float(row.get('bid_size')),
                     'ask_size': self._safe_float(row.get('ask_size'))
                 }
-                # Tylko poprawne wiersze
                 if data['symbol']:
                     results.append(data)
         except Exception as e:
