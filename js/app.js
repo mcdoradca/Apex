@@ -17,9 +17,7 @@ import {
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
     showPhaseX, handleRunPhaseXScan,
-    showPhase4, handleRunPhase4Scan,
-    // === NOWOŚĆ: IMPORT HANDLERA FAZY 5 ===
-    handleRunPhase5Scan 
+    showPhase4, handleRunPhase4Scan
 } from './logic.js';
 
 // Tworzymy lokalny obiekt Logic dla kompatybilności z resztą kodu
@@ -39,9 +37,7 @@ const Logic = {
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
     showPhaseX, handleRunPhaseXScan,
-    showPhase4, handleRunPhase4Scan,
-    // Dodajemy F5 do obiektu Logic
-    handleRunPhase5Scan
+    showPhase4, handleRunPhase4Scan
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -168,17 +164,6 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.btnPhase4.addEventListener('click', (e) => {
                 e.preventDefault();
                 Logic.showPhase4();
-            });
-        }
-
-        // === OBSŁUGA PRZYCISKU FAZY 5 (OMNI-FLUX) - NOWOŚĆ ===
-        if (UI.btnPhase5) {
-            UI.btnPhase5.addEventListener('click', (e) => {
-                e.preventDefault();
-                // F5 nie ma własnego widoku tabelarycznego jak FX/H4, bo działa w pętli ciągłej
-                // i generuje sygnały bezpośrednio do listy głównej (Dashboard/H3 Signals).
-                // Dlatego od razu uruchamiamy skaner.
-                Logic.handleRunPhase5Scan();
             });
         }
         
