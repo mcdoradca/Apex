@@ -27,8 +27,8 @@ API_HEADERS = {'Content-Type': 'application/json'}
 
 def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str) -> dict:
     """
-    Wywołuje Gemini API, aby przeanalizować pojedynczą wiadomość (z Alpha Vantage)
-    i zwrócić krytyczną klasyfikację (CRITICAL_NEGATIVE, CRITICAL_POSITIVE, NEUTRAL).
+    Wywołuje Gemini API, aby przeanalizować pojedynczą wiadomość.
+    Wersja V3: Tryb "Reporter" dla Biotech - powiadamia o wszystkim, co istotne.
     """
     if not GEMINI_API_KEY:
         logger.error("Agent Newsowy: Brak klucza GEMINI_API_KEY. Analiza niemożliwa.")
@@ -37,22 +37,73 @@ def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str)
     # Krótka pauza, aby utrzymać się w limitach Gemini (ok. 60 zapytań/min)
     time.sleep(1.1 + random.uniform(0, 0.5)) 
     
-    prompt = f"""
-    Jesteś analitykiem ryzyka daytradingowego. Twoim zadaniem jest ochrona kapitału tradera.
-    Przeanalizuj poniższy nagłówek i streszczenie wiadomości dla spółki {ticker}.
-    Ignoruj standardowy szum rynkowy i analizy cenowe. Skup się wyłącznie na
-    informacjach, które mogą GWAŁTOWNIE i NATYCHMIASTOWO zmienić cenę akcji.
+    # 1. Wykrywanie kontekstu BioX (Biotech)
+    # Sprawdzamy słowa kluczowe charakterystyczne dla branży
+    biotech_keywords = [
+        "fda", "phase 1", "phase 2", "phase 3", "clinical", "trial", "study", "patient", 
+        "drug", "therapy", "treatment", "approval", "orphan", "designation", "patent", 
+        "biotech", "pharmaceu", "oncology", "cancer", "gene", "cell", "pipeline", "ind submission",
+        "topline", "data", "results", "endpoint", "meeting", "presentation"
+    ]
+    
+    content_lower = (headline + " " + summary).lower()
+    is_biotech_context = any(kw in content_lower for kw in biotech_keywords)
+    
+    # 2. Wybór Promptu
+    if is_biotech_context:
+        # --- PROMPT SPECJALISTYCZNY (BIOX - TRYB "NEWS FEED") ---
+        # Zmiana strategii: Użytkownik chce wiedzieć o WSZYSTKIM.
+        # Traktujemy CRITICAL_POSITIVE jako flagę "WYŚLIJ ALERT" dla każdej merytorycznej wiadomości.
+        prompt = f"""
+        Jesteś inteligentnym filtrem newsów dla aktywnego inwestora w sektorze BIOTECH.
+        Twój cel: Powiadomić tradera o KAŻDYM nowym fakcie korporacyjnym dotyczącym spółki {ticker}.
+        NIE OCENIAJ WAGI ani WPŁYWU CENOWEGO. Twoim zadaniem jest jedynie odsiać spam i artykuły generowane automatycznie.
 
-    Wiadomość:
-    Nagłówek: "{headline}"
-    Streszczenie: "{summary}"
-    Źródło: {url}
+        Wiadomość:
+        Nagłówek: "{headline}"
+        Streszczenie: "{summary}"
+        Źródło: {url}
 
-    Sklasyfikuj tę wiadomość jako JEDNĄ z trzech opcji:
-    1.  `CRITICAL_NEGATIVE`: Wiadomość, która może spowodować natychmiastową panikę lub spadek (np. obniżenie prognoz, złe wyniki finansowe, śledztwo, fatalne dane FDA, rezygnacja CEO, pozew zbiorowy).
-    2.  `CRITICAL_POSITIVE`: Wiadomość, która może spowodować natychmiastową euforię lub wzrost (np. zatwierdzenie FDA, przejęcie, partnerstwo strategiczne, wyniki znacznie lepsze od oczekiwań).
-    3.  `NEUTRAL`: Standardowy szum rynkowy (np. "Analitycy uważają, że...", "Cena akcji wzrosła o X%", "Spółka prezentuje się na konferencji", ogólne analizy sektorowe).
-    """
+        Zasady klasyfikacji:
+        1. `CRITICAL_POSITIVE`: Użyj tej etykiety dla KAŻDEJ konkretnej informacji korporacyjnej, niezależnie czy jest dobra czy zła.
+           Przykłady (co raportować):
+           - Wyniki badań (dobre LUB złe)
+           - Decyzje, wnioski, spotkania z FDA
+           - Patenty, publikacje naukowe
+           - Wyniki finansowe (Earnings), Guidance
+           - Wystąpienia na konferencjach, prezentacje
+           - Zmiany w zarządzie, insider trading
+           - Emisje akcji (Offering), zmiany w strukturze kapitału
+           - Partnerstwa, licencje, fuzje i przejęcia
+           (W systemie ta etykieta oznacza: "WAŻNY NEWS -> WYŚLIJ ALERT").
+           
+        2. `NEUTRAL`: Użyj tej etykiety TYLKO dla bezwartościowego szumu.
+           Przykłady (co ignorować):
+           - "Akcje {ticker} rosną/spadają o X%" (bez podania przyczyny)
+           - "Analiza techniczna", "Sygnał kupna wg wskaźnika RSI"
+           - "Raport o nastrojach w sektorze", "Najlepsze akcje na dziś"
+           - "Dlaczego akcje się ruszają?" (jeśli artykuł tylko spekuluje)
+
+        WAŻNE: NIE używaj etykiety `CRITICAL_NEGATIVE` w tym trybie. Jeśli wiadomość jest negatywna (np. porażka badania), oznacz ją jako `CRITICAL_POSITIVE`, aby system wysłał powiadomienie, a trader sam podejmie decyzję o reakcji.
+        """
+    else:
+        # --- PROMPT OGÓLNY (STANDARD) ---
+        # Dla reszty rynku zachowujemy standardową ochronę kapitału
+        prompt = f"""
+        Jesteś analitykiem ryzyka daytradingowego.
+        Przeanalizuj news dla spółki {ticker}. Ignoruj typowy szum rynkowy.
+        Szukaj TYLKO informacji, które mogą wywołać NATYCHMIASTOWY ruch ceny.
+
+        Wiadomość:
+        Nagłówek: "{headline}"
+        Streszczenie: "{summary}"
+        Źródło: {url}
+
+        Sklasyfikuj tę wiadomość:
+        1. `CRITICAL_POSITIVE`: Silny katalizator wzrostu (Przejęcie, Earnings Beat, Kontrakt).
+        2. `CRITICAL_NEGATIVE`: Silny katalizator spadku (Bankructwo, Śledztwo, Dilution).
+        3. `NEUTRAL`: Standardowy szum (Zmiana ceny, opinia analityka, ogólny komentarz).
+        """
 
     # Definicja schematu JSON dla odpowiedzi Gemini
     sentiment_schema = {
@@ -64,7 +115,7 @@ def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str)
             },
             "reason": {
                 "type": "STRING",
-                "description": "Krótkie (1 zdanie) wyjaśnienie, dlaczego ta wiadomość jest lub nie jest krytyczna."
+                "description": "Krótkie (1 zdanie) wyjaśnienie decyzji."
             }
         },
         "required": ["sentiment", "reason"]
@@ -93,11 +144,15 @@ def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str)
             sentiment = analysis_json.get('sentiment', 'NEUTRAL')
             reason = analysis_json.get('reason', 'Brak analizy')
             
-            logger.info(f"Agent Newsowy ({ticker}): Sentyment={sentiment}. Powód: {reason}")
+            # Logowanie specyficzne dla kontekstu
+            if is_biotech_context:
+                logger.info(f"Agent Newsowy [BIOX] ({ticker}): {sentiment} | {reason}")
+            else:
+                logger.info(f"Agent Newsowy [STD] ({ticker}): {sentiment} | {reason}")
+                
             return {"sentiment": sentiment, "reason": reason}
 
         except requests.exceptions.HTTPError as e:
-            # === POPRAWKA: Obsługa błędów 5xx (Server Error) ===
             status_code = e.response.status_code if e.response is not None else 0
             if status_code == 429 or status_code >= 500:
                 wait = (initial_backoff * (2 ** attempt)) + random.uniform(0, 1)
@@ -109,8 +164,6 @@ def _run_news_analysis_agent(ticker: str, headline: str, summary: str, url: str)
                 break
         except requests.exceptions.RequestException as e:
             logger.error(f"Agent Newsowy: Błąd sieciowy podczas wywołania Gemini dla {ticker}: {e}", exc_info=True)
-            # Błędy sieciowe też można by ponawiać, ale tutaj przerywamy dla bezpieczeństwa, chyba że dodamy logikę retry
-            # Dla prostoty zostawiamy break, chyba że jest to timeout
             break
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             logger.error(f"Agent Newsowy: Błąd przetwarzania odpowiedzi JSON z Gemini dla {ticker}: {e}", exc_info=True)
@@ -212,7 +265,6 @@ def _run_macro_analysis_agent(inflation: dict, fed_rate: dict, yield_10y: dict, 
             return {"sentiment": sentiment, "reason": reason}
 
         except requests.exceptions.HTTPError as e:
-            # === POPRAWKA: Obsługa błędów 5xx (Server Error) ===
             status_code = e.response.status_code if e.response is not None else 0
             if status_code == 429 or status_code >= 500:
                 wait = (initial_backoff * (2 ** attempt)) + random.uniform(0, 1)
