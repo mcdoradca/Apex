@@ -220,13 +220,16 @@ def get_raw_data_with_cache(
 
     # 3. Zapisz do Cache (Upsert)
     try:
-        json_data = raw_data # SQLAlchemy JSONB sam serializuje dict
+        # === FIX: Konwersja dict na JSON string przed zapisem ===
+        # psycopg2 przy surowym SQL nie mapuje automatycznie dict na JSONB
+        json_data = json.dumps(raw_data) if isinstance(raw_data, (dict, list)) else raw_data
+        
         upsert_stmt = text("""
             INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
             VALUES (:ticker, :data_type, :raw_data, NOW())
             ON CONFLICT (ticker, data_type) DO UPDATE SET raw_data_json = :raw_data, last_fetched = NOW();
         """)
-        session.execute(upsert_stmt, {'ticker': ticker, 'data_type': data_type, 'raw_data': json.dumps(raw_data) if not isinstance(raw_data, str) and not isinstance(raw_data, dict) else raw_data})
+        session.execute(upsert_stmt, {'ticker': ticker, 'data_type': data_type, 'raw_data': json_data})
         session.commit()
     except Exception as e:
         logger.error(f"Cache Write Error: {e}")
