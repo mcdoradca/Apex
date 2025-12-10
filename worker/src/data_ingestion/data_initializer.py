@@ -133,7 +133,7 @@ def selective_data_wipe(session: Session):
         session.execute(text("TRUNCATE TABLE optimization_jobs CASCADE;"))
         
         # === 1.1 OPTIMIZER - TABELE OPTUNY (Pamięć Algorytmu) ===
-        # To jest kluczowe! Optuna trzyma stan w osobnych tabelach.
+        # To jest kluczowy moment! Optuna trzyma stan w osobnych tabelach.
         # Usuwamy je, aby zmusić algorytm do startu od zera.
         optuna_tables = [
             "trial_values", "trial_params", "trial_user_attributes", 
@@ -197,9 +197,9 @@ def force_reset_simulation_data(session: Session):
 def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
     
-    # === URUCHAMIAMY CZYSZCZENIE "ZATRUTEJ" PAMIĘCI OPTUNY ===
-    # Uruchamiamy jednorazowo w tej wersji pliku.
-    selective_data_wipe(session) 
+    # === SELEKTYWNE CZYSZCZENIE ZOSTAŁO WYKONANE ===
+    # Usuwamy wywołanie, aby nie czyścić danych ponownie przy kolejnym restarcie.
+    # selective_data_wipe(session) 
     
     try:
         engine = session.get_bind()
