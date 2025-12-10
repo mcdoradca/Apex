@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def _parse_setup_type_from_notes(notes: str) -> str:
     if not notes: return "UNKNOWN"
     notes_lower = notes.lower()
-    if "flux" in notes_lower: return "OMNI_FLUX" # Zmiana nazwy dla porządku
+    # Usunięto wykrywanie FLUX
     if "biox" in notes_lower: return "BIOX_PUMP"
     if "aqm" in notes_lower: return "AQM_V4"
     if "h3" in notes_lower: return "H3_SNIPER"
@@ -23,7 +23,7 @@ def _parse_setup_type_from_notes(notes: str) -> str:
 def _parse_metrics_from_notes(notes: str) -> dict:
     """
     Ekstrakcja parametrów z notatki sygnału.
-    Obsługuje formaty H3 (AQM) oraz F5 (Flux, Velocity, OFP).
+    Wersja oczyszczona: Tylko H3 (AQM).
     """
     metrics = {}
     if not notes: return metrics
@@ -34,29 +34,7 @@ def _parse_metrics_from_notes(notes: str) -> dict:
         try: metrics['metric_aqm_score_h3'] = float(aqm_match.group(1))
         except: pass
         
-    # 2. FLUX (Faza 5)
-    # Wzorce: SCORE: 75/100, OFP: 0.45, VELOCITY: 2.10
-    
-    score_match = re.search(r'SCORE:\s*(\d+)', notes)
-    if score_match:
-        try: metrics['metric_flux_score'] = float(score_match.group(1))
-        except: pass
-        
-    ofp_match = re.search(r'OFP:\s*([+\-]?\d+\.?\d*)', notes)
-    if ofp_match:
-        try: metrics['metric_flux_ofp'] = float(ofp_match.group(1))
-        except: pass
-        
-    vel_match = re.search(r'VELOCITY:\s*([0-9\.]+)', notes)
-    if vel_match:
-        try: metrics['metric_flux_velocity'] = float(vel_match.group(1))
-        except: pass
-
-    # Elasticity jest wspólne dla H4 i F5, ale w bazie mamy metric_elasticity
-    elast_match = re.search(r'ELASTICITY:\s*([+\-]?\d+\.?\d*)', notes)
-    if elast_match:
-        try: metrics['metric_elasticity'] = float(elast_match.group(1))
-        except: pass
+    # Usunięto parsowanie metryk FLUX (Score, OFP, Velocity, Elasticity)
 
     return metrics
 
@@ -91,14 +69,10 @@ def open_virtual_trade(session: Session, signal: models.TradingSignal):
             expected_profit_factor=signal.expected_profit_factor,
             expected_win_rate=signal.expected_win_rate,
             
-            # Mapowanie metryk
+            # Mapowanie metryk H3
             metric_aqm_score_h3=parsed_metrics.get('metric_aqm_score_h3'),
             
-            # Nowe metryki Flux
-            metric_flux_score=parsed_metrics.get('metric_flux_score'),
-            metric_flux_velocity=parsed_metrics.get('metric_flux_velocity'),
-            metric_flux_ofp=parsed_metrics.get('metric_flux_ofp'),
-            metric_elasticity=parsed_metrics.get('metric_elasticity')
+            # Usunięto mapowanie metryk Flux
         )
         
         session.add(new_trade)
