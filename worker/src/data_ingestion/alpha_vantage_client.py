@@ -142,15 +142,63 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_bulk_quotes(self, symbols: list[str]):
-        params = {
-            "function": "REALTIME_BULK_QUOTES",
-            "symbol": ",".join(symbols),
-            "datatype": "csv",
-        }
-        text_response = self._make_request(params)
-        if isinstance(text_response, str) and "symbol" in text_response:
-             return text_response
-        return None
+        """
+        Pobiera surowy tekst CSV dla endpointu REALTIME_BULK_QUOTES.
+        OBSŁUGA BATCHINGU: Dzieli zapytanie na paczki po 100 symboli.
+        """
+        # 1. Oczyszczenie i deduplikacja symboli
+        clean_symbols = list(set([s.strip().upper() for s in symbols if s.strip()]))
+        if not clean_symbols:
+            return None
+
+        # 2. Podział na batche (Max 100 symboli na request wg dokumentacji AV)
+        batch_size = 100
+        batches = [clean_symbols[i:i + batch_size] for i in range(0, len(clean_symbols), batch_size)]
+        
+        combined_csv_output = ""
+        header_saved = False
+        
+        # 3. Wykonanie zapytań dla każdej paczki
+        for batch in batches:
+            params = {
+                "function": "REALTIME_BULK_QUOTES",
+                "symbol": ",".join(batch),
+                "datatype": "csv",
+            }
+            
+            try:
+                # _make_request zarządza API Key i Rate Limitami (Worker ma własne limity 120/min)
+                text_response = self._make_request(params)
+                
+                if isinstance(text_response, str) and "symbol" in text_response:
+                    lines = text_response.strip().split('\n')
+                    if not lines: continue
+                    
+                    # Logika łączenia CSV
+                    if not header_saved:
+                        # Pierwsza paczka: bierzemy wszystko (nagłówek + dane)
+                        combined_csv_output += text_response.strip()
+                        header_saved = True
+                    else:
+                        # Kolejne paczki: pomijamy nagłówek (pierwszą linię), doklejamy tylko dane
+                        if len(lines) > 1:
+                            # Dodaj nową linię separatora, jeśli buffer nie jest pusty
+                            if combined_csv_output:
+                                combined_csv_output += "\n"
+                            combined_csv_output += "\n".join(lines[1:])
+                
+                # Krótki oddech, aby nie zalać API przy bardzo dużej liczbie batchy
+                if len(batches) > 1:
+                    time.sleep(0.1)
+                    
+            except Exception as e:
+                logger.error(f"Worker: Błąd podczas pobierania batcha Bulk Quotes: {e}")
+                continue
+
+        if not combined_csv_output or "symbol" not in combined_csv_output:
+            return None
+            
+        return combined_csv_output
 
     def get_bulk_quotes_parsed(self, symbols: list[str]) -> list[dict]:
         """
@@ -182,6 +230,7 @@ class AlphaVantageClient:
         return results
 
     def get_global_quote(self, symbol: str):
+        # Używamy get_bulk_quotes z listą jednoelementową, aby skorzystać z tej samej logiki
         bulk_csv = self.get_bulk_quotes([symbol])
         if not bulk_csv: return None
         quote_data = self._parse_bulk_quotes_csv(bulk_csv, symbol)
