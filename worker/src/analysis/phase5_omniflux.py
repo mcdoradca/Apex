@@ -21,7 +21,7 @@ from .flux_physics import calculate_flux_vectors, calculate_ofp
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA OMNI-FLUX (V5.7 - PRE-MARKET FIX) ===
+# === KONFIGURACJA OMNI-FLUX (V5.8 - API SAFE GUARD) ===
 CAROUSEL_SIZE = 8          
 RADAR_DELAY = 4.0          
 SNIPER_COOLDOWN = 120      
@@ -38,13 +38,12 @@ ROTATION_TIMEOUT_WARM = 300    # 5 minut dla średnich (30-64 pkt)
 
 class OmniFluxAnalyzer:
     """
-    APEX OMNI-FLUX ENGINE (V5.7 - Pre-Market Fix & Crash Guard)
+    APEX OMNI-FLUX ENGINE (V5.8 - API Safe Guard)
     Architektura: Radar (Bulk) + Prioritized Sniper Queue + Safe State Loading
     
-    ZMIANY V5.7:
-    1. Agresywna sanityzacja typów (eliminacja błędu NoneType).
-    2. Priorytet aktualizacji dla spółek z ceną 0.00 (wymuszenie pobrania ceny z Intraday).
-    3. Nadpisywanie ceny 'Radar' dokładniejszą ceną 'Sniper' (Intraday Close).
+    ZMIANY V5.8:
+    1. Ochrona przed usunięciem tickera w przypadku błędu API (Bulk Quotes empty).
+    2. Jeśli Bulk zwróci pustą listę (np. rate limit), cykl jest pomijany (freeze state).
     """
 
     def __init__(self, session: Session, api_client: AlphaVantageClient):
@@ -170,7 +169,16 @@ class OmniFluxAnalyzer:
         tickers = [item['ticker'] for item in self.active_pool]
         
         # Pobieramy Bulk Quotes (mogą być 0 w Pre-Market)
-        radar_hits = self.client.get_bulk_quotes_parsed(tickers) 
+        radar_hits = self.client.get_bulk_quotes_parsed(tickers)
+        
+        # === API SAFE GUARD (V5.8) ===
+        # Jeśli API zwróci pustą listę (np. błąd 429 Rate Limit), przerywamy cykl.
+        # Zapobiega to oznaczaniu tickerów jako 'fails' z powodu błędów sieciowych.
+        if not radar_hits and len(tickers) > 0:
+            logger.warning("Faza 5: Bulk Quotes empty (Rate Limit?). Pomijanie cyklu.")
+            time.sleep(RADAR_DELAY)
+            return
+
         radar_map = {d['symbol']: d for d in radar_hits}
         
         tickers_to_remove = []
@@ -234,6 +242,8 @@ class OmniFluxAnalyzer:
                     if needs_update:
                         sniper_queue.append({'item': item, 'priority': priority_score})
                 else:
+                    # Jeśli ticker jest w puli, ale nie ma go w radar_map (a inne są), to znaczy, że ticker jest błędny.
+                    # Ale jeśli radar_map jest pusta (obsłużone wyżej), ten blok się nie wykona.
                     fails = item.get('fails') or 0
                     item['fails'] = fails + 1
                     if item['fails'] >= 3: tickers_to_remove.append(ticker)
