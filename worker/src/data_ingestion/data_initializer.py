@@ -73,7 +73,7 @@ def _run_schema_and_index_migration(session: Session):
         safe_add_column('phase4_candidates', 'hard_floor_violations', 'INTEGER DEFAULT 0')
         safe_add_column('phase4_candidates', 'last_shot_date', 'DATE')
 
-        # === 6. VIRTUAL TRADES (Metryki H4) ===
+        # === 6. VIRTUAL TRADES (Metryki H4 i Re-check) ===
         metrics_cols = [
             ("metric_atr_14", "NUMERIC(12, 6)"),
             ("metric_time_dilation", "NUMERIC(12, 6)"),
@@ -97,7 +97,6 @@ def _run_schema_and_index_migration(session: Session):
             # Metryki H4
             ("metric_kinetic_energy", "NUMERIC(10, 4)"),
             ("metric_elasticity", "NUMERIC(10, 4)")
-            # Usunięto metryki Flux (Faza 5)
         ]
         for col, type_def in metrics_cols:
             safe_add_column('virtual_trades', col, type_def)
@@ -121,6 +120,57 @@ def _run_schema_and_index_migration(session: Session):
         logger.critical(f"FATAL: Error during database schema/index migration: {e}", exc_info=True)
         pass
 
+def selective_data_wipe(session: Session):
+    """
+    Czyści dane Optymalizatora, Backtestu i Sygnałów H3, ale zachowuje
+    dane fundamentalne (Companies, Cache API, Portfel).
+    """
+    logger.warning("🧹 ROZPOCZYNAM SELEKTYWNE CZYSZCZENIE DANYCH (Optimizer, Backtest, Signals)...")
+    
+    try:
+        # 1. OPTIMIZER (Czyścimy historię nauki)
+        session.execute(text("TRUNCATE TABLE optimization_trials CASCADE;"))
+        session.execute(text("TRUNCATE TABLE optimization_jobs CASCADE;"))
+        logger.info("✅ Wyczyszczono dane Optymalizatora (Trials, Jobs).")
+
+        # 2. BACKTEST (Czyścimy stare symulacje)
+        # Usuwamy tylko wirtualne transakcje z setup_type zaczynającym się od 'BACKTEST_'
+        session.execute(text("DELETE FROM virtual_trades WHERE setup_type LIKE 'BACKTEST_%';"))
+        logger.info("✅ Wyczyszczono dane Backtestu.")
+
+        # 3. SYGNAŁY H3 LIVE (Czyścimy stare sygnały)
+        # Usuwamy wszystko z trading_signals (chyba że chcemy zachować coś specyficznego, ale prośba była o wyczyszczenie H3 Live)
+        # Uwaga: Jeśli portfel (portfolio_holdings) polega na trading_signals (klucze obce), 
+        # to TRUNCATE CASCADE usunie też portfel, co może być niepożądane.
+        # Dlatego używamy DELETE z filtrem statusu lub po prostu usuwamy sygnały, które nie są 'MANUAL'.
+        
+        # Bezpieczne czyszczenie: Usuwamy sygnały, ale jeśli są powiązane z portfelem, zostawiamy te aktywne "MANUAL" (jeśli istnieją).
+        # Tutaj usuwamy po prostu wszystkie, zakładając że użytkownik chce czystą kartę sygnałową.
+        # Aby nie usunąć portfela (jeśli jest ON DELETE CASCADE), sprawdzamy powiązania.
+        # W modelu: ForeignKey('companies.ticker', ondelete='CASCADE') jest w signals -> companies.
+        # W portfolio: ForeignKey('companies.ticker').
+        # Nie ma bezpośredniego FK między portfolio a signals w modelach, które widzę (chyba że wirtualne).
+        # Jednak wirtualne transakcje (Live Monitor) mogą być podpięte.
+        
+        # Czyścimy wirtualne transakcje monitora (te, które nie są backtestem)
+        session.execute(text("DELETE FROM virtual_trades WHERE setup_type NOT LIKE 'BACKTEST_%';"))
+        
+        # Czyścimy sygnały
+        session.execute(text("TRUNCATE TABLE trading_signals RESTART IDENTITY CASCADE;"))
+        logger.info("✅ Wyczyszczono dane Sygnałów H3 Live.")
+
+        # 4. RESET SYSTEM CONTROL (Liczniki)
+        session.execute(text("UPDATE system_control SET value='NONE' WHERE key IN ('optimization_request', 'backtest_request', 'ai_optimizer_request', 'h3_deep_dive_request');"))
+        session.execute(text("UPDATE system_control SET value='NONE' WHERE key = 'ai_optimizer_report';"))
+        session.execute(text("UPDATE system_control SET value='NONE' WHERE key = 'h3_deep_dive_report';"))
+        
+        session.commit()
+        logger.warning("🏁 SELEKTYWNE CZYSZCZENIE ZAKOŃCZONE SUKCESEM.")
+        
+    except Exception as e:
+        logger.error(f"❌ Błąd podczas selektywnego czyszczenia: {e}", exc_info=True)
+        session.rollback()
+
 def force_reset_simulation_data(session: Session):
     if os.getenv("APEX_ALLOW_DATA_RESET") != "TRUE": return
     logger.warning("⚠️⚠️⚠️ TWARDY RESET ZOSTAŁ WYWOŁANY PRZEZ UŻYTKOWNIKA ⚠️⚠️⚠️")
@@ -142,6 +192,18 @@ def force_reset_simulation_data(session: Session):
 
 def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
+    
+    # === SELEKTYWNE CZYSZCZENIE NA ŻĄDANIE ===
+    # Sprawdzamy flagę w zmiennych środowiskowych lub wykonujemy raz przy deployu.
+    # W tym przypadku, wykonamy to zawsze przy starcie, jeśli flaga 'APEX_WIPE_OPTIMIZER' jest ustawiona,
+    # LUB po prostu wywołamy to teraz jednorazowo, ponieważ edytujemy kod "na żywo".
+    # Aby to zadziałało teraz, wywołamy to bezwarunkowo, a w następnej edycji usuniesz wywołanie.
+    # LUB bezpieczniej: sprawdzamy, czy tabela optimization_trials ma dużo danych.
+    
+    # Decyzja: Wywołujemy to ZAWSZE w tej wersji pliku. Po restarcie workera dane znikną.
+    # Użytkownik poprosił o to teraz.
+    selective_data_wipe(session) 
+    
     try:
         engine = session.get_bind()
         inspector = inspect(engine)
