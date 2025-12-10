@@ -21,9 +21,11 @@ from .utils import (
     get_raw_data_with_cache,
     standardize_df_columns
 )
+# === IMPORTY SILNIKÓW FIZYCZNYCH (H3/AQM) ===
 from . import aqm_v3_metrics 
 from . import aqm_v3_h2_loader
 from . import aqm_v4_logic
+# ============================================
 from .apex_audit import SensitivityAnalyzer
 from ..database import get_db_session 
 
@@ -32,11 +34,9 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class QuantumOptimizer:
     """
-    SERCE SYSTEMU APEX V19.2 - ELITE FILTERING
-    Zmiany: 
-    - Wymuszony SL >= 3.0 ATR
-    - Max Hold <= 7 dni
-    - Percentyle/Score >= 0.90 (Redukcja szumu)
+    SERCE SYSTEMU APEX V20 (Unified Physics Engine)
+    Optymalizator parametrów strategii.
+    ZASADA: Używa DOKŁADNIE tych samych funkcji wektorowych co Sniper i Backtest.
     """
 
     def __init__(self, session: Session, job_id: str, target_year: int):
@@ -65,7 +65,7 @@ class QuantumOptimizer:
         logger.info(f"QuantumOptimizer initialized: Job {job_id}, Mode {self.strategy_mode}")
 
     def run(self, n_trials: int = 50):
-        start_msg = f"🚀 OPTIMIZER V19.2: Start Zadania {self.job_id} (Strategia: {self.strategy_mode})..."
+        start_msg = f"🚀 OPTIMIZER V20: Start Zadania {self.job_id} (Strategia: {self.strategy_mode})..."
         logger.info(start_msg)
         append_scan_log(self.session, start_msg)
         
@@ -80,6 +80,7 @@ class QuantumOptimizer:
             self.macro_data = self._load_macro_context()
             
             # 2. Cache Danych (SEKWENCYJNIE Z PEŁNĄ DIAGNOSTYKĄ)
+            # Tutaj następuje wstępne obliczenie fizyki (Vector Engine)
             self._preload_data_to_cache_sequential()
             
             if not self.data_cache:
@@ -162,21 +163,20 @@ class QuantumOptimizer:
                 macro['qqq_df'].index = pd.to_datetime(macro['qqq_df'].index)
                 macro['qqq_df'].sort_index(inplace=True)
             
-            if self.strategy_mode == 'AQM':
-                # Używamy helpera z backtest_engine do parsowania serii
-                from .backtest_engine import _parse_macro_to_series
-                
-                # Rentowność
-                yield_raw = get_raw_data_with_cache(local_session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
-                macro['yield_series'] = _parse_macro_to_series(yield_raw)
-                
-                # Inflacja
-                inf_raw = get_raw_data_with_cache(local_session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
-                macro['inflation_series'] = _parse_macro_to_series(inf_raw)
-                
-                # Stopy
-                fed_raw = get_raw_data_with_cache(local_session, client, 'FEDERAL_FUNDS_RATE', 'FEDERAL_FUNDS_RATE', 'get_fed_funds_rate', interval='monthly')
-                macro['fed_rate_series'] = _parse_macro_to_series(fed_raw)
+            # Ładujemy dane makro dla obu strategii (H3 używa QQQ, AQM używa też Inflacji/Yields)
+            from .backtest_engine import _parse_macro_to_series
+            
+            # Rentowność
+            yield_raw = get_raw_data_with_cache(local_session, client, 'TREASURY_YIELD', 'TREASURY_YIELD', 'get_treasury_yield', interval='monthly')
+            macro['yield_series'] = _parse_macro_to_series(yield_raw)
+            
+            # Inflacja
+            inf_raw = get_raw_data_with_cache(local_session, client, 'INFLATION', 'INFLATION', 'get_inflation_rate')
+            macro['inflation_series'] = _parse_macro_to_series(inf_raw)
+            
+            # Stopy
+            fed_raw = get_raw_data_with_cache(local_session, client, 'FEDERAL_FUNDS_RATE', 'FEDERAL_FUNDS_RATE', 'get_fed_funds_rate', interval='monthly')
+            macro['fed_rate_series'] = _parse_macro_to_series(fed_raw)
 
         except Exception as e:
             append_scan_log(self.session, f"⚠️ Warning Makro: {e}")
@@ -190,14 +190,14 @@ class QuantumOptimizer:
         tickers = self._get_all_tickers()
         
         # Filtrujemy QQQ z listy kandydatów (Benchmark nie jest do handlu)
-        tickers = [t for t in tickers if t not in ['QQQ', 'SPY']]
+        tickers = [t for t in tickers if t not in ['QQQ', 'SPY', 'IWM']]
         
         if not tickers:
             append_scan_log(self.session, "⚠️ Brak tickerów w bazie (Faza 1 pusta?).")
             return
 
         total_tickers = len(tickers)
-        msg = f"🔄 Ładowanie danych dla {total_tickers} spółek..."
+        msg = f"🔄 Ładowanie danych i wstępne obliczenia dla {total_tickers} spółek..."
         logger.info(msg)
         append_scan_log(self.session, msg)
         
@@ -263,6 +263,7 @@ class QuantumOptimizer:
                     obv_df.index = pd.to_datetime(obv_df.index)
                     obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
         
+        # Tutaj następuje kluczowe obliczenie wektorowe (Fizyka)
         processed_df = self._preprocess_ticker_unified(daily_data, h2_data, weekly_df, obv_df)
         
         if not processed_df.empty:
@@ -271,10 +272,14 @@ class QuantumOptimizer:
         return False
 
     def _preprocess_ticker_unified(self, daily_data, h2_data, weekly_df, obv_df) -> pd.DataFrame:
+        """
+        Przygotowuje DataFrame z obliczonymi metrykami.
+        Używa DOKŁADNIE tych samych silników wektorowych co Sniper/Backtest.
+        """
         try:
             daily_df = standardize_df_columns(pd.DataFrame.from_dict(daily_data.get('Time Series (Daily)', {}), orient='index'))
             
-            if len(daily_df) < 50: return pd.DataFrame()
+            if len(daily_df) < 200: return pd.DataFrame()
             
             if not isinstance(daily_df.index, pd.DatetimeIndex):
                 daily_df.index = pd.to_datetime(daily_df.index)
@@ -283,25 +288,26 @@ class QuantumOptimizer:
             daily_df.sort_index(inplace=True)
             daily_df['atr_14'] = calculate_atr(daily_df).ffill().fillna(0)
 
+            # === ŚCIEŻKA H3 (ELITE SNIPER) ===
             if self.strategy_mode == 'H3':
-                # === H3 LOGIC RESTORED & HARDENED (SELF-CONTAINED) ===
-                # Niezależna implementacja, odporna na zmiany w aqm_v4_logic.py
+                # 1. Przygotowanie danych wejściowych dla silnika H3
+                # (Tak samo jak w phase3_sniper.py)
                 
-                # 1. Price Gravity
+                # Price Gravity
                 daily_df['price_gravity'] = (daily_df['high'] + daily_df['low'] + daily_df['close']) / 3 / daily_df['close'] - 1
                 
-                # 2. H2 Data Integration
+                # H2 Data Integration (Insider & News)
                 insider_df = h2_data.get('insider_df')
                 news_df = h2_data.get('news_df')
                 
                 daily_df['institutional_sync'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name) or 0.0, axis=1)
                 daily_df['retail_herding'] = daily_df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name) or 0.0, axis=1)
                 
-                # 3. Market Temp
+                # Market Temp
                 daily_df['daily_returns'] = daily_df['close'].pct_change().fillna(0)
                 daily_df['market_temperature'] = daily_df['daily_returns'].rolling(window=30).std().fillna(0) 
                 
-                # 4. Entropy
+                # Entropy
                 if not news_df.empty:
                     nc = news_df.groupby(news_df.index.date).size() 
                     nc.index = pd.to_datetime(nc.index)
@@ -309,58 +315,26 @@ class QuantumOptimizer:
                     daily_df['information_entropy'] = nc.rolling(window=10).sum().fillna(0)
                 else: daily_df['information_entropy'] = 0.0
                 
-                # 5. Volume M^2
-                daily_df['avg_volume_10d'] = daily_df['volume'].rolling(window=10).mean().fillna(0)
-                # Używamy min_periods, aby nie tracić danych na starcie
-                daily_df['vol_mean_200d'] = daily_df['avg_volume_10d'].rolling(window=200, min_periods=20).mean().fillna(0)
-                daily_df['vol_std_200d'] = daily_df['avg_volume_10d'].rolling(window=200, min_periods=20).std().fillna(1)
+                # Vol M^2 (Wstępna)
+                # (Silnik H3 znormalizuje to samo, ale potrzebujemy wolumenu)
                 
-                daily_df['normalized_volume'] = ((daily_df['avg_volume_10d'] - daily_df['vol_mean_200d']) / daily_df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
-                daily_df['m_sq'] = daily_df['normalized_volume'] 
-                daily_df['nabla_sq'] = daily_df['price_gravity']
+                # === 2. WYWOŁANIE GŁÓWNEGO SILNIKA H3 ===
+                # Zamiast pisać logikę od nowa, wołamy moduł centralny!
+                df_calc = aqm_v3_metrics.calculate_aqm_h3_vectorized(daily_df)
                 
-                # 6. AQM V3 FORMULA (Explicitly implemented here)
-                # Mu Normalized
-                daily_df['mu_normalized'] = (daily_df['institutional_sync'] - daily_df['institutional_sync'].rolling(100, min_periods=20).mean()) / daily_df['institutional_sync'].rolling(100, min_periods=20).std().fillna(1)
-                daily_df['mu_normalized'] = daily_df['mu_normalized'].fillna(0)
+                # 3. Obliczenie Ranka (Percentyl) na bieżąco (Window)
+                # Robimy to tutaj, aby _objective miało gotową kolumnę do filtrowania
+                df_calc['aqm_rank'] = df_calc['aqm_score_h3'].rolling(window=100, min_periods=20).rank(pct=True).fillna(0)
                 
-                # Retail Cap
-                daily_df['retail_herding_capped'] = daily_df['retail_herding'].clip(-1.0, 1.0)
-                
-                # J Calculation
-                S = daily_df['information_entropy']
-                Q = daily_df['retail_herding_capped']
-                T = daily_df['market_temperature'].replace(0, np.nan)
-                mu = daily_df['mu_normalized']
-                
-                daily_df['J'] = (S - (Q/T) + mu).fillna(0)
-                
-                # Component Normalization
-                j_mean = daily_df['J'].rolling(100, min_periods=20).mean()
-                j_std = daily_df['J'].rolling(100, min_periods=20).std().fillna(1)
-                daily_df['J_norm'] = ((daily_df['J'] - j_mean) / j_std).fillna(0)
-                
-                nab_mean = daily_df['nabla_sq'].rolling(100, min_periods=20).mean()
-                nab_std = daily_df['nabla_sq'].rolling(100, min_periods=20).std().fillna(1)
-                daily_df['nabla_sq_norm'] = ((daily_df['nabla_sq'] - nab_mean) / nab_std).fillna(0)
-                
-                m_mean = daily_df['m_sq'].rolling(100, min_periods=20).mean()
-                m_std = daily_df['m_sq'].rolling(100, min_periods=20).std().fillna(1)
-                daily_df['m_sq_norm'] = ((daily_df['m_sq'] - m_mean) / m_std).fillna(0)
-                
-                # FINAL AQM H3 SCORE
-                daily_df['aqm_score_h3'] = (daily_df['J_norm'] * 1.0) - (daily_df['nabla_sq_norm'] * 1.0) - (daily_df['m_sq_norm'] * 1.0)
-                
-                # Rank
-                daily_df['aqm_rank'] = daily_df['aqm_score_h3'].rolling(window=100, min_periods=20).rank(pct=True).fillna(0)
-                
-                result = daily_df[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].fillna(0)
+                # Zwracamy tylko potrzebne kolumny, aby oszczędzać RAM
+                result = df_calc[['open', 'high', 'low', 'close', 'atr_14', 'aqm_score_h3', 'aqm_rank', 'm_sq_norm']].fillna(0)
                 
                 if result.empty: return pd.DataFrame()
                 return result
 
+            # === ŚCIEŻKA AQM (ADAPTIVE QUANTUM V4) ===
             elif self.strategy_mode == 'AQM':
-                # === AQM V2.0 Logic ===
+                # Przygotowanie dodatkowych DF
                 if not weekly_df.empty and isinstance(weekly_df.index, pd.DatetimeIndex):
                     weekly_df.index = weekly_df.index.tz_localize(None)
                 if not obv_df.empty and isinstance(obv_df.index, pd.DatetimeIndex):
@@ -372,6 +346,7 @@ class QuantumOptimizer:
                         'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
                     }).dropna()
 
+                # Wywołanie silnika AQM V4
                 aqm_df = aqm_v4_logic.calculate_aqm_full_vector(
                     daily_df=daily_df,
                     weekly_df=weekly_df,
@@ -390,43 +365,46 @@ class QuantumOptimizer:
 
                 req_cols = ['open', 'high', 'low', 'close', 'atr_14', 'aqm_score', 'qps', 'ras', 'vms', 'tcs']
                 
-                if not all(col in aqm_df.columns for col in req_cols):
-                    return pd.DataFrame()
-                    
-                return aqm_df[req_cols].fillna(0)
+                # Upewniamy się, że kolumny istnieją
+                valid_cols = [c for c in req_cols if c in aqm_df.columns]
+                
+                return aqm_df[valid_cols].fillna(0)
             
             return pd.DataFrame()
         except Exception as e:
-            # logger.error(f"Preprocessing Error: {e}")
+            # logger.error(f"Preprocessing Error for {self.strategy_mode}: {e}")
             return pd.DataFrame()
 
     def _objective(self, trial):
+        """
+        Funkcja celu Optuny.
+        Definiuje przestrzeń poszukiwań dla parametrów SZTYWNYCH.
+        """
         params = {}
         
         if self.strategy_mode == 'H3':
             params = {
-                # === ELITE FILTERING: Percentyl min 0.90 ===
-                'h3_percentile': trial.suggest_float('h3_percentile', 0.90, 0.99), 
-                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -3.0, 3.0), 
-                'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.5),
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 2.0, 10.0), 
+                # === ELITE FILTERING (H3) ===
+                'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
+                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -2.0, 2.0), 
+                'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.0),
                 
-                # === MODYFIKACJA: SL >= 3.0, Max Hold <= 7 ===
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 7.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 7), 
+                # Zarządzanie pozycją
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 10.0), 
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 5.0),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 10), 
             }
             
         elif self.strategy_mode == 'AQM':
-            # === OPTYMALIZACJA AQM V2 ===
             params = {
-                # === ELITE FILTERING: Score min 0.90 ===
-                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.90, 0.99),
-                'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.40, 0.80),
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 8.0),
+                # === AQM V2 PARAMS ===
+                'aqm_min_score': trial.suggest_float('aqm_min_score', 0.60, 0.95),
+                'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.30, 0.70),
                 
-                # === MODYFIKACJA: SL >= 3.0, Max Hold <= 7 ===
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 3.0, 7.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 7),
+                # Zarządzanie pozycją (Używamy tych samych kluczy co H3 dla uproszczenia backendu)
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 10.0),
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 5.0),
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 10),
             }
 
         start_ts = pd.Timestamp(f"{self.target_year}-01-01")
@@ -451,10 +429,15 @@ class QuantumOptimizer:
 
         self._save_trial(trial, params, pf, trades, pf, result['win_rate'])
         
-        if trades < 3: return 0.0
+        # Kara za zbyt małą liczbę transakcji (overfitting)
+        if trades < 5: return 0.0
         return pf
 
     def _run_simulation_unified(self, params, start_ts, end_ts):
+        """
+        Szybka symulacja na pre-kalkulowanych danych.
+        Stosuje filtry z parametrów triala na gotowych kolumnach.
+        """
         trades_pnl = []
         tp_mult = params['h3_tp_multiplier']
         sl_mult = params['h3_sl_multiplier']
@@ -469,55 +452,74 @@ class QuantumOptimizer:
             if len(sim_df) < 2: continue
             
             entry_mask = None
+            
+            # === LOGIKA WEJŚCIA H3 ===
             if self.strategy_mode == 'H3':
                 h3_p = params['h3_percentile']
                 h3_m = params['h3_m_sq_threshold']
                 h3_min = params['h3_min_score']
                 
-                # Używamy kolumn wyliczonych lokalnie
                 if 'aqm_score_h3' in sim_df.columns:
-                    entry_mask = ((sim_df['aqm_rank'] > h3_p) & (sim_df['m_sq_norm'] < h3_m) & (sim_df['aqm_score_h3'] > h3_min))
+                    # Szybka wektoryzacja warunków
+                    entry_mask = (
+                        (sim_df['aqm_rank'] > h3_p) & 
+                        (sim_df['m_sq_norm'] < h3_m) & 
+                        (sim_df['aqm_score_h3'] > h3_min)
+                    )
             
+            # === LOGIKA WEJŚCIA AQM ===
             elif self.strategy_mode == 'AQM':
-                # === LOGIKA WEJŚCIA AQM V2 ===
                 min_score = params['aqm_min_score']
                 vms_min = params['aqm_vms_min']
                 
-                if 'ras' in sim_df.columns:
+                if 'aqm_score' in sim_df.columns:
                     entry_mask = (
                         (sim_df['aqm_score'] > min_score) &
-                        (sim_df['ras'] > 0.5) & 
-                        (sim_df['tcs'] > 0.5) &
-                        (sim_df['vms'] > vms_min)
+                        (sim_df.get('vms', pd.Series(1.0)) > vms_min) &
+                        (sim_df.get('tcs', pd.Series(1.0)) > 0.1)
                     )
-                else:
-                    entry_mask = (sim_df['aqm_score'] > min_score)
             
             if entry_mask is None: continue
 
+            # Znajdź indeksy wejścia (gdzie maska True)
             entry_indices = np.where(entry_mask)[0]
             last_exit_idx = -1
             
+            # Pętla po sygnałach (Prosta symulacja transakcyjna)
             for idx in entry_indices:
+                # Nie otwieraj nowej pozycji, jeśli stara trwa
                 if idx <= last_exit_idx: continue
+                # Nie otwieraj na ostatniej świecy
                 if idx + 1 >= len(sim_df): break 
+                
                 entry_idx = idx + 1
                 entry_row = sim_df.iloc[entry_idx]
-                signal_row = sim_df.iloc[idx] 
+                signal_row = sim_df.iloc[idx] # Sygnał jest na świecy POPRZEDNIEJ (zamkniętej)
+                
                 entry_price = entry_row['open']
                 atr = signal_row['atr_14']
-                if atr == 0: continue
+                
+                if atr == 0 or entry_price == 0: continue
+                
                 tp = entry_price + (tp_mult * atr)
                 sl = entry_price - (sl_mult * atr)
+                
                 pnl = 0.0
+                
+                # Symulacja trwania pozycji (Max Hold)
                 for hold_day in range(max_hold):
                     current_idx = entry_idx + hold_day
+                    
+                    # Koniec danych
                     if current_idx >= len(sim_df): 
                         exit_price = sim_df.iloc[-1]['close']
                         pnl = (exit_price - entry_price) / entry_price
                         last_exit_idx = current_idx
                         break
+                    
                     candle = sim_df.iloc[current_idx]
+                    
+                    # Sprawdzenie SL/TP (Low/High)
                     if candle['low'] <= sl:
                         pnl = (sl - entry_price) / entry_price
                         last_exit_idx = current_idx
@@ -526,10 +528,14 @@ class QuantumOptimizer:
                         pnl = (tp - entry_price) / entry_price
                         last_exit_idx = current_idx
                         break
+                    
+                    # Wyjście czasowe (Time Stop)
                     if hold_day == max_hold - 1:
                         pnl = (candle['close'] - entry_price) / entry_price
                         last_exit_idx = current_idx
+                
                 trades_pnl.append(pnl)
+                
         return self._calculate_stats(trades_pnl)
 
     def _calculate_stats(self, trades):
@@ -605,7 +611,7 @@ class QuantumOptimizer:
             job.configuration = {
                 'best_params': best_params, 
                 'sensitivity_analysis': sensitivity_report, 
-                'version': 'V19.2_ELITE_FILTERING', 
+                'version': 'V20_UNIFIED_PHYSICS', 
                 'strategy': self.strategy_mode,
                 'scan_period': self.scan_period, 
                 'tickers_analyzed': self.tickers_count
