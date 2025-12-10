@@ -20,9 +20,7 @@ from .analysis import (
     phase1_scanner, phase3_sniper, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, 
     h3_deep_dive_agent, signal_monitor, apex_optimizer, phasex_scanner, 
-    biox_agent, recheck_agent, phase4_kinetic,
-    # === FAZA 5 (OMNI-FLUX) ===
-    phase5_omniflux
+    biox_agent, recheck_agent, phase4_kinetic
 )
 
 # Konfiguracja Loggera
@@ -42,36 +40,20 @@ current_state = "IDLE"
 
 # === ZARZĄDCA STANU (RESOURCE GOVERNOR) ===
 # Definiuje tryby pracy Workera
-MODE_MONITORING = "MONITORING"   # Faza 5 (Omni-Flux) + Newsy + Tło (Niskie zużycie API)
+MODE_MONITORING = "MONITORING"   # Newsy + Tło (Niskie zużycie API)
 MODE_OPERATION = "OPERATION"     # Skanery (F1, F3, F4, FX) / Optymalizacja (Wysokie zużycie API - Wyłączność)
 
 active_mode = MODE_MONITORING 
 
 def run_monitoring_tasks(session):
     """
-    Tryb Wartownika: Utrzymuje przy życiu Fazę 5 i lekkie procesy tła.
+    Tryb Wartownika: Utrzymuje przy życiu lekkie procesy tła.
     Działa w pętli głównej (jeden obrót na wywołanie).
     Przerywany natychmiast, gdy pojawi się zlecenie priorytetowe.
     """
     global current_state
     
-    # 1. Omni-Flux (Faza 5) - "Serce systemu"
-    # Wykonujemy jeden cykl (obrót karuzeli) i oddajemy sterowanie
-    try:
-        # Zapisz stan, że Faza 5 jest aktywna (dla UI)
-        if current_state != 'PHASE_5_FLUX':
-            utils.update_system_control(session, 'worker_status', 'RUNNING_FLUX')
-            utils.update_system_control(session, 'current_phase', 'PHASE_5_OMNI_FLUX')
-            current_state = 'PHASE_5_FLUX'
-            
-        phase5_omniflux.run_phase5_cycle(session, api_client)
-        
-    except Exception as e:
-        logger.error(f"Monitoring Error (F5): {e}")
-        # W razie błędu F5, nie zabijamy workera, tylko logujemy
-        utils.append_scan_log(session, f"Błąd Monitora F5: {e}")
-
-    # 2. Zadania w tle (Schedule) - Newsy, Re-check, Wirtualny Portfel
+    # 1. Zadania w tle (Schedule) - Newsy, Re-check, Wirtualny Portfel
     # Uruchamiamy je tylko w trybie monitoringu
     try:
         schedule.run_pending()
@@ -88,10 +70,8 @@ def execute_high_priority_operation(session, operation_func, *args, **kwargs):
     logger.info(">>> PRZEŁĄCZANIE TRYBU: MONITORING -> OPERACJA (High Priority)")
     active_mode = MODE_OPERATION
     
-    # 1. Zapisz stan Fazy 5 (jeśli była aktywna) i wstrzymaj
-    # Faza 5 zapisuje swój stan automatycznie w run_phase5_cycle, więc tu wystarczy zmienić flagę statusu
     utils.update_system_control(session, 'worker_status', 'BUSY_OPERATION')
-    utils.append_scan_log(session, "SYSTEM: Wstrzymanie monitoringu (F5). Start operacji priorytetowej...")
+    utils.append_scan_log(session, "SYSTEM: Wstrzymanie monitoringu. Start operacji priorytetowej...")
     
     start_time = time.time()
     
@@ -107,10 +87,10 @@ def execute_high_priority_operation(session, operation_func, *args, **kwargs):
         # 3. Przywróć system do życia (Resuscytacja)
         duration = time.time() - start_time
         logger.info(f"<<< OPERACJA ZAKOŃCZONA ({duration:.1f}s). POWRÓT DO MONITORINGU.")
-        utils.append_scan_log(session, f"SYSTEM: Operacja zakończona. Wznawianie monitoringu F5.")
+        utils.append_scan_log(session, f"SYSTEM: Operacja zakończona. Wznawianie monitoringu.")
         
         active_mode = MODE_MONITORING
-        current_state = "IDLE" # Reset stanu, aby monitoring zainicjował się ponownie i odświeżył UI
+        current_state = "IDLE" # Reset stanu
         utils.update_system_control(session, 'worker_status', 'IDLE')
         utils.update_system_control(session, 'current_phase', 'NONE')
 
@@ -259,14 +239,6 @@ def main_loop():
                 elif deep_dive_req and deep_dive_req not in ['NONE', 'PROCESSING']: operation_to_run = run_h3_deep_dive_task
                 elif opt_req and opt_req not in ['NONE', 'PROCESSING']: operation_to_run = run_optimization_task
 
-                # C. Obsługa specjalna dla Fazy 5 (Start/Stop Ręczny)
-                if cmd == "START_PHASE_5_REQUESTED":
-                    # F5 to po prostu powrót do Monitoringu (domyślny stan)
-                    utils.update_system_control(session, 'worker_command', 'NONE')
-                    utils.append_scan_log(session, "SYSTEM: Ręczne wymuszenie Fazy 5 (Omni-Flux).")
-                    current_state = 'IDLE' 
-                    active_mode = MODE_MONITORING
-                    
                 elif cmd == "PAUSE_REQUESTED":
                     utils.update_system_control(session, 'worker_status', 'PAUSED')
                     utils.update_system_control(session, 'worker_command', 'NONE')
@@ -286,11 +258,11 @@ def main_loop():
                     if cmd and "REQUESTED" in cmd:
                         utils.update_system_control(session, 'worker_command', 'NONE')
                     
-                    # Wykonujemy operację z "Odcięciem Tlenu" (Blokujemy F5)
+                    # Wykonujemy operację z "Odcięciem Tlenu"
                     execute_high_priority_operation(session, operation_to_run)
                 
                 else:
-                    # Brak zadań specjalnych -> Działa WARTOWNIK (F5 + Tło)
+                    # Brak zadań specjalnych -> Działa WARTOWNIK (Tło)
                     current_status_val = utils.get_system_control_value(session, 'worker_status')
                     
                     # Jeśli nie jesteśmy spauzowani ani zajęci inną operacją
@@ -304,7 +276,7 @@ def main_loop():
                 logger.error(f"Main Loop Error: {e}", exc_info=True)
                 time.sleep(5) # Odczekaj chwilę po błędzie krytycznym
 
-        # Krótki sleep, żeby nie zarżnąć CPU, ale na tyle krótki, by F5 było responsywne
+        # Krótki sleep, żeby nie zarżnąć CPU
         time.sleep(0.5)
 
 if __name__ == "__main__":
