@@ -338,97 +338,6 @@ export const handleRunPhase4Scan = async () => {
     }
 };
 
-// === OBSŁUGA FAZY 5 (OMNI-FLUX) - POPRAWKA LOGICZNA ===
-export const handleRunPhase5Scan = async () => {
-    // 1. Sprawdź, czy faza już działa. Jeśli tak -> PRZEŁĄCZ WIDOK zamiast blokować.
-    if (state.workerStatus && (state.workerStatus.phase === 'PHASE_5_OMNI_FLUX' || state.workerStatus.status === 'RUNNING_FLUX')) {
-        showSystemAlert("Faza 5 już pracuje. Przełączam na monitor...");
-        showPhase5Monitor();
-        return;
-    }
-
-    const btn = document.getElementById('btn-phase5-scan');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>Uruchamianie F5...';
-    }
-    
-    try {
-        await api.sendWorkerControl('start_phase5');
-        showSystemAlert("Zlecono start Omni-Flux (F5).");
-        // Szybkie przełączenie na widok, aby użytkownik widział, że coś się dzieje
-        setTimeout(() => { showPhase5Monitor(); }, 1500);
-    } catch (e) {
-        showSystemAlert("Błąd startu F5: " + e.message);
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
-        }
-    }
-};
-
-const handleStopPhase5 = async () => {
-    if (!confirm("Czy na pewno chcesz zatrzymać Omni-Flux?")) return;
-    
-    const stopBtn = document.getElementById('stop-phase5-btn');
-    if (stopBtn) stopBtn.disabled = true;
-
-    try {
-        await api.sendWorkerControl('pause');
-        showSystemAlert("Wysłano sygnał ZATRZYMANIA. Czekam na workera...");
-    } catch (e) {
-        alert("Błąd zatrzymywania: " + e.message);
-    }
-};
-
-export const showPhase5Monitor = async () => {
-    stopViewPolling();
-    showLoading();
-    
-    const render = async () => {
-        try {
-            const monitorState = await api.getPhase5MonitorState();
-            const poolData = monitorState.active_pool || [];
-            
-            if (monitorState.macro_bias) {
-                state.macroBias = monitorState.macro_bias;
-            }
-            
-            UI.mainContent.innerHTML = renderers.phase5View(poolData);
-            
-            // Podpięcie zdarzenia dla przycisku STOP (który jest renderowany w UI.js)
-            const stopBtn = document.getElementById('stop-phase5-btn');
-            if (stopBtn) {
-                // Klonowanie, aby usunąć stare listenery przy re-renderze
-                const newBtn = stopBtn.cloneNode(true);
-                stopBtn.parentNode.replaceChild(newBtn, stopBtn);
-                newBtn.addEventListener('click', handleStopPhase5);
-            }
-
-            // === NOWOŚĆ: PODPIĘCIE PRZYCISKÓW KUP NA KAFELKACH ===
-            const buyButtons = document.querySelectorAll('.flux-tile-buy-btn');
-            buyButtons.forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    // Zapobiegamy propagacji, jeśli kafelek miałby inne akcje na kliknięcie
-                    e.stopPropagation();
-                    const ticker = btn.dataset.ticker;
-                    if (ticker) {
-                        showBuyModal(ticker);
-                    }
-                });
-            });
-
-            if (window.lucide) window.lucide.createIcons();
-        } catch (e) {
-            // Jeśli błąd, nie nadpisuj całego widoku, tylko zaloguj
-            console.error("Błąd odświeżania F5:", e);
-        }
-    };
-    
-    await render();
-    state.activeViewPolling = setInterval(render, 2000);
-};
-
 export const showTransactions = async (silent = false) => {
     stopViewPolling();
     if (!silent) showLoading();
@@ -508,24 +417,6 @@ export const pollWorkerStatus = () => {
             const scanLog = document.getElementById('scan-log');
             const currentPhaseTxt = document.getElementById('dashboard-current-phase');
             const dashboardWorkerStatus = document.getElementById('dashboard-worker-status');
-
-            // === SYNC PRZYCISKU FAZY 5 Z RZECZYWISTYM STANEM ===
-            const btnF5 = document.getElementById('btn-phase5-scan');
-            if (btnF5) {
-                if (status.phase === 'PHASE_5_OMNI_FLUX' || status.status === 'RUNNING_FLUX') {
-                    // Jeśli działa, przycisk pokazuje info, ale jest aktywny (żeby móc kliknąć i wejść w widok)
-                    btnF5.disabled = false;
-                    btnF5.innerHTML = '<i data-lucide="eye" class="mr-2 h-4 w-4"></i>Pokaż Monitor F5';
-                    btnF5.classList.remove('bg-emerald-600/20');
-                    btnF5.classList.add('bg-emerald-900', 'text-emerald-200', 'border-emerald-500', 'animate-pulse');
-                } else {
-                    // Reset do stanu wyjściowego
-                    btnF5.disabled = false;
-                    btnF5.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
-                    btnF5.classList.remove('bg-emerald-900', 'text-emerald-200', 'border-emerald-500', 'animate-pulse');
-                    btnF5.classList.add('bg-emerald-600/20');
-                }
-            }
 
             if (dashboardWorkerStatus) {
                 dashboardWorkerStatus.textContent = status.status;
