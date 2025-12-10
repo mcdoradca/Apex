@@ -12,7 +12,8 @@ from .utils import (
     calculate_atr, 
     append_scan_log, 
     update_scan_progress,
-    _resolve_trade 
+    _resolve_trade,
+    log_decision # Nowość z Kroku 2
 )
 
 # Importy analityczne (H2/H3)
@@ -190,7 +191,6 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                 daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
                 
                 if not daily_raw:
-                    # logger.debug(f"Brak danych OHLCV dla {ticker}")
                     processed_count += 1
                     continue
 
@@ -224,7 +224,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
 
                 signal_df = pd.DataFrame()
 
-                # === LOGIKA H3 (ELITE SNIPER) ===
+                # === ŚCIEŻKA A: STRATEGIA H3 (ELITE SNIPER) ===
                 if strategy_mode == 'H3':
                     if len(df) < 201: 
                         processed_count += 1; continue
@@ -233,56 +233,32 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     insider_df = h2_data.get('insider_df')
                     news_df = h2_data.get('news_df')
                     
-                    # Obliczenia metryk
-                    df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1)
-                    df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1)
+                    # Obliczenia metryk wstepnych (pre-vectorization)
+                    df['institutional_sync'] = df.apply(lambda row: aqm_v3_metrics.calculate_institutional_sync_from_data(insider_df, row.name), axis=1).fillna(0.0)
+                    df['retail_herding'] = df.apply(lambda row: aqm_v3_metrics.calculate_retail_herding_from_data(news_df, row.name), axis=1).fillna(0.0)
                     
                     df['price_gravity'] = (df['high'] + df['low'] + df['close']) / 3 / df['close'] - 1
                     df['time_dilation'] = _calculate_time_dilation_series(df, qqq_df) # QQQ jako benchmark
                     
-                    df['daily_returns'] = df['close'].pct_change()
-                    df['market_temperature'] = df['daily_returns'].rolling(window=30).std()
+                    df['daily_returns'] = df['close'].pct_change().fillna(0)
+                    df['market_temperature'] = df['daily_returns'].rolling(window=30).std().fillna(0.01)
                     
                     if not news_df.empty:
                         if news_df.index.tz is not None: news_df.index = news_df.index.tz_localize(None)
                         nc = news_df.groupby(news_df.index.date).size()
                         nc.index = pd.to_datetime(nc.index)
                         nc = nc.reindex(df.index, fill_value=0)
-                        df['information_entropy'] = nc.rolling(window=10).sum()
+                        df['information_entropy'] = nc.rolling(window=10).sum().fillna(0)
                     else:
                         df['information_entropy'] = 0.0
                     
-                    # Wolumen (m^2)
-                    df['avg_volume_10d'] = df['volume'].rolling(window=10).mean()
-                    df['vol_mean_200d'] = df['avg_volume_10d'].rolling(window=200).mean()
-                    df['vol_std_200d'] = df['avg_volume_10d'].rolling(window=200).std()
-                    df['normalized_volume'] = ((df['avg_volume_10d'] - df['vol_mean_200d']) / df['vol_std_200d']).replace([np.inf, -np.inf], 0).fillna(0)
+                    # Wolumen (df['volume'] już jest)
+
+                    # >>> URUCHOMIENIE SILNIKA WEKTOROWEGO H3 <<<
+                    # To jest ten sam silnik, co w Skanerze Live (Krok 3)
+                    df = aqm_v3_metrics.calculate_aqm_h3_vectorized(df)
                     
-                    df['m_sq'] = df['normalized_volume'] 
-                    df['nabla_sq'] = df['price_gravity']
-
-                    # === FIX: PEŁNA IMPLEMENTACJA AQM H3 (Zastępstwo stuba z utils) ===
-                    # 1. Normalizacja Institutional Sync (Z-Score)
-                    df['mu_normalized'] = (df['institutional_sync'] - df['institutional_sync'].rolling(100, min_periods=20).mean()) / df['institutional_sync'].rolling(100, min_periods=20).std().fillna(1)
-                    df['mu_normalized'] = df['mu_normalized'].fillna(0)
-
-                    # 2. Cap Retail Herding
-                    df['retail_herding_capped'] = df['retail_herding'].clip(-1.0, 1.0)
-
-                    # 3. Obliczenie J (Energia)
-                    # Zabezpieczenie T przed zerem
-                    T = df['market_temperature'].replace(0, np.nan)
-                    df['J'] = (df['information_entropy'] - (df['retail_herding_capped'] / T) + df['mu_normalized']).fillna(0)
-
-                    # 4. Normalizacja Komponentów (Z-Score)
-                    df['J_norm'] = ((df['J'] - df['J'].rolling(100, min_periods=20).mean()) / df['J'].rolling(100, min_periods=20).std().fillna(1)).fillna(0)
-                    df['nabla_sq_norm'] = ((df['nabla_sq'] - df['nabla_sq'].rolling(100, min_periods=20).mean()) / df['nabla_sq'].rolling(100, min_periods=20).std().fillna(1)).fillna(0)
-                    df['m_sq_norm'] = ((df['m_sq'] - df['m_sq'].rolling(100, min_periods=20).mean()) / df['m_sq'].rolling(100, min_periods=20).std().fillna(1)).fillna(0)
-
-                    # 5. Final AQM Score (To pole było brakujące i powodowało KeyError)
-                    df['aqm_score_h3'] = (df['J_norm'] * 1.0) - (df['nabla_sq_norm'] * 1.0) - (df['m_sq_norm'] * 1.0)
-                    
-                    # 6. Rank
+                    # Obliczanie Rank (Percentyl) na bieżąco w oknie
                     df['aqm_rank'] = df['aqm_score_h3'].rolling(window=100, min_periods=20).rank(pct=True).fillna(0)
                     
                     h3_p = float(parameters.get('h3_percentile', 0.95))
@@ -296,7 +272,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     )
                     signal_df = df
 
-                # === LOGIKA AQM (ADAPTIVE QUANTUM V4) ===
+                # === ŚCIEŻKA B: STRATEGIA AQM (ADAPTIVE QUANTUM V4) ===
                 elif strategy_mode == 'AQM':
                     if len(df) < 201: 
                         processed_count += 1; continue
@@ -315,6 +291,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                         obv_df.rename(columns={'OBV': 'OBV'}, inplace=True)
 
                     # Obliczamy AQM z nową obsługą danych makro
+                    # >>> URUCHOMIENIE SILNIKA WEKTOROWEGO AQM <<<
                     aqm_metrics_df = aqm_v4_logic.calculate_aqm_full_vector(
                         daily_df=df,
                         weekly_df=weekly_df,
@@ -341,7 +318,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     else:
                         signal_df = pd.DataFrame()
 
-                # === LOGIKA BIOX (PUMP HUNTER) ===
+                # === ŚCIEŻKA C: STRATEGIA BIOX (PUMP HUNTER) ===
                 elif strategy_mode == 'BIOX':
                     sec, ind = company_sectors.get(ticker, ('',''))
                     is_biotech = any(k in sec or k in ind for k in BIOTECH_KEYWORDS)
@@ -366,7 +343,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df['aqm_score_h3'] = df[['intraday_change', 'session_change']].max(axis=1) * 100
                     signal_df = df
 
-                # === SYMULACJA TRANSAKCJI ===
+                # === SYMULACJA TRANSAKCJI (WSPÓLNA LOGIKA) ===
                 if not signal_df.empty and 'is_signal' in signal_df.columns:
                     sim_start_idx = signal_df.index.searchsorted(start_date_ts)
                     i = sim_start_idx
@@ -446,7 +423,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                     if 'aqm_score_h3' in row:
                                         metric_score = float(row['aqm_score_h3'])
                                     else:
-                                        logger.warning(f"Brak aqm_score_h3 dla {ticker} w dniu {current_date}")
+                                        # logger.warning(f"Brak aqm_score_h3 dla {ticker} w dniu {current_date}")
                                         metric_score = 0.0
                                 elif strategy_mode == 'AQM': 
                                     metric_score = float(row.get('aqm_score', 0))
@@ -491,7 +468,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
 
             except Exception as e:
                 logger.error(f"Błąd backtestu dla {ticker}: {e}", exc_info=True)
-                append_scan_log(session, f"Błąd {ticker}: {str(e)[:100]}")
+                log_decision(session, ticker, "BACKTEST", "ERROR", str(e)[:100])
                 session.rollback()
                 continue
 
