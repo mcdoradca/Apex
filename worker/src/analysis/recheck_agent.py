@@ -21,7 +21,7 @@ API_HEADERS = {'Content-Type': 'application/json'}
 def _call_gemini_auditor(trade_context: dict) -> dict:
     """
     Wysyła dane o zakończonym setupie do Gemini w celu przeprowadzenia audytu 'Re-check'.
-    Teraz obsługuje zarówno H3 (AQM), jak i F5 (Omni-Flux).
+    Wersja oczyszczona: Obsługuje tylko H3 (AQM).
     """
     if not GEMINI_API_KEY:
         return {"report": "Brak klucza API Gemini. Audyt niemożliwy.", "suggestion": None}
@@ -39,16 +39,6 @@ def _call_gemini_auditor(trade_context: dict) -> dict:
     AQM Score: {trade_context.get('metric_aqm_score_h3')} (Siła techniczna)
     Retail Herding: {trade_context.get('metric_retail_herding')} (Sentyment tłumu)
     Institutional Sync: {trade_context.get('metric_inst_sync')} (Działania inst.)
-        """
-        
-    # Dla strategii F5 (Omni-Flux)
-    if trade_context.get('metric_flux_score') is not None:
-        metrics_section += f"""
-    --- METRYKI F5 (OMNI-FLUX) ---
-    Flux Score: {trade_context.get('metric_flux_score')} (Ogólna ocena)
-    Velocity: {trade_context.get('metric_flux_velocity')}x (Dynamika wolumenu)
-    OFP (Order Flow Pressure): {trade_context.get('metric_flux_ofp')} (Presja Kupna/Sprzedaży - zakres -1 do 1)
-    Elasticity: {trade_context.get('metric_elasticity')}σ (Odchylenie od średniej)
         """
 
     prompt = f"""
@@ -74,13 +64,12 @@ def _call_gemini_auditor(trade_context: dict) -> dict:
     ZADANIE:
     1. Porównaj Oczekiwania z Rzeczywistością. Czy strategia "dowiezła" wynik?
     2. Zidentyfikuj przyczynę (Sukces/Porażka).
-       - Jeśli to FLUX: Czy OFP (Order Flow) potwierdzało kierunek? Czy Velocity było wystarczające?
        - Jeśli to H3: Czy Retail Herding nie był zbyt wysoki (pułapka)?
-    3. Podaj KONKRETNĄ rekomendację dla Optymalizatora (np. "Wymagaj OFP > 0.2", "Zwiększ próg Flux Score").
+    3. Podaj KONKRETNĄ rekomendację dla Optymalizatora (np. "Zwiększ próg AQM Score").
     
     Format odpowiedzi: JSON z polami:
     - "audit_summary": (String) Zwięzły raport tekstowy dla tradera (max 3 zdania).
-    - "optimization_tweak": (Object) Sugerowane zmiany parametrów (np. {{"flux_min_score": "+5", "min_ofp": "0.1"}}).
+    - "optimization_tweak": (Object) Sugerowane zmiany parametrów (np. {{"h3_min_score": "+5"}}).
     """
 
     payload = {
@@ -105,7 +94,7 @@ def _call_gemini_auditor(trade_context: dict) -> dict:
 def run_recheck_audit_cycle(session: Session):
     """
     Główna pętla Agenta Re-check.
-    Skanuje zakończone transakcje (H3 i Flux), które posiadają 'Oczekiwania'.
+    Skanuje zakończone transakcje, które posiadają 'Oczekiwania'.
     """
     # logger.info("🕵️ Re-check Agent: Rozpoczynanie cyklu audytowego...")
     
@@ -126,7 +115,7 @@ def run_recheck_audit_cycle(session: Session):
             if trade.close_date and trade.open_date:
                 duration = (trade.close_date - trade.open_date).days
             
-            # Budowanie kontekstu z uwzględnieniem nowych pól Flux
+            # Budowanie kontekstu
             context = {
                 "ticker": trade.ticker,
                 "setup_type": trade.setup_type,
@@ -141,12 +130,6 @@ def run_recheck_audit_cycle(session: Session):
                 "metric_aqm_score_h3": float(trade.metric_aqm_score_h3) if trade.metric_aqm_score_h3 else None,
                 "metric_retail_herding": float(trade.metric_retail_herding) if trade.metric_retail_herding else None,
                 "metric_inst_sync": float(trade.metric_inst_sync) if trade.metric_inst_sync else None,
-                
-                # Metryki F5 (Flux) - NOWOŚĆ
-                "metric_flux_score": float(trade.metric_flux_score) if trade.metric_flux_score else None,
-                "metric_flux_velocity": float(trade.metric_flux_velocity) if trade.metric_flux_velocity else None,
-                "metric_flux_ofp": float(trade.metric_flux_ofp) if trade.metric_flux_ofp else None,
-                "metric_elasticity": float(trade.metric_elasticity) if trade.metric_elasticity else None
             }
             
             logger.info(f"Re-check: Audytowanie {trade.ticker} ({trade.setup_type})...")
