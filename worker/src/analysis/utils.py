@@ -23,14 +23,137 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # AGRESYWNY CACHE DLA DANYCH HISTORYCZNYCH
-# Dane dzienne (DAILY) są ważne przez 24h, ale jeśli są z weekendu, to dłużej.
-# Newsy i Insider są ważne przez 7 dni (bo to dane historyczne).
 CACHE_EXPIRY_DAYS_DEFAULT = 7 
 
 if not TELEGRAM_BOT_TOKEN:
     logger.warning("TELEGRAM_BOT_TOKEN not found. Telegram alerts are DISABLED.")
 if not TELEGRAM_CHAT_ID:
     logger.warning("TELEGRAM_CHAT_ID not found. Telegram alerts are DISABLED.")
+
+# ==================================================================
+# SEKCJA 1: SYSTEM LOGOWANIA (CORE LOGGING)
+# ==================================================================
+
+def update_system_control(session: Session, key: str, value: str):
+    """Aktualizuje tabelę system_control (klucz-wartość) w bazie danych."""
+    try:
+        # Używamy safe cast na string, aby uniknąć błędów
+        val_str = str(value)
+        session.execute(text("INSERT INTO system_control (key, value, updated_at) VALUES (:key, :value, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();"), [{'key': key, 'value': val_str}])
+        session.commit()
+    except Exception as e:
+        logger.error(f"Błąd update_system_control({key}): {e}")
+        session.rollback()
+
+def get_system_control_value(session: Session, key: str) -> str | None:
+    """Pobiera wartość z tabeli system_control."""
+    try:
+        res = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
+        return res[0] if res else None
+    except: return None
+
+def append_scan_log(session: Session, message: str):
+    """
+    Dodaje wpis do dziennika operacyjnego (widocznego w UI Dashboard).
+    Log jest odwrócony (najnowsze na górze) i przycinany do 20k znaków.
+    """
+    try:
+        curr = get_system_control_value(session, 'scan_log') or ""
+        timestamp = datetime.now(timezone.utc).strftime('%H:%M:%S')
+        new_entry = f"[{timestamp}] {message}"
+        
+        # Ograniczenie wielkości loga, aby nie zapchać bazy/UI
+        new_log = (new_entry + "\n" + curr)[:20000]
+        update_system_control(session, 'scan_log', new_log)
+    except Exception as e:
+        logger.error(f"Błąd append_scan_log: {e}")
+
+def log_decision(session: Session, ticker: str, stage: str, status: str, details: str):
+    """
+    Strukturalne logowanie decyzji algorytmu.
+    Używane przez Skaner, Backtest i Optymalizator do raportowania 'dlaczego'.
+    
+    Args:
+        ticker: Symbol spółki (np. "NVDA")
+        stage: Etap analizy (np. "H3_FILTER", "F1_PRICE", "AI_CHECK")
+        status: Wynik (ACCEPTED, REJECTED, HOLD, ERROR)
+        details: Konkretne powody (np. "Score 45 < 80", "Zbyt wysoki RSI")
+    """
+    icon_map = {
+        "ACCEPTED": "✅",
+        "ADDED": "✅",
+        "REJECTED": "❌",
+        "DROP": "❌",
+        "ANALYZING": "🔍",
+        "ERROR": "⚠️",
+        "HOLD": "⏳",
+        "WATCH": "👀",
+        "BUY": "🚀",
+        "SELL": "💰"
+    }
+    icon = icon_map.get(status.upper(), "ℹ️")
+    
+    # Format: [STAGE] TICKER -> ICON STATUS | Details
+    msg = f"[{stage}] {ticker} -> {icon} {status} | {details}"
+    
+    # Logujemy do bazy (UI) i na konsolę (Docker logs)
+    append_scan_log(session, msg)
+    
+    # Dla odrzuconych tickerów używamy debug, żeby nie śmiecić w konsoli głównej, chyba że to błąd
+    if status in ["REJECTED", "DROP"]:
+        logger.debug(msg)
+    else:
+        logger.info(msg)
+
+def clear_scan_log(session: Session):
+    update_system_control(session, 'scan_log', '')
+
+def update_scan_progress(session: Session, processed: int, total: int):
+    update_system_control(session, 'scan_progress_processed', str(processed))
+    update_system_control(session, 'scan_progress_total', str(total))
+
+def report_heartbeat(session: Session):
+    """Raportuje, że worker żyje (update timestamp)."""
+    try:
+        res = session.execute(text("SELECT value FROM system_control WHERE key = 'worker_status'")).fetchone()
+        current_status = res[0] if res else 'UNKNOWN'
+
+        # Heartbeat wysyłamy tylko jeśli system nie jest w ciężkim stanie operacyjnym
+        heavy_load_states = ['BUSY_OPERATION', 'OPTIMIZING_CALC', 'OPTIMIZING_DATA_LOAD']
+
+        if any(s in current_status for s in heavy_load_states):
+            return
+
+        update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass
+
+# ==================================================================
+# SEKCJA 2: ALERTY I KOMUNIKACJA
+# ==================================================================
+
+_sent_alert_hashes = set()
+def clear_alert_memory_cache():
+    global _sent_alert_hashes
+    _sent_alert_hashes = set()
+
+def send_telegram_alert(message: str):
+    """Wysyła powiadomienie na Telegram (z dedupkacją)."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+    
+    message_hash = hashlib.sha256(message.encode('utf-8')).hexdigest()
+    if message_hash in _sent_alert_hashes: return
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={quote_plus(message)}"
+        requests.get(url, timeout=5)
+        _sent_alert_hashes.add(message_hash)
+    except Exception as e:
+        logger.error(f"Telegram Error: {e}")
+
+# ==================================================================
+# SEKCJA 3: OBSŁUGA DANYCH (DATA HANDLING)
+# ==================================================================
 
 def get_raw_data_with_cache(
     session: Session, 
@@ -72,18 +195,16 @@ def get_raw_data_with_cache(
                         is_fresh = True
 
             if is_fresh and cache_entry.raw_data_json:
-                # logger.debug(f"CACHE HIT: {ticker} ({data_type})")
                 return cache_entry.raw_data_json 
                 
     except Exception as e:
         logger.error(f"Cache Read Error: {e}")
 
     # 2. Jeśli brak w cache lub stare -> Zapytaj API
-    # Ale najpierw sprawdź, czy klient API ma na to "budżet" (klient sam to obsłuży)
     client_method = getattr(api_client, api_func, None)
     if not client_method: return {}
     
-    # Dostosuj argumenty
+    # Dostosuj argumenty (niektóre funkcje w kliencie mają inne nazwy parametrów)
     if api_func == 'get_news_sentiment': kwargs['ticker'] = ticker
     elif api_func == 'get_bulk_quotes': kwargs['symbols'] = [ticker]
     else: kwargs['symbol'] = ticker
@@ -99,20 +220,13 @@ def get_raw_data_with_cache(
 
     # 3. Zapisz do Cache (Upsert)
     try:
-        # Używamy surowego JSON stringa
-        json_data = raw_data
-        if not isinstance(raw_data, str): # Jeśli to słownik, zrzuć do stringa (dla kompatybilności wstecznej json.dumps)
-             # Ale model oczekuje JSONB, który SQLAlchemy sam parsuje z dicta.
-             # Jeśli AlphaVantageClient zwraca dict, to jest OK.
-             pass
-
+        json_data = raw_data # SQLAlchemy JSONB sam serializuje dict
         upsert_stmt = text("""
             INSERT INTO alpha_vantage_cache (ticker, data_type, raw_data_json, last_fetched)
             VALUES (:ticker, :data_type, :raw_data, NOW())
             ON CONFLICT (ticker, data_type) DO UPDATE SET raw_data_json = :raw_data, last_fetched = NOW();
         """)
-        # SQLAlchemy z psycopg2 automatycznie serializuje dict do JSONB
-        session.execute(upsert_stmt, {'ticker': ticker, 'data_type': data_type, 'raw_data': json.dumps(raw_data)})
+        session.execute(upsert_stmt, {'ticker': ticker, 'data_type': data_type, 'raw_data': json.dumps(raw_data) if not isinstance(raw_data, str) and not isinstance(raw_data, dict) else raw_data})
         session.commit()
     except Exception as e:
         logger.error(f"Cache Write Error: {e}")
@@ -120,25 +234,10 @@ def get_raw_data_with_cache(
         
     return raw_data
 
-_sent_alert_hashes = set()
-def clear_alert_memory_cache():
-    global _sent_alert_hashes
-    _sent_alert_hashes = set()
-
-def send_telegram_alert(message: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
-    message_hash = hashlib.sha256(message.encode('utf-8')).hexdigest()
-    if message_hash in _sent_alert_hashes: return
-    try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={quote_plus(message)}", timeout=5)
-        _sent_alert_hashes.add(message_hash)
-    except Exception: pass
-
 def get_market_status_and_time(api_client) -> dict:
     """
     Zwraca aktualny status rynku (USA/New York) oraz czas lokalny NY.
-    NAPRAWIONO: Obsługa Pre-Market (04:00-09:30) i After-Market (16:00-20:00).
-    Zwraca poprawne stałe: MARKET_OPEN, PRE_MARKET, AFTER_MARKET, CLOSED.
+    Obsługuje Pre-Market (04:00-09:30) i After-Market (16:00-20:00).
     """
     try:
         now = datetime.now(timezone.utc)
@@ -148,15 +247,9 @@ def get_market_status_and_time(api_client) -> dict:
         status = "CLOSED"
         
         if ny_time.weekday() < 5:  # Poniedziałek-Piątek
-            # Definicje godzin sesji (New York Time)
-            # Pre-Market: 04:00 - 09:30
             pre_start = ny_time.replace(hour=4, minute=0, second=0, microsecond=0)
-            
-            # Market Open: 09:30 - 16:00
             market_open = ny_time.replace(hour=9, minute=30, second=0, microsecond=0)
             market_close = ny_time.replace(hour=16, minute=0, second=0, microsecond=0)
-            
-            # After-Market: 16:00 - 20:00
             post_end = ny_time.replace(hour=20, minute=0, second=0, microsecond=0)
 
             if pre_start <= ny_time < market_open:
@@ -167,8 +260,6 @@ def get_market_status_and_time(api_client) -> dict:
                 status = "AFTER_MARKET"
             else:
                 status = "CLOSED"
-        else:
-            status = "CLOSED"
         
         return {
             "status": status,
@@ -179,68 +270,9 @@ def get_market_status_and_time(api_client) -> dict:
         logger.error(f"Error calculating market status: {e}")
         return {"status": "UNKNOWN", "time_ny": "N/A", "date_ny": "N/A"}
 
-def update_system_control(session: Session, key: str, value: str):
-    try:
-        session.execute(text("INSERT INTO system_control (key, value, updated_at) VALUES (:key, :value, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();"), [{'key': key, 'value': str(value)}])
-        session.commit()
-    except Exception: session.rollback()
-
-def get_system_control_value(session: Session, key: str) -> str | None:
-    try:
-        res = session.execute(text("SELECT value FROM system_control WHERE key = :key"), {'key': key}).fetchone()
-        return res[0] if res else None
-    except: return None
-
-def update_scan_progress(session: Session, processed: int, total: int):
-    update_system_control(session, 'scan_progress_processed', str(processed))
-    update_system_control(session, 'scan_progress_total', str(total))
-
-def append_scan_log(session: Session, message: str):
-    try:
-        curr = get_system_control_value(session, 'scan_log') or ""
-        new_log = (f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {message}\n" + curr)[:15000]
-        update_system_control(session, 'scan_log', new_log)
-    except: pass
-
-def clear_scan_log(session: Session):
-    update_system_control(session, 'scan_log', '')
-
-def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
-    # Ta funkcja jest obecnie rzadziej używana, ponieważ main.py ma własną logikę
-    # ale zachowujemy ją dla kompatybilności wstecznej
-    cmd = get_system_control_value(session, 'worker_command')
-    
-    if cmd == "START_REQUESTED": return "FULL_RUN", current_state
-    if cmd == "START_PHASE_1_REQUESTED": return "PHASE_1_RUN", current_state
-    if cmd == "START_PHASE_3_REQUESTED": return "PHASE_3_RUN", current_state
-    if cmd == "START_PHASE_X_REQUESTED": return "PHASE_X_RUN", current_state
-    if cmd == "START_PHASE_4_REQUESTED": return "PHASE_4_RUN", current_state
-    if cmd == "START_PHASE_5_REQUESTED": return "PHASE_5_RUN", current_state
-        
-    if cmd == "PAUSE_REQUESTED": return "NONE", "PAUSED"
-    if cmd == "RESUME_REQUESTED": return "NONE", "RUNNING"
-    return "NONE", current_state
-
-def report_heartbeat(session: Session):
-    try:
-        res = session.execute(text("SELECT value FROM system_control WHERE key = 'worker_status'")).fetchone()
-        current_status = res[0] if res else 'UNKNOWN'
-
-        # Heartbeat wysyłamy tylko jeśli system nie jest w ciężkim stanie operacyjnym
-        # aby nie spowalniać bazy zbędnymi update'ami
-        heavy_load_states = [
-            'BUSY_OPERATION',
-            'OPTIMIZING_CALC',
-            'OPTIMIZING_DATA_LOAD'
-        ]
-
-        if any(s in current_status for s in heavy_load_states):
-            return
-
-        update_system_control(session, 'last_heartbeat', datetime.now(timezone.utc).isoformat())
-
-    except Exception:
-        pass
+# ==================================================================
+# SEKCJA 4: NARZĘDZIA MATEMATYCZNE I PRZETWARZANIE DANYCH
+# ==================================================================
 
 def safe_float(value) -> float | None:
     if value is None: return None
@@ -248,6 +280,7 @@ def safe_float(value) -> float | None:
     except: return None
 
 def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Standaryzuje nazwy kolumn z Alpha Vantage (usuwa numerację '1. open')."""
     if df.empty: return df
     mapping = {'1. open':'open', '2. high':'high', '3. low':'low', '4. close':'close', '5. vwap':'vwap', '5. volume':'volume', '6. volume':'volume', '7. adjusted close':'adjusted close'}
     df.rename(columns=lambda c: mapping.get(c, c.split('. ')[-1]), inplace=True)
@@ -256,17 +289,16 @@ def standardize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_index()
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd_Series:
-    if df.empty or len(df) < period: return pd.Series(dtype=float)
+    """Oblicza Average True Range."""
+    if df.empty or len(df) < period: return pd_Series(dtype=float)
     hl = df['high'] - df['low']
     hc = (df['high'] - df['close'].shift()).abs()
     lc = (df['low'] - df['close'].shift()).abs()
     return pd.concat([hl, hc, lc], axis=1).max(axis=1).ewm(span=period, adjust=False).mean()
 
 def calculate_ema(series: pd_Series, period: int) -> pd_Series:
+    """Oblicza Exponential Moving Average."""
     return series.ewm(span=period, adjust=False).mean()
-
-# --- Funkcje obliczeniowe dla symulatorów (H3/V4) ---
-# Są tu, aby unikać cyklicznych importów w modułach analitycznych
 
 def _safe_float_convert(value: Any) -> float | None:
     if value is None: return None
@@ -274,6 +306,9 @@ def _safe_float_convert(value: Any) -> float | None:
     except: return None
 
 def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[str, Any], max_hold_days: int, year: str, direction: str) -> models.VirtualTrade | None:
+    """
+    Symuluje wynik transakcji na danych historycznych (Backtest Helper).
+    """
     try:
         entry_price = setup['entry_price']
         stop_loss = setup['stop_loss']
@@ -299,6 +334,7 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
                     status = 'CLOSED_TP'
                     break
         else:
+            # Wyjście czasowe
             final_idx = min(entry_index + max_hold_days - 1, len(historical_data) - 1)
             close_price = historical_data.iloc[final_idx]['close']
             status = 'CLOSED_EXPIRED'
@@ -329,28 +365,10 @@ def _resolve_trade(historical_data: pd.DataFrame, entry_index: int, setup: Dict[
         logger.error(f"[Backtest Utils] Błąd transakcji: {e}")
         return None
 
-def normalize_institutional_sync_v4(df: pd.DataFrame, window: int = 100) -> pd.Series:
-    try:
-        rolling_mean = df['institutional_sync'].rolling(window).mean()
-        rolling_std = df['institutional_sync'].rolling(window).std()
-        normalized = (df['institutional_sync'] - rolling_mean) / rolling_std
-        return normalized.replace([np.inf, -np.inf], 0).fillna(0)
-    except Exception as e:
-        return pd.Series(0, index=df.index)
-
-def calculate_retail_herding_capped_v4(retail_herding_series: pd.Series) -> pd.Series:
-    if retail_herding_series.empty:
-        return retail_herding_series
-    return retail_herding_series.clip(-1.0, 1.0)
-
-def calculate_h3_metrics_v4(df: pd.DataFrame, params: dict) -> pd.DataFrame:
-    # Wersja skrócona dla Utils, pełna logika w aqm_v4_logic.py
-    # Służy do podstawowych obliczeń, gdy pełny moduł nie jest potrzebny
-    try:
-        if 'institutional_sync' in df.columns:
-            df['mu_normalized'] = normalize_institutional_sync_v4(df)
-        if 'retail_herding' in df.columns:
-            df['retail_herding_capped'] = calculate_retail_herding_capped_v4(df['retail_herding'])
-            
-        return df
-    except: return df
+# Kompatybilność wsteczna (zachowane dla pewności)
+def check_for_commands(session: Session, current_state: str) -> tuple[str, str]:
+    cmd = get_system_control_value(session, 'worker_command')
+    if cmd == "START_REQUESTED": return "FULL_RUN", current_state
+    if cmd == "PAUSE_REQUESTED": return "NONE", "PAUSED"
+    if cmd == "RESUME_REQUESTED": return "NONE", "RUNNING"
+    return "NONE", current_state
