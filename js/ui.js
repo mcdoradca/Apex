@@ -89,53 +89,11 @@ style.textContent = `
     /* H4 Kinetic Badge */
     .strat-badge-h4 { background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 5px rgba(245, 158, 11, 0.2); }
     
-    /* V5 Flux Badge (NOWOŚĆ) */
-    .strat-badge-flux { background-color: rgba(16, 185, 129, 0.2); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.4); box-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
-    
     .strat-badge-unknown { background-color: rgba(75, 85, 99, 0.3); color: #9ca3af; border-color: rgba(75, 85, 99, 0.5); }
     
     /* Kinetic Score Bar */
     .kinetic-bar-bg { background: rgba(255,255,255,0.1); height: 6px; width: 100%; border-radius: 3px; overflow: hidden; margin-top: 4px; }
     .kinetic-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
-
-    /* Flux Pulse Animation (V5) */
-    .flux-pulse { animation: text-pulse 1.5s infinite; }
-    @keyframes text-pulse {
-        0% { opacity: 1; text-shadow: 0 0 5px rgba(110, 231, 183, 0.5); }
-        50% { opacity: 0.8; text-shadow: 0 0 15px rgba(110, 231, 183, 0.8); }
-        100% { opacity: 1; text-shadow: 0 0 5px rgba(110, 231, 183, 0.5); }
-    }
-    
-    /* Active Pool Slot (V5) */
-    .pool-slot {
-        background: #1f2937;
-        border: 2px solid #374151; /* Grubsza ramka */
-        border-radius: 8px;
-        padding: 12px;
-        position: relative;
-        overflow: hidden;
-        transition: all 0.3s ease;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        min-height: 140px; /* Stała wysokość */
-    }
-    
-    /* Kolory Stanów (Flux States) */
-    .flux-state-wait { border-color: #4b5563; background: #1f2937; opacity: 0.8; }
-    .flux-state-ready { border-color: #fbbf24; background: linear-gradient(135deg, #1f2937 0%, #451a03 100%); box-shadow: 0 0 10px rgba(251, 191, 36, 0.2); }
-    .flux-state-action { border-color: #10b981; background: linear-gradient(135deg, #1f2937 0%, #064e3b 100%); box-shadow: 0 0 15px rgba(16, 185, 129, 0.4); animation: border-pulse 2s infinite; }
-    
-    @keyframes border-pulse {
-        0% { box-shadow: 0 0 5px rgba(16, 185, 129, 0.4); border-color: #10b981; }
-        50% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.7); border-color: #34d399; }
-        100% { box-shadow: 0 0 5px rgba(16, 185, 129, 0.4); border-color: #10b981; }
-    }
-
-    .flux-action-text { font-size: 1.5rem; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase; text-align: center; margin-top: auto; margin-bottom: auto; }
-    .text-action-green { color: #34d399; text-shadow: 0 0 10px rgba(52, 211, 153, 0.6); }
-    .text-action-yellow { color: #fcd34d; text-shadow: 0 0 10px rgba(252, 211, 77, 0.6); }
-    .text-action-gray { color: #6b7280; }
 
 `;
 document.head.appendChild(style);
@@ -167,7 +125,6 @@ const getStrategyInfo = (notes) => {
     if (!notes) return { name: 'UNK', class: 'strat-badge-unknown', full: 'Unknown' };
     
     const n = notes.toUpperCase();
-    if (n.includes("STRATEGIA: FLUX") || n.includes("STRATEGIA: OMNI-FLUX")) return { name: 'FLUX', class: 'strat-badge-flux', full: 'Apex Flux (AF1)' };
     if (n.includes("STRATEGIA: H3") || n.includes("STRATEGY: H3")) return { name: 'H3', class: 'strat-badge-h3', full: 'H3 Elite Sniper' };
     if (n.includes("STRATEGIA: AQM") || n.includes("STRATEGY: AQM")) return { name: 'AQM', class: 'strat-badge-aqm', full: 'AQM V4' };
     if (n.includes("STRATEGIA: BIOX") || n.includes("STRATEGY: BIOX")) return { name: 'BIOX', class: 'strat-badge-biox', full: 'BioX Pump' };
@@ -206,9 +163,6 @@ export const renderers = {
                     scoreVal = parseFloat(scorePart);
                     
                     let scoreBg = "bg-blue-900/30 text-blue-300";
-                    if (strat.name === 'FLUX') {
-                        scoreBg = "bg-emerald-900/30 text-emerald-300 flux-pulse";
-                    }
                     
                     if (strat.name !== 'BIOX') {
                         scoreDisplay = `<span class="ml-2 text-xs ${scoreBg} px-1 rounded">SC: ${scoreVal.toFixed(0)}</span>`;
@@ -233,159 +187,6 @@ export const renderers = {
         }).join('');
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr><th class="p-3 text-left">Ticker</th><th class="p-3 text-right">Cena</th><th class="p-3 text-left">Kinetic Score</th><th class="p-3 text-right">Strzały (30d)</th><th class="p-3 text-right">Max Dziennie</th><th class="p-3 text-right">Śr. Zasięg</th><th class="p-3 text-right">Podłoga (-5%)</th></tr></thead>`;
         return `<div id="phase4-view" class="max-w-6xl mx-auto"><div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4"><div><h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="zap" class="w-6 h-6 mr-3 text-amber-500"></i>Faza 4: Kinetic Alpha</h2><p class="text-sm text-gray-500 mt-1">Ranking "Petard": Akcje z największą liczbą impulsów intraday >2%.</p></div><button id="run-phase4-scan-btn" class="modal-button modal-button-primary bg-amber-600 hover:bg-amber-700 flex items-center shadow-[0_0_15px_rgba(217,119,6,0.3)]"><i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj H4</button></div>${candidates.length === 0 ? '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak danych. Uruchom skaner, aby znaleźć petardy.</p></div>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`}</div>`;
-    },
-
-    // === WIDOK FAZY 5: OMNI-FLUX MONITOR (Z PRZYCISKIEM KUP) ===
-    phase5View: (poolData) => {
-        // --- SAFE GUARD: Sprawdź czy poolData to tablica ---
-        if (!Array.isArray(poolData)) {
-            return `<div class="p-4 text-center text-red-400">Błąd danych F5 (Data Stream Error)</div>`;
-        }
-
-        const activeSlots = poolData.slice(0, 8); 
-        
-        const slotsHtml = activeSlots.map((item, index) => {
-            // --- WARSTWA SANITYZACJI DANYCH ---
-            const priceVal = typeof item.price === 'number' ? item.price : 0;
-            const scoreVal = typeof item.flux_score === 'number' ? item.flux_score : 0;
-            const velVal = typeof item.velocity === 'number' ? item.velocity : 0;
-            const elastVal = typeof item.elasticity === 'number' ? item.elasticity : 0;
-            const tickerStr = item.ticker || "???";
-
-            // Obsługa NULL z backendu dla SL/TP
-            const slRaw = item.stop_loss;
-            const tpRaw = item.take_profit;
-
-            const slText = (typeof slRaw === 'number' && slRaw > 0) ? slRaw.toFixed(2) : "---";
-            const tpText = (typeof tpRaw === 'number' && tpRaw > 0) ? tpRaw.toFixed(2) : "---";
-            // R:R ZOSTAŁO USUNIĘTE Z WIDOKU
-
-            // Logika kolorów i akcji
-            let cardState = "flux-state-wait";
-            let actionText = "CZEKAJ";
-            let actionColor = "text-action-gray";
-            let actionDescription = "Monitorowanie...";
-            
-            if (scoreVal >= 65) {
-                cardState = "flux-state-action";
-                actionText = "KUPUJ";
-                actionColor = "text-action-green";
-                actionDescription = "Setup Potwierdzony!";
-                if (elastVal < -1.0) actionText = "DIP BUY";
-                else if (elastVal > 0.5) actionText = "BREAKOUT";
-            } 
-            else if (scoreVal >= 40 || velVal > 1.5) {
-                cardState = "flux-state-ready";
-                actionText = "GOTOWY";
-                actionColor = "text-action-yellow";
-                actionDescription = "Szukam wejścia...";
-            }
-            
-            const isActive = (item.fails || 0) === 0;
-            const statusIcon = isActive ? '<span class="flex h-3 w-3 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>' : '<span class="h-3 w-3 rounded-full bg-red-500"></span>';
-            
-            // === NOWOŚĆ: Przycisk KUP ===
-            const buyButtonHtml = priceVal > 0 ? `
-                <button class="flux-tile-buy-btn absolute bottom-3 right-3 z-30 bg-white hover:bg-gray-200 text-black text-xs font-bold py-1.5 px-3 rounded shadow-lg flex items-center gap-1 transition-transform hover:scale-105 active:scale-95" data-ticker="${tickerStr}">
-                    <i data-lucide="shopping-cart" class="w-3 h-3"></i> KUP
-                </button>
-            ` : '';
-
-            return `
-            <div class="pool-slot ${cardState} relative overflow-hidden group">
-                <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 font-black text-6xl text-white pointer-events-none">#${index+1}</div>
-                
-                <div class="flex justify-between items-start z-10">
-                    <div>
-                        <div class="flex items-center gap-2 mb-1">
-                            ${statusIcon}
-                            <span class="font-black text-2xl text-white tracking-wide">${tickerStr}</span>
-                        </div>
-                        <div class="text-xs font-mono text-gray-400">Cena: <span class="text-white font-bold">${priceVal.toFixed(2)}</span></div>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-[10px] uppercase text-gray-500 font-bold">Flux Score</div>
-                        <div class="text-xl font-black ${actionColor}">${scoreVal}</div>
-                    </div>
-                </div>
-                
-                <div class="flux-action-text ${actionColor} py-2">
-                    ${actionText}
-                </div>
-                
-                <div class="flex flex-col gap-1 my-2 px-2 py-1 bg-black/20 rounded border border-white/5 relative z-10">
-                    <div class="flex justify-between items-center">
-                        <span class="text-[10px] uppercase text-red-500 font-bold">SL</span>
-                        <span class="text-sm font-bold text-red-400 font-mono">${slText}</span>
-                    </div>
-                    <div class="flex justify-between items-center pt-1 mt-1 border-t border-white/10">
-                        <span class="text-[10px] uppercase text-green-500 font-bold">TP</span>
-                        <span class="text-sm font-bold text-green-400 font-mono">${tpText}</span>
-                    </div>
-                </div>
-                
-                <div class="mt-auto z-10 mb-8">
-                    <div class="flex justify-between items-end mb-1">
-                        <span class="text-[10px] text-gray-400 font-mono uppercase">${actionDescription}</span>
-                        <span class="text-[10px] font-mono ${velVal > 1.0 ? 'text-green-400' : 'text-gray-500'}">Vol: ${velVal.toFixed(1)}x</span>
-                    </div>
-                    <div class="h-2 w-full bg-gray-800 rounded-full overflow-hidden border border-gray-700">
-                        <div class="h-full ${scoreVal >= 65 ? 'bg-emerald-500' : (scoreVal >= 40 ? 'bg-yellow-500' : 'bg-gray-600')} transition-all duration-500" style="width: ${Math.min(100, scoreVal)}%"></div>
-                    </div>
-                </div>
-
-                ${buyButtonHtml}
-
-            </div>`;
-        }).join('');
-
-        const emptySlotsCount = 8 - activeSlots.length;
-        const emptySlotsHtml = Array(Math.max(0, emptySlotsCount)).fill(0).map((_, i) => `
-            <div class="pool-slot bg-[#0d1117] border border-gray-800 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-gray-600 opacity-50 min-h-[140px]">
-                <i data-lucide="loader" class="w-8 h-8 mb-2 animate-spin text-gray-700"></i>
-                <span class="text-xs font-mono">Slot Wolny</span>
-            </div>
-        `).join('');
-
-        return `
-        <div id="phase5-monitor-view" class="max-w-7xl mx-auto">
-            <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-gray-700 pb-4 gap-4">
-                <div>
-                    <h2 class="text-3xl font-black text-white flex items-center tracking-tight">
-                        <i data-lucide="waves" class="w-8 h-8 mr-3 text-emerald-500"></i>
-                        OMNI-FLUX MONITOR
-                    </h2>
-                    <p class="text-sm text-gray-500 mt-1 font-mono">REAL-TIME ACTIVE POOL | <span class="text-emerald-400">LIVE CYCLE: ~4.0s</span></p>
-                </div>
-                
-                <div class="flex items-center gap-4">
-                    <div class="text-right mr-4">
-                        <p class="text-[10px] text-gray-500 uppercase font-bold">Market Bias</p>
-                        <p class="text-lg font-black font-mono ${state.macroBias === 'BEARISH' ? 'text-red-500' : 'text-green-500'}">
-                            ${state.macroBias || 'NEUTRAL'}
-                        </p>
-                    </div>
-                    <button id="stop-phase5-btn" class="bg-red-900/30 hover:bg-red-800/50 text-red-300 border border-red-800 px-4 py-3 rounded-lg text-xs font-bold flex items-center transition-colors shadow-lg">
-                        <i data-lucide="square" class="w-4 h-4 mr-2 fill-current"></i> ZATRZYMAJ
-                    </button>
-                </div>
-            </div>
-
-            <div class="mb-4">
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    ${slotsHtml}
-                    ${emptySlotsHtml}
-                </div>
-            </div>
-            
-            <div class="mt-4 p-3 bg-[#161B22] border border-gray-700 rounded text-xs text-gray-400 flex items-center justify-between">
-                <div class="flex items-center">
-                    <i data-lucide="info" class="w-4 h-4 mr-2 text-blue-400"></i>
-                    <span>System automatycznie rotuje spółki. <span class="text-white font-bold">Użyj przycisku KUP na kafelku</span>, aby zachować strategię w portfelu.</span>
-                </div>
-                <div class="font-mono text-gray-600">v5.0.4 Flux SafeView</div>
-            </div>
-        </div>`;
     },
 
     dashboard: () => {
@@ -484,9 +285,6 @@ export const renderers = {
             }
             
             let statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
-            if (strat.name === 'FLUX') {
-                statusColor = 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]';
-            }
             
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
             return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}"><div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div><div class="flex justify-between items-start mb-3"><div><div class="flex items-center gap-2"><h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4><span class="strat-badge ${strat.class}">${strat.name}</span><i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i></div><div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div></div><div class="text-right"><div class="flex flex-col items-end"><span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span><span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span></div></div></div><div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2"><div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div><div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div><div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div></div><div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div><div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div></div>`;
@@ -670,16 +468,6 @@ export const ui = {
              sidebarControls.appendChild(btnH4);
         }
 
-        // === INIEKCJA PRZYCISKU FAZY 5 (OMNI-FLUX) ===
-        if (sidebarControls && !document.getElementById('btn-phase5-scan')) {
-             const btnF5 = document.createElement('button');
-             btnF5.id = 'btn-phase5-scan';
-             // Używamy koloru szmaragdowego (Emerald) dla odróżnienia
-             btnF5.className = 'w-full text-left flex items-center bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
-             btnF5.innerHTML = '<i data-lucide="waves" class="mr-2 h-4 w-4"></i>Start F5 (Omni-Flux)';
-             sidebarControls.appendChild(btnF5);
-        }
-
         return {
             loginScreen: get('login-screen'),
             dashboardScreen: get('dashboard'),
@@ -691,7 +479,6 @@ export const ui = {
             btnPhase3: get('btn-phase-3'),
             btnPhaseX: get('btn-phasex-scan'),
             btnPhase4: get('btn-phase4-scan'),
-            btnPhase5: get('btn-phase5-scan'),
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
