@@ -386,28 +386,7 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
         } for signal in signals_from_db
     ]
 
-def get_flux_signals(db: Session) -> List[Dict[str, Any]]:
-    signals = db.query(models.TradingSignal).filter(
-        models.TradingSignal.status.in_(['ACTIVE', 'PENDING']),
-        models.TradingSignal.notes.like('%STRATEGIA: FLUX%')
-    ).order_by(desc(models.TradingSignal.generation_date)).all()
-    
-    if not signals:
-        signals = db.query(models.TradingSignal).filter(
-            models.TradingSignal.status.in_(['ACTIVE', 'PENDING']),
-            models.TradingSignal.notes.like('%OMNI-FLUX%')
-        ).order_by(desc(models.TradingSignal.generation_date)).all()
-
-    return [{
-        "id": s.id,
-        "ticker": s.ticker,
-        "status": s.status,
-        "entry_price": _safe_float_stat(s.entry_price),
-        "take_profit": _safe_float_stat(s.take_profit),
-        "stop_loss": _safe_float_stat(s.stop_loss),
-        "notes": s.notes,
-        "generation_date": s.generation_date.isoformat() if s.generation_date else None
-    } for s in signals]
+# Usunięto get_flux_signals (Faza 5)
 
 def get_discarded_signals_count_24h(db: Session) -> int:
     try:
