@@ -166,10 +166,7 @@ class VirtualTrade(BaseModel):
     metric_J: Optional[float] = None
     metric_J_threshold_2sigma: Optional[float] = None
 
-    # Metryki F5 (Flux) - KLUCZOWE DLA NAPRAWY
-    metric_flux_score: Optional[float] = None
-    metric_flux_velocity: Optional[float] = None
-    metric_flux_ofp: Optional[float] = None
+    # Usunięto Metryki F5 (Flux) - CZYSZCZENIE
     
     # Metryki H4
     metric_kinetic_energy: Optional[float] = None
