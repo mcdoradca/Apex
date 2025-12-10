@@ -122,27 +122,44 @@ def _run_schema_and_index_migration(session: Session):
 
 def selective_data_wipe(session: Session):
     """
-    Czyści dane Optymalizatora, Backtestu i Sygnałów H3, ale zachowuje
-    dane fundamentalne (Companies, Cache API, Portfel).
+    Czyści dane Optymalizatora (w tym pamięć wewnętrzną Optuny), 
+    Backtestu i Sygnałów H3, ale zachowuje dane fundamentalne.
     """
-    logger.warning("🧹 ROZPOCZYNAM SELEKTYWNE CZYSZCZENIE DANYCH (Optimizer, Backtest, Signals)...")
+    logger.warning("🧹 ROZPOCZYNAM SELEKTYWNE CZYSZCZENIE DANYCH (Deep Clean)...")
     
     try:
-        # 1. OPTIMIZER (Czyścimy historię nauki)
+        # 1. OPTIMIZER - TWOJE TABELE (Raportowanie)
         session.execute(text("TRUNCATE TABLE optimization_trials CASCADE;"))
         session.execute(text("TRUNCATE TABLE optimization_jobs CASCADE;"))
-        logger.info("✅ Wyczyszczono dane Optymalizatora (Trials, Jobs).")
+        
+        # === 1.1 OPTIMIZER - TABELE OPTUNY (Pamięć Algorytmu) ===
+        # To jest kluczowe! Optuna trzyma stan w osobnych tabelach.
+        # Usuwamy je, aby zmusić algorytm do startu od zera.
+        optuna_tables = [
+            "trial_values", "trial_params", "trial_user_attributes", 
+            "trial_system_attributes", "trials", "study_user_attributes", 
+            "study_system_attributes", "studies", "version_info", "alembic_version"
+        ]
+        
+        inspector = inspect(session.get_bind())
+        existing_tables = inspector.get_table_names()
+        
+        for table in optuna_tables:
+            if table in existing_tables:
+                try:
+                    session.execute(text(f"TRUNCATE TABLE {table} CASCADE;"))
+                    logger.info(f"🗑️ Wyczyszczono wewnętrzną tabelę Optuny: {table}")
+                except Exception as ex:
+                    logger.warning(f"Nie udało się wyczyścić {table} (może nie jest używana): {ex}")
+
+        logger.info("✅ Wyczyszczono KOMPLETNIE dane Optymalizatora (Memory Wipe).")
 
         # 2. BACKTEST (Czyścimy stare symulacje)
-        # Usuwamy tylko wirtualne transakcje z setup_type zaczynającym się od 'BACKTEST_'
         session.execute(text("DELETE FROM virtual_trades WHERE setup_type LIKE 'BACKTEST_%';"))
         logger.info("✅ Wyczyszczono dane Backtestu.")
 
         # 3. SYGNAŁY H3 LIVE (Czyścimy stare sygnały)
-        # Czyścimy wirtualne transakcje monitora (te, które nie są backtestem)
         session.execute(text("DELETE FROM virtual_trades WHERE setup_type NOT LIKE 'BACKTEST_%';"))
-        
-        # Czyścimy sygnały
         session.execute(text("TRUNCATE TABLE trading_signals RESTART IDENTITY CASCADE;"))
         logger.info("✅ Wyczyszczono dane Sygnałów H3 Live.")
 
@@ -152,7 +169,7 @@ def selective_data_wipe(session: Session):
         session.execute(text("UPDATE system_control SET value='NONE' WHERE key = 'h3_deep_dive_report';"))
         
         session.commit()
-        logger.warning("🏁 SELEKTYWNE CZYSZCZENIE ZAKOŃCZONE SUKCESEM.")
+        logger.warning("🏁 DEEP CLEAN ZAKOŃCZONY SUKCESEM.")
         
     except Exception as e:
         logger.error(f"❌ Błąd podczas selektywnego czyszczenia: {e}", exc_info=True)
@@ -180,9 +197,9 @@ def force_reset_simulation_data(session: Session):
 def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
     
-    # === SELEKTYWNE CZYSZCZENIE ZOSTAŁO WYKONANE ===
-    # Usuwamy wywołanie, aby nie czyścić danych ponownie przy kolejnym restarcie.
-    # selective_data_wipe(session) 
+    # === URUCHAMIAMY CZYSZCZENIE "ZATRUTEJ" PAMIĘCI OPTUNY ===
+    # Uruchamiamy jednorazowo w tej wersji pliku.
+    selective_data_wipe(session) 
     
     try:
         engine = session.get_bind()
