@@ -73,7 +73,7 @@ def _run_schema_and_index_migration(session: Session):
         safe_add_column('phase4_candidates', 'hard_floor_violations', 'INTEGER DEFAULT 0')
         safe_add_column('phase4_candidates', 'last_shot_date', 'DATE')
 
-        # === 6. VIRTUAL TRADES (Metryki H4 i H5 Flux) ===
+        # === 6. VIRTUAL TRADES (Metryki H4) ===
         metrics_cols = [
             ("metric_atr_14", "NUMERIC(12, 6)"),
             ("metric_time_dilation", "NUMERIC(12, 6)"),
@@ -96,11 +96,8 @@ def _run_schema_and_index_migration(session: Session):
             ("ai_optimization_suggestion", "JSONB"),
             # Metryki H4
             ("metric_kinetic_energy", "NUMERIC(10, 4)"),
-            ("metric_elasticity", "NUMERIC(10, 4)"),
-            # === NOWOŚĆ: Metryki H5 (Flux) ===
-            ("metric_flux_score", "NUMERIC(10, 4)"),
-            ("metric_flux_velocity", "NUMERIC(10, 4)"),
-            ("metric_flux_ofp", "NUMERIC(10, 4)")
+            ("metric_elasticity", "NUMERIC(10, 4)")
+            # Usunięto metryki Flux (Faza 5)
         ]
         for col, type_def in metrics_cols:
             safe_add_column('virtual_trades', col, type_def)
