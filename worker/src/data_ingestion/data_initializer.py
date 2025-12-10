@@ -139,19 +139,6 @@ def selective_data_wipe(session: Session):
         logger.info("✅ Wyczyszczono dane Backtestu.")
 
         # 3. SYGNAŁY H3 LIVE (Czyścimy stare sygnały)
-        # Usuwamy wszystko z trading_signals (chyba że chcemy zachować coś specyficznego, ale prośba była o wyczyszczenie H3 Live)
-        # Uwaga: Jeśli portfel (portfolio_holdings) polega na trading_signals (klucze obce), 
-        # to TRUNCATE CASCADE usunie też portfel, co może być niepożądane.
-        # Dlatego używamy DELETE z filtrem statusu lub po prostu usuwamy sygnały, które nie są 'MANUAL'.
-        
-        # Bezpieczne czyszczenie: Usuwamy sygnały, ale jeśli są powiązane z portfelem, zostawiamy te aktywne "MANUAL" (jeśli istnieją).
-        # Tutaj usuwamy po prostu wszystkie, zakładając że użytkownik chce czystą kartę sygnałową.
-        # Aby nie usunąć portfela (jeśli jest ON DELETE CASCADE), sprawdzamy powiązania.
-        # W modelu: ForeignKey('companies.ticker', ondelete='CASCADE') jest w signals -> companies.
-        # W portfolio: ForeignKey('companies.ticker').
-        # Nie ma bezpośredniego FK między portfolio a signals w modelach, które widzę (chyba że wirtualne).
-        # Jednak wirtualne transakcje (Live Monitor) mogą być podpięte.
-        
         # Czyścimy wirtualne transakcje monitora (te, które nie są backtestem)
         session.execute(text("DELETE FROM virtual_trades WHERE setup_type NOT LIKE 'BACKTEST_%';"))
         
@@ -193,16 +180,9 @@ def force_reset_simulation_data(session: Session):
 def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
     
-    # === SELEKTYWNE CZYSZCZENIE NA ŻĄDANIE ===
-    # Sprawdzamy flagę w zmiennych środowiskowych lub wykonujemy raz przy deployu.
-    # W tym przypadku, wykonamy to zawsze przy starcie, jeśli flaga 'APEX_WIPE_OPTIMIZER' jest ustawiona,
-    # LUB po prostu wywołamy to teraz jednorazowo, ponieważ edytujemy kod "na żywo".
-    # Aby to zadziałało teraz, wywołamy to bezwarunkowo, a w następnej edycji usuniesz wywołanie.
-    # LUB bezpieczniej: sprawdzamy, czy tabela optimization_trials ma dużo danych.
-    
-    # Decyzja: Wywołujemy to ZAWSZE w tej wersji pliku. Po restarcie workera dane znikną.
-    # Użytkownik poprosił o to teraz.
-    selective_data_wipe(session) 
+    # === SELEKTYWNE CZYSZCZENIE ZOSTAŁO WYKONANE ===
+    # Usuwamy wywołanie, aby nie czyścić danych ponownie przy kolejnym restarcie.
+    # selective_data_wipe(session) 
     
     try:
         engine = session.get_bind()
