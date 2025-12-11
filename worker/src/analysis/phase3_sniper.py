@@ -263,15 +263,23 @@ def _create_or_update_signal(session: Session, ticker: str, strategy: str, price
     """
     Tworzy lub aktualizuje sygnał w bazie danych.
     Oblicza SL/TP na podstawie sztywnych mnożników ATR.
+    
+    CRITICAL FIX: Rozdzielono zapis sygnału (Commit) od logowania.
+    Zapewnia to, że sygnał zostanie zapisany nawet jeśli logowanie/alerting zawiedzie.
     """
     try:
+        # 1. Bezpieczne rzutowanie typów (NumPy protection)
+        price_val = float(price) if not np.isnan(price) else 0.0
+        atr_val = float(atr) if not np.isnan(atr) else 0.0
+        score_val = float(score) if not np.isnan(score) else 0.0
+        
         # Obliczenia cenowe
         # Zaokrąglamy do 2 miejsc
-        entry_price = round(price, 2)
-        atr = max(0.01, atr) # Zabezpieczenie przed 0
+        entry_price = round(price_val, 2)
+        atr_clean = max(0.01, atr_val) # Zabezpieczenie przed 0
         
-        stop_loss = round(entry_price - (sl_mult * atr), 2)
-        take_profit = round(entry_price + (tp_mult * atr), 2)
+        stop_loss = round(entry_price - (sl_mult * atr_clean), 2)
+        take_profit = round(entry_price + (tp_mult * atr_clean), 2)
         
         risk = entry_price - stop_loss
         reward = take_profit - entry_price
@@ -281,21 +289,22 @@ def _create_or_update_signal(session: Session, ticker: str, strategy: str, price
         expiration_date = datetime.now(timezone.utc) + timedelta(days=max_hold)
         
         # Format notatki (Zgodny z UI parserem: SCORE: XX, STRATEGIA: YY)
-        # Przykład: "STRATEGIA: H3 | SCORE: 85 | Rank: 0.98 | M2: -0.6"
         note_content = (
             f"STRATEGIA: {strategy}\n"
-            f"SCORE: {int(score)}/100\n"
+            f"SCORE: {int(score_val)}/100\n"
             f"DETALE: {details}\n"
             f"PARAMETRY: TP {tp_mult}xATR | SL {sl_mult}xATR\n"
             f"MAX HOLD: {max_hold} dni"
         )
 
-        # Sprawdź czy sygnał już istnieje (Active/Pending)
+        # 2. Sprawdź czy sygnał już istnieje (Active/Pending)
         existing = session.query(models.TradingSignal).filter(
             models.TradingSignal.ticker == ticker,
             models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
         ).first()
 
+        operation_type = "UPDATE"
+        
         if existing:
             # Aktualizacja
             existing.updated_at = datetime.now(timezone.utc)
@@ -306,10 +315,9 @@ def _create_or_update_signal(session: Session, ticker: str, strategy: str, price
             existing.notes = note_content
             existing.expiration_date = expiration_date
             # Statusu nie zmieniamy, jeśli był ACTIVE to zostaje ACTIVE
-            
-            append_scan_log(session, f"🔄 Sygnał zaktualizowany: {ticker} ({strategy})")
         else:
             # Nowy sygnał
+            operation_type = "INSERT"
             new_signal = models.TradingSignal(
                 ticker=ticker,
                 status='PENDING',
@@ -327,10 +335,21 @@ def _create_or_update_signal(session: Session, ticker: str, strategy: str, price
                 expected_win_rate=60.0      # Cel
             )
             session.add(new_signal)
-            append_scan_log(session, f"🚀 NOWY SYGNAŁ: {ticker} ({strategy}) Score: {int(score)}")
-            send_telegram_alert(f"🚀 SNIPER {strategy}: {ticker}\nCena: {entry_price}\nScore: {int(score)}\nRR: {rr_ratio}")
 
+        # 3. KRYTYCZNY PUNKT: Commit SYGNAŁU przed logowaniem
+        # To gwarantuje, że sygnał trafi do bazy, nawet jeśli system logowania/alertów zawiedzie.
         session.commit()
+        
+        # --- Sekcja Logowania i Alertów (Oddzielna obsługa błędów) ---
+        try:
+            if operation_type == "UPDATE":
+                append_scan_log(session, f"🔄 Sygnał zaktualizowany: {ticker} ({strategy})")
+            else:
+                append_scan_log(session, f"🚀 NOWY SYGNAŁ: {ticker} ({strategy}) Score: {int(score_val)}")
+                send_telegram_alert(f"🚀 SNIPER {strategy}: {ticker}\nCena: {entry_price}\nScore: {int(score_val)}\nRR: {rr_ratio}")
+        except Exception as log_err:
+            logger.error(f"Sygnał zapisany, ale błąd logowania/alertu dla {ticker}: {log_err}")
+            # Nie robimy rollbacku tutaj, bo sygnał jest już bezpieczny!
 
     except Exception as e:
         logger.error(f"Błąd zapisu sygnału {ticker}: {e}")
