@@ -102,6 +102,9 @@ def run_news_agent_cycle(session: Session, api_client: object):
         if not all_tickers:
             return
 
+        # LOGOWANIE STARTU DO UI
+        append_scan_log(session, f"Agent Newsowy: Start cyklu. Monitoruję {len(all_tickers)} tickerów.")
+
         # 3. Zapytanie do Alpha Vantage (Batch)
         # Limit 50 newsów, sortowanie LATEST (domyślne w AV)
         ticker_string = ",".join(all_tickers[:50]) # AV limituje długość URL, więc bezpiecznie bierzemy 50 tickerów max na raz w workerze
@@ -216,6 +219,7 @@ def run_news_agent_cycle(session: Session, api_client: object):
 
         if processed_count > 0:
             logger.info(f"Agent Newsowy: Przetworzono {processed_count} wzmianek. Wysłano {alerts_count} alertów.")
+            append_scan_log(session, f"Agent Newsowy: Koniec cyklu. Nowych newsów: {processed_count}. Alertów: {alerts_count}.")
             session.commit()
 
     except Exception as e:
