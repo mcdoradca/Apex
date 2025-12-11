@@ -4,21 +4,32 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text, select, func
 
-# Importy z wnętrza projektu
-# === MODYFIKACJA: Dodano PhaseXCandidate do importów ===
+# Importy modeli
 from ..models import TradingSignal, ProcessedNews, PortfolioHolding, PhaseXCandidate
-# ==================================================================
-# KROK 3 (KAT. 1): Import funkcji alertów Telegram
-# ==================================================================
-from ..analysis.utils import update_system_control, get_market_status_and_time, send_telegram_alert
-# ==================================================================
-# Import "mózgu" agenta, który stworzyliśmy w poprzednim kroku
-from ..analysis.ai_agents import _run_news_analysis_agent
+
+# Importy narzędziowe
+from ..analysis.utils import update_system_control, get_market_status_and_time, send_telegram_alert, append_scan_log
 
 logger = logging.getLogger(__name__)
 
-# --- Funkcje pomocnicze skopiowane ze starego 'catalyst_monitor' ---
-# (Są niezbędne do działania nowego agenta)
+# ==================================================================
+# KONFIGURACJA PROGÓW (HARD LOGIC)
+# ==================================================================
+
+# Próg relewancji dla standardowych spółek (aby uniknąć wzmianek "przy okazji")
+STANDARD_RELEVANCE_THRESHOLD = 0.60 
+
+# Progi sentymentu dla standardowych spółek (0.15 łapie też "Somewhat Bullish/Bearish")
+STANDARD_BULLISH_THRESHOLD = 0.15
+STANDARD_BEARISH_THRESHOLD = -0.15
+
+# Konfiguracja BioX (Faza X)
+BIOX_RELEVANCE_THRESHOLD = 0.90 # Musi dotyczyć stricte tej spółki
+# Dla BioX nie ma progu sentymentu - każdy news o wysokiej relewancji jest ważny.
+
+# ==================================================================
+# FUNKCJE POMOCNICZE
+# ==================================================================
 
 def _create_news_hash(headline: str, uri: str) -> str:
     """Tworzy unikalny hash SHA-256 dla wiadomości, aby uniknąć duplikatów."""
@@ -28,180 +39,185 @@ def _create_news_hash(headline: str, uri: str) -> str:
 def _check_if_news_processed(session: Session, ticker: str, news_hash: str) -> bool:
     """Sprawdza, czy dany news (hash) był już przetwarzany dla danego tickera."""
     try:
-        # Sprawdzamy newsy z ostatnich 3 dni (krótsze okno niż poprzednio)
-        three_days_ago = datetime.utcnow() - timedelta(days=3)
+        # Sprawdzamy newsy z ostatnich 7 dni (aby nie spamować powtórkami)
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
         exists = session.scalar(
             select(func.count(ProcessedNews.id))
             .where(ProcessedNews.ticker == ticker)
             .where(ProcessedNews.news_hash == news_hash)
-            .where(ProcessedNews.processed_at >= three_days_ago)
+            .where(ProcessedNews.processed_at >= seven_days_ago)
         )
         return exists > 0
     except Exception as e:
-        logger.error(f"Agent Newsowy: Błąd podczas sprawdzania hasha newsa dla {ticker}: {e}", exc_info=True)
-        return False # Na wszelki wypadek lepiej przetworzyć ponownie
+        logger.error(f"Agent Newsowy: Błąd podczas sprawdzania hasha newsa dla {ticker}: {e}")
+        return False 
 
 def _save_processed_news(session: Session, ticker: str, news_hash: str, sentiment: str, headline: str, url: str):
     """Zapisuje przetworzony news do bazy danych."""
     try:
-        new_entry = ProcessedNews(
+        entry = ProcessedNews(
             ticker=ticker,
             news_hash=news_hash,
-            sentiment=sentiment, # Zapisujemy CRITICAL_NEGATIVE / NEUTRAL itp.
-            headline=headline,
-            source_url=url
+            sentiment=sentiment,
+            headline=headline[:1000] if headline else "", # Przycinamy na wszelki wypadek
+            source_url=url[:1000] if url else ""
         )
-        session.add(new_entry)
+        session.add(entry)
         session.commit()
     except Exception as e:
-        logger.error(f"Agent Newsowy: Błąd podczas zapisywania newsa dla {ticker}: {e}", exc_info=True)
+        logger.error(f"Agent Newsowy: Błąd zapisu newsa dla {ticker}: {e}")
         session.rollback()
 
-# --- Główna funkcja "Ultra Agenta Newsowego" ---
+# ==================================================================
+# GŁÓWNY CYKL AGENTA (WERSJA AV NATIVE)
+# ==================================================================
 
 def run_news_agent_cycle(session: Session, api_client: object):
     """
-    Główna funkcja "Ultra Agenta Newsowego".
-    Pobiera dane Premium (NEWS_SENTIMENT) dla wszystkich monitorowanych spółek,
-    analizuje je za pomocą Gemini i unieważnia sygnały w przypadku krytycznych
-    negatywnych wiadomości.
+    Główna funkcja Agenta Newsowego opartego na metadanych Alpha Vantage.
+    Nie używa LLM. Analizuje pola `ticker_sentiment` z JSON-a.
     """
-    logger.info("Uruchamianie cyklu 'Ultra Agenta Newsowego' (Kategoria 2)...")
+    # logger.info("Uruchamianie cyklu Agenta Newsowego (AV Native)...")
 
-    # 1. Sprawdź, czy rynek jest aktywny
+    # 1. Sprawdź status rynku (opcjonalne, ale oszczędza zasoby w nocy)
+    # Można to zakomentować, jeśli chcesz newsy 24/7
     market_info = get_market_status_and_time(api_client)
-    market_status = market_info.get("status")
-    
-    if market_status not in ["MARKET_OPEN", "PRE_MARKET", "AFTER_MARKET"]:
-        logger.info(f"Agent Newsowy: Rynek jest {market_status}. Pomijanie cyklu.")
-        return
+    # market_status = market_info.get("status")
+    # if market_status == "CLOSED": return
 
     try:
-        # 2. Pobierz listę wszystkich tickerów, które nas interesują
-        active_signals = session.scalars(
-            select(TradingSignal.ticker)
-            .where(TradingSignal.status.in_(['ACTIVE', 'PENDING']))
-            .distinct()
-        ).all()
+        # 2. Pobierz listy monitorowanych tickerów
         
-        portfolio_tickers = session.scalars(
-            select(PortfolioHolding.ticker)
-            .distinct()
-        ).all()
+        # A. Aktywne Sygnały i Portfel (Standard)
+        active_signals = session.scalars(select(TradingSignal.ticker).where(TradingSignal.status.in_(['ACTIVE', 'PENDING']))).all()
+        portfolio_tickers = session.scalars(select(PortfolioHolding.ticker)).all()
+        standard_tickers = set(active_signals + portfolio_tickers)
 
-        # === MODYFIKACJA: Dodanie tickerów z Fazy X (BioX) ===
-        phasex_tickers = session.scalars(
-            select(PhaseXCandidate.ticker)
-            .distinct()
-        ).all()
+        # B. Kandydaci BioX (Specjalne traktowanie)
+        phasex_tickers = set(session.scalars(select(PhaseXCandidate.ticker)).all())
         
-        # Połącz listy i usuń duplikaty (Sygnały + Portfel + Faza X)
-        tickers_to_monitor = list(set(active_signals + portfolio_tickers + phasex_tickers))
+        # Wszystkie unikalne tickery do zapytania API
+        all_tickers = list(standard_tickers.union(phasex_tickers))
 
-        if not tickers_to_monitor:
-            logger.info("Agent Newsowy: Brak tickerów do monitorowania.")
+        if not all_tickers:
             return
 
-        logger.info(f"Agent Newsowy: Monitorowanie {len(tickers_to_monitor)} tickerów (w tym {len(phasex_tickers)} z Fazy X).")
-
-        # 3. Wykonaj jedno zapytanie batchowe (Premium) o wiadomości
-        ticker_string = ",".join(tickers_to_monitor)
-        # Używamy limitu 50, aby dostać najnowsze newsy z ostatnich godzin
+        # 3. Zapytanie do Alpha Vantage (Batch)
+        # Limit 50 newsów, sortowanie LATEST (domyślne w AV)
+        ticker_string = ",".join(all_tickers[:50]) # AV limituje długość URL, więc bezpiecznie bierzemy 50 tickerów max na raz w workerze
+        
+        # Używamy klienta API. Jeśli funkcja nie istnieje w mocku, to wywali błąd, ale w produkcji jest OK.
+        # Parametr topics='life_sciences' można dodać opcjonalnie, ale tu chcemy wszystko.
         news_data = api_client.get_news_sentiment(ticker=ticker_string, limit=50)
 
-        if not news_data or not news_data.get('feed'):
-            logger.info("Agent Newsowy: Endpoint NEWS_SENTIMENT nie zwrócił żadnych wiadomości dla monitorowanych tickerów.")
+        if not news_data or 'feed' not in news_data:
             return
 
-        # 4. Przetwórz każdą otrzymaną wiadomość
-        processed_items = 0
-        critical_alerts = 0
-        
-        for item in news_data.get('feed', []):
-            headline = item.get('title')
-            summary = item.get('summary')
-            url = item.get('url')
-            
-            if not all([headline, summary, url]):
-                continue # Pomiń niekompletne dane
+        processed_count = 0
+        alerts_count = 0
 
-            # 5. Sprawdź, dla których z naszych tickerów jest ta wiadomość
-            tickers_in_news = [t['ticker'] for t in item.get('topics', [])]
+        # 4. Przetwarzanie Feed-u
+        for item in news_data.get('feed', []):
+            headline = item.get('title', 'No Title')
+            summary = item.get('summary', 'No Summary')
+            url = item.get('url', '#')
             
-            for ticker in tickers_in_news:
-                # Jeśli ten news dotyczy spółki, której nie monitorujemy, zignoruj
-                if ticker not in tickers_to_monitor:
+            # Najważniejsze: Lista sentymentów per ticker
+            ticker_sentiment_list = item.get('ticker_sentiment', [])
+            
+            if not ticker_sentiment_list: continue
+
+            # Dla każdego tickera wymienionego w newsie
+            for ts_data in ticker_sentiment_list:
+                ticker = ts_data.get('ticker')
+                
+                # Czy nas ten ticker obchodzi?
+                if ticker not in all_tickers:
                     continue
 
-                # 6. Sprawdź, czy już przetwarzaliśmy ten news dla tego tickera
-                news_hash = _create_news_hash(headline, url)
+                # Sprawdź duplikaty (per ticker, bo ten sam news może dotyczyć wielu)
+                news_hash = _create_news_hash(headline + ticker, url)
                 if _check_if_news_processed(session, ticker, news_hash):
-                    continue # Już to widzieliśmy, pomiń
+                    continue
+
+                # Wyciągamy metryki AV
+                try:
+                    relevance_score = float(ts_data.get('relevance_score', 0))
+                    sentiment_score = float(ts_data.get('ticker_sentiment_score', 0))
+                    sentiment_label = ts_data.get('ticker_sentiment_label', 'Neutral')
+                except (ValueError, TypeError):
+                    continue
+
+                is_biox = ticker in phasex_tickers
+                should_alert = False
+                alert_type = "NEUTRAL"
+                alert_emoji = "ℹ️"
+
+                # === LOGIKA DECYZYJNA ===
+
+                # SCENARIUSZ 1: BioX (Biotech) - Opcja B
+                # Każdy news o wysokiej relewancji to katalizator
+                if is_biox:
+                    if relevance_score >= BIOX_RELEVANCE_THRESHOLD:
+                        should_alert = True
+                        alert_type = "BIOX_CATALYST"
+                        alert_emoji = "🧬"
+                        # Aktualizujemy datę analizy w BioX, aby pokazać aktywność
+                        session.execute(text("UPDATE phasex_candidates SET analysis_date = NOW() WHERE ticker = :t"), {'t': ticker})
                 
-                logger.info(f"Agent Newsowy: Wykryto nowy news dla {ticker}: '{headline}'. Rozpoczynanie analizy AI...")
-                processed_items += 1
+                # SCENARIUSZ 2: Standard (Sygnały/Portfel)
+                # Filtrujemy szum, szukamy sentymentu
+                else:
+                    if relevance_score >= STANDARD_RELEVANCE_THRESHOLD:
+                        if sentiment_score >= STANDARD_BULLISH_THRESHOLD:
+                            should_alert = True
+                            alert_type = "POSITIVE"
+                            alert_emoji = "🚀" if sentiment_score >= 0.35 else "📈" # Rakieta dla Bullish, Wykres dla Somewhat
+                        
+                        elif sentiment_score <= STANDARD_BEARISH_THRESHOLD:
+                            should_alert = True
+                            alert_type = "NEGATIVE"
+                            alert_emoji = "💥" if sentiment_score <= -0.35 else "📉" # Wybuch dla Bearish, Wykres dla Somewhat
 
-                # 7. Mamy nowy news. Wyślij go do "mózgu" AI (Gemini)
-                analysis = _run_news_analysis_agent(ticker, headline, summary, url)
-                sentiment = analysis.get('sentiment', 'NEUTRAL')
+                # === AKCJA ===
+                if should_alert:
+                    alerts_count += 1
+                    
+                    # Log w bazie
+                    _save_processed_news(session, ticker, news_hash, alert_type, headline, url)
+                    
+                    # Formatowanie wiadomości
+                    msg = (
+                        f"{alert_emoji} <b>NEWS ALERT: {ticker}</b>\n"
+                        f"Label: {sentiment_label} (Score: {sentiment_score})\n"
+                        f"Relevance: {relevance_score}\n\n"
+                        f"📰 {headline}\n"
+                        f"🔗 <a href='{url}'>Link do źródła</a>"
+                    )
+                    
+                    # Log w UI Dashboard
+                    append_scan_log(session, f"NEWS: {ticker} | {sentiment_label} | {headline[:50]}...")
+                    
+                    # Alert Telegram (HTML parse mode jest obsługiwany przez bibliotekę utils jeśli jest wdrożony, tutaj plain text bezpieczniej)
+                    # W utils.py mamy quote_plus, więc HTML tagi mogą nie przejść idealnie, wysyłamy czysty tekst
+                    clean_msg = (
+                        f"{alert_emoji} NEWS: {ticker} [{alert_type}]\n"
+                        f"Sentyment: {sentiment_label} ({sentiment_score})\n"
+                        f"{headline}\n"
+                        f"{url}"
+                    )
+                    send_telegram_alert(clean_msg)
+                    
+                    # Alert Systemowy w UI (Dla krytycznych wartości)
+                    if abs(sentiment_score) >= 0.35 or alert_type == "BIOX_CATALYST":
+                        update_system_control(session, 'system_alert', f"{ticker}: {headline[:60]}...")
 
-                # 8. Zapisz wynik analizy w bazie (aby nie analizować ponownie)
-                _save_processed_news(session, ticker, news_hash, sentiment, headline, url)
+                processed_count += 1
 
-                # 9. REAKCJA NA KRYTYCZNY NEWS
-                if sentiment == 'CRITICAL_NEGATIVE':
-                    critical_alerts += 1
-                    logger.warning(f"Agent Newsowy: KRYTYCZNY NEGATYWNY NEWS DLA {ticker}! Unieważnianie sygnałów.")
-                    
-                    # Unieważnij wszystkie aktywne/oczekujące sygnały dla tego tickera
-                    update_stmt = text("""
-                        UPDATE trading_signals 
-                        SET status = 'INVALIDATED', 
-                            notes = :notes, 
-                            updated_at = NOW()
-                        WHERE ticker = :ticker 
-                        AND status IN ('ACTIVE', 'PENDING')
-                    """)
-                    session.execute(update_stmt, {
-                        'ticker': ticker,
-                        'notes': f"Sygnał unieważniony przez Agenta Newsowego (CRITICAL_NEGATIVE). News: {headline}"
-                    })
-                    session.commit()
-                    
-                    # Wyślij pilny alert do UI (i w przyszłości na Telegram)
-                    alert_msg = f"PILNY ALERT NEWSOWY: {ticker} | {sentiment} | {headline}"
-                    update_system_control(session, 'system_alert', alert_msg)
-                    # ==================================================================
-                    # KROK 3 (KAT. 1): Wysyłanie alertu na Telegram
-                    # ==================================================================
-                    send_telegram_alert(f"💥 PILNY ALERT NEGATYWNY 💥\n{alert_msg}")
-                    # ==================================================================
-                
-                # ==================================================================
-                # Reakcja na Pozytywny News (Dla BioX i innych)
-                # ==================================================================
-                elif sentiment == 'CRITICAL_POSITIVE':
-                    critical_alerts += 1 
-                    logger.warning(f"Agent Newsowy: KRYTYCZNY POZYTYWNY NEWS DLA {ticker}! Wysyłanie alertu.")
-                    
-                    # Dla pozytywnego newsa NIE unieważniamy sygnału,
-                    # ale wysyłamy alert, aby trader mógł podjąć decyzję.
-                    alert_msg = f"PILNY ALERT NEWSOWY: {ticker} | {sentiment} | {headline}"
-                    update_system_control(session, 'system_alert', alert_msg)
-                    
-                    # Jeśli to spółka z Fazy X, a nie ma aktywnego sygnału, zaktualizuj datę analizy w phasex_candidates
-                    # aby wskazać, że coś się dzieje.
-                    session.execute(text("UPDATE phasex_candidates SET analysis_date = NOW() WHERE ticker = :t"), {'t': ticker})
-                    session.commit()
-
-                    # ==================================================================
-                    # KROK 3 (KAT. 1): Wysyłanie alertu na Telegram
-                    # ==================================================================
-                    send_telegram_alert(f"🚀 PILNY ALERT POZYTYWNY 🚀\n{alert_msg}")
-                    # ==================================================================
-        
-        logger.info(f"Agent Newsowy: Cykl zakończony. Przetworzono {processed_items} nowych wiadomości. Wygenerowano {critical_alerts} alertów krytycznych.")
+        if processed_count > 0:
+            logger.info(f"Agent Newsowy: Przetworzono {processed_count} wzmianek. Wysłano {alerts_count} alertów.")
+            session.commit()
 
     except Exception as e:
-        logger.error(f"Agent Newsowy: Nieoczekiwany błąd w głównym cyklu: {e}", exc_info=True)
+        logger.error(f"Agent Newsowy: Błąd krytyczny cyklu: {e}", exc_info=True)
         session.rollback()
