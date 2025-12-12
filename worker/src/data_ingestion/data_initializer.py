@@ -198,9 +198,8 @@ def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
     
     # === SELEKTYWNE CZYSZCZENIE DANYCH ===
-    # ODKOMENTOWANE w celu resetu Optuny. 
-    # Zakomentuj ponownie po wdrożeniu i restarcie!
-    selective_data_wipe(session) 
+    # ZAKOMENTOWANE - Bezpieczne dla restartu (Nie czyści bazy).
+    # selective_data_wipe(session) 
     
     try:
         engine = session.get_bind()
