@@ -197,9 +197,10 @@ def force_reset_simulation_data(session: Session):
 def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
     
-    # === SELEKTYWNE CZYSZCZENIE ZOSTAŁO WYKONANE ===
-    # Usuwamy wywołanie, aby nie czyścić danych ponownie przy kolejnym restarcie.
-    # selective_data_wipe(session) 
+    # === SELEKTYWNE CZYSZCZENIE DANYCH ===
+    # ODKOMENTOWANE w celu resetu Optuny. 
+    # Zakomentuj ponownie po wdrożeniu i restarcie!
+    selective_data_wipe(session) 
     
     try:
         engine = session.get_bind()
