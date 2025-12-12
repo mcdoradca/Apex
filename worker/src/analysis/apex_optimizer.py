@@ -378,21 +378,33 @@ class QuantumOptimizer:
     def _objective(self, trial):
         """
         Funkcja celu Optuny.
-        Definiuje przestrzeń poszukiwań dla parametrów SZTYWNYCH.
+        Definiuje przestrzeń poszukiwań (Zaktualizowana o Twarde Ograniczenia Użytkownika).
         """
         params = {}
         
         if self.strategy_mode == 'H3':
             params = {
                 # === ELITE FILTERING (H3) ===
-                'h3_percentile': trial.suggest_float('h3_percentile', 0.85, 0.99), 
-                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -2.0, 2.0), 
-                'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 1.0),
+                # Percentyl: Szukamy tylko w górnym decylu (0.90 - 0.99)
+                'h3_percentile': trial.suggest_float('h3_percentile', 0.90, 0.99), 
                 
-                # Zarządzanie pozycją
-                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 10.0), 
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 5.0),
-                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 10), 
+                # Masa: Start od -1.0 w górę (do 0.5, żeby złapać lekki ruch)
+                # Unikamy głębokiej hibernacji (-1.88)
+                'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -1.0, 0.5), 
+                
+                # Min Score: Maksymalnie 0.4, nie wyżej
+                'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 0.4),
+                
+                # Zarządzanie pozycją - Ryzykowne "Let it run"
+                # TP: Bez ograniczeń w górę (wysoki sufit), min 4.7
+                'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 4.7, 20.0), 
+                
+                # SL: Szeroki stop, ale ograniczony do 4.7x ATR (zgodnie z życzeniem)
+                # Chcemy uniknąć głębokich spadków, z których trudno się podnieść.
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 4.7),
+                
+                # Max Hold: Skrócony do 9 dni
+                'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 9), 
             }
             
         elif self.strategy_mode == 'AQM':
@@ -401,7 +413,7 @@ class QuantumOptimizer:
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.60, 0.95),
                 'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.30, 0.70),
                 
-                # Zarządzanie pozycją (Używamy tych samych kluczy co H3 dla uproszczenia backendu)
+                # Zarządzanie pozycją (Domyślne/Wspólne)
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 10.0),
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 5.0),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 10),
@@ -623,3 +635,4 @@ class QuantumOptimizer:
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job: job.status = 'FAILED'; self.session.commit()
         except: self.session.rollback()
+
