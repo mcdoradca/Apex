@@ -19,14 +19,15 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 # === KONFIGURACJA KRYTERIÓW FAZY X (BIOX) ===
-MIN_PRICE = 0.50
-MAX_PRICE = 4.00 
+# ZAKTUALIZOWANO: Zwiększono zakres cenowy, aby łapać spółki jak RADX (start z ~$4.26)
+MIN_PRICE = 0.20   # Obniżono dolny próg
+MAX_PRICE = 25.00  # Podniesiono górny próg (wcześniej 4.00) - łapiemy Small/Mid Cap Biotech
 
 # Słowa kluczowe do identyfikacji sektora Biotech
 BIOTECH_KEYWORDS = [
     'Biotechnology', 'Pharmaceutical', 'Health Care', 'Life Sciences', 
     'Medical', 'Therapeutics', 'Biosciences', 'Oncology', 'Genomics',
-    'Drug', 'Bio'
+    'Drug', 'Bio', 'Immuno', 'Cell', 'Gene', 'Theranostics' # Dodano Theranostics
 ]
 
 def _is_biotech(sector: str, industry: str) -> bool:
@@ -76,7 +77,7 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
     3. Jeśli Biotech -> Zapisuje.
     """
     logger.info("Running Phase X: BioX Scanner (Full Market Scan)...")
-    append_scan_log(session, "Faza X (BioX): Start pełnego skanowania rynku. Cel: Biotech $0.5-$4.0.")
+    append_scan_log(session, f"Faza X (BioX): Start pełnego skanowania rynku. Cel: Biotech ${MIN_PRICE}-${MAX_PRICE}.")
 
     # 1. Pobieramy WSZYSTKIE tickery, posortowane alfabetycznie (dla porządku w logach)
     # Pobieramy też sektor, żeby wiedzieć czy musimy pytać API
@@ -99,25 +100,26 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
     logger.info(f"Faza X: Załadowano {total_tickers} tickerów do sprawdzenia.")
     
     candidates_buffer = []
-    BATCH_SIZE = 20 # Mniejszy batch, częstszy zapis
+    # BATCH_SIZE = 20 # Mniejszy batch, częstszy zapis (usunięto nieużywaną zmienną lokalną, używamy 5 w pętli)
     processed_count = 0
     passed_price = 0
     found_count = 0
     
     # Czyścimy tabelę kandydatów na starcie, żeby mieć czysty obraz
+    # UWAGA: To usuwa stare wyniki, więc skan musi przejść całość, żeby odzyskać listę.
     try:
         session.execute(text("DELETE FROM phasex_candidates"))
         session.commit()
     except Exception:
         session.rollback()
 
-    start_time = time.time()
+    # start_time = time.time() # Nieużywane
 
     # 2. Główna pętla
     for ticker in tickers_list:
         processed_count += 1
         
-        # Aktualizacja postępu w UI co 10 sztuk (żebyś widział, że działa)
+        # Aktualizacja postępu w UI co 10 sztuk
         if processed_count % 10 == 0:
              update_scan_progress(session, processed_count, total_tickers)
              # Log w konsoli co 50 sztuk
@@ -149,13 +151,10 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
             last_candle = ts[last_date]
             
             # Close price (Adjusted lub raw)
-            # Klucze mogą być "4. close" lub "5. adjusted close" zależnie od endpointu,
-            # ale get_daily_adjusted zwraca adjusted w '5.' i close w '4.'.
-            # Używamy close (raw price) do filtra $0.5-$4.0
             raw_close = float(last_candle.get('4. close', 0))
             volume = int(last_candle.get('6. volume', 0))
 
-            # FILTR CENOWY
+            # FILTR CENOWY (Rozszerzony)
             if not (MIN_PRICE <= raw_close <= MAX_PRICE):
                 continue 
             
@@ -167,7 +166,6 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
             
             # Jeśli w bazie brak danych -> Pytamy API (Overview)
             if not sector or sector == 'N/A' or not industry or industry == 'N/A':
-                # append_scan_log(session, f"Faza X: Sprawdzam sektor w API dla {ticker}...")
                 sector, industry = _update_company_sector(session, api_client, ticker)
                 # Mały sleep po callu do API Overview, żeby nie zabić limitu
                 time.sleep(1.0) 
@@ -177,7 +175,6 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
                 continue
 
             # === KROK C: MAMY KANDYDATA! ===
-            # append_scan_log(session, f"✅ Faza X: Znaleziono {ticker} ({sector}) Cena: {raw_close}")
             
             candidates_buffer.append({
                 'ticker': ticker,
@@ -196,8 +193,6 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
                 candidates_buffer = []
 
         except Exception as e:
-            # Ignorujemy błędy pojedynczych tickerów, lecimy dalej
-            # logger.error(f"Err {ticker}: {e}")
             continue
 
     # Zapisz resztę z bufora na koniec
@@ -206,7 +201,7 @@ def run_phasex_scan(session: Session, api_client) -> List[str]:
 
     update_scan_progress(session, total_tickers, total_tickers)
     
-    summary = f"🏁 Faza X (BioX): Koniec. Przeanalizowano: {total_tickers}. Pasowało cenowo: {passed_price}. Wynik Biotech: {found_count}."
+    summary = f"🏁 Faza X (BioX): Koniec. Przeanalizowano: {total_tickers}. Pasowało cenowo (${MIN_PRICE}-${MAX_PRICE}): {passed_price}. Wynik Biotech: {found_count}."
     logger.info(summary)
     append_scan_log(session, summary)
     
