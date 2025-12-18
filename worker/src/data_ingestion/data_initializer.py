@@ -197,9 +197,10 @@ def force_reset_simulation_data(session: Session):
 def initialize_database_if_empty(session: Session, api_client):
     _run_schema_and_index_migration(session)
     
-    # === SELEKTYWNE CZYSZCZENIE DANYCH ===
-    # ZAKOMENTOWANE - Bezpieczne dla restartu (Nie czyści bazy).
-    # selective_data_wipe(session) 
+    # === SELEKTYWNE CZYSZCZENIE DANYCH (Deep Clean) ===
+    # ODKOMENTOWANE: Poniższa linia uruchomi czyszczenie pamięci Optuny.
+    # Po wdrożeniu i restarcie, należy ją ponownie zakomentować!
+    selective_data_wipe(session) 
     
     try:
         engine = session.get_bind()
