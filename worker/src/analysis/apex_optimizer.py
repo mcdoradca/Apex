@@ -8,6 +8,7 @@ from sqlalchemy import text
 from datetime import datetime, timezone
 import time
 import os 
+import math # Import math do logarytmów
 
 # Importy wewnętrzne
 from .. import models
@@ -124,7 +125,11 @@ class QuantumOptimizer:
             best_trial = self.study.best_trial
             best_value = float(best_trial.value)
             
-            end_msg = f"🏁 SUKCES! Najlepszy PF: {best_value:.4f}"
+            # Wyciągamy statystyki najlepszej próby z User Attributes (zapisane w _objective)
+            best_pf = best_trial.user_attrs.get("profit_factor", 0.0)
+            best_trades = best_trial.user_attrs.get("trades", 0)
+            
+            end_msg = f"🏁 SUKCES! Najlepszy SmartScore: {best_value:.2f} (PF: {best_pf:.2f}, Transakcji: {best_trades})"
             append_scan_log(self.session, end_msg)
             
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
@@ -377,43 +382,27 @@ class QuantumOptimizer:
 
     def _objective(self, trial):
         """
-        Funkcja celu Optuny.
-        Definiuje przestrzeń poszukiwań (Zaktualizowana o Twarde Ograniczenia Użytkownika).
+        Funkcja celu Optuny (Smart Scoring).
         """
         params = {}
         
         if self.strategy_mode == 'H3':
             params = {
                 # === ELITE FILTERING (H3) ===
-                # Percentyl: Szukamy tylko w górnym decylu (0.90 - 0.99)
                 'h3_percentile': trial.suggest_float('h3_percentile', 0.90, 0.99), 
-                
-                # Masa: Start od -1.0 w górę (do 0.5, żeby złapać lekki ruch)
-                # Unikamy głębokiej hibernacji (-1.88)
                 'h3_m_sq_threshold': trial.suggest_float('h3_m_sq_threshold', -1.0, 0.5), 
-                
-                # Min Score: Maksymalnie 0.4, nie wyżej
                 'h3_min_score': trial.suggest_float('h3_min_score', -0.5, 0.4),
                 
-                # Zarządzanie pozycją - Ryzykowne "Let it run"
-                # TP: Bez ograniczeń w górę (wysoki sufit), min 4.7
+                # Zarządzanie pozycją - Skorygowane SL
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 4.7, 20.0), 
-                
-                # SL: Szeroki stop, ale ograniczony do 4.7x ATR (zgodnie z życzeniem)
-                # Chcemy uniknąć głębokich spadków, z których trudno się podnieść.
-                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 4.7),
-                
-                # Max Hold: Skrócony do 9 dni
+                'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 4.7), # MAX 4.7!
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 9), 
             }
             
         elif self.strategy_mode == 'AQM':
             params = {
-                # === AQM V2 PARAMS ===
                 'aqm_min_score': trial.suggest_float('aqm_min_score', 0.60, 0.95),
                 'aqm_vms_min': trial.suggest_float('aqm_vms_min', 0.30, 0.70),
-                
-                # Zarządzanie pozycją (Domyślne/Wspólne)
                 'h3_tp_multiplier': trial.suggest_float('h3_tp_multiplier', 3.0, 10.0),
                 'h3_sl_multiplier': trial.suggest_float('h3_sl_multiplier', 2.0, 5.0),
                 'h3_max_hold': trial.suggest_int('h3_max_hold', 2, 10),
@@ -432,18 +421,32 @@ class QuantumOptimizer:
         pf = result['profit_factor']
         trades = result['total_trades']
         
-        if trial.number % 5 == 0:
-            logger.info(f"⚡ Trial {trial.number}: PF={pf:.2f} (T: {trades})")
-
-        if pf > self.best_score_so_far:
-            self.best_score_so_far = pf
-            self._update_best_score(pf)
-
-        self._save_trial(trial, params, pf, trades, pf, result['win_rate'])
+        # === SMART SCORING METRIC (Composite Score) ===
+        # Zamiast czystego PF, liczymy wynik ważony logarytmem liczby transakcji.
+        # To zmusza Optunę do szukania strategii, które faktycznie handlują.
+        # Wzór: Score = PF * log10(trades + 1)
+        #
+        # Przykład:
+        # 1. PF 5.0, 1 transakcja -> 5.0 * log10(2) = 5.0 * 0.30 = 1.50 (SŁABY WYNIK)
+        # 2. PF 3.0, 50 transakcji -> 3.0 * log10(51) = 3.0 * 1.70 = 5.10 (DOBRY WYNIK)
         
-        # Kara za zbyt małą liczbę transakcji (overfitting)
-        if trades < 5: return 0.0
-        return pf
+        score = pf * math.log10(trades + 1)
+        
+        # Zapisujemy atrybuty, żeby potem wiedzieć jaki był prawdziwy PF
+        trial.set_user_attr("profit_factor", pf)
+        trial.set_user_attr("trades", trades)
+
+        if trial.number % 5 == 0:
+            logger.info(f"⚡ Trial {trial.number}: Score={score:.2f} (PF: {pf:.2f}, Trades: {trades})")
+
+        if score > self.best_score_so_far:
+            self.best_score_so_far = score
+            self._update_best_score(score)
+
+        self._save_trial(trial, params, pf, trades, score, result['win_rate'])
+        
+        if trades < 5: return 0.0 # Hard limit
+        return score
 
     def _run_simulation_unified(self, params, start_ts, end_ts):
         """
@@ -577,7 +580,9 @@ class QuantumOptimizer:
         for t in self.study.trials:
             if t.state == optuna.trial.TrialState.COMPLETE:
                 safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in t.params.items()}
-                trials_data.append({'params': safe_params, 'profit_factor': float(t.value) if t.value is not None else 0.0})
+                # Zapisujemy prawdziwy PF, nie zmodulowany score
+                pf = t.user_attrs.get("profit_factor", float(t.value))
+                trials_data.append({'params': safe_params, 'profit_factor': pf})
         return trials_data
 
     def _run_sensitivity_analysis(self, trials_data):
@@ -599,6 +604,7 @@ class QuantumOptimizer:
         try:
             safe_pf = float(pf) if pf is not None and not np.isnan(pf) else 0.0
             safe_trades = int(trades) if trades is not None else 0
+            # Zapisujemy SCORE jako główną metrykę (bo to ją maksymalizujemy)
             safe_score = float(score) if score is not None and not np.isnan(score) else 0.0
             safe_win_rate = float(win_rate) if win_rate is not None and not np.isnan(win_rate) else 0.0
             safe_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in params.items()}
@@ -608,7 +614,8 @@ class QuantumOptimizer:
             trial_record = models.OptimizationTrial(
                 job_id=self.job_id, trial_number=trial.number, params=safe_params,
                 profit_factor=safe_pf, total_trades=safe_trades, win_rate=safe_win_rate,
-                net_profit=0.0, state='COMPLETE', created_at=datetime.now(timezone.utc)
+                net_profit=safe_score, # Hack: Zapisujemy Score w kolumnie net_profit dla podglądu
+                state='COMPLETE', created_at=datetime.now(timezone.utc)
             )
             self.session.add(trial_record)
             if trial.number % 10 == 0: self.session.commit()
@@ -618,10 +625,19 @@ class QuantumOptimizer:
         job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
         if job:
             job.status = 'COMPLETED'
-            job.best_score = float(best_trial.value)
+            # To jest "Smart Score", nie czysty PF
+            job.best_score = float(best_trial.value) 
             best_params = {k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in best_trial.params.items()}
+            
+            # Dodajemy prawdziwe metryki do konfiguracji
+            final_metrics = {
+                'real_profit_factor': best_trial.user_attrs.get("profit_factor", 0.0),
+                'real_trades': best_trial.user_attrs.get("trades", 0)
+            }
+            
             job.configuration = {
                 'best_params': best_params, 
+                'final_metrics': final_metrics,
                 'sensitivity_analysis': sensitivity_report, 
                 'version': 'V20_UNIFIED_PHYSICS', 
                 'strategy': self.strategy_mode,
@@ -635,4 +651,3 @@ class QuantumOptimizer:
             job = self.session.query(models.OptimizationJob).filter(models.OptimizationJob.id == self.job_id).first()
             if job: job.status = 'FAILED'; self.session.commit()
         except: self.session.rollback()
-
