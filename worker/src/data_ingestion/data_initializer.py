@@ -200,7 +200,7 @@ def initialize_database_if_empty(session: Session, api_client):
     # === SELEKTYWNE CZYSZCZENIE DANYCH (Deep Clean) ===
     # ODKOMENTOWANE: Poniższa linia uruchomi czyszczenie pamięci Optuny.
     # Po wdrożeniu i restarcie, należy ją ponownie zakomentować!
-    selective_data_wipe(session) 
+    # selective_data_wipe(session) 
     
     try:
         engine = session.get_bind()
