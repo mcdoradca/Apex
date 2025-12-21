@@ -152,14 +152,10 @@
     <div id="h3-deep-dive-modal" class="modal-backdrop hidden"><div class="modal-content modal-content-lg"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-white">Analiza H3 Deep Dive</h3><button id="h3-deep-dive-close-btn" class="p-1 text-gray-500 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button></div><div class="mb-4 p-4 bg-gray-900 border border-gray-700 rounded-md"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Analizę Porażek H3</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok, który wykazał słabe wyniki (np. 2023), aby przeanalizować przyczyny niepowodzeń transakcji H3 w tym okresie.</p><div class="flex items-start gap-3"><input type="number" id="h3-deep-dive-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="2100"><button id="run-h3-deep-dive-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="search-check" class="w-4 h-4 mr-2"></i> Analizuj Rok</button></div><div id="h3-deep-dive-status-message" class="text-sm mt-3 h-4"></div></div><div id="h3-deep-dive-report-content" class="text-gray-300 bg-gray-900 border border-gray-700 p-4 rounded-md max-h-[50vh] overflow-y-auto"><p class="text-gray-500">Zleć analizę roku, aby zobaczyć raport.</p></div></div></div>
 
     <div id="h3-live-modal" class="modal-backdrop hidden">
-        <div class="modal-content !max-w-2xl !p-5"> <!-- Szersze i niższe okno -->
-            <h3 class="text-lg font-bold mb-3 text-white flex items-center"><i data-lucide="settings" class="w-5 h-5 mr-2 text-purple-400"></i>Konfiguracja H3 (Live)</h3>
+        <div class="modal-content !max-w-2xl !p-5"> <h3 class="text-lg font-bold mb-3 text-white flex items-center"><i data-lucide="settings" class="w-5 h-5 mr-2 text-purple-400"></i>Konfiguracja H3 (Live)</h3>
             <p class="text-xs text-gray-500 mb-3">Ustaw parametry dla skanera sygnałów H3.</p>
             
-            <!-- Grid 2-kolumnowy, żeby zmniejszyć wysokość -->
             <div class="grid grid-cols-2 gap-3">
-                <!-- JS Wstrzykuje "Tryb Strategii" tutaj (Slot 1) -->
-                
                 <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-live-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"></div>
                 
                 <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-live-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"></div>
@@ -168,14 +164,12 @@
                 
                 <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-live-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"></div>
 
-                <!-- TP/SL obok siebie w wierszu na pełną szerokość -->
                 <div class="col-span-2 grid grid-cols-2 gap-3 bg-gray-800/30 p-2 rounded border border-gray-700/50">
                     <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik TP</label><input type="number" id="h3-live-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"></div>
                     <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Mnożnik SL</label><input type="number" id="h3-live-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"></div>
                 </div>
                 
-                <!-- JS Wstrzykuje "Min. Component Score" tutaj (Slot Ostatni) -->
-            </div>
+                </div>
             
             <div class="flex justify-end gap-3 mt-4">
                 <button id="h3-live-cancel-btn" class="modal-button modal-button-secondary text-xs">Anuluj</button>
@@ -267,7 +261,17 @@
                 </div>
                 <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Rok Analizy</label><input type="number" id="qo-year-input" class="modal-input" placeholder="np. 2023" min="2000" max="2100" value="2024"></div>
                 <div><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Liczba Prób (Trials)</label><input type="number" id="qo-trials-input" class="modal-input" placeholder="50" min="10" max="200" value="30"><p class="text-xs text-gray-500 mt-1">Więcej prób = lepszy wynik, ale dłuższy czas.</p></div>
-            </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Okres Skanowania</label>
+                    <select id="qo-scan-period-select" class="modal-input cursor-pointer hover:bg-gray-800 transition-colors">
+                        <option value="FULL">Pełny Rok (FULL)</option>
+                        <option value="Q1">Q1 (Styczeń - Marzec)</option>
+                        <option value="Q2">Q2 (Kwiecień - Czerwiec)</option>
+                        <option value="Q3">Q3 (Lipiec - Wrzesień)</option>
+                        <option value="Q4">Q4 (Październik - Grudzień)</option>
+                    </select>
+                </div>
+                </div>
             <div id="qo-status-message" class="text-sm mt-3 h-4 text-center"></div>
             <div class="flex justify-end gap-3 mt-6">
                 <button id="qo-cancel-btn" class="modal-button modal-button-secondary">Anuluj</button>
@@ -286,7 +290,6 @@
         </div>
     </div>
 
-    <!-- === NOWOŚĆ: MODAL RE-CHECK (AUDYT) === -->
     <div id="trade-audit-modal" class="modal-backdrop hidden">
         <div class="modal-content modal-content-lg bg-[#161B22] border border-gray-700 shadow-2xl">
             <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
@@ -299,7 +302,6 @@
                 </button>
             </div>
             
-            <!-- Sekcja Porównawcza (Grid) -->
             <div class="grid grid-cols-2 gap-4 mb-6">
                 <div class="bg-gray-800/50 p-4 rounded border border-gray-700">
                     <h4 class="text-xs font-bold text-gray-500 uppercase mb-2">Obietnica (Optymalizator)</h4>
@@ -313,13 +315,11 @@
                 </div>
             </div>
 
-            <!-- Raport Tekstowy -->
             <div class="mb-6">
                 <h4 class="text-sm font-bold text-gray-300 mb-2 flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-2 text-gray-500"></i>Analiza Błędu / Sukcesu</h4>
                 <div id="ta-report-content" class="text-sm text-gray-300 bg-[#0D1117] border border-gray-700 p-4 rounded-md max-h-64 overflow-y-auto whitespace-pre-wrap font-mono leading-relaxed custom-scrollbar">Ładowanie raportu...</div>
             </div>
 
-            <!-- Sugestie -->
             <div id="ta-suggestion-box" class="bg-blue-900/20 border border-blue-500/30 p-4 rounded hidden">
                 <h4 class="text-xs font-bold text-blue-400 uppercase mb-1">Rekomendacja dla Optymalizatora</h4>
                 <p id="ta-suggestion-text" class="text-sm text-blue-200">---</p>
