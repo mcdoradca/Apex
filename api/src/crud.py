@@ -75,12 +75,22 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
 
 def create_optimization_job(db: Session, request: schemas.OptimizationRequest) -> models.OptimizationJob:
     job_id = str(uuid.uuid4())
+    
+    # === FIX START: Obsługa scan_period ===
+    # Kopiujemy parametry lub tworzymy pusty słownik, jeśli None
+    config = request.parameter_space.copy() if request.parameter_space else {}
+    
+    # Dodajemy scan_period do konfiguracji. Worker (apex_optimizer.py) odczyta to pole.
+    # Używamy getattr na wypadek gdyby pole nie istniało w starszej wersji schemas, choć już je dodaliśmy.
+    config['scan_period'] = getattr(request, 'scan_period', 'FULL')
+    # === FIX END ===
+
     new_job = models.OptimizationJob(
         id=job_id,
         target_year=request.target_year,
         total_trials=request.n_trials,
         status='PENDING',
-        configuration=request.parameter_space,
+        configuration=config, # Zapisujemy zaktualizowaną konfigurację (z scan_period)
         created_at=datetime.now(timezone.utc)
     )
     db.add(new_job)
