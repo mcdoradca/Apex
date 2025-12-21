@@ -933,6 +933,13 @@ export const handleStartQuantumOptimization = async () => {
     const trials = parseInt(UI.quantumModal.trialsInput.value);
     const strategy = UI.quantumModal.strategySelect.value;
     
+    // === NAPRAWA START: Pobieranie okresu skanowania (scan_period) ===
+    // Szukamy elementu select z ID 'qo-scan-period-select' w DOM (zakładamy, że user go dodał do HTML)
+    // Domyślna wartość to 'FULL' jeśli element nie istnieje.
+    const scanPeriodEl = document.getElementById('qo-scan-period-select'); 
+    const scanPeriod = scanPeriodEl ? scanPeriodEl.value : 'FULL';
+    // === NAPRAWA END ===
+    
     if (!year || !trials || trials < 10) {
         UI.quantumModal.statusMessage.textContent = "Podaj poprawny rok i min. 10 prób.";
         UI.quantumModal.statusMessage.className = "text-red-400 text-sm mt-3 h-4 text-center";
@@ -941,13 +948,14 @@ export const handleStartQuantumOptimization = async () => {
 
     try {
         UI.quantumModal.startBtn.disabled = true;
-        UI.quantumModal.statusMessage.textContent = `Uruchamianie silnika (${strategy})...`;
+        UI.quantumModal.statusMessage.textContent = `Uruchamianie silnika (${strategy} - ${scanPeriod})...`; // Dodano info o okresie
         UI.quantumModal.statusMessage.className = "text-yellow-400 text-sm mt-3 h-4 text-center";
         
         await api.startOptimization({ 
             target_year: year, 
             n_trials: trials,
-            parameter_space: { strategy: strategy } 
+            parameter_space: { strategy: strategy },
+            scan_period: scanPeriod // Przekazujemy parametr do API
         });
         
         UI.quantumModal.statusMessage.textContent = "Zlecenie przyjęte! Sprawdź wyniki.";
