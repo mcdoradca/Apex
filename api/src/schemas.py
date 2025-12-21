@@ -226,6 +226,7 @@ class OptimizationRequest(BaseModel):
     target_year: int = Field(..., description="Rok optymalizacji", ge=2000, le=2100)
     n_trials: int = Field(default=50, description="Liczba prób", ge=10, le=5000)
     parameter_space: Optional[Dict[str, Any]] = None
+    scan_period: Optional[str] = Field(default='FULL', description="Okres skanowania: FULL, Q1, Q2, Q3, Q4")
 
 class OptimizationTrial(BaseModel):
     id: int
