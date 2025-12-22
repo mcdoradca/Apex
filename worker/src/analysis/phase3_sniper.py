@@ -94,6 +94,7 @@ def run_h3_live_scan(session: Session, candidates: list, api_client: AlphaVantag
             df.sort_index(inplace=True)
             
             # Oblicz ATR (potrzebne do SL/TP i logiki)
+            # WAŻNE: To oblicza kolumnę 'atr_14' w df, ale silniki mogą zwracać nowe df!
             df['atr_14'] = calculate_atr(df)
 
             # === ŚCIEŻKA A: STRATEGIA H3 (ELITE SNIPER) ===
@@ -228,12 +229,15 @@ def run_h3_live_scan(session: Session, candidates: list, api_client: AlphaVantag
                     reason_msg = f"AQM HIT! Score {total_score:.2f} > {aqm_min_score}"
                     log_decision(session, ticker, "AQM_STRATEGY", "ACCEPTED", reason_msg)
                     
+                    # === FIX: Bezpieczne pobranie ATR (AQM używa 'atr', H3 'atr_14') ===
+                    atr_val = last_row.get('atr', last_row.get('atr_14', 0.0))
+                    
                     _create_or_update_signal(
                         session=session,
                         ticker=ticker,
                         strategy="AQM",
                         price=last_row['close'],
-                        atr=last_row['atr_14'],
+                        atr=atr_val, # Poprawione pobieranie ATR
                         tp_mult=tp_mult,
                         sl_mult=sl_mult,
                         max_hold=max_hold_days,
