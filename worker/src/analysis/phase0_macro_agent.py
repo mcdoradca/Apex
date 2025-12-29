@@ -1,12 +1,12 @@
+{
+type: uploaded file
+fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/analysis/phase0_macro_agent.py
+fullContent:
 import logging
-# === POPRAWKA (Błąd 'datetime' not defined z logów) ===
 from datetime import datetime
-# ===================================================
 from sqlalchemy.orm import Session
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
-# Importujemy "mózg" Agenta Makro (z Kroku C)
-from ..analysis.ai_agents import _run_macro_analysis_agent
-# Importujemy alerty
+# Importy narzędziowe
 from ..analysis.utils import (
     append_scan_log, send_telegram_alert, update_system_control
 )
@@ -15,82 +15,60 @@ logger = logging.getLogger(__name__)
 
 def run_macro_analysis(session: Session, api_client: AlphaVantageClient) -> str:
     """
-    Uruchamia Agenta Makro Fazy 0.
-    Pobiera kluczowe wskaźniki makro, wysyła je do analizy AI (Gemini)
-    i zwraca ostateczny sentyment rynkowy ('RISK_ON' lub 'RISK_OFF').
+    Agent Makro Fazy 0 (Wersja 'No-AI').
+    Pobiera wskaźniki makro dla celów logowania i świadomości sytuacyjnej.
+    Logika decyzyjna AI została wyłączona - Agent działa w trybie PASS-THROUGH (zawsze RISK_ON).
     """
-    logger.info("AGENT FAZY 0 (MAKRO): Rozpoczynanie analizy...")
+    logger.info("AGENT FAZY 0 (MAKRO): Pobieranie wskaźników ekonomicznych...")
     
     try:
-        # === KROK 1: Pobieranie danych makro (Krok B) ===
-        # Używamy funkcji dodanych do alpha_vantage_client.py
-        
-        # ==================================================================
-        # === GŁÓWNA NAPRAWA BŁĘDU FAZY 0 ===
-        # Zmieniamy wywołanie z `get_cpi` (które zwracało 324.8)
-        # na `get_inflation_rate` (które zwraca np. 3.0).
-        # ==================================================================
+        # === KROK 1: Pobieranie danych makro ===
+        # Dane są pobierane, abyś miał podgląd sytuacji rynkowej w logach/UI.
         inflation_data = api_client.get_inflation_rate(interval='monthly')
-        # ==================================================================
-        
         fed_rate_data = api_client.get_fed_funds_rate(interval='monthly')
         yield_data = api_client.get_treasury_yield(interval='monthly', maturity='10year')
         unemployment_data = api_client.get_unemployment()
 
-        # Sprawdzenie, czy wszystkie dane dotarły
-        if not all([inflation_data, fed_rate_data, yield_data, unemployment_data]):
-            logger.error("AGENT FAZY 0 (MAKRO): Błąd krytyczny. Nie udało się pobrać jednego lub więcej wskaźników makro. Skanowanie domyślnie dozwolone (RISK_ON).")
-            # Bezpiecznik: Jeśli Alpha Vantage zawiedzie, domyślnie przepuszczamy skanowanie.
-            return "RISK_ON"
+        # Funkcja pomocnicza do bezpiecznego wyciągania wartości z JSON-a AV
+        def get_val(data_dict):
+            try:
+                if not data_dict or 'data' not in data_dict: return 'N/A'
+                val = data_dict['data'][0].get('value', 'N/A')
+                date = data_dict['data'][0].get('date', '?')
+                return f"{val}% ({date})"
+            except: 
+                return 'N/A'
 
-        # === KROK 2: Trening i Decyzja AI (Krok C) ===
-        # Wysyłamy surowe dane do "mózgu" AI, który wytrenowaliśmy w ai_agents.py
-        
-        logger.info("AGENT FAZY 0 (MAKRO): Dane pobrane. Wysyłanie do analizy AI (Gemini)...")
-        
-        # ==================================================================
-        # Zmieniamy przekazywany parametr z `cpi=` na `inflation=`,
-        # aby dopasować się do zmiany w kroku 1.
-        # ==================================================================
-        analysis = _run_macro_analysis_agent(
-            inflation=inflation_data,
-            fed_rate=fed_rate_data,
-            yield_10y=yield_data,
-            unemployment=unemployment_data
+        # Ekstrakcja wartości dla Logów
+        inf_str = get_val(inflation_data)
+        fed_str = get_val(fed_rate_data)
+        yield_str = get_val(yield_data)
+        unemp_str = get_val(unemployment_data)
+
+        # Raport widoczny w konsoli i UI
+        macro_report = (
+            f"RAPORT MAKRO: "
+            f"Inflacja: {inf_str} | "
+            f"Stopy FED: {fed_str} | "
+            f"10Y Yield: {yield_str} | "
+            f"Bezrobocie: {unemp_str}"
         )
-        # ==================================================================
+        
+        logger.info(f"AGENT FAZY 0 (MAKRO): {macro_report}")
+        append_scan_log(session, macro_report)
 
-        # === KROK 3: Reakcja na decyzję AI ===
-        sentiment = analysis.get('sentiment', 'RISK_ON') # Domyślnie RISK_ON w razie błędu Gemini
-        reason = analysis.get('reason', 'Brak szczegółowego powodu.')
-
-        if sentiment == 'RISK_OFF':
-            # Sytuacja niebezpieczna - blokujemy skanowanie
-            alert_msg = f"🛡️ FAZA 0: TRYB RISK-OFF 🛡️\nSkanowanie EOD wstrzymane.\nPowód: {reason}"
-            logger.warning(f"AGENT FAZY 0 (MAKRO): {alert_msg}")
-            
-            # Zapisz w logach UI i wyślij na Telegram
-            append_scan_log(session, alert_msg)
-            send_telegram_alert(alert_msg)
-            
-            # Zapisz globalny status makro (opcjonalne, ale przydatne)
-            # Ta linia teraz zadziała
-            update_system_control(session, 'macro_sentiment', f"RISK_OFF ({datetime.now().isoformat()})")
-            
-            return "RISK_OFF"
-
-        else:
-            # Sytuacja sprzyjająca - kontynuujemy
-            log_msg = f"Faza 0: TRYB RISK-ON. Warunki sprzyjające.\nPowód: {reason}"
-            logger.info(f"AGENT FAZY 0 (MAKRO): {log_msg}")
-            
-            append_scan_log(session, log_msg)
-            # Ta linia teraz zadziała
-            update_system_control(session, 'macro_sentiment', f"RISK_ON ({datetime.now().isoformat()})")
-            
-            return "RISK_ON"
+        # === KROK 2: Decyzja (Hardcoded RISK_ON) ===
+        # Zgodnie z decyzją o wyłączeniu AI, Faza 0 nie blokuje handlu.
+        # Ustawiamy status RISK_ON, ale zachowujemy dane w systemie.
+        
+        status_msg = "RISK_ON (Mode: No-AI)"
+        update_system_control(session, 'macro_sentiment', f"{status_msg} | Ostatni odczyt: {datetime.now().strftime('%H:%M')}")
+        
+        return "RISK_ON"
 
     except Exception as e:
-        logger.error(f"AGENT FAZY 0 (MAKRO): Nieoczekiwany błąd krytyczny: {e}", exc_info=True)
-        # Bezpiecznik: W razie nieoczekiwanego błędu, domyślnie pozwól na skanowanie
+        logger.error(f"AGENT FAZY 0 (MAKRO): Błąd pobierania danych: {e}", exc_info=True)
+        # Bezpiecznik: W razie błędu API, również nie blokujemy systemu.
         return "RISK_ON"
+
+}
