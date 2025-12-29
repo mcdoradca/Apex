@@ -1,7 +1,4 @@
-{
-type: uploaded file
-fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/main.py
-fullContent:
+
 import os
 import time
 import schedule
@@ -302,5 +299,3 @@ def main_loop():
 
 if __name__ == "__main__":
     main_loop()
-
-}
