@@ -1,3 +1,7 @@
+{
+type: uploaded file
+fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/api/src/alpha_vantage_client.py
+fullContent:
 import time
 import requests
 import logging
@@ -19,10 +23,8 @@ if not API_KEY:
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    # === OPTYMALIZACJA (TRAFFIC SHAPING) ===
+    # === OPTYMALIZACJA (TRAFFIC SHAPING) - FRONTEND ===
     # API Service (Frontend) otrzymuje gwarantowane 30 zapytań/minutę.
-    # To zapewnia płynne odświeżanie Dashboardu, Portfela i Detali Sygnałów,
-    # nawet gdy Worker jest w trakcie ciężkiej analizy (Faza 1/4).
     def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 30, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
             logger.error("API key is missing for AlphaVantageClient instance in API.")
@@ -84,7 +86,7 @@ class AlphaVantageClient:
                     raise requests.exceptions.RequestException("Response was not valid JSON.")
 
                 is_rate_limit_json = False
-                if isinstance(data, dict) and "Information" in data:
+                if "Information" in data:
                     info_text = data["Information"].lower()
                     if "frequency" in info_text or "api call volume" in info_text or "please contact premium" in info_text:
                         is_rate_limit_json = True
@@ -92,7 +94,7 @@ class AlphaVantageClient:
                 is_error_msg = isinstance(data, dict) and "Error Message" in data
 
                 if is_rate_limit_json:
-                    wait_time = 2 * (attempt + 1) # Krótszy czas oczekiwania dla Frontendu
+                    wait_time = 2 * (attempt + 1)
                     logger.warning(f"API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
                     time.sleep(wait_time)
                     continue
@@ -247,7 +249,6 @@ class AlphaVantageClient:
                 "09. change": quote_data.get("change"),
                 "10. change percent": f'{quote_data.get("change_percent")}%'
             }
-            # Obsługa Extended Hours
             ext_price = self._safe_float(quote_data.get("extended_hours_quote"))
             if ext_price and ext_price > 0:
                 formatted_quote["05. price"] = quote_data.get("extended_hours_quote")
@@ -323,13 +324,28 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None, time_to: str = None):
+        """
+        Pobiera newsy i sentyment.
+        Dodano parametr sort='LATEST' zgodnie z rekomendacją Supportu.
+        """
         params = {
             "function": "NEWS_SENTIMENT", 
             "tickers": ticker, 
-            "limit": str(limit)
+            "limit": str(limit),
+            "sort": "LATEST" 
         }
         if time_from: params["time_from"] = time_from
         if time_to: params["time_to"] = time_to
+        return self._make_request(params)
+    
+    def search_symbol(self, keywords: str):
+        """
+        Wyszukuje symbole pasujące do słowa kluczowego.
+        """
+        params = {
+            "function": "SYMBOL_SEARCH",
+            "keywords": keywords
+        }
         return self._make_request(params)
     
     def get_insider_transactions(self, symbol: str):
@@ -356,3 +372,5 @@ class AlphaVantageClient:
     def get_unemployment(self):
         params = {"function": "UNEMPLOYMENT", "datatype": "json"}
         return self._make_request(params)
+
+}
