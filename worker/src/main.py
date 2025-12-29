@@ -1,3 +1,7 @@
+{
+type: uploaded file
+fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/main.py
+fullContent:
 import os
 import time
 import schedule
@@ -100,8 +104,11 @@ def safe_run_news_agent():
     # Tylko w trybie monitoringu (żeby nie marnować API podczas skanu)
     if active_mode == MODE_MONITORING:
         with get_db_session() as session:
-            try: news_agent.run_news_agent_cycle(session, api_client)
-            except: pass
+            try: 
+                news_agent.run_news_agent_cycle(session, api_client)
+            except Exception as e:
+                # Logujemy błędy, zamiast je połykać, aby wiedzieć dlaczego alerty nie dochodzą
+                logger.error(f"News Agent Error (Schedule): {e}", exc_info=True)
 
 def safe_run_signal_monitor():
     if active_mode == MODE_MONITORING:
@@ -131,7 +138,7 @@ def safe_run_recheck_audit():
 
 def run_phase_1_task(session):
     utils.update_system_control(session, 'current_phase', 'PHASE_1_SCAN')
-    phase0_macro_agent.run_macro_analysis(session, api_client)
+    # phase0_macro_agent.run_macro_analysis(session, api_client) # Wyłączone AI Macro
     session.execute(text("DELETE FROM phase1_candidates"))
     session.commit()
     phase1_scanner.run_scan(session, lambda: "RUNNING", api_client)
@@ -168,15 +175,19 @@ def run_backtest_task(session):
     utils.update_system_control(session, 'backtest_request', 'NONE')
 
 def run_ai_optimizer_task(session):
-    utils.update_system_control(session, 'current_phase', 'AI_ANALYSIS')
-    ai_optimizer.run_ai_optimization_analysis(session)
+    # DISABLED: Funkcja wyłączona (Usunięcie zależności Gemini)
+    utils.update_system_control(session, 'current_phase', 'AI_ANALYSIS_DISABLED')
+    # ai_optimizer.run_ai_optimization_analysis(session)
     utils.update_system_control(session, 'ai_optimizer_request', 'NONE')
+    logger.info("Skipping AI Optimizer Task (AI Agents Disabled).")
 
 def run_h3_deep_dive_task(session):
-    req = utils.get_system_control_value(session, 'h3_deep_dive_request')
-    utils.update_system_control(session, 'current_phase', 'DEEP_DIVE')
-    h3_deep_dive_agent.run_h3_deep_dive_analysis(session, int(req))
+    # DISABLED: Funkcja wyłączona (Usunięcie zależności Gemini)
+    # req = utils.get_system_control_value(session, 'h3_deep_dive_request')
+    utils.update_system_control(session, 'current_phase', 'DEEP_DIVE_DISABLED')
+    # h3_deep_dive_agent.run_h3_deep_dive_analysis(session, int(req))
     utils.update_system_control(session, 'h3_deep_dive_request', 'NONE')
+    logger.info("Skipping Deep Dive Task (AI Agents Disabled).")
 
 def run_optimization_task(session):
     job_id = utils.get_system_control_value(session, 'optimization_request')
@@ -193,13 +204,13 @@ def run_optimization_task(session):
 
 def main_loop():
     global current_state, api_client, active_mode
-    logger.info("Worker V6.0 (Resource Governor) STARTED.")
+    logger.info("Worker V6.1 (NO-AI Edition) STARTED.")
     
     # Inicjalizacja bazy
     try:
         with get_db_session() as session:
             initialize_database_if_empty(session, api_client)
-            utils.append_scan_log(session, "SYSTEM: Worker Uruchomiony. Tryb: MONITORING.")
+            utils.append_scan_log(session, "SYSTEM: Worker Uruchomiony. Tryb: MONITORING (NO-AI).")
             # Reset flagi pauzy na starcie
             utils.update_system_control(session, 'worker_status', 'IDLE')
     except Exception as e:
@@ -207,7 +218,12 @@ def main_loop():
         time.sleep(5)
 
     # Harmonogram zadań tła (działają tylko w trybie Monitoring)
-    schedule.every(2).minutes.do(safe_run_news_agent)
+    
+    # === KONFIGURACJA AGENTA NEWSOWEGO ===
+    # Zgodnie z wytycznymi AV: 600 tickerów co 5 minut.
+    # Ustawiamy 5 minut, aby dać czas na przetworzenie batchy i regenerację limitu.
+    schedule.every(5).minutes.do(safe_run_news_agent)
+    
     schedule.every(10).seconds.do(safe_run_signal_monitor) # Częste sprawdzanie sygnałów
     schedule.every(5).minutes.do(safe_run_biox_monitor)
     schedule.every(15).minutes.do(safe_run_recheck_audit)
@@ -235,8 +251,13 @@ def main_loop():
                 
                 # B. Mapowanie żądań analitycznych (Async Jobs)
                 elif backtest_req and backtest_req not in ['NONE', 'PROCESSING']: operation_to_run = run_backtest_task
-                elif ai_req == 'REQUESTED': operation_to_run = run_ai_optimizer_task
-                elif deep_dive_req and deep_dive_req not in ['NONE', 'PROCESSING']: operation_to_run = run_h3_deep_dive_task
+                
+                # Wyłączone funkcje AI (Stuby)
+                elif ai_req == 'REQUESTED': 
+                    operation_to_run = run_ai_optimizer_task # Uruchomi wersję DISABLED
+                elif deep_dive_req and deep_dive_req not in ['NONE', 'PROCESSING']: 
+                    operation_to_run = run_h3_deep_dive_task # Uruchomi wersję DISABLED
+                
                 elif opt_req and opt_req not in ['NONE', 'PROCESSING']: operation_to_run = run_optimization_task
 
                 elif cmd == "PAUSE_REQUESTED":
@@ -281,3 +302,5 @@ def main_loop():
 
 if __name__ == "__main__":
     main_loop()
+
+}
