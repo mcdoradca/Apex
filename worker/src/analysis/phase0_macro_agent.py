@@ -1,7 +1,4 @@
-{
-type: uploaded file
-fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/analysis/phase0_macro_agent.py
-fullContent:
+
 import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -70,5 +67,3 @@ def run_macro_analysis(session: Session, api_client: AlphaVantageClient) -> str:
         logger.error(f"AGENT FAZY 0 (MAKRO): Błąd pobierania danych: {e}", exc_info=True)
         # Bezpiecznik: W razie błędu API, również nie blokujemy systemu.
         return "RISK_ON"
-
-}
