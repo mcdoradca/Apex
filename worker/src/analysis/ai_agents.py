@@ -1,7 +1,4 @@
-{
-type: uploaded file
-fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/analysis/ai_agents.py
-fullContent:
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -35,5 +32,3 @@ def _run_macro_analysis_agent(inflation: dict, fed_rate: dict, yield_10y: dict, 
 
 # Można tu dodać inne funkcje stubowe, jeśli zajdzie potrzeba, 
 # np. dla optymalizatora portfela, jeśli był oparty o LLM.
-
-}
