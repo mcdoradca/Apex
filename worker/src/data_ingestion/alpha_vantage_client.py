@@ -1,7 +1,4 @@
-{
-type: uploaded file
-fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/data_ingestion/alpha_vantage_client.py
-fullContent:
+
 import time
 import requests
 import logging
@@ -377,5 +374,3 @@ class AlphaVantageClient:
     def get_unemployment(self):
         params = {"function": "UNEMPLOYMENT", "datatype": "json"}
         return self._make_request(params)
-
-}
