@@ -1,3 +1,7 @@
+{
+type: uploaded file
+fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/data_ingestion/alpha_vantage_client.py
+fullContent:
 import time
 import requests
 import logging
@@ -324,13 +328,29 @@ class AlphaVantageClient:
         return self._make_request(params)
 
     def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None, time_to: str = None):
+        """
+        Pobiera newsy i sentyment.
+        Dodano parametr sort='LATEST' zgodnie z rekomendacją Supportu.
+        """
         params = {
             "function": "NEWS_SENTIMENT", 
             "tickers": ticker, 
-            "limit": str(limit)
+            "limit": str(limit),
+            "sort": "LATEST" 
         }
         if time_from: params["time_from"] = time_from
         if time_to: params["time_to"] = time_to
+        return self._make_request(params)
+    
+    def search_symbol(self, keywords: str):
+        """
+        Wyszukuje symbole pasujące do słowa kluczowego.
+        Przydatne do walidacji listy tickerów (rekomendacja Supportu).
+        """
+        params = {
+            "function": "SYMBOL_SEARCH",
+            "keywords": keywords
+        }
         return self._make_request(params)
     
     def get_insider_transactions(self, symbol: str):
@@ -357,3 +377,5 @@ class AlphaVantageClient:
     def get_unemployment(self):
         params = {"function": "UNEMPLOYMENT", "datatype": "json"}
         return self._make_request(params)
+
+}
