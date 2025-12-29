@@ -1,7 +1,4 @@
-{
-type: uploaded file
-fileName: mcdoradca/apex/Apex-4dfc50d9f4f4e8f2b1ee4b40873ece5dd0ad9ef0/worker/src/analysis/news_agent.py
-fullContent:
+
 import logging
 import hashlib
 import time
@@ -262,5 +259,3 @@ def run_news_agent_cycle(session: Session, api_client: object):
     except Exception as e:
         logger.error(f"Agent Newsowy: Błąd krytyczny cyklu: {e}", exc_info=True)
         session.rollback()
-
-}
