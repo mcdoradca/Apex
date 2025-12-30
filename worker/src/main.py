@@ -224,7 +224,10 @@ def main_loop():
     schedule.every(10).seconds.do(safe_run_signal_monitor) # Częste sprawdzanie sygnałów
     schedule.every(5).minutes.do(safe_run_biox_monitor)
     schedule.every(15).minutes.do(safe_run_recheck_audit)
-    schedule.every().day.at("23:00", "Europe/Warsaw").do(safe_run_virtual_agent)
+    
+    # === POPRAWKA: ODŚWIEŻANIE PORTFELA ===
+    # Zmieniono z raz dziennie (23:00) na co 1 minutę, aby widzieć wyniki na bieżąco.
+    schedule.every(1).minutes.do(safe_run_virtual_agent) 
 
     while True:
         with get_db_session() as session:
@@ -299,3 +302,4 @@ def main_loop():
 
 if __name__ == "__main__":
     main_loop()
+
