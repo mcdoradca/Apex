@@ -176,6 +176,52 @@ export const renderers = {
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-2 strat-badge ${strat.class}">${strat.name}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
+    // === WIDOK SDAR (DODANO) ===
+    sdarView: (candidates) => {
+        const rows = candidates.map(c => {
+            // Kolorowanie wyników
+            const totalScoreClass = c.total_anomaly_score > 80 ? 'text-red-500 font-black' : (c.total_anomaly_score > 60 ? 'text-green-400 font-bold' : 'text-yellow-400');
+            const saiClass = c.sai_score > 70 ? 'text-green-400' : 'text-gray-300';
+            const spdClass = c.spd_score > 60 ? 'text-blue-400 font-bold' : 'text-gray-300';
+            
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
+                <td class="p-3 font-bold text-sky-400">${c.ticker}</td>
+                <td class="p-3 text-right ${totalScoreClass}">${c.total_anomaly_score.toFixed(1)}</td>
+                <td class="p-3 text-right ${saiClass}">${c.sai_score.toFixed(1)}</td>
+                <td class="p-3 text-right ${spdClass}">${c.spd_score.toFixed(1)}</td>
+                <td class="p-3 text-right font-mono text-gray-400">${c.sentiment_shock ? c.sentiment_shock.toFixed(2) : '-'}</td>
+                <td class="p-3 text-right font-mono text-gray-400">${c.atr_compression ? c.atr_compression.toFixed(3) : '-'}</td>
+                <td class="p-3 text-right text-xs text-gray-500">${new Date(c.analysis_date).toLocaleTimeString()}</td>
+            </tr>`;
+        }).join('');
+
+        const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr>
+            <th class="p-3 text-left">Ticker</th>
+            <th class="p-3 text-right">Total Score</th>
+            <th class="p-3 text-right">SAI (Vol)</th>
+            <th class="p-3 text-right">SPD (Sent)</th>
+            <th class="p-3 text-right">Shock</th>
+            <th class="p-3 text-right">ATR Comp.</th>
+            <th class="p-3 text-right">Czas</th>
+        </tr></thead>`;
+
+        return `<div id="sdar-view" class="max-w-6xl mx-auto">
+            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                <div>
+                    <h2 class="text-2xl font-bold text-white flex items-center"><i data-lucide="ghost" class="w-6 h-6 mr-3 text-blue-500"></i>SDAR: Anomalie Rynkowe</h2>
+                    <p class="text-sm text-gray-500 mt-1">Silent Accumulation & Sentiment Divergence (Real Money Strategy).</p>
+                </div>
+                <button id="run-sdar-scan-btn" class="modal-button modal-button-primary bg-blue-600 hover:bg-blue-700 flex items-center shadow-[0_0_15px_rgba(37,99,235,0.3)]">
+                    <i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj SDAR
+                </button>
+            </div>
+            ${candidates.length === 0 ? 
+                '<div class="text-center py-10 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="search" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak anomalii. Uruchom skaner.</p></div>' : 
+                `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`
+            }
+        </div>`;
+    },
+
     phase4View: (candidates) => {
         const rows = candidates.map(c => {
             const scoreColor = c.kinetic_score >= 80 ? 'text-amber-400 font-black' : (c.kinetic_score >= 50 ? 'text-yellow-200 font-bold' : 'text-gray-400');
@@ -468,6 +514,15 @@ export const ui = {
              sidebarControls.appendChild(btnH4);
         }
 
+        // === INIEKCJA PRZYCISKU SDAR (NOWOŚĆ) ===
+        if (sidebarControls && !document.getElementById('btn-sdar-scan')) {
+             const btnSdar = document.createElement('button');
+             btnSdar.id = 'btn-sdar-scan';
+             btnSdar.className = 'w-full text-left flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2';
+             btnSdar.innerHTML = '<i data-lucide="ghost" class="mr-2 h-4 w-4"></i>Skanuj SDAR';
+             sidebarControls.appendChild(btnSdar);
+        }
+
         return {
             loginScreen: get('login-screen'),
             dashboardScreen: get('dashboard'),
@@ -479,6 +534,7 @@ export const ui = {
             btnPhase3: get('btn-phase-3'),
             btnPhaseX: get('btn-phasex-scan'),
             btnPhase4: get('btn-phase4-scan'),
+            btnSdar: get('btn-sdar-scan'), // Dodano do obiektu zwracanego
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
