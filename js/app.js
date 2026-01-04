@@ -17,7 +17,8 @@ import {
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
     showPhaseX, handleRunPhaseXScan,
-    showPhase4, handleRunPhase4Scan
+    showPhase4, handleRunPhase4Scan,
+    showSdar, handleRunSdarScan // <--- IMPORT SDAR
 } from './logic.js';
 
 // Tworzymy lokalny obiekt Logic dla kompatybilności z resztą kodu
@@ -37,7 +38,8 @@ const Logic = {
     showOptimizationResults, hideOptimizationResults,
     showH3Signals,
     showPhaseX, handleRunPhaseXScan,
-    showPhase4, handleRunPhase4Scan
+    showPhase4, handleRunPhase4Scan,
+    showSdar, handleRunSdarScan // <--- REJESTRACJA SDAR W OBIEKCIE LOGIC
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -164,6 +166,14 @@ document.addEventListener('DOMContentLoaded', () => {
             UI.btnPhase4.addEventListener('click', (e) => {
                 e.preventDefault();
                 Logic.showPhase4();
+            });
+        }
+
+        // === NOWOŚĆ: Obsługa przycisku SDAR (System Detekcji Anomalii) ===
+        if (UI.btnSdar) {
+            UI.btnSdar.addEventListener('click', (e) => {
+                e.preventDefault();
+                Logic.showSdar();
             });
         }
         
