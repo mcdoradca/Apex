@@ -114,6 +114,16 @@ def get_phase1_candidates_endpoint(db: Session = Depends(get_db)):
 def get_phasex_candidates_endpoint(db: Session = Depends(get_db)):
     return crud.get_phasex_candidates(db)
 
+@app.get("/api/v1/candidates/sdar", response_model=List[schemas.SdarCandidate])
+def get_sdar_candidates_endpoint(db: Session = Depends(get_db)):
+    """Pobiera listę kandydatów SDAR (Nowa Idea), sortując po wyniku anomalii."""
+    try:
+        # Bezpośrednie zapytanie, aby uniknąć konieczności edycji pliku CRUD
+        return db.query(models.SdarCandidate).order_by(models.SdarCandidate.total_anomaly_score.desc()).all()
+    except Exception as e:
+        logger.error(f"Error fetching SDAR candidates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Błąd pobierania danych SDAR.")
+
 @app.get("/api/v1/candidates/phase4", response_model=List[schemas.Phase4Candidate])
 def get_phase4_candidates_endpoint(db: Session = Depends(get_db)):
     """Pobiera listę kandydatów Kinetic Alpha (Petardy)."""
@@ -453,7 +463,8 @@ def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db:
         "start_phase1": "START_PHASE_1_REQUESTED", 
         "start_phase3": "START_PHASE_3_REQUESTED",
         "start_phasex": "START_PHASE_X_REQUESTED",
-        "start_phase4": "START_PHASE_4_REQUESTED"
+        "start_phase4": "START_PHASE_4_REQUESTED",
+        "start_sdar": "START_SDAR_REQUESTED"  # <--- NOWA IDEA: SDAR TRIGGER
     }
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
