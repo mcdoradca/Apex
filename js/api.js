@@ -55,6 +55,9 @@ export const api = {
     // Pobieranie kandydatów Fazy 4 (H4 Kinetic Alpha)
     getPhase4Candidates: () => apiRequest('api/v1/candidates/phase4'),
 
+    // Pobieranie kandydatów SDAR (System Detekcji Anomalii) - NOWOŚĆ
+    getSdarCandidates: () => apiRequest('api/v1/candidates/sdar'),
+
     // === NOWOŚĆ: Pobieranie stanu Monitora Fazy 5 (Omni-Flux) ===
     getPhase5MonitorState: () => apiRequest('api/v1/monitor/phase5'),
 
