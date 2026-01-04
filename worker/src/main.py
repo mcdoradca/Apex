@@ -8,14 +8,14 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Importy bazodanowe (Unified)
+# === IMPORTY BAZODANOWE (Unified) ===
 from .models import Base, OptimizationJob 
 from .database import get_db_session, engine
 from .data_ingestion.data_initializer import initialize_database_if_empty
 from .data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .config import COMMAND_CHECK_INTERVAL_SECONDS
 
-# Importy analityczne
+# === IMPORTY ANALITYCZNE (Moduły Strategii) ===
 from .analysis import (
     phase1_scanner, phase3_sniper, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, 
@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-# Sprawdzenie klucza API
+# Sprawdzenie klucza API (Krytyczne dla działania Alpha Vantage)
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 if not API_KEY:
     logger.critical("ALPHAVANTAGE_API_KEY not found. Worker exiting.")
@@ -39,9 +39,9 @@ api_client = AlphaVantageClient(api_key=API_KEY)
 current_state = "IDLE" 
 
 # === ZARZĄDCA STANU (RESOURCE GOVERNOR) ===
-# Definiuje tryby pracy Workera
-MODE_MONITORING = "MONITORING"   # Newsy + Tło (Niskie zużycie API)
-MODE_OPERATION = "OPERATION"     # Skanery (F1, F3, F4, FX) / Optymalizacja (Wysokie zużycie API - Wyłączność)
+# Definiuje tryby pracy Workera w celu ochrony limitów API (Traffic Shaping)
+MODE_MONITORING = "MONITORING"   # Newsy + Tło (Niskie zużycie API - nasłuchiwanie)
+MODE_OPERATION = "OPERATION"     # Skanery (F1, F3, F4, FX) / Optymalizacja (Wysokie zużycie - Wyłączność)
 
 active_mode = MODE_MONITORING 
 
@@ -54,7 +54,7 @@ def run_monitoring_tasks(session):
     global current_state
     
     # 1. Zadania w tle (Schedule) - Newsy, Re-check, Wirtualny Portfel
-    # Uruchamiamy je tylko w trybie monitoringu
+    # Uruchamiamy je tylko w trybie monitoringu, aby nie zatykać kolejki API podczas skanowania
     try:
         schedule.run_pending()
     except Exception as e:
@@ -62,8 +62,9 @@ def run_monitoring_tasks(session):
 
 def execute_high_priority_operation(session, operation_func, *args, **kwargs):
     """
-    Tryb Operacji: "Odcięcie Tlenu".
+    Tryb Operacji: "Odcięcie Tlenu" dla tła.
     Zawiesza monitoring, wykonuje ciężkie zadanie (Skaner), a potem przywraca system.
+    Zapewnia, że Skaner ma 100% dostępnych zasobów API.
     """
     global active_mode, current_state
     
@@ -76,7 +77,7 @@ def execute_high_priority_operation(session, operation_func, *args, **kwargs):
     start_time = time.time()
     
     try:
-        # 2. Wykonaj Operację (Skan/Optymalizacja)
+        # 2. Wykonaj Operację (Skan/Optymalizacja/SDAR)
         operation_func(session, *args, **kwargs)
         
     except Exception as e:
@@ -113,7 +114,7 @@ def safe_run_signal_monitor():
             except: pass
 
 def safe_run_virtual_agent():
-    # Ten agent może działać zawsze, bo operuje głównie na bazie danych
+    # Ten agent może działać zawsze, bo operuje głównie na bazie danych (Virtual Portfolio)
     with get_db_session() as session:
         try: virtual_agent.run_virtual_trade_monitor(session, api_client)
         except: pass
@@ -133,8 +134,24 @@ def safe_run_recheck_audit():
 # === OBSŁUGA ZLECEŃ (HANDLERS) ===
 
 def run_phase_1_task(session):
+    """
+    Uruchamia Fazę 1 (Skaner Rynku).
+    NOWOŚĆ: Zintegrowana z Fazą 0 (Bezpiecznik Nasdaq).
+    """
     utils.update_system_control(session, 'current_phase', 'PHASE_1_SCAN')
-    # phase0_macro_agent.run_macro_analysis(session, api_client) # Wyłączone AI Macro
+    
+    # === KROK 0: BEZPIECZNIK NASDAQ (Guardrail) ===
+    # Zanim wydamy zasoby na skanowanie setek spółek, sprawdzamy czy rynek w ogóle pozwala na handel.
+    # Jeśli QQQ jest pod SMA200 (Bessa) -> przerywamy.
+    market_status = phase0_macro_agent.run_macro_analysis(session, api_client)
+    
+    if market_status == "RISK_OFF":
+        msg = "⛔ SKAN FAZY 1 PRZERWANY: Nasdaq (QQQ) jest w trybie RISK_OFF (Bessa/Wysokie Stopy)."
+        logger.warning(msg)
+        utils.append_scan_log(session, msg)
+        return # STOP - Oszczędzamy API i kapitał
+        
+    # Jeśli RISK_ON -> kontynuujemy normalny skan
     session.execute(text("DELETE FROM phase1_candidates"))
     session.commit()
     phase1_scanner.run_scan(session, lambda: "RUNNING", api_client)
@@ -165,10 +182,28 @@ def run_phase_4_task(session):
 
 def run_sdar_task(session):
     """
-    Uruchamia System Detekcji Anomalii Rynkowych (Nowa Idea).
-    Bada korelację sentymentu (News) i wolumenu (OBV/VWAP) dla kandydatów z Fazy 1.
+    Uruchamia System Detekcji Anomalii Rynkowych (SDAR - Nowa Idea).
+    Bada korelację sentymentu (News) i wolumenu (SAI) dla najlepszych kandydatów.
+    
+    WAŻNE: Respektuje flagę RISK_OFF z Fazy 0. Nie szukamy perełek w trakcie tsunami.
     """
     utils.update_system_control(session, 'current_phase', 'SDAR_ANOMALY_HUNT')
+    
+    # 1. Sprawdzenie bezpiecznika globalnego (zapisanego w bazie przez F0)
+    market_status = utils.get_system_control_value(session, 'market_status')
+    
+    # 2. Jeśli status nieznany lub stary, odśwież go "na gorąco"
+    if not market_status:
+        market_status = phase0_macro_agent.run_macro_analysis(session, api_client)
+
+    # 3. Decyzja Strategiczna
+    if market_status == 'RISK_OFF':
+        msg = "⛔ SDAR ZABLOKOWANY: Nasdaq jest w trybie RISK_OFF. Szukanie Longów jest zbyt ryzykowne."
+        logger.warning(msg)
+        utils.append_scan_log(session, msg)
+        return
+
+    # 4. Uruchomienie Silnika (tylko w trybie RISK_ON)
     analyzer = phase_sdar.SDARAnalyzer(session, api_client)
     analyzer.run_sdar_cycle(limit=50) # Analiza Top 50
 
@@ -180,14 +215,14 @@ def run_backtest_task(session):
     utils.update_system_control(session, 'backtest_request', 'NONE')
 
 def run_ai_optimizer_task(session):
-    # DISABLED: Funkcja wyłączona (Usunięcie zależności Gemini)
+    # DISABLED: Funkcja wyłączona (Usunięcie zależności Gemini/LLM)
     utils.update_system_control(session, 'current_phase', 'AI_ANALYSIS_DISABLED')
     # ai_optimizer.run_ai_optimization_analysis(session)
     utils.update_system_control(session, 'ai_optimizer_request', 'NONE')
     logger.info("Skipping AI Optimizer Task (AI Agents Disabled).")
 
 def run_h3_deep_dive_task(session):
-    # DISABLED: Funkcja wyłączona (Usunięcie zależności Gemini)
+    # DISABLED: Funkcja wyłączona (Usunięcie zależności Gemini/LLM)
     # req = utils.get_system_control_value(session, 'h3_deep_dive_request')
     utils.update_system_control(session, 'current_phase', 'DEEP_DIVE_DISABLED')
     # h3_deep_dive_agent.run_h3_deep_dive_analysis(session, int(req))
@@ -205,36 +240,41 @@ def run_optimization_task(session):
     utils.update_system_control(session, 'optimization_request', 'NONE')
 
 
-# === GŁÓWNA PĘTLA WORKERA ===
+# === GŁÓWNA PĘTLA WORKERA (THE HEARTBEAT) ===
 
 def main_loop():
     global current_state, api_client, active_mode
-    logger.info("Worker V6.1 (NO-AI Edition) STARTED.")
+    logger.info("Worker V6.3 (Real Money Nasdaq Edition) STARTED.")
     
-    # Inicjalizacja bazy
+    # Inicjalizacja bazy i systemu
     try:
         with get_db_session() as session:
             initialize_database_if_empty(session, api_client)
-            utils.append_scan_log(session, "SYSTEM: Worker Uruchomiony. Tryb: MONITORING (NO-AI).")
+            utils.append_scan_log(session, "SYSTEM: Worker Uruchomiony. Tryb: REAL MONEY (SDAR + Nasdaq Guard).")
             # Reset flagi pauzy na starcie
             utils.update_system_control(session, 'worker_status', 'IDLE')
+            
+            # Startowy check makro (żeby system wiedział od razu, co się dzieje na Nasdaq)
+            phase0_macro_agent.run_macro_analysis(session, api_client)
+            
     except Exception as e:
         logger.error(f"Startup Error: {e}")
         time.sleep(5)
 
-    # Harmonogram zadań tła (działają tylko w trybie Monitoring)
+    # === HARMONOGRAM ZADAŃ (Background Jobs) ===
+    # Zadania działają tylko w trybie MONITORING, aby nie kolidować ze skanami
     
-    # === KONFIGURACJA AGENTA NEWSOWEGO ===
-    # Zgodnie z wytycznymi AV: 600 tickerów co 5 minut.
-    # Ustawiamy 5 minut, aby dać czas na przetworzenie batchy i regenerację limitu.
+    # Newsy co 5 minut (zgodnie z limitem zapytań)
     schedule.every(5).minutes.do(safe_run_news_agent)
     
-    schedule.every(10).seconds.do(safe_run_signal_monitor) # Częste sprawdzanie sygnałów
+    # Monitor sygnałów (bardzo częsty, dla szybkiej reakcji)
+    schedule.every(10).seconds.do(safe_run_signal_monitor)
+    
+    # Inne monitory
     schedule.every(5).minutes.do(safe_run_biox_monitor)
     schedule.every(15).minutes.do(safe_run_recheck_audit)
     
-    # === POPRAWKA: ODŚWIEŻANIE PORTFELA ===
-    # Zmieniono z raz dziennie (23:00) na co 1 minutę, aby widzieć wyniki na bieżąco.
+    # Odświeżanie portfela co minutę
     schedule.every(1).minutes.do(safe_run_virtual_agent) 
 
     while True:
@@ -243,7 +283,7 @@ def main_loop():
                 # 1. Sprawdź, czy są jakieś ROZKAZY od użytkownika (Priorytet Absolutny)
                 cmd = utils.get_system_control_value(session, 'worker_command')
                 
-                # Zmienne pomocnicze do wykrywania zleceń asynchronicznych
+                # Zmienne pomocnicze do wykrywania zleceń asynchronicznych (UI Requests)
                 backtest_req = utils.get_system_control_value(session, 'backtest_request')
                 ai_req = utils.get_system_control_value(session, 'ai_optimizer_request')
                 deep_dive_req = utils.get_system_control_value(session, 'h3_deep_dive_request')
@@ -256,7 +296,7 @@ def main_loop():
                 elif cmd == "START_PHASE_3_REQUESTED": operation_to_run = run_phase_3_task
                 elif cmd == "START_PHASE_X_REQUESTED": operation_to_run = run_phase_x_task
                 elif cmd == "START_PHASE_4_REQUESTED": operation_to_run = run_phase_4_task
-                elif cmd == "START_SDAR_REQUESTED": operation_to_run = run_sdar_task # <--- NOWA IDEA TRIGGER
+                elif cmd == "START_SDAR_REQUESTED": operation_to_run = run_sdar_task # TRIGGER SDAR
                 
                 # B. Mapowanie żądań analitycznych (Async Jobs)
                 elif backtest_req and backtest_req not in ['NONE', 'PROCESSING']: operation_to_run = run_backtest_task
@@ -269,6 +309,7 @@ def main_loop():
                 
                 elif opt_req and opt_req not in ['NONE', 'PROCESSING']: operation_to_run = run_optimization_task
 
+                # C. Obsługa Pauzy
                 elif cmd == "PAUSE_REQUESTED":
                     utils.update_system_control(session, 'worker_status', 'PAUSED')
                     utils.update_system_control(session, 'worker_command', 'NONE')
@@ -288,7 +329,7 @@ def main_loop():
                     if cmd and "REQUESTED" in cmd:
                         utils.update_system_control(session, 'worker_command', 'NONE')
                     
-                    # Wykonujemy operację z "Odcięciem Tlenu"
+                    # Wykonujemy operację z "Odcięciem Tlenu" (Tryb OPERATION)
                     execute_high_priority_operation(session, operation_to_run)
                 
                 else:
@@ -306,7 +347,7 @@ def main_loop():
                 logger.error(f"Main Loop Error: {e}", exc_info=True)
                 time.sleep(5) # Odczekaj chwilę po błędzie krytycznym
 
-        # Krótki sleep, żeby nie zarżnąć CPU
+        # Krótki sleep, żeby nie zarżnąć CPU w pętli while
         time.sleep(0.5)
 
 if __name__ == "__main__":
