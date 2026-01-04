@@ -1,4 +1,3 @@
-
 import os
 import time
 import schedule
@@ -21,7 +20,7 @@ from .analysis import (
     phase1_scanner, phase3_sniper, utils, news_agent,
     phase0_macro_agent, virtual_agent, backtest_engine, ai_optimizer, 
     h3_deep_dive_agent, signal_monitor, apex_optimizer, phasex_scanner, 
-    biox_agent, recheck_agent, phase4_kinetic
+    biox_agent, recheck_agent, phase4_kinetic, phase_sdar
 )
 
 # Konfiguracja Loggera
@@ -164,6 +163,15 @@ def run_phase_4_task(session):
     utils.update_system_control(session, 'current_phase', 'PHASE_4_KINETIC')
     phase4_kinetic.run_phase4_scan(session, api_client)
 
+def run_sdar_task(session):
+    """
+    Uruchamia System Detekcji Anomalii Rynkowych (Nowa Idea).
+    Bada korelację sentymentu (News) i wolumenu (OBV/VWAP) dla kandydatów z Fazy 1.
+    """
+    utils.update_system_control(session, 'current_phase', 'SDAR_ANOMALY_HUNT')
+    analyzer = phase_sdar.SDARAnalyzer(session, api_client)
+    analyzer.run_sdar_cycle(limit=50) # Analiza Top 50
+
 def run_backtest_task(session):
     req = utils.get_system_control_value(session, 'backtest_request')
     params = json.loads(utils.get_system_control_value(session, 'backtest_parameters') or '{}')
@@ -248,6 +256,7 @@ def main_loop():
                 elif cmd == "START_PHASE_3_REQUESTED": operation_to_run = run_phase_3_task
                 elif cmd == "START_PHASE_X_REQUESTED": operation_to_run = run_phase_x_task
                 elif cmd == "START_PHASE_4_REQUESTED": operation_to_run = run_phase_4_task
+                elif cmd == "START_SDAR_REQUESTED": operation_to_run = run_sdar_task # <--- NOWA IDEA TRIGGER
                 
                 # B. Mapowanie żądań analitycznych (Async Jobs)
                 elif backtest_req and backtest_req not in ['NONE', 'PROCESSING']: operation_to_run = run_backtest_task
@@ -302,4 +311,3 @@ def main_loop():
 
 if __name__ == "__main__":
     main_loop()
-
