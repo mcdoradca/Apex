@@ -1,4 +1,3 @@
-
 import time
 import requests
 import logging
@@ -15,16 +14,17 @@ logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
 if not API_KEY:
-    logger.error("ALPHAVANTAGE_API_KEY not found in environment for API's client.")
+    logger.error("ALPHAVANTAGE_API_KEY not found in environment for WORKER's client.")
 
 class AlphaVantageClient:
     BASE_URL = "https://www.alphavantage.co/query"
 
-    # === OPTYMALIZACJA (TRAFFIC SHAPING) - FRONTEND ===
-    # API Service (Frontend) otrzymuje gwarantowane 30 zapytań/minutę.
-    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 30, retries: int = 3, backoff_factor: float = 0.5):
+    # === OPTYMALIZACJA (TRAFFIC SHAPING) - WORKER ===
+    # Worker otrzymuje 120 zapytań/minutę (80% pasma Premium).
+    # Pozostałe 30 zapytań/minutę jest zarezerwowane dla Frontendu.
+    def __init__(self, api_key: str = API_KEY, requests_per_minute: int = 120, retries: int = 3, backoff_factor: float = 0.5):
         if not api_key:
-            logger.error("API key is missing for AlphaVantageClient instance in API.")
+            logger.error("API key is missing for AlphaVantageClient instance in WORKER.")
         self.api_key = api_key
         self.retries = retries
         self.backoff_factor = backoff_factor
@@ -42,15 +42,18 @@ class AlphaVantageClient:
         if not self.api_key: return
              
         now = time.monotonic()
+        # Usuwamy stare znaczniki czasu (starsze niż 60s)
         while self.request_timestamps and (now - self.request_timestamps[0] > 60):
             self.request_timestamps.popleft()
             
+        # Jeśli przekroczyliśmy limit w oknie 60s -> czekamy
         if len(self.request_timestamps) >= self.requests_per_minute:
             time_to_wait = 60 - (now - self.request_timestamps[0]) + 0.1
             if time_to_wait > 0:
                 time.sleep(time_to_wait)
                 now = time.monotonic()
 
+        # Pacing (odstęp między zapytaniami)
         if self.request_timestamps:
             time_since_last = now - self.request_timestamps[-1]
             if time_since_last < self.request_interval:
@@ -91,8 +94,8 @@ class AlphaVantageClient:
                 is_error_msg = isinstance(data, dict) and "Error Message" in data
 
                 if is_rate_limit_json:
-                    wait_time = 2 * (attempt + 1)
-                    logger.warning(f"API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
+                    wait_time = 5 * (attempt + 1)
+                    logger.warning(f"Worker API Rate Limit Hit for {request_identifier}. Sleeping {wait_time}s...")
                     time.sleep(wait_time)
                     continue
 
@@ -164,7 +167,7 @@ class AlphaVantageClient:
             }
             
             try:
-                # _make_request zarządza API Key i Rate Limitami
+                # _make_request zarządza API Key i Rate Limitami (Worker ma własne limity 120/min)
                 text_response = self._make_request(params)
                 
                 if isinstance(text_response, str) and "symbol" in text_response:
@@ -189,7 +192,7 @@ class AlphaVantageClient:
                     time.sleep(0.1)
                     
             except Exception as e:
-                logger.error(f"Błąd podczas pobierania batcha Bulk Quotes: {e}")
+                logger.error(f"Worker: Błąd podczas pobierania batcha Bulk Quotes: {e}")
                 continue
 
         if not combined_csv_output or "symbol" not in combined_csv_output:
@@ -199,7 +202,7 @@ class AlphaVantageClient:
 
     def get_bulk_quotes_parsed(self, symbols: list[str]) -> list[dict]:
         """
-        Pobiera i parsuje dane Bulk do listy słowników.
+        Pobiera i parsuje dane Bulk do listy słowników (Dla Workera/Faza 5).
         """
         csv_text = self.get_bulk_quotes(symbols)
         if not csv_text: 
@@ -222,7 +225,7 @@ class AlphaVantageClient:
                 if data['symbol']:
                     results.append(data)
         except Exception as e:
-            logger.error(f"Błąd parsowania Bulk CSV: {e}")
+            logger.error(f"Błąd parsowania Bulk CSV w Workerze: {e}")
             
         return results
 
@@ -320,16 +323,16 @@ class AlphaVantageClient:
         params = {"function": "OBV", "symbol": symbol, "interval": interval}
         return self._make_request(params)
 
-    def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None, time_to: str = None):
+    def get_news_sentiment(self, ticker: str, limit: int = 50, time_from: str = None, time_to: str = None, sort: str = 'LATEST'):
         """
         Pobiera newsy i sentyment.
-        Dodano parametr sort='LATEST' zgodnie z rekomendacją Supportu.
+        AKTUALIZACJA SDAR: Dodano obsługę parametrów sortowania i okien czasowych dla Backtestu.
         """
         params = {
             "function": "NEWS_SENTIMENT", 
             "tickers": ticker, 
             "limit": str(limit),
-            "sort": "LATEST" 
+            "sort": sort 
         }
         if time_from: params["time_from"] = time_from
         if time_to: params["time_to"] = time_to
@@ -338,6 +341,7 @@ class AlphaVantageClient:
     def search_symbol(self, keywords: str):
         """
         Wyszukuje symbole pasujące do słowa kluczowego.
+        Przydatne do walidacji listy tickerów (rekomendacja Supportu).
         """
         params = {
             "function": "SYMBOL_SEARCH",
