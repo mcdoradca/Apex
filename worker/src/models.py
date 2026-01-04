@@ -40,6 +40,33 @@ class PhaseXCandidate(Base):
     last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
+# === FAZA SDAR: SYSTEM DETEKCJI ANOMALII RYNKOWYCH (Nowa Idea) ===
+# Tabela przechowująca wyniki analizy korelacji Sentymentu i Wolumenu
+class SdarCandidate(Base):
+    __tablename__ = 'sdar_candidates'
+    ticker = Column(VARCHAR(50), primary_key=True)
+    
+    # Wyniki Główne
+    sai_score = Column(NUMERIC(10, 4), comment="Silent Accumulation Index (Cicha Akumulacja)")
+    spd_score = Column(NUMERIC(10, 4), comment="Sentiment-Price Divergence (Dywergencja)")
+    total_anomaly_score = Column(NUMERIC(10, 4), comment="Złożony wynik anomalii")
+
+    # Komponenty SAI (Techniczne)
+    atr_compression = Column(NUMERIC(10, 4), comment="Stosunek obecnego ATR do średniego (Kompresja)")
+    obv_slope = Column(NUMERIC(10, 4), comment="Nachylenie linii OBV")
+    price_stability = Column(NUMERIC(10, 4), comment="Stabilność ceny przy rosnącym wolumenie")
+
+    # Komponenty SPD (Sentymentalne)
+    sentiment_shock = Column(NUMERIC(10, 4), comment="Druga pochodna sentymentu (Impuls zmian)")
+    news_volume_spike = Column(NUMERIC(10, 4), comment="Wzrost wolumenu newsów")
+    price_resilience = Column(NUMERIC(10, 4), comment="Odporność ceny na negatywny sentyment")
+    
+    # Metryki pomocnicze
+    last_sentiment_score = Column(NUMERIC(5, 4))
+    smart_money_flow = Column(NUMERIC(12, 4), comment="Szacunkowy przepływ kapitału instytucjonalnego")
+
+    analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
+
 # === FAZA 4: KANDYDACI KINETIC ALPHA (H4) ===
 class Phase4Candidate(Base):
     __tablename__ = 'phase4_candidates'
