@@ -13,7 +13,7 @@ from .utils import (
     append_scan_log, 
     update_scan_progress,
     _resolve_trade,
-    log_decision # Nowość z Kroku 2
+    log_decision 
 )
 
 # Importy analityczne (H2/H3)
@@ -22,6 +22,9 @@ from . import aqm_v3_metrics
 
 # Importy analityczne (AQM V4)
 from . import aqm_v4_logic
+
+# === NOWOŚĆ: Import SDAR ===
+from .phase_sdar import SDARAnalyzer
 
 from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 from .. import models
@@ -34,6 +37,64 @@ BIOTECH_KEYWORDS = [
     'Medical', 'Therapeutics', 'Biosciences', 'Oncology', 'Genomics',
     'Drug', 'Bio'
 ]
+
+# === KLASA POMOCNICZA: WEHIKUŁ CZASU DLA SDAR (DODANO) ===
+class TimeTravelSDARAnalyzer(SDARAnalyzer):
+    """
+    Specjalna wersja analyzera SDAR dla Backtestu.
+    Nadpisuje pobieranie danych, aby 'cofnąć się w czasie'.
+    """
+    def __init__(self, session, api_client, target_date: datetime):
+        super().__init__(session, api_client)
+        self.target_date = target_date
+        # Ustawiamy koniec dnia badanej daty
+        self.cutoff_time = target_date.replace(hour=23, minute=59, second=59)
+
+    def _get_news_data(self, ticker: str) -> list:
+        try:
+            # Okno: 48h wstecz od momentu badania
+            time_from_str = (self.cutoff_time - timedelta(days=2)).strftime('%Y%m%dT%H%M')
+            time_to_str = self.cutoff_time.strftime('%Y%m%dT%H%M')
+
+            # Wywołanie klienta z parametrami historycznymi (sort='LATEST' w oknie)
+            resp = self.client.get_news_sentiment(
+                ticker, limit=50, time_from=time_from_str, time_to=time_to_str, sort='LATEST'
+            )
+            if resp and 'feed' in resp:
+                return resp['feed']
+        except Exception:
+            pass
+        return []
+
+    def _get_intraday_data(self, ticker: str):
+        """Pobiera ceny i ucina je na dacie badania."""
+        try:
+            # Pobieramy full history (bez cache Fazy 1, żeby mieć pewność kompletności)
+            raw_data = self.client.get_intraday(ticker, interval='60min', outputsize='full')
+            ts_key = 'Time Series (60min)'
+            if not raw_data or ts_key not in raw_data: return None
+            
+            df = pd.DataFrame.from_dict(raw_data[ts_key], orient='index')
+            df = standardize_df_columns(df)
+            df.index = pd.to_datetime(df.index)
+            df.sort_index(inplace=True)
+            
+            cols = ['open', 'high', 'low', 'close', 'volume']
+            for col in cols: df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            # Odcięcie przyszłości
+            if df.index.tz is None:
+                cutoff_naive = self.cutoff_time.replace(tzinfo=None)
+                df = df[df.index <= cutoff_naive]
+            else:
+                cutoff_aware = self.cutoff_time.replace(tzinfo=df.index.tz)
+                df = df[df.index <= cutoff_aware]
+
+            if len(df) < 40: return None # SDAR wymaga min 40 świec
+            return df
+        except Exception:
+            return None
+
 
 # === NARZĘDZIA POMOCNICZE DLA MAKRO ===
 def _parse_macro_to_series(raw_json: dict) -> pd.Series:
@@ -83,6 +144,8 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
             strategy_mode = 'AQM'
         elif parameters.get('strategy_mode') == 'BIOX':
             strategy_mode = 'BIOX'
+        elif parameters.get('strategy_mode') == 'SDAR': # Dodano obsługę parametru SDAR
+            strategy_mode = 'SDAR'
         
     start_msg = f"[Backtest] Start analizy historycznej {year} (Strategia: {strategy_mode})..."
     logger.info(start_msg)
@@ -342,6 +405,31 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     
                     df['aqm_score_h3'] = df[['intraday_change', 'session_change']].max(axis=1) * 100
                     signal_df = df
+                    
+                # === ŚCIEŻKA D: STRATEGIA SDAR (NOWOŚĆ - TIME TRAVEL) ===
+                elif strategy_mode == 'SDAR':
+                    # Dla SDAR musimy iterować dzień po dniu, aby pobierać newsy z "bańki czasowej"
+                    # Ograniczamy zakres analizy do wybranego roku
+                    df_sdar = df[(df.index >= start_date_ts) & (df.index <= end_date_ts)].copy()
+                    df_sdar['is_signal'] = False
+                    df_sdar['aqm_score_h3'] = 0.0 # Używamy tego pola do zapisu score SDAR
+                    
+                    # Iterujemy po dniach (uwaga: to może trwać długo!)
+                    for date_idx in df_sdar.index:
+                        # Tworzymy analyzer dla konkretnego dnia
+                        analyzer = TimeTravelSDARAnalyzer(session, api_client, target_date=date_idx)
+                        
+                        # Uruchamiamy analizę (pobierze ucięte Intraday i Newsy historyczne)
+                        result = analyzer.analyze_ticker(ticker)
+                        
+                        if result:
+                            # Zapisujemy wynik w DataFrame
+                            df_sdar.at[date_idx, 'aqm_score_h3'] = result.total_anomaly_score
+                            # Warunek sygnału: Score > 60 (przykładowy próg)
+                            if result.total_anomaly_score > 60:
+                                df_sdar.at[date_idx, 'is_signal'] = True
+                    
+                    signal_df = df_sdar
 
                 # === SYMULACJA TRANSAKCJI (WSPÓLNA LOGIKA) ===
                 if not signal_df.empty and 'is_signal' in signal_df.columns:
@@ -429,6 +517,8 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                     metric_score = float(row.get('aqm_score', 0))
                                 elif strategy_mode == 'BIOX': 
                                     metric_score = float(row.get('aqm_score_h3', 0))
+                                elif strategy_mode == 'SDAR': # Dodano SDAR
+                                    metric_score = float(row.get('aqm_score_h3', 0)) # Tutaj zapisaliśmy total_anomaly_score
                             except Exception as metric_err:
                                 logger.error(f"Błąd konwersji metryki dla {ticker}: {metric_err}")
                                 metric_score = 0.0
