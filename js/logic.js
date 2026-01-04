@@ -288,6 +288,64 @@ export const handleRunPhaseXScan = async () => {
     }
 };
 
+// === OBSŁUGA WIDOKU SDAR (NOWOŚĆ) ===
+export const showSdar = async () => {
+    stopViewPolling();
+    showLoading();
+    
+    const render = async () => {
+        try {
+            const candidates = await api.getSdarCandidates();
+            if (UI && UI.mainContent) {
+                UI.mainContent.innerHTML = renderers.sdarView(candidates);
+            }
+            
+            // Podpięcie przycisku skanowania wewnątrz widoku
+            const runBtn = document.getElementById('run-sdar-scan-btn');
+            if (runBtn) {
+                runBtn.addEventListener('click', handleRunSdarScan);
+            }
+            
+            if (window.lucide) window.lucide.createIcons();
+            
+        } catch (e) {
+            if (UI && UI.mainContent) {
+                UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd pobierania SDAR: ${e.message}</p>`;
+            }
+        }
+    };
+    
+    await render();
+    state.activeViewPolling = setInterval(render, 15000); // Odświeżanie co 15s
+};
+
+export const handleRunSdarScan = async () => {
+    const btn = document.getElementById('run-sdar-scan-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Analiza Anomalii...";
+        btn.classList.add('animate-pulse', 'bg-gray-600');
+        btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+    }
+    
+    try {
+        await api.sendWorkerControl('start_sdar');
+        showSystemAlert("Rozpoczęto skanowanie SDAR. Szukam Cichej Akumulacji.");
+    } catch (e) {
+        alert("Błąd startu SDAR: " + e.message);
+    } finally {
+        setTimeout(() => {
+            if (document.body.contains(btn)) {
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="radar" class="w-4 h-4 mr-2"></i> Skanuj SDAR';
+                btn.classList.remove('animate-pulse', 'bg-gray-600');
+                btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                if (window.lucide) window.lucide.createIcons();
+            }
+        }, 5000);
+    }
+};
+
 // === OBSŁUGA WIDOKU FAZY 4 (H4: Kinetic Alpha) ===
 export const showPhase4 = async () => {
     stopViewPolling();
@@ -934,8 +992,6 @@ export const handleStartQuantumOptimization = async () => {
     const strategy = UI.quantumModal.strategySelect.value;
     
     // === NAPRAWA START: Pobieranie okresu skanowania (scan_period) ===
-    // Szukamy elementu select z ID 'qo-scan-period-select' w DOM (zakładamy, że user go dodał do HTML)
-    // Domyślna wartość to 'FULL' jeśli element nie istnieje.
     const scanPeriodEl = document.getElementById('qo-scan-period-select'); 
     const scanPeriod = scanPeriodEl ? scanPeriodEl.value : 'FULL';
     // === NAPRAWA END ===
