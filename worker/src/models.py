@@ -40,30 +40,32 @@ class PhaseXCandidate(Base):
     last_pump_percent = Column(NUMERIC(10, 2), nullable=True, comment="Wielkość ostatniego skoku w %")
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
-# === FAZA SDAR: SYSTEM DETEKCJI ANOMALII RYNKOWYCH (Nowa Idea) ===
-# Tabela przechowująca wyniki analizy korelacji Sentymentu i Wolumenu
+# === FAZA SDAR: SYSTEM DETEKCJI ANOMALII RYNKOWYCH (POPRAWIONA) ===
 class SdarCandidate(Base):
     __tablename__ = 'sdar_candidates'
     ticker = Column(VARCHAR(50), primary_key=True)
     
     # Wyniki Główne
-    sai_score = Column(NUMERIC(10, 4), comment="Silent Accumulation Index (Cicha Akumulacja)")
-    spd_score = Column(NUMERIC(10, 4), comment="Sentiment-Price Divergence (Dywergencja)")
-    total_anomaly_score = Column(NUMERIC(10, 4), comment="Złożony wynik anomalii")
+    sai_score = Column(NUMERIC(10, 4), comment="Silent Accumulation Index")
+    spd_score = Column(NUMERIC(10, 4), comment="Sentiment-Price Divergence")
+    me_score  = Column(NUMERIC(10, 4), comment="Momentum Exhaustion Score (Nowość)")
+    total_anomaly_score = Column(NUMERIC(10, 4))
 
     # Komponenty SAI (Techniczne)
-    atr_compression = Column(NUMERIC(10, 4), comment="Stosunek obecnego ATR do średniego (Kompresja)")
-    obv_slope = Column(NUMERIC(10, 4), comment="Nachylenie linii OBV")
-    price_stability = Column(NUMERIC(10, 4), comment="Stabilność ceny przy rosnącym wolumenie")
+    atr_compression = Column(NUMERIC(10, 4))
+    obv_slope = Column(NUMERIC(10, 4))
+    price_stability = Column(NUMERIC(10, 4))
+    smart_money_flow = Column(NUMERIC(12, 4)) # VWAP based logic
 
     # Komponenty SPD (Sentymentalne)
-    sentiment_shock = Column(NUMERIC(10, 4), comment="Druga pochodna sentymentu (Impuls zmian)")
-    news_volume_spike = Column(NUMERIC(10, 4), comment="Wzrost wolumenu newsów")
-    price_resilience = Column(NUMERIC(10, 4), comment="Odporność ceny na negatywny sentyment")
-    
-    # Metryki pomocnicze
+    sentiment_shock = Column(NUMERIC(10, 4))
+    news_volume_spike = Column(NUMERIC(10, 4))
+    price_resilience = Column(NUMERIC(10, 4))
     last_sentiment_score = Column(NUMERIC(5, 4))
-    smart_money_flow = Column(NUMERIC(12, 4), comment="Szacunkowy przepływ kapitału instytucjonalnego")
+    
+    # Komponenty ME (Momentum Exhaustion) - Zgodne z PDF 2.3
+    metric_rsi = Column(NUMERIC(10, 4), comment="RSI 14 na interwale 4H")
+    metric_apo = Column(NUMERIC(10, 4), comment="Absolute Price Oscillator")
 
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
@@ -211,7 +213,10 @@ class VirtualTrade(Base):
     metric_kinetic_energy = Column(NUMERIC(10, 4), nullable=True)
     metric_elasticity = Column(NUMERIC(10, 4), nullable=True)
 
-    # Usunięto Metryki F5 (Omni-Flux)
+    # Metryki F5 (Omni-Flux)
+    metric_flux_score = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_velocity = Column(NUMERIC(10, 4), nullable=True)
+    metric_flux_ofp = Column(NUMERIC(10, 4), nullable=True)
 
     # Audyt AI (Re-check)
     expected_profit_factor = Column(NUMERIC(10, 4), nullable=True)
