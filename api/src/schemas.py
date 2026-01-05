@@ -83,28 +83,31 @@ class PhaseXCandidate(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-# === FAZA SDAR: SYSTEM DETEKCJI ANOMALII RYNKOWYCH (Nowa Idea) ===
+# === FAZA SDAR: SYSTEM DETEKCJI ANOMALII RYNKOWYCH (POPRAWIONA) ===
 class SdarCandidate(BaseModel):
     ticker: str
     
     # Wyniki Główne
     sai_score: Optional[float] = None
     spd_score: Optional[float] = None
+    me_score: Optional[float] = None    # <--- DODANO (Momentum Exhaustion)
     total_anomaly_score: Optional[float] = None
 
     # Komponenty SAI (Techniczne)
     atr_compression: Optional[float] = None
     obv_slope: Optional[float] = None
     price_stability: Optional[float] = None
+    smart_money_flow: Optional[float] = None
 
     # Komponenty SPD (Sentymentalne)
     sentiment_shock: Optional[float] = None
     news_volume_spike: Optional[float] = None
     price_resilience: Optional[float] = None
-    
-    # Metryki pomocnicze
     last_sentiment_score: Optional[float] = None
-    smart_money_flow: Optional[float] = None
+    
+    # Komponenty ME (Momentum Exhaustion)
+    metric_rsi: Optional[float] = None  # <--- DODANO
+    metric_apo: Optional[float] = None  # <--- DODANO
 
     analysis_date: datetime
 
@@ -192,8 +195,6 @@ class VirtualTrade(BaseModel):
     metric_m_sq_norm: Optional[float] = None
     metric_J: Optional[float] = None
     metric_J_threshold_2sigma: Optional[float] = None
-
-    # Usunięto Metryki F5 (Flux) - CZYSZCZENIE
     
     # Metryki H4
     metric_kinetic_energy: Optional[float] = None
