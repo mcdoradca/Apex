@@ -101,6 +101,23 @@ def _run_schema_and_index_migration(session: Session):
         for col, type_def in metrics_cols:
             safe_add_column('virtual_trades', col, type_def)
 
+        # === 7. SDAR CANDIDATES (ANOMALY DETECTION) - NOWOŚĆ ===
+        # Zapewniamy, że tabela SDAR ma wszystkie wymagane kolumny
+        safe_add_column('sdar_candidates', 'me_score', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'metric_rsi', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'metric_apo', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'sai_score', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'spd_score', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'total_anomaly_score', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'atr_compression', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'obv_slope', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'price_stability', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'smart_money_flow', 'NUMERIC(12, 4)')
+        safe_add_column('sdar_candidates', 'sentiment_shock', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'news_volume_spike', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'price_resilience', 'NUMERIC(10, 4)')
+        safe_add_column('sdar_candidates', 'last_sentiment_score', 'NUMERIC(5, 4)')
+        
         # === INDEKSY ===
         try:
             with engine.connect() as conn:
