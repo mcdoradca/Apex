@@ -160,7 +160,7 @@ def get_raw_data_with_cache(
     api_client: AlphaVantageClient, 
     ticker: str, 
     data_type: str, 
-    api_func: str, 
+    api_func: Any, # Zmieniono type hint na Any, aby przyjąć Callable
     expiry_hours: Optional[int] = None, 
     **kwargs
 ) -> Dict[str, Any]:
@@ -201,17 +201,29 @@ def get_raw_data_with_cache(
         logger.error(f"Cache Read Error: {e}")
 
     # 2. Jeśli brak w cache lub stare -> Zapytaj API
-    client_method = getattr(api_client, api_func, None)
-    if not client_method: return {}
-    
-    # Dostosuj argumenty (niektóre funkcje w kliencie mają inne nazwy parametrów)
-    if api_func == 'get_news_sentiment': kwargs['ticker'] = ticker
-    elif api_func == 'get_bulk_quotes': kwargs['symbols'] = [ticker]
-    else: kwargs['symbol'] = ticker
-    
-    try: 
-        raw_data = client_method(**kwargs)
-    except TypeError: return {}
+    raw_data = None
+
+    # === FIX: Obsługa funkcji bezpośredniej (Lambda/Callable) dla SDAR ===
+    if callable(api_func):
+        try:
+            raw_data = api_func(ticker)
+        except Exception as e:
+            logger.error(f"API Callable Error for {ticker}: {e}")
+            return {}
+    # =====================================================================
+    else:
+        # Standardowa obsługa nazwy metody (string)
+        client_method = getattr(api_client, api_func, None)
+        if not client_method: return {}
+        
+        # Dostosuj argumenty (niektóre funkcje w kliencie mają inne nazwy parametrów)
+        if api_func == 'get_news_sentiment': kwargs['ticker'] = ticker
+        elif api_func == 'get_bulk_quotes': kwargs['symbols'] = [ticker]
+        else: kwargs['symbol'] = ticker
+        
+        try: 
+            raw_data = client_method(**kwargs)
+        except TypeError: return {}
     
     # Walidacja odpowiedzi API
     if not raw_data: return {}
