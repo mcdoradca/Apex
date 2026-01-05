@@ -4,7 +4,6 @@ import numpy as np
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
-import traceback
 
 # Importy narzędziowe
 from .utils import (
@@ -15,7 +14,7 @@ from .utils import (
     update_scan_progress,
     _resolve_trade,
     log_decision,
-    update_system_control
+    update_system_control # Dodano brakujący import
 )
 
 # Importy analityczne (H2/H3)
@@ -68,26 +67,22 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             pass
         return []
 
-    # === FIX: ZMIANA NAZWY METODY NA _get_virtual_candles ABY NADPISAĆ ORYGINAŁ ===
-    # Wcześniej nazywała się _get_intraday_data, przez co SDAR używał metody bazowej (Live 5min)
+    # === FIX: Zmiana nazwy metody na _get_virtual_candles aby nadpisać oryginał z phase_sdar.py ===
     def _get_virtual_candles(self, ticker: str):
         """
-        Pobiera ceny historyczne, ucina je na dacie badania I AGREGUJE DO 4H.
-        To kluczowe dla szybkości i poprawności SDAR w backteście.
+        Pobiera ceny i ucina je na dacie badania I AGREGUJE DO 4H.
+        Naprawia problem braku danych w silniku SDAR w backteście.
         """
         try:
-            # 1. Pobieramy dane godzinowe (Alpha Vantage ma dłuższą historię dla 60min niż 5min)
-            # W backteście historycznym 60min to kompromis dla szybkości.
+            # Pobieramy full history godzinową (60min jest stabilniejsze historycznie niż 5min)
             raw_data = get_raw_data_with_cache(
                 self.session, self.client, ticker, 
                 'INTRADAY_60', 
                 lambda t: self.client.get_intraday(t, interval='60min', outputsize='full'),
-                expiry_hours=24 # Cache na 24h wystarczy
+                expiry_hours=24
             )
-            
             ts_key = 'Time Series (60min)'
-            if not raw_data or ts_key not in raw_data: 
-                return None
+            if not raw_data or ts_key not in raw_data: return None
             
             df = pd.DataFrame.from_dict(raw_data[ts_key], orient='index')
             df = standardize_df_columns(df)
@@ -97,7 +92,7 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             cols = ['open', 'high', 'low', 'close', 'volume']
             for col in cols: df[col] = pd.to_numeric(df[col], errors='coerce')
 
-            # 2. Odcięcie przyszłości (Time Travel)
+            # Odcięcie przyszłości
             if df.index.tz is None:
                 cutoff_naive = self.cutoff_time.replace(tzinfo=None)
                 df = df[df.index <= cutoff_naive]
@@ -105,9 +100,9 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
                 cutoff_aware = self.cutoff_time.replace(tzinfo=df.index.tz)
                 df = df[df.index <= cutoff_aware]
 
-            if len(df) < 20: return None # Zbyt mało danych do analizy
+            if len(df) < 20: return None 
 
-            # 3. Agregacja do 4H (Wymagane przez logikę SDAR)
+            # === AGREGACJA DO 4H (Wymagane przez SDAR) ===
             # Używamy '4h' (małe h) aby uniknąć błędów pandas
             df_virtual = df.resample('4h').agg({
                 'open': 'first',
@@ -118,8 +113,7 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             }).dropna()
 
             return df_virtual
-        except Exception as e:
-            # logger.error(f"TimeTravel Data Error: {e}")
+        except Exception:
             return None
 
 
@@ -197,7 +191,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
 
         tickers = list(set(tickers))
         
-        # Fallback - jeśli pusto, bierzemy próbkę z bazy companies
+        # Fallback
         if not tickers:
             append_scan_log(session, "⚠️ Brak kandydatów w F1/FX. Pobieram próbkę z tabeli companies.")
             tickers = [r[0] for r in session.execute(text("SELECT ticker FROM companies WHERE industry != 'N/A' LIMIT 880")).fetchall()]
@@ -346,7 +340,10 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     else:
                         df['information_entropy'] = 0.0
                     
+                    # Wolumen (df['volume'] już jest)
+
                     # >>> URUCHOMIENIE SILNIKA WEKTOROWEGO H3 <<<
+                    # To jest ten sam silnik, co w Skanerze Live (Krok 3)
                     df = aqm_v3_metrics.calculate_aqm_h3_vectorized(df)
                     
                     # Obliczanie Rank (Percentyl) na bieżąco w oknie
@@ -447,6 +444,12 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     signals_count_local = 0
                     
                     for date_idx in check_dates:
+                        # Logowanie dla usera co 10-ty sprawdzany dzień (żeby widział że mieli)
+                        if signals_count_local == 0 and processed_count % 10 == 0:
+                           # Dodajemy log tylko co któryś ticker i co którąś datę, żeby nie zabić bazy
+                           if check_dates.get_loc(date_idx) == 0: # Tylko pierwszy dzień
+                               append_scan_log(session, f"SDAR: Analiza {ticker}...")
+
                         # Tworzymy analyzer dla konkretnego dnia
                         # UWAGA: Teraz TimeTravelSDARAnalyzer ma poprawną metodę _get_virtual_candles
                         # więc nadpisze pobieranie danych i użyje historii godzinowej (agregowanej do 4h)
@@ -514,7 +517,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                 days_held += 1
                                 close_date = day_candle.name
                                 
-                                # Symulacja intra-day
+                                # Symulacja intra-day (Najpierw sprawdzamy SL na otwarciu, potem w trakcie)
                                 if d_open <= sl_price:
                                     trade_status = 'CLOSED_SL'
                                     close_price = d_open
@@ -539,16 +542,22 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                             
                             metric_score = 0.0
                             
+                            # BEZPIECZNE POBIERANIE METRYK (Z Logowaniem Błędów)
                             try:
                                 if strategy_mode == 'H3': 
-                                    metric_score = float(row.get('aqm_score_h3', 0))
+                                    if 'aqm_score_h3' in row:
+                                        metric_score = float(row['aqm_score_h3'])
+                                    else:
+                                        # logger.warning(f"Brak aqm_score_h3 dla {ticker} w dniu {current_date}")
+                                        metric_score = 0.0
                                 elif strategy_mode == 'AQM': 
                                     metric_score = float(row.get('aqm_score', 0))
                                 elif strategy_mode == 'BIOX': 
                                     metric_score = float(row.get('aqm_score_h3', 0))
-                                elif strategy_mode == 'SDAR': 
-                                    metric_score = float(row.get('aqm_score_h3', 0))
-                            except Exception:
+                                elif strategy_mode == 'SDAR': # Dodano SDAR
+                                    metric_score = float(row.get('aqm_score_h3', 0)) # Tutaj zapisaliśmy total_anomaly_score
+                            except Exception as metric_err:
+                                logger.error(f"Błąd konwersji metryki dla {ticker}: {metric_err}")
                                 metric_score = 0.0
 
                             trade_data = {
@@ -586,7 +595,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
 
             except Exception as e:
                 logger.error(f"Błąd backtestu dla {ticker}: {e}", exc_info=True)
-                # log_decision(session, ticker, "BACKTEST", "ERROR", str(e)[:100])
+                log_decision(session, ticker, "BACKTEST", "ERROR", str(e)[:100])
                 session.rollback()
                 continue
 
