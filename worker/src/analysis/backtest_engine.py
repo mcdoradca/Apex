@@ -13,7 +13,8 @@ from .utils import (
     append_scan_log, 
     update_scan_progress,
     _resolve_trade,
-    log_decision 
+    log_decision,
+    update_system_control # Dodano brakujący import
 )
 
 # Importy analityczne (H2/H3)
@@ -38,7 +39,7 @@ BIOTECH_KEYWORDS = [
     'Drug', 'Bio'
 ]
 
-# === KLASA POMOCNICZA: WEHIKUŁ CZASU DLA SDAR (DODANO) ===
+# === KLASA POMOCNICZA: WEHIKUŁ CZASU DLA SDAR (NAPRAWIONA) ===
 class TimeTravelSDARAnalyzer(SDARAnalyzer):
     """
     Specjalna wersja analyzera SDAR dla Backtestu.
@@ -66,13 +67,24 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             pass
         return []
 
-    def _get_intraday_data(self, ticker: str):
-        """Pobiera ceny i ucina je na dacie badania."""
+    # === FIX: Zmiana nazwy metody na _get_virtual_candles aby nadpisać oryginał z phase_sdar.py ===
+    def _get_virtual_candles(self, ticker: str):
+        """
+        Pobiera ceny, ucina je na dacie badania I AGREGUJE DO 4H.
+        Naprawia problem braku danych w silniku SDAR.
+        """
         try:
-            # Pobieramy full history (bez cache Fazy 1, żeby mieć pewność kompletności)
+            # 1. Pobieramy dane godzinowe (Alpha Vantage ma dłuższą historię dla 60min niż 5min)
+            # W backteście historycznym 60min to kompromis.
             raw_data = self.client.get_intraday(ticker, interval='60min', outputsize='full')
             ts_key = 'Time Series (60min)'
-            if not raw_data or ts_key not in raw_data: return None
+            
+            if not raw_data or ts_key not in raw_data: 
+                # Fallback: próba pobrania 5min (jeśli dostępne)
+                raw_data = self.client.get_intraday(ticker, interval='5min', outputsize='full')
+                ts_key = 'Time Series (5min)'
+                if not raw_data or ts_key not in raw_data:
+                    return None
             
             df = pd.DataFrame.from_dict(raw_data[ts_key], orient='index')
             df = standardize_df_columns(df)
@@ -82,7 +94,7 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             cols = ['open', 'high', 'low', 'close', 'volume']
             for col in cols: df[col] = pd.to_numeric(df[col], errors='coerce')
 
-            # Odcięcie przyszłości
+            # 2. Odcięcie przyszłości (Time Travel)
             if df.index.tz is None:
                 cutoff_naive = self.cutoff_time.replace(tzinfo=None)
                 df = df[df.index <= cutoff_naive]
@@ -90,9 +102,21 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
                 cutoff_aware = self.cutoff_time.replace(tzinfo=df.index.tz)
                 df = df[df.index <= cutoff_aware]
 
-            if len(df) < 40: return None # SDAR wymaga min 40 świec
-            return df
-        except Exception:
+            if len(df) < 20: return None # Zbyt mało danych do analizy
+
+            # 3. Agregacja do 4H (Wymagane przez SDARAnalyzer)
+            # Fix FutureWarning: używamy '4h' zamiast '4H'
+            df_virtual = df.resample('4h').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
+
+            return df_virtual
+        except Exception as e:
+            # logger.error(f"TimeTravel Data Error: {e}")
             return None
 
 
@@ -155,7 +179,7 @@ def run_historical_backtest(session: Session, api_client, year: str, parameters:
 
 def _run_historical_backtest_unified(session: Session, api_client, year: str, parameters: dict = None, strategy_mode: str = 'H3'):
     try:
-        # Czyścimy stare wyniki backtestu
+        # Czyścimy stare wyniki backtestu (opcjonalnie, zależy od preferencji)
         session.execute(text("DELETE FROM virtual_trades WHERE setup_type LIKE 'BACKTEST_%'"))
         session.commit()
 
@@ -244,12 +268,16 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         processed_count = 0
         trades_generated = 0
         
+        # Inicjalizacja paska postępu
+        update_scan_progress(session, 0, total_tickers)
+        
         for ticker in tickers:
             try:
-                # Logowanie postępu co 10 sztuk
-                if processed_count % 10 == 0:
-                    append_scan_log(session, f"Backtest: Przetwarzam {processed_count}/{total_tickers} ({ticker})...")
-
+                # Logowanie postępu co 5 sztuk w bazie
+                if processed_count % 5 == 0:
+                    update_scan_progress(session, processed_count, total_tickers)
+                    
+                # Pobieramy dane dzienne (niezależnie od strategii, potrzebne do symulacji transakcji)
                 daily_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_OHLCV', 'get_time_series_daily', outputsize='full')
                 daily_adj_raw = get_raw_data_with_cache(session, api_client, ticker, 'DAILY_ADJUSTED', 'get_daily_adjusted', outputsize='full')
                 
@@ -408,14 +436,23 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     
                 # === ŚCIEŻKA D: STRATEGIA SDAR (NOWOŚĆ - TIME TRAVEL) ===
                 elif strategy_mode == 'SDAR':
-                    # Dla SDAR musimy iterować dzień po dniu, aby pobierać newsy z "bańki czasowej"
                     # Ograniczamy zakres analizy do wybranego roku
                     df_sdar = df[(df.index >= start_date_ts) & (df.index <= end_date_ts)].copy()
                     df_sdar['is_signal'] = False
-                    df_sdar['aqm_score_h3'] = 0.0 # Używamy tego pola do zapisu score SDAR
+                    df_sdar['aqm_score_h3'] = 0.0 
                     
-                    # Iterujemy po dniach (uwaga: to może trwać długo!)
-                    for date_idx in df_sdar.index:
+                    # Optymalizacja: Nie sprawdzamy każdego dnia, bo to trwa wieki.
+                    # Sprawdzamy co 5 dni (tygodniowo), żeby backtest był wykonwalny.
+                    # W pełnej wersji można usunąć [::5]
+                    check_dates = df_sdar.index[::5] 
+                    
+                    signals_count_local = 0
+                    
+                    for date_idx in check_dates:
+                        # Logowanie dla usera (żeby widział że mieli)
+                        # if signals_count_local == 0 and check_dates.get_loc(date_idx) % 10 == 0:
+                        #    append_scan_log(session, f"SDAR: Analiza {ticker} @ {date_idx.date()}...")
+
                         # Tworzymy analyzer dla konkretnego dnia
                         analyzer = TimeTravelSDARAnalyzer(session, api_client, target_date=date_idx)
                         
@@ -423,12 +460,19 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                         result = analyzer.analyze_ticker(ticker)
                         
                         if result:
-                            # Zapisujemy wynik w DataFrame
-                            df_sdar.at[date_idx, 'aqm_score_h3'] = result.total_anomaly_score
-                            # Warunek sygnału: Score > 60 (przykładowy próg)
-                            if result.total_anomaly_score > 60:
+                            # Zapisujemy wynik w DataFrame (mapowanie na datę)
+                            # Uwaga: analyze_ticker nie zwraca daty, więc ufamy date_idx
+                            if result.total_anomaly_score > 70: # Próg sygnału
+                                df_sdar.at[date_idx, 'aqm_score_h3'] = result.total_anomaly_score
                                 df_sdar.at[date_idx, 'is_signal'] = True
+                                signals_count_local += 1
+                                log_decision(session, ticker, "BACKTEST_SDAR", "SIGNAL", f"Score: {result.total_anomaly_score:.1f}")
                     
+                    if signals_count_local == 0:
+                        # Logujemy brak sygnałów dla tickera
+                        # log_decision(session, ticker, "BACKTEST_SDAR", "NO_SIGNAL", "Brak anomalii > 70")
+                        pass
+                        
                     signal_df = df_sdar
 
                 # === SYMULACJA TRANSAKCJI (WSPÓLNA LOGIKA) ===
@@ -511,7 +555,6 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                     if 'aqm_score_h3' in row:
                                         metric_score = float(row['aqm_score_h3'])
                                     else:
-                                        # logger.warning(f"Brak aqm_score_h3 dla {ticker} w dniu {current_date}")
                                         metric_score = 0.0
                                 elif strategy_mode == 'AQM': 
                                     metric_score = float(row.get('aqm_score', 0))
