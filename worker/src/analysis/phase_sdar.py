@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # === KONFIGURACJA SDAR (ZGODNA Z PDF) ===
 SDAR_RAW_INTERVAL = '5min'      # Dane źródłowe (Mikro-struktura)
-SDAR_VIRTUAL_TIMEFRAME = '4H'   # Wirtualna świeca (Agregacja)
+SDAR_VIRTUAL_TIMEFRAME = '4h'   # <--- ZMIANA: '4H' -> '4h' (Fix FutureWarning)
 SDAR_LOOKBACK_CANDLES = 100     # Ile świec 4H analizować wstecz
 BATCH_DELAY = 1.0               # Zwiększono opóźnienie dla bezpieczeństwa API
 
