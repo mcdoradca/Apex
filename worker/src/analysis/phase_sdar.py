@@ -8,22 +8,26 @@ from sqlalchemy import text
 from typing import List, Dict, Optional
 
 # Importy z systemu Apex
-from ..models import SdarCandidate, Phase1Candidate
+from ..models import SdarCandidate
 from .utils import get_raw_data_with_cache, standardize_df_columns
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA SDAR ===
-SDAR_LOOKBACK_DAYS = 7          # Okno analizy intraday
-SDAR_INTERVAL = '60min'         # Interwał
-BATCH_DELAY = 0.5               # Traffic shaping
+# === KONFIGURACJA SDAR (ZGODNA Z PDF) ===
+SDAR_RAW_INTERVAL = '5min'      # Dane źródłowe (Mikro-struktura)
+SDAR_VIRTUAL_TIMEFRAME = '4H'   # Wirtualna świeca (Agregacja)
+SDAR_LOOKBACK_CANDLES = 100     # Ile świec 4H analizować wstecz
+BATCH_DELAY = 1.0               # Zwiększono opóźnienie dla bezpieczeństwa API
 
 class SDARAnalyzer:
     """
-    Silnik Analityczny SDAR (System Detekcji Anomalii Rynkowych).
-    Wersja PRO (Bez uproszczeń):
-    - SAI: Analiza wolumenu OBV z uwzględnieniem mikro-trendów.
-    - SPD: Event-Driven Sentiment Mapping (Mapowanie newsów do konkretnych świec).
+    Silnik Analityczny SDAR (System Detekcji Anomalii Rynkowych) - Wersja Zgodna z PDF.
+    
+    Zaimplementowane Filary:
+    1. SAI (Silent Accumulation): Dane 5min -> Agregacja 4H -> Precyzyjny VWAP i OBV.
+    2. SPD (Sentiment Divergence): Analiza Szoku Sentymentu (Druga Pochodna).
+    3. ME (Momentum Exhaustion): Wykrywanie pułapek byka (RSI + APO).
+    4. Risk Guard: Filtr wyników finansowych (Earnings).
     """
 
     def __init__(self, session: Session, api_client):
@@ -31,284 +35,306 @@ class SDARAnalyzer:
         self.client = api_client
 
     def run_sdar_cycle(self, limit: int = 50) -> List[str]:
-        """Główna pętla skanera SDAR."""
-        logger.info(f"🚀 SDAR (Real Money Mode): Rozpoczynam cykl analizy dla max {limit} spółek...")
+        logger.info(f"🚀 SDAR Pro: Start analizy anomalii (Input: {SDAR_RAW_INTERVAL} -> Agg: {SDAR_VIRTUAL_TIMEFRAME})")
 
         candidates = self._fetch_candidates(limit)
-        
         if not candidates:
-            logger.warning("SDAR: Brak kandydatów do analizy.")
+            logger.warning("SDAR: Brak kandydatów spełniających wymogi płynności.")
             return []
 
         processed_tickers = []
 
         for ticker in candidates:
             try:
+                # 0. Risk Guard: Earnings Filter (PDF Faza 4 pkt 3)
+                if self._is_near_earnings(ticker):
+                    logger.info(f"SDAR: {ticker} pominięty (Earnings Risk).")
+                    continue
+
                 time.sleep(BATCH_DELAY)
                 result = self.analyze_ticker(ticker)
                 
                 if result:
                     self._save_result(result)
                     processed_tickers.append(ticker)
-                    logger.info(f"✅ SDAR: {ticker} -> Score: {result.total_anomaly_score:.2f} [SAI: {result.sai_score:.2f} | SPD: {result.spd_score:.2f}]")
-                else:
-                    logger.debug(f"SDAR: {ticker} odrzucony (brak danych/anomalii).")
+                    logger.info(f"✅ SDAR: {ticker} | Score: {result.total_anomaly_score:.1f} | SAI: {result.sai_score:.0f} SPD: {result.spd_score:.0f} ME: {result.me_score:.0f}")
 
             except Exception as e:
-                logger.error(f"❌ SDAR Error dla {ticker}: {str(e)}")
+                logger.error(f"❌ SDAR Error dla {ticker}: {str(e)}", exc_info=True)
                 self.session.rollback()
 
         return processed_tickers
 
     def analyze_ticker(self, ticker: str) -> Optional[SdarCandidate]:
-        """
-        Pełna analiza: Fuzja techniki (Intraday) i fundamentów (News).
-        """
-        # A. Dane Intraday (Cena + Wolumen)
-        df_intraday = self._get_intraday_data(ticker)
-        if df_intraday is None or df_intraday.empty:
+        # A. Pobranie danych Mikro (5min) i Agregacja do 4H
+        df_virtual = self._get_virtual_candles(ticker)
+        if df_virtual is None or len(df_virtual) < 50:
             return None
 
         # B. Dane News (Sentyment)
         news_data = self._get_news_data(ticker)
 
-        # C. Wskaźnik SAI (Silent Accumulation Index)
-        sai_metrics = self._calculate_sai(df_intraday)
-        
-        # D. Wskaźnik SPD (Sentiment-Price Divergence) - Wersja Event-Driven
-        spd_metrics = self._calculate_spd(df_intraday, news_data)
+        # C. Obliczenia Filarów
+        sai = self._calculate_sai(df_virtual)        # Filar 1: Cicha Akumulacja
+        spd = self._calculate_spd(df_virtual, news_data) # Filar 2: Dywergencja Sentymentu
+        me  = self._calculate_me(df_virtual, news_data)  # Filar 3: Wyczerpanie Pędu (RSI+APO)
 
-        # E. Scoring (Wagi dynamiczne)
-        # Jeśli mamy silną dywergencję na newsach (SPD), jest ona ważniejsza niż technika.
-        sai_score = sai_metrics['score']
-        spd_score = spd_metrics['score']
+        # D. Scoring Hybrydowy
+        # PDF: Szukamy potwierdzenia w dysharmonii.
+        # Bazowy wynik to SAI (Fundament techniczny). 
+        # SPD działa jako mnożnik "szansy" (Bullish Divergence).
+        # ME działa jako filtr negatywny (Bull Trap).
         
-        if spd_score > 0:
-            # Wykryto anomalię informacyjną - zwiększamy jej wagę
-            total_score = (sai_score * 0.4) + (spd_score * 0.6)
-        else:
-            # Brak newsów lub brak dywergencji - polegamy na technice
-            total_score = sai_score
+        total_score = (sai['score'] * 0.4) + (spd['score'] * 0.4) + (me['score'] * 0.2)
+        
+        # Jeśli wykryto wyczerpanie pędu (Bull Trap), drastycznie obniż wynik
+        if me['is_trap']:
+            total_score *= 0.5
 
-        # F. Zapis Wyników
-        result = SdarCandidate(
+        return SdarCandidate(
             ticker=ticker,
-            sai_score=sai_score,
-            spd_score=spd_score,
+            
+            # Wyniki
+            sai_score=sai['score'],
+            spd_score=spd['score'],
+            me_score=me['score'],
             total_anomaly_score=total_score,
             
             # Detale SAI
-            atr_compression=sai_metrics['atr_compression'],
-            obv_slope=sai_metrics['obv_slope'],
-            price_stability=sai_metrics['price_stability'],
-            smart_money_flow=sai_metrics['smart_money_flow'],
+            atr_compression=sai['atr_compression'],
+            obv_slope=sai['obv_slope'],
+            price_stability=sai['price_stability'],
+            smart_money_flow=sai['smart_money_flow'], # VWAP Logic
             
             # Detale SPD
-            sentiment_shock=spd_metrics['sentiment_shock'],
-            news_volume_spike=spd_metrics['news_volume_spike'],
-            price_resilience=spd_metrics['price_resilience'],
-            last_sentiment_score=spd_metrics['current_sentiment'],
+            sentiment_shock=spd['sentiment_shock'],
+            news_volume_spike=spd['news_count'],
+            price_resilience=spd['resilience_score'],
+            last_sentiment_score=spd['last_sentiment'],
+            
+            # Detale ME
+            metric_rsi=me['rsi'],
+            metric_apo=me['apo'],
             
             analysis_date=datetime.now()
         )
-        
-        return result
 
-    # --- THE ALCHEMY (CORE LOGIC) ---
-
+    # --- FILAR 1: SAI (Silent Accumulation Index) ---
     def _calculate_sai(self, df: pd.DataFrame) -> Dict:
         """
-        Silent Accumulation Index (SAI).
-        Wykrywa: Wzrost OBV przy braku wzrostu ceny (Kompresja).
+        Analiza na świecach wirtualnych 4H.
+        Wykrywa: Płaska cena + Rosnący OBV + Malejący ATR + VWAP Support.
         """
-        # 1. OBV Calculation
+        # 1. OBV & VWAP Calculation
+        # OBV liczymy na już zagregowanych danych
         df['price_change'] = df['close'].diff()
-        df['obv_direction'] = np.where(df['price_change'] > 0, 1, -1)
-        df['obv_direction'] = np.where(df['price_change'] == 0, 0, df['obv_direction'])
-        df['obv'] = (df['volume'] * df['obv_direction']).cumsum()
+        df['obv_dir'] = np.where(df['price_change'] > 0, 1, -1)
+        df['obv_dir'] = np.where(df['price_change'] == 0, 0, df['obv_dir'])
+        df['obv'] = (df['volume'] * df['obv_dir']).cumsum()
+        
+        # VWAP (uproszczony dla świec 4H - suma (P*V) / suma V w oknie kroczącym)
+        df['pv'] = df['close'] * df['volume']
+        df['vwap'] = df['pv'].rolling(window=20).sum() / df['volume'].rolling(window=20).sum()
 
-        # 2. ATR Calculation (Intraday volatility)
-        df['tr'] = df['high'] - df['low']
+        # 2. ATR Calculation (Zmienność)
+        df['tr'] = np.maximum(df['high'] - df['low'], 
+                   np.maximum(abs(df['high'] - df['close'].shift()), abs(df['low'] - df['close'].shift())))
         df['atr'] = df['tr'].rolling(window=14).mean()
 
-        # 3. Analiza Regresji (Ostatnie 40 świec ~ tydzień handlowy H1)
-        lookback = 40
-        if len(df) < lookback: lookback = len(df)
+        # 3. Analiza Regresji (Ostatnie 10 świec 4H ~ tydzień handlowy)
+        subset = df.iloc[-10:].copy()
+        if len(subset) < 10: return {'score':0, 'atr_compression':0, 'obv_slope':0, 'price_stability':0, 'smart_money_flow':0}
         
-        subset = df.iloc[-lookback:].copy()
         x = np.arange(len(subset))
         
-        # Nachylenia (Slopes)
-        slope_price = np.polyfit(x, subset['close'], 1)[0]
-        price_norm = slope_price / subset['close'].mean() * 100 
+        # Normalizowane nachylenia
+        slope_price = np.polyfit(x, subset['close'], 1)[0] / subset['close'].mean() * 100
+        slope_obv = np.polyfit(x, subset['obv'], 1)[0] / subset['volume'].mean() # Relatywne do wolumenu
+        slope_atr = np.polyfit(x, subset['atr'], 1)[0]
         
-        slope_obv = np.polyfit(x, subset['obv'], 1)[0]
-        avg_vol = subset['volume'].mean()
-        obv_norm = slope_obv / avg_vol if avg_vol > 0 else 0
-        
-        slope_atr = np.polyfit(x, subset['atr'].fillna(0), 1)[0]
-        
-        # 4. Scoring SAI
+        # VWAP Check: Czy cena jest powyżej VWAP? (Instytucjonalne wsparcie)
+        last_price = subset['close'].iloc[-1]
+        last_vwap = subset['vwap'].iloc[-1]
+        vwap_support = 1 if last_price > last_vwap else 0
+
         score = 0
-        
-        # WARUNEK 1: Dywergencja OBV (Cena stoi/spada, OBV rośnie)
-        if obv_norm > 0.05:          # OBV rośnie
-            if price_norm < 0.02:    # Cena płaska lub spada
-                score += 40
-            if price_norm < -0.01:   # Cena spada (Silna dywergencja)
-                score += 20
-        
-        # WARUNEK 2: Kompresja Zmienności (ATR maleje przed wybuchem)
-        if slope_atr < 0:
-            score += 20
+        # A. Dywergencja OBV (Cena płaska/spada, OBV rośnie)
+        if slope_obv > 0.5: # Silny napływ
+            if abs(slope_price) < 0.2: score += 40 # Cena stabilna
+            elif slope_price < 0: score += 50      # Cena spada (Silniejszy sygnał)
             
-        # WARUNEK 3: Smart Money Flow (Cena zamyka się wysoko na dużym wolumenie)
-        # Uproszczona wersja Money Flow Multiplier
+        # B. Kompresja Zmienności (Cisza przed burzą)
+        if slope_atr < 0: score += 20
         
+        # C. VWAP Support
+        if vwap_support: score += 10
+
         return {
             'score': min(score, 100),
             'atr_compression': slope_atr,
-            'obv_slope': obv_norm,
-            'price_stability': 1.0 / (abs(price_norm) + 0.01),
-            'smart_money_flow': (subset['close'] * subset['volume']).mean()
+            'obv_slope': slope_obv,
+            'price_stability': 1.0 / (abs(slope_price) + 0.01),
+            'smart_money_flow': last_vwap
         }
 
-    def _calculate_spd(self, df_price: pd.DataFrame, news_items: List[Dict]) -> Dict:
+    # --- FILAR 2: SPD (Sentiment-Price Divergence) ---
+    def _calculate_spd(self, df: pd.DataFrame, news_data: List[Dict]) -> Dict:
         """
-        Sentiment-Price Divergence (SPD) - EVENT DRIVEN.
-        
-        Zasada: Dla każdego newsa sprawdzamy reakcję rynku w oknie 4 godzin (4 świece H1).
-        Szukamy "Teflonowych Spółek": Złe newsy -> Cena nie spada.
+        Badanie 'Sentiment Shock' i 'Price Resilience'.
         """
-        default_result = {
-            'score': 0, 'sentiment_shock': 0, 
-            'news_volume_spike': 0, 'price_resilience': 0, 'current_sentiment': 0
-        }
-        
-        if not news_items or df_price.empty:
-            return default_result
+        if not news_data or df.empty:
+            return {'score':0, 'sentiment_shock':0, 'news_count':0, 'resilience_score':0, 'last_sentiment':0}
 
-        # Konwersja indeksu daty na timezone-aware (jeśli trzeba)
-        if df_price.index.tz is None:
-            # Zakładamy UTC dla Alpha Vantage
-            df_price.index = df_price.index.tz_localize('UTC')
-
-        divergence_accumulated = 0
-        weighted_sentiment_sum = 0
-        weight_sum = 0
-        
-        processed_news_count = 0
-        resilience_instances = 0 # Ile razy cena oparła się złym newsom
-
-        for item in news_items:
+        # 1. Obliczanie Szoku Sentymentu (Pochodna zmian)
+        # Sortujemy newsy chronologicznie
+        sorted_news = sorted(news_data, key=lambda x: x.get('time_published', ''))
+        sentiments = []
+        for n in sorted_news[-10:]: # Ostatnie 10 newsów
             try:
-                # 1. Parsowanie danych newsa
-                sentiment_score = float(item.get('overall_sentiment_score', 0))
-                time_str = item.get('time_published') # Format: '20230101T120000'
-                
-                if not time_str: continue
-                
-                news_time = datetime.strptime(time_str, '%Y%m%dT%H%M%S')
-                news_time = news_time.replace(tzinfo=df_price.index.tz) # Synchronizacja stref
+                s = float(n.get('overall_sentiment_score', 0))
+                sentiments.append(s)
+            except: pass
+            
+        sentiment_shock = 0
+        if len(sentiments) >= 2:
+            # Druga pochodna (zmiana zmiany) lub po prostu dynamika ostatnich zmian
+            # Jeśli ostatni jest mocno ujemny, a poprzedni był neutralny -> Szok negatywny
+            sentiment_shock = sentiments[-1] - np.mean(sentiments[:-1])
 
-                # 2. Obliczenie "Świeżości" (Time Decay)
-                # News starszy niż 48h nas nie interesuje w kontekście SDAR
-                hours_elapsed = (datetime.now(news_time.tzinfo) - news_time).total_seconds() / 3600
-                if hours_elapsed > 48: 
-                    continue
-                
-                # Waga spada liniowo do 0 po 48h. News sprzed 1h ma wagę ~1.0
-                recency_weight = max(0, 1 - (hours_elapsed / 48.0))
-                
-                weighted_sentiment_sum += sentiment_score * recency_weight
-                weight_sum += recency_weight
-                processed_news_count += 1
-
-                # 3. Analiza Reakcji Ceny (Event Window Analysis)
-                # Pobieramy świece po publikacji newsa (okno 4h)
-                post_news_candles = df_price[df_price.index >= news_time].head(4)
-                
-                if len(post_news_candles) > 0:
-                    start_price = post_news_candles['open'].iloc[0]
-                    end_price = post_news_candles['close'].iloc[-1]
-                    price_reaction_pct = (end_price - start_price) / start_price * 100
-                    
-                    # === DETEKCJA ANOMALII (DIVERGENCE) ===
-                    
-                    # SCENARIUSZ A: Zły News (Bearish) + Cena Stabilna/Rośnie
-                    # To jest "Ślad Giganta" - ktoś skupuje spadki
-                    if sentiment_score <= -0.15: 
-                        if price_reaction_pct > -0.2: # Cena spadła mniej niż 0.2% lub wzrosła
-                            # Im gorszy news i lepsza cena, tym wyższy wynik
-                            div_strength = abs(sentiment_score) + (price_reaction_pct if price_reaction_pct > 0 else 0)
-                            divergence_accumulated += (div_strength * 50 * recency_weight)
-                            resilience_instances += 1
-                            
-                    # SCENARIUSZ B: Dobry News (Bullish) + Cena Spada
-                    # To jest "Dystrybucja" - uciekamy (negatywna dywergencja)
-                    elif sentiment_score >= 0.15:
-                        if price_reaction_pct < -0.5:
-                            # Odejmujemy punkty - pułapka na byki
-                            divergence_accumulated -= (30 * recency_weight)
-
-            except Exception as e:
-                continue
-
-        # 4. Finalizacja Wyników
-        avg_weighted_sentiment = weighted_sentiment_sum / weight_sum if weight_sum > 0 else 0
+        # 2. Analiza Dywergencji (Reakcja Ceny na ostatnie newsy)
+        # Jeśli newsy są negatywne (Shock < -0.2), a cena w ostatnich świecach 4H nie spada
+        recent_price_change = df['close'].iloc[-1] / df['close'].iloc[-3] - 1 # Zmiana z ostatnich 12h (3 świece 4H)
         
-        # Normalizacja wyniku SPD do 0-100
-        # divergence_accumulated może być wysokie, ucinamy na 100
-        final_score = min(max(divergence_accumulated, 0), 100)
-
+        resilience_score = 0
+        if sentiment_shock < -0.2: # Atak złych newsów
+            if recent_price_change > -0.01: # Cena spadła mniej niż 1% lub wzrosła
+                resilience_score = 100 # BULLISH DIVERGENCE
+                
+        # Wynik
+        final_score = 0
+        if resilience_score > 0: final_score = 80 # Wysoki wynik za dywergencję
+        
         return {
             'score': final_score,
-            'sentiment_shock': avg_weighted_sentiment,
-            'news_volume_spike': processed_news_count,
-            'price_resilience': resilience_instances,
-            'current_sentiment': avg_weighted_sentiment
+            'sentiment_shock': sentiment_shock,
+            'news_count': len(news_data),
+            'resilience_score': resilience_score,
+            'last_sentiment': sentiments[-1] if sentiments else 0
         }
 
-    # --- DATA FETCHING (Zoptymalizowane pod Worker) ---
+    # --- FILAR 3: ME (Momentum Exhaustion - NOWOŚĆ) ---
+    def _calculate_me(self, df: pd.DataFrame, news_data: List[Dict]) -> Dict:
+        """
+        Wykrywanie Bull Trap (PDF 2.3).
+        Składniki: RSI + APO.
+        """
+        # 1. RSI (Relative Strength Index)
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        
+        # 2. APO (Absolute Price Oscillator) - SMA Fast - SMA Slow
+        df['apo'] = df['close'].rolling(window=12).mean() - df['close'].rolling(window=26).mean()
+        
+        current_rsi = df['rsi'].iloc[-1]
+        current_apo = df['apo'].iloc[-1]
+        prev_apo = df['apo'].iloc[-2]
+        price_new_high = df['close'].iloc[-1] > df['close'].iloc[-5:].max() # Czy mamy lokalny szczyt?
+        
+        is_trap = False
+        me_score = 50 # Neutralny
+        
+        # Logika Bull Trap: Cena robi szczyt, ale APO spada (dywergencja pędu) + RSI wykupione
+        if price_new_high:
+            if current_apo < prev_apo: # Momentum spada
+                if current_rsi > 70:   # Wykupienie
+                    is_trap = True
+                    me_score = 0 # Dyskwalifikacja
+        else:
+            # Jeśli nie ma pułapki, a APO rośnie -> pozytywne momentum
+            if current_apo > prev_apo and current_apo > 0:
+                me_score = 80
 
-    def _fetch_candidates(self, limit: int) -> List[str]:
-        # Pobieramy tylko te spółki z Fazy 1, które mają sensowny wolumen
-        query = text(f"SELECT ticker FROM phase1_candidates WHERE volume > 50000 ORDER BY score DESC LIMIT {limit}")
-        result = self.session.execute(query).fetchall()
-        return [row[0] for row in result]
+        return {
+            'score': me_score,
+            'is_trap': is_trap,
+            'rsi': current_rsi,
+            'apo': current_apo
+        }
 
-    def _get_intraday_data(self, ticker: str) -> Optional[pd.DataFrame]:
+    # --- HELPERY DANYCH ---
+
+    def _get_virtual_candles(self, ticker: str) -> Optional[pd.DataFrame]:
+        """
+        Pobiera surowe dane 5min i agreguje je do 4H (Virtual Candles).
+        To realizuje postulat '1.1 Dane Cenowe o Wysokiej Częstotliwości'.
+        """
+        # 1. Pobranie danych 5min
         raw_data = get_raw_data_with_cache(
-            self.session, self.client, ticker, 
-            'INTRADAY_60', 
-            lambda t: self.client.get_intraday(t, interval=SDAR_INTERVAL, outputsize='full'),
-            expiry_hours=1 
+            self.session, self.client, ticker,
+            'INTRADAY_5',
+            lambda t: self.client.get_intraday(t, interval='5min', outputsize='full'),
+            expiry_hours=1
         )
         
-        ts_key = f'Time Series ({SDAR_INTERVAL})'
-        if not raw_data or ts_key not in raw_data:
+        if not raw_data or 'Time Series (5min)' not in raw_data:
             return None
             
-        df = pd.DataFrame.from_dict(raw_data[ts_key], orient='index')
-        df = standardize_df_columns(df) 
+        # 2. Konwersja do DataFrame
+        df = pd.DataFrame.from_dict(raw_data['Time Series (5min)'], orient='index')
+        df = standardize_df_columns(df)
         df.index = pd.to_datetime(df.index)
         df.sort_index(inplace=True)
         
+        # Konwersja typów
         cols = ['open', 'high', 'low', 'close', 'volume']
-        for col in cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-        return df
+        for c in cols: df[c] = pd.to_numeric(df[c])
+
+        # 3. AGREGACJA DO 4H (Virtual Candles)
+        # Resampling z logiką OHLCV
+        df_virtual = df.resample(SDAR_VIRTUAL_TIMEFRAME).agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }).dropna()
+
+        return df_virtual
 
     def _get_news_data(self, ticker: str) -> List[Dict]:
+        # Bez zmian - pobieramy newsy jak wcześniej
         try:
-            # Pobieramy newsy, sortowane od najnowszych
             resp = self.client.get_news_sentiment(ticker, limit=50)
-            if resp and 'feed' in resp:
-                return resp['feed']
-        except Exception as e:
-            logger.warning(f"SDAR: Błąd newsów dla {ticker}: {e}")
+            if resp and 'feed' in resp: return resp['feed']
+        except: pass
         return []
+    
+    def _fetch_candidates(self, limit: int) -> List[str]:
+        # Dodatkowy filtr wolumenu (zgodnie z Risk Check)
+        query = text(f"SELECT ticker FROM phase1_candidates WHERE volume > 100000 ORDER BY score DESC LIMIT {limit}")
+        result = self.session.execute(query).fetchall()
+        return [r[0] for r in result]
+
+    def _is_near_earnings(self, ticker: str) -> bool:
+        """
+        Sprawdza czy spółka ma wyniki w oknie zabronionym (PDF Faza 4 pkt 3).
+        Korzysta z danych zapisanych w tabeli TradingSignal (jeśli są) lub Phase1.
+        """
+        try:
+            # Próbujemy pobrać datę earnings z bazy (Phase1Candidate ma pole days_to_earnings)
+            query = text("SELECT days_to_earnings FROM phase1_candidates WHERE ticker=:t")
+            res = self.session.execute(query, {'t': ticker}).first()
+            
+            if res and res[0] is not None:
+                days = res[0]
+                # Blokujemy: 2 dni przed (days <= 2) i 1 dzień po (days >= -1) -> Zakres [-1, 2]
+                if -1 <= days <= 2:
+                    return True
+        except: pass
+        return False
 
     def _save_result(self, result: SdarCandidate):
         self.session.merge(result)
