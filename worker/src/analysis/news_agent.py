@@ -1,4 +1,3 @@
-
 import logging
 import time
 import json
@@ -10,14 +9,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 # === IMPORTY ===
+# models są w katalogu wyżej (worker/src)
 from .. import models
-# Importujemy utils z tego samego katalogu
+# utils są w tym samym katalogu (worker/src/analysis)
 from . import utils
 
 logger = logging.getLogger(__name__)
 
 # === KONFIGURACJA ZGODNA Z SUPORTEM ALPHA VANTAGE (WARIANT B - STRICT PHASE X) ===
-# Zmniejszamy z 120 na 100 RPM dla stabilności.
+# Zmniejszamy z 120 na 100 RPM dla pełnej stabilności (unikamy warningów o limicie).
 TARGET_RPM = 100  
 REQUEST_INTERVAL = 60.0 / TARGET_RPM  
 LOOKBACK_WINDOW_MINUTES = 2  
@@ -28,6 +28,7 @@ DEFAULT_SENTIMENT_THRESHOLD = 0.30
 LIFE_SCIENCES_SENTIMENT_THRESHOLD = 0.25 
 URGENT_SENTIMENT_THRESHOLD = 0.45
 
+# Konfiguracja Telegrama (Pobierana z ENV Workera)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -59,7 +60,7 @@ class NewsScout:
                 q_phasex = self.session.query(models.PhaseXCandidate.ticker).all()
                 tickers = [t[0] for t in q_phasex]
                 
-                # Usuwamy duplikaty na wszelki wypadek
+                # Usuwamy ewentualne duplikaty
                 tickers = list(set(tickers))
 
             except Exception as e:
@@ -75,7 +76,7 @@ class NewsScout:
             utils.append_scan_log(self.session, "NEWS: Brak tickerów w Fazie X. Kończę pracę.")
             return
 
-        # 2. Ustalenie okna czasowego
+        # 2. Ustalenie okna czasowego (time_from)
         time_from_dt = datetime.now(timezone.utc) - timedelta(minutes=LOOKBACK_WINDOW_MINUTES)
         time_from_str = time_from_dt.strftime('%Y%m%dT%H%M')
 
@@ -96,7 +97,7 @@ class NewsScout:
                 progress_msg = f"NEWS: Przeanalizowano {i + 1}/{len(tickers)}..."
                 utils.append_scan_log(self.session, progress_msg)
             
-            # PACING
+            # PACING - Odstęp czasowy między zapytaniami
             elapsed = time.time() - step_start
             sleep_time = max(0, REQUEST_INTERVAL - elapsed)
             if sleep_time > 0:
@@ -110,6 +111,7 @@ class NewsScout:
         utils.append_scan_log(self.session, msg_end)
 
     def _process_ticker(self, ticker: str, time_from: str):
+        """Pobiera i analizuje newsy dla pojedynczego tickera."""
         data = self.api_client.get_news_sentiment(
             ticker=ticker,
             limit=50,
@@ -124,6 +126,7 @@ class NewsScout:
             self._analyze_article(ticker, article)
 
     def _analyze_article(self, ticker: str, article: dict):
+        """Analizuje pojedynczy artykuł pod kątem relewancji i sentymentu."""
         url = article.get("url")
         title = article.get("title")
         source = article.get("source")
@@ -141,9 +144,11 @@ class NewsScout:
         ticker_score = float(specific_sentiment.get("ticker_sentiment_score", 0))
         ticker_label = specific_sentiment.get("ticker_sentiment_label", overall_sentiment_label)
 
+        # Filtr 1: Relewancja
         if relevance_score < MIN_RELEVANCE_SCORE:
             return 
 
+        # Filtr 2: Life Sciences / Biotech (obniżony próg sentymentu)
         is_life_sciences = any(
             t.get("topic") == "Life Sciences" or "Mergers & Acquisitions" in t.get("topic") 
             for t in topics
@@ -151,9 +156,11 @@ class NewsScout:
         
         threshold = LIFE_SCIENCES_SENTIMENT_THRESHOLD if is_life_sciences else DEFAULT_SENTIMENT_THRESHOLD
         
+        # Filtr 3: Sentyment (mocny pozytywny lub negatywny)
         if abs(ticker_score) < threshold:
             return
 
+        # Filtr 4: Deduplikacja
         news_hash = self._generate_news_hash(url, title, source)
         
         exists = self.session.query(models.ProcessedNews).filter_by(
@@ -164,7 +171,7 @@ class NewsScout:
         if exists:
             return 
 
-        # Znaleziono newsa!
+        # Znaleziono newsa! Zapisz i alarmuj.
         self._save_news(ticker, news_hash, ticker_label, title, url)
         self.stats["articles_found"] += 1
         
@@ -180,9 +187,10 @@ class NewsScout:
         # A. Wyświetl w Aplikacji (System Alert - Czerwona belka)
         try:
             utils.update_system_control(self.session, "system_alert", alert_msg)
-            # Dodatkowo wpis do logu operacyjnego
-            utils.append_scan_log(self.session, f"NEWS ALERT: {ticker} - {title[:30]}...")
+            # Dodatkowo wpis do logu operacyjnego z wyróżnieniem
+            utils.append_scan_log(self.session, f"!!! NEWS ALERT: {ticker} - {title[:50]}...")
         except AttributeError:
+            # Fallback (zabezpieczenie)
             try:
                 utils.set_system_control_value(self.session, "system_alert", alert_msg)
             except:
@@ -198,7 +206,7 @@ class NewsScout:
         else:
             self._send_telegram(alert_msg)
         
-        # C. Notatka do sygnału
+        # C. Notatka do sygnału (jeśli istnieje aktywny setup)
         try:
             signal = self.session.query(models.TradingSignal).filter(
                 models.TradingSignal.ticker == ticker,
@@ -217,10 +225,12 @@ class NewsScout:
         logger.info(f"NEWS ALERT ({ticker}): {title}")
 
     def _generate_news_hash(self, url, title, source):
+        """Tworzy unikalny hash dla newsa (MD5)."""
         raw_str = f"{url}|{title}|{source}"
         return hashlib.md5(raw_str.encode('utf-8')).hexdigest()
 
     def _save_news(self, ticker, news_hash, sentiment, headline, url):
+        """Zapisuje przetworzony news w bazie danych."""
         try:
             news_entry = models.ProcessedNews(
                 ticker=ticker,
@@ -237,6 +247,7 @@ class NewsScout:
             logger.error(f"Błąd zapisu newsa do DB: {e}")
 
     def _send_telegram(self, message):
+        """Wysyła powiadomienie na Telegram (Implementacja zapasowa)."""
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
             return
 
@@ -254,6 +265,6 @@ class NewsScout:
             logger.error(f"Błąd wysyłania Telegrama: {e}")
 
 def run_news_agent_cycle(session, api_client):
+    """Funkcja wrapper uruchamiana przez Workera (schedule)."""
     scout = NewsScout(session, api_client)
     scout.run_cycle()
-"""
