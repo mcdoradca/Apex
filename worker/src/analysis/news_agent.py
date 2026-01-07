@@ -53,16 +53,20 @@ class NewsScout:
         else:
             # Domyślnie: Pobierz kandydatów z Fazy X (Pump Hunter) + Fazy 1 (EOD)
             # Support AV sugerował listę ~650 tickerów. Tutaj łączymy kluczowe tabele.
-            q_phasex = self.session.query(models.PhaseXCandidate.ticker).all()
-            q_phase1 = self.session.query(models.Phase1Candidate.ticker).all()
-            
-            # Unikalna lista tickerów
-            tickers = list(set([t[0] for t in q_phasex] + [t[0] for t in q_phase1]))
-            
-            # Jeśli lista jest pusta (np. po restarcie), weź topowe spółki z bazy
-            if not tickers:
-                q_companies = self.session.query(models.Company.ticker).limit(200).all()
-                tickers = [t[0] for t in q_companies]
+            try:
+                q_phasex = self.session.query(models.PhaseXCandidate.ticker).all()
+                q_phase1 = self.session.query(models.Phase1Candidate.ticker).all()
+                
+                # Unikalna lista tickerów
+                tickers = list(set([t[0] for t in q_phasex] + [t[0] for t in q_phase1]))
+                
+                # Jeśli lista jest pusta (np. po restarcie), weź topowe spółki z bazy
+                if not tickers:
+                    q_companies = self.session.query(models.Company.ticker).limit(200).all()
+                    tickers = [t[0] for t in q_companies]
+            except Exception as e:
+                logger.error(f"NEWS AGENT: Błąd pobierania tickerów: {e}")
+                tickers = []
 
         logger.info(f"NEWS AGENT: Lista do skanowania: {len(tickers)} tickerów.")
 
@@ -172,29 +176,43 @@ class NewsScout:
         priority_label = "🔥 PILNE" if is_urgent else "INFO"
         
         alert_msg = (
-            f"[{priority_label}] {ticker}: {ticker_label} (Score: {ticker_score:.2f}, Rel: {relevance_score})\n"
-            f"Tytuł: {title}\n"
+            f"[{priority_label}] {ticker}: {ticker_label} (Score: {ticker_score:.2f}, Rel: {relevance_score})\\n"
+            f"Tytuł: {title}\\n"
             f"Link: {url}"
         )
         
         # A. Wyświetl w Aplikacji (System Alert)
-        utils.set_system_control_value(self.session, "system_alert", alert_msg)
+        # POPRAWKA: Używamy update_system_control (zgodnie z utils.py w Workerze)
+        try:
+            utils.update_system_control(self.session, "system_alert", alert_msg)
+        except AttributeError:
+             # Fallback, gdyby nazwa jednak była inna (defensive coding)
+            logger.warning("Utils update_system_control not found, trying set_system_control_value")
+            try:
+                utils.set_system_control_value(self.session, "system_alert", alert_msg)
+            except:
+                pass
         
         # B. Wyślij na Telegram
         self._send_telegram(alert_msg)
         
         # C. Loguj w bazie (Trading Signal Notes update - opcjonalnie)
         # Możemy dopisać notatkę do aktywnego sygnału, jeśli istnieje
-        signal = self.session.query(models.TradingSignal).filter(
-            models.TradingSignal.ticker == ticker,
-            models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
-        ).first()
-        
-        if signal:
-            timestamp = datetime.now().strftime("%H:%M")
-            new_note = f"\\n[{timestamp}] NEWS: {ticker_label} - {title[:50]}..."
-            signal.notes = (signal.notes or "") + new_note
-            self.session.commit()
+        try:
+            signal = self.session.query(models.TradingSignal).filter(
+                models.TradingSignal.ticker == ticker,
+                models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
+            ).first()
+            
+            if signal:
+                timestamp = datetime.now().strftime("%H:%M")
+                # Escaping dla bezpieczeństwa SQL/String
+                safe_title = title.replace("'", "").replace('"', "")[:50]
+                new_note = f"\\n[{timestamp}] NEWS: {ticker_label} - {safe_title}..."
+                signal.notes = (signal.notes or "") + new_note
+                self.session.commit()
+        except Exception as e:
+            logger.error(f"Błąd aktualizacji notatki sygnału: {e}")
 
         logger.info(f"NEWS ALERT ({ticker}): {title}")
 
@@ -225,7 +243,8 @@ class NewsScout:
     def _send_telegram(self, message):
         \"\"\"Wysyła powiadomienie na Telegram, jeśli skonfigurowano tokeny.\"\"\"
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-            logger.warning("Telegram nie jest skonfigurowany (brak TELEGRAM_BOT_TOKEN/CHAT_ID). Alert tylko w logach.")
+            # Nie spamujemy logów, tylko raz przy starcie workera by wystarczyło, 
+            # ale tutaj po prostu cicho wychodzimy.
             return
 
         try:
@@ -236,6 +255,7 @@ class NewsScout:
                 "parse_mode": "HTML", # Opcjonalnie Markdown
                 "disable_web_page_preview": True
             }
+            # Timeout krótki, żeby nie blokować Workera
             response = requests.post(url, json=payload, timeout=5)
             if response.status_code == 200:
                 self.stats["alerts_sent"] += 1
