@@ -1,4 +1,3 @@
-
 import logging
 import time
 import json
@@ -46,10 +45,10 @@ class NewsScout:
         }
 
     def run_cycle(self, specific_tickers=None):
-        \"\"\"
+        """
         Główna pętla agenta newsowego.
         Obsługuje listę tickerów z Fazy X (lub inną przekazaną), zachowując limity API.
-        \"\"\"
+        """
         start_time = time.time()
         logger.info(">>> NEWS AGENT: Rozpoczynam cykl skanowania (Wariant B: 120 RPM)...")
 
@@ -105,7 +104,7 @@ class NewsScout:
         logger.info(f"<<< NEWS AGENT: Cykl zakończony w {duration:.1f}s. Statystyki: {self.stats}")
 
     def _process_ticker(self, ticker: str, time_from: str):
-        \"\"\"Pobiera i analizuje newsy dla pojedynczego tickera.\"\"\"
+        """Pobiera i analizuje newsy dla pojedynczego tickera."""
         
         # Wywołanie API (Sortowanie LATEST zaszyte w kliencie AV)
         data = self.api_client.get_news_sentiment(
@@ -123,7 +122,7 @@ class NewsScout:
             self._analyze_article(ticker, article)
 
     def _analyze_article(self, ticker: str, article: dict):
-        \"\"\"Analizuje pojedynczy artykuł pod kątem relewancji i sentymentu.\"\"\"
+        """Analizuje pojedynczy artykuł pod kątem relewancji i sentymentu."""
         
         # 1. Wyciągnij kluczowe dane
         url = article.get("url")
@@ -186,8 +185,8 @@ class NewsScout:
         
         # Formatowanie wiadomości
         alert_msg = (
-            f"[{priority_label}] {ticker}: {ticker_label} (Score: {ticker_score:.2f}, Rel: {relevance_score})\\n"
-            f"Tytuł: {title}\\n"
+            f"[{priority_label}] {ticker}: {ticker_label} (Score: {ticker_score:.2f}, Rel: {relevance_score})\n"
+            f"Tytuł: {title}\n"
             f"Link: {url}"
         )
         
@@ -222,7 +221,7 @@ class NewsScout:
             if signal:
                 timestamp = datetime.now().strftime("%H:%M")
                 safe_title = title.replace("'", "").replace('"', "")[:50]
-                new_note = f"\\n[{timestamp}] NEWS: {ticker_label} - {safe_title}..."
+                new_note = f"\n[{timestamp}] NEWS: {ticker_label} - {safe_title}..."
                 signal.notes = (signal.notes or "") + new_note
                 self.session.commit()
         except Exception as e:
@@ -231,12 +230,12 @@ class NewsScout:
         logger.info(f"NEWS ALERT ({ticker}): {title}")
 
     def _generate_news_hash(self, url, title, source):
-        \"\"\"Tworzy unikalny hash dla newsa (MD5).\"\"\"
+        """Tworzy unikalny hash dla newsa (MD5)."""
         raw_str = f"{url}|{title}|{source}"
         return hashlib.md5(raw_str.encode('utf-8')).hexdigest()
 
     def _save_news(self, ticker, news_hash, sentiment, headline, url):
-        \"\"\"Zapisuje przetworzony news w bazie danych.\"\"\"
+        """Zapisuje przetworzony news w bazie danych."""
         try:
             news_entry = models.ProcessedNews(
                 ticker=ticker,
@@ -253,7 +252,7 @@ class NewsScout:
             logger.error(f"Błąd zapisu newsa do DB: {e}")
 
     def _send_telegram(self, message):
-        \"\"\"Wysyła powiadomienie na Telegram (Implementacja zapasowa).\"\"\"
+        """Wysyła powiadomienie na Telegram (Implementacja zapasowa)."""
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
             # Brak konfiguracji = brak wysyłki (tylko logi)
             return
@@ -276,7 +275,6 @@ class NewsScout:
             logger.error(f"Błąd wysyłania Telegrama: {e}")
 
 def run_news_agent_cycle(session, api_client):
-    \"\"\"Funkcja wrapper uruchamiana przez Workera (schedule).\"\"\"
+    """Funkcja wrapper uruchamiana przez Workera (schedule)."""
     scout = NewsScout(session, api_client)
     scout.run_cycle()
-"""
