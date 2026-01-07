@@ -1,3 +1,4 @@
+
 import logging
 import time
 import json
@@ -15,9 +16,8 @@ from . import utils
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA ZGODNA Z SUPORTEM ALPHA VANTAGE (WARIANT B - ZMODYFIKOWANY) ===
-# Zmniejszamy z 120 na 100 RPM, aby uniknąć ciągłego "Sleeping 15s" widocznego w logach.
-# Stabilne 100 jest szybsze niż rwane 120.
+# === KONFIGURACJA ZGODNA Z SUPORTEM ALPHA VANTAGE (WARIANT B - STRICT PHASE X) ===
+# Zmniejszamy z 120 na 100 RPM dla stabilności.
 TARGET_RPM = 100  
 REQUEST_INTERVAL = 60.0 / TARGET_RPM  
 LOOKBACK_WINDOW_MINUTES = 2  
@@ -45,29 +45,35 @@ class NewsScout:
     def run_cycle(self, specific_tickers=None):
         """
         Główna pętla agenta newsowego.
+        SKANUJE WYŁĄCZNIE FAZĘ X (Biotech/Pharma).
         """
         start_time = time.time()
         
-        # 1. Pobierz listę tickerów
+        # 1. Pobierz listę tickerów - TYLKO FAZA X
         if specific_tickers:
             tickers = specific_tickers
         else:
             try:
+                # ŚCISŁA REGUŁA: Tylko PhaseXCandidate (Biotech/Pharma)
+                # Żadnej Fazy 1, żadnych fallbacków.
                 q_phasex = self.session.query(models.PhaseXCandidate.ticker).all()
-                q_phase1 = self.session.query(models.Phase1Candidate.ticker).all()
-                tickers = list(set([t[0] for t in q_phasex] + [t[0] for t in q_phase1]))
+                tickers = [t[0] for t in q_phasex]
                 
-                if not tickers:
-                    q_companies = self.session.query(models.Company.ticker).limit(200).all()
-                    tickers = [t[0] for t in q_companies]
+                # Usuwamy duplikaty na wszelki wypadek
+                tickers = list(set(tickers))
+
             except Exception as e:
-                logger.error(f"NEWS AGENT: Błąd pobierania listy tickerów: {e}")
+                logger.error(f"NEWS AGENT: Błąd pobierania listy Fazy X: {e}")
                 tickers = []
 
         # LOGOWANIE DO UI (Dziennik Operacyjny) - START
-        msg_start = f"NEWS: Start skanowania {len(tickers)} tickerów (Cel: {TARGET_RPM} RPM)..."
+        msg_start = f"NEWS: Start skanowania Fazy X ({len(tickers)} tickerów, {TARGET_RPM} RPM)..."
         logger.info(msg_start)
         utils.append_scan_log(self.session, msg_start)
+
+        if not tickers:
+            utils.append_scan_log(self.session, "NEWS: Brak tickerów w Fazie X. Kończę pracę.")
+            return
 
         # 2. Ustalenie okna czasowego
         time_from_dt = datetime.now(timezone.utc) - timedelta(minutes=LOOKBACK_WINDOW_MINUTES)
@@ -85,8 +91,8 @@ class NewsScout:
 
             self.stats["processed_tickers"] += 1
             
-            # Raportowanie postępu co 50 tickerów do UI, żebyś widział że żyje
-            if (i + 1) % 50 == 0:
+            # Raportowanie postępu co 20 tickerów (częstsze raporty przy mniejszej liście)
+            if (i + 1) % 20 == 0:
                 progress_msg = f"NEWS: Przeanalizowano {i + 1}/{len(tickers)}..."
                 utils.append_scan_log(self.session, progress_msg)
             
@@ -99,7 +105,7 @@ class NewsScout:
         duration = time.time() - start_time
         
         # LOGOWANIE DO UI - KONIEC
-        msg_end = f"NEWS: Koniec cyklu ({duration:.1f}s). Znaleziono: {self.stats['articles_found']}, Alerty: {self.stats['alerts_sent']}."
+        msg_end = f"NEWS: Koniec cyklu Fazy X ({duration:.1f}s). Znaleziono: {self.stats['articles_found']}, Alerty: {self.stats['alerts_sent']}."
         logger.info(msg_end)
         utils.append_scan_log(self.session, msg_end)
 
@@ -250,3 +256,4 @@ class NewsScout:
 def run_news_agent_cycle(session, api_client):
     scout = NewsScout(session, api_client)
     scout.run_cycle()
+"""
