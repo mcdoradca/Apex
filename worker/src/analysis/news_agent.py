@@ -19,231 +19,219 @@ logger = logging.getLogger(__name__)
 # KONFIGURACJA AGENTA
 # ==================================================================
 
-BATCH_SIZE = 50                 # Limit Alpha Vantage na jeden request
-# ZMNIEJSZONO PROGI, ABY WYŁAPYWAĆ WIĘCEJ SYGNAŁÓW
+BATCH_SIZE = 50                 
+# SKORYGOWANE FILTRY (Zgodnie z Twoim poleceniem)
 MIN_RELEVANCE_SCORE = 0.40      # Obniżono z 0.60
-MIN_SENTIMENT_SCORE = 0.15      # Obniżono z 0.20 (żeby łapać "Somewhat-Bullish")
+MIN_SENTIMENT_SCORE = 0.15      # Obniżono z 0.20
 
-# Klucz w system_control do przechowywania czasu ostatniego skanu
 LAST_SCAN_KEY = 'news_agent_last_scan_time'
 
-class NewsAgent:
-    def __init__(self, session: Session, api_client: AlphaVantageClient):
-        self.session = session
-        self.client = api_client
-        self.is_active = True
+# ==================================================================
+# FUNKCJE POMOCNICZE
+# ==================================================================
 
-    def _create_news_hash(self, headline: str, uri: str) -> str:
-        """Tworzy unikalny hash SHA-256 dla wiadomości."""
-        s = f"{headline.strip()}{uri.strip()}"
-        return hashlib.sha256(s.encode('utf-8')).hexdigest()
+def _create_news_hash(headline: str, uri: str) -> str:
+    s = f"{headline.strip()}{uri.strip()}"
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
-    def _check_if_news_processed(self, ticker: str, news_hash: str) -> bool:
-        """Sprawdza, czy dany news był już przetwarzany w ciągu ostatnich 7 dni."""
+def _check_if_news_processed(session: Session, ticker: str, news_hash: str) -> bool:
+    try:
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        exists = session.scalar(
+            select(func.count(ProcessedNews.id))
+            .where(ProcessedNews.ticker == ticker)
+            .where(ProcessedNews.news_hash == news_hash)
+            .where(ProcessedNews.processed_at >= seven_days_ago)
+        )
+        return exists > 0
+    except Exception as e:
+        logger.error(f"Agent Newsowy: Błąd duplikatu {ticker}: {e}")
+        return False 
+
+def _save_processed_news(session: Session, ticker: str, news_hash: str, sentiment: str, headline: str, url: str):
+    try:
+        entry = ProcessedNews(
+            ticker=ticker,
+            news_hash=news_hash,
+            sentiment=sentiment,
+            headline=headline[:1000] if headline else "",
+            source_url=url[:1000] if url else ""
+        )
+        session.add(entry)
+        session.commit()
+    except Exception as e:
+        logger.error(f"Agent Newsowy: Błąd zapisu DB {ticker}: {e}")
+        session.rollback()
+
+def _get_time_from_param(session: Session) -> str:
+    last_val = get_system_control_value(session, LAST_SCAN_KEY)
+    if last_val:
+        return last_val
+    else:
+        # 48h wstecz na start
+        dt = datetime.utcnow() - timedelta(hours=48)
+        return dt.strftime('%Y%m%dT%H%M')
+
+def _update_last_scan_time_to_now(session: Session, current_dt: datetime):
+    fmt = current_dt.strftime('%Y%m%dT%H%M')
+    update_system_control(session, LAST_SCAN_KEY, fmt)
+
+# ==================================================================
+# GŁÓWNA FUNKCJA WORKERA (Run Cycle)
+# ==================================================================
+
+def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
+    """
+    Funkcja wykonywana przez harmonogram (Schedule) w main.py.
+    """
+    try:
+        # 1. Pobieranie Tickerów
         try:
-            seven_days_ago = datetime.utcnow() - timedelta(days=7)
-            exists = self.session.scalar(
-                select(func.count(ProcessedNews.id))
-                .where(ProcessedNews.ticker == ticker)
-                .where(ProcessedNews.news_hash == news_hash)
-                .where(ProcessedNews.processed_at >= seven_days_ago)
-            )
-            return exists > 0
-        except Exception as e:
-            logger.error(f"Agent Newsowy: Błąd sprawdzenia duplikatu dla {ticker}: {e}")
-            return False 
+            phasex_tickers = set(session.scalars(select(PhaseXCandidate.ticker)).all())
+            active_signals = session.scalars(select(TradingSignal.ticker).where(TradingSignal.status.in_(['ACTIVE', 'PENDING']))).all()
+            portfolio_tickers = session.scalars(select(PortfolioHolding.ticker)).all()
+        except Exception as db_err:
+            logger.error(f"[NewsAgent] Błąd bazy danych: {db_err}")
+            return
 
-    def _save_processed_news(self, ticker: str, news_hash: str, sentiment: str, headline: str, url: str):
-        """Zapisuje przetworzony news do bazy danych."""
-        try:
-            entry = ProcessedNews(
-                ticker=ticker,
-                news_hash=news_hash,
-                sentiment=sentiment,
-                headline=headline[:1000] if headline else "",
-                source_url=url[:1000] if url else ""
-            )
-            self.session.add(entry)
-            self.session.commit()
-        except Exception as e:
-            logger.error(f"Agent Newsowy: Błąd zapisu newsa dla {ticker}: {e}")
-            self.session.rollback()
+        standard_tickers = set(active_signals + portfolio_tickers)
+        all_tickers = list(phasex_tickers.union(standard_tickers))
+        all_tickers.sort()
 
-    def _get_time_from_param(self) -> str:
-        """Pobiera timestamp ostatniego skanu (YYYYMMDDTHHMM)."""
-        last_val = get_system_control_value(self.session, LAST_SCAN_KEY)
-        if last_val:
-            return last_val
-        else:
-            # Domyślnie 48h wstecz przy pierwszym uruchomieniu
-            dt = datetime.utcnow() - timedelta(hours=48)
-            return dt.strftime('%Y%m%dT%H%M')
+        # === DIAGNOSTYKA: LOGUJEMY JEŚLI LISTA PUSTA ===
+        if not all_tickers:
+            msg = "⚠️ Agent Newsowy: Lista monitorowanych spółek jest PUSTA. Sprawdź Fazy Skanowania."
+            logger.warning(msg)
+            # append_scan_log(session, msg) # Odkomentuj jeśli chcesz to widzieć w UI
+            return
 
-    def _update_last_scan_time_to_now(self, current_dt: datetime):
-        """Aktualizuje znacznik czasu w bazie."""
-        fmt = current_dt.strftime('%Y%m%dT%H%M')
-        update_system_control(self.session, LAST_SCAN_KEY, fmt)
+        # 2. Logika Czasu
+        scan_start_time = datetime.utcnow()
+        time_from_str = _get_time_from_param(session)
 
-    def run_news_monitor(self):
-        """
-        Główna pętla monitorująca (kompatybilna z main.py).
-        Skanuje BioX (Faza X) + Aktywne Sygnały + Portfel.
-        """
-        logger.info("[NewsAgent] Uruchamianie cyklu monitorowania...")
+        # Log startowy w konsoli (potwierdzenie że żyje)
+        logger.info(f"[NewsAgent] Start skanu: {len(all_tickers)} spółek od {time_from_str}")
         
-        try:
-            # 1. Pobierz listy monitorowanych tickerów
-            # Używamy try-except, bo tabele mogą być puste na starcie
-            try:
-                phasex_tickers = set(self.session.scalars(select(PhaseXCandidate.ticker)).all())
-                active_signals = self.session.scalars(select(TradingSignal.ticker).where(TradingSignal.status.in_(['ACTIVE', 'PENDING']))).all()
-                portfolio_tickers = self.session.scalars(select(PortfolioHolding.ticker)).all()
-            except Exception as db_err:
-                logger.error(f"[NewsAgent] Błąd pobierania tickerów z bazy: {db_err}")
-                return
+        processed_count = 0
+        
+        # 3. Pętla po paczkach (Batching)
+        batches = [all_tickers[i:i + BATCH_SIZE] for i in range(0, len(all_tickers), BATCH_SIZE)]
 
-            standard_tickers = set(active_signals + portfolio_tickers)
-            all_tickers = list(phasex_tickers.union(standard_tickers))
-            all_tickers.sort()
-
-            if not all_tickers:
-                msg = "⚠️ Agent Newsowy: Brak spółek do monitorowania! (Tabele puste). Radar wyłączony."
-                logger.warning(msg)
-                append_scan_log(self.session, msg)
-                return
-
-            # 2. Logika Czasowa
-            scan_start_time = datetime.utcnow()
-            time_from_str = self._get_time_from_param()
-
-            start_msg = (
-                f"Agent Newsowy: Skanowanie {len(all_tickers)} spółek od {time_from_str}. "
-                f"(Filtry: Rev>{MIN_RELEVANCE_SCORE}, Sent>{MIN_SENTIMENT_SCORE})"
-            )
-            logger.info(start_msg)
-            # append_scan_log(self.session, start_msg) # Opcjonalnie włącz dla verbose UI
-
-            processed_count = 0
-            alerts_sent = 0
+        for i, batch in enumerate(batches):
+            ticker_string = ",".join(batch)
             
-            # 3. Batching Loop
-            batches = [all_tickers[i:i + BATCH_SIZE] for i in range(0, len(all_tickers), BATCH_SIZE)]
+            try:
+                # Zapytanie do API
+                news_data = api_client.get_news_sentiment(
+                    ticker=ticker_string, 
+                    limit=1000, 
+                    time_from=time_from_str
+                )
+            except Exception as e:
+                logger.error(f"Agent Newsowy: Błąd API (Batch {i+1}): {e}")
+                continue
 
-            for i, batch in enumerate(batches):
-                ticker_string = ",".join(batch)
+            if len(batches) > 1:
+                time.sleep(0.2) 
+
+            if not news_data or 'feed' not in news_data:
+                continue
+
+            # 4. Analiza Newsów
+            for item in news_data.get('feed', []):
+                headline = item.get('title', 'No Title')
+                url = item.get('url', '#')
+                ticker_sentiment_list = item.get('ticker_sentiment', [])
                 
-                try:
-                    # limit=1000, time_from załatwia przyrostowość
-                    news_data = self.client.get_news_sentiment(
-                        ticker=ticker_string, 
-                        limit=1000, 
-                        time_from=time_from_str
-                    )
-                except Exception as e:
-                    logger.error(f"Agent Newsowy: Błąd API dla paczki {i+1}: {e}")
-                    continue
+                if not ticker_sentiment_list: continue
 
-                if len(batches) > 1:
-                    time.sleep(0.25) # Lekkie opóźnienie dla API
+                topics = item.get('topics', [])
+                topic_tags = []
+                is_hot_topic = False
+                for t in topics:
+                    t_name = t.get('topic', '')
+                    if t_name in ['Earnings', 'Mergers & Acquisitions', 'Life Sciences']:
+                        topic_tags.append(t_name)
+                        is_hot_topic = True
 
-                if not news_data or 'feed' not in news_data:
-                    continue
-
-                # 4. Przetwarzanie Feed-u
-                for item in news_data.get('feed', []):
-                    headline = item.get('title', 'No Title')
-                    url = item.get('url', '#')
-                    ticker_sentiment_list = item.get('ticker_sentiment', [])
+                for ts_data in ticker_sentiment_list:
+                    ticker = ts_data.get('ticker')
                     
-                    if not ticker_sentiment_list: continue
+                    if ticker not in all_tickers:
+                        continue
 
-                    topics = item.get('topics', [])
-                    topic_tags = []
-                    is_hot_topic = False
-                    for t in topics:
-                        t_name = t.get('topic', '')
-                        if t_name in ['Earnings', 'Mergers & Acquisitions', 'Life Sciences']:
-                            topic_tags.append(t_name)
-                            is_hot_topic = True
+                    news_hash = _create_news_hash(headline + ticker, url)
+                    if _check_if_news_processed(session, ticker, news_hash):
+                        continue
 
-                    # Iteracja po tickerach
-                    for ts_data in ticker_sentiment_list:
-                        ticker = ts_data.get('ticker')
-                        
-                        if ticker not in all_tickers:
-                            continue
+                    try:
+                        relevance_score = float(ts_data.get('relevance_score', 0))
+                        sentiment_score = float(ts_data.get('ticker_sentiment_score', 0))
+                        sentiment_label = ts_data.get('ticker_sentiment_label', 'Neutral')
+                    except: continue
 
-                        news_hash = self._create_news_hash(headline + ticker, url)
-                        if self._check_if_news_processed(ticker, news_hash):
-                            continue
+                    # === FILTRY (TERAZ ŁAGODNIEJSZE) ===
+                    
+                    # 1. Relevance
+                    if relevance_score < MIN_RELEVANCE_SCORE:
+                        # Loguj tylko te warte uwagi (np. > 0.2), żeby nie śmiecić
+                        if relevance_score > 0.2:
+                            logger.debug(f"SKIP {ticker}: Rel {relevance_score:.2f} < {MIN_RELEVANCE_SCORE}")
+                        continue
+                    
+                    # 2. Sentiment
+                    # Dla Hot Topics obniżamy próg do prawie zera (0.05)
+                    threshold = 0.05 if is_hot_topic else MIN_SENTIMENT_SCORE
 
-                        try:
-                            relevance_score = float(ts_data.get('relevance_score', 0))
-                            sentiment_score = float(ts_data.get('ticker_sentiment_score', 0))
-                            sentiment_label = ts_data.get('ticker_sentiment_label', 'Neutral')
-                        except (ValueError, TypeError):
-                            continue
+                    if sentiment_score <= threshold:
+                        # Loguj bliskie odrzucenia
+                        if sentiment_score > -0.15:
+                             logger.debug(f"SKIP {ticker}: Sent {sentiment_score:.2f} <= {threshold} | {headline[:30]}...")
+                        continue
 
-                        # === LOGIKA DECYZYJNA ===
+                    # === ALERT ===
+                    alert_emoji = "🚀" if sentiment_score >= 0.35 else "📈"
+                    if is_hot_topic: alert_emoji = "🔥"
 
-                        # Warunek 1: Relevance
-                        if relevance_score < MIN_RELEVANCE_SCORE:
-                            if relevance_score > 0.2: # Loguj tylko sensowne
-                                logger.debug(f"SKIP {ticker}: Low Relevance {relevance_score:.2f} < {MIN_RELEVANCE_SCORE}")
-                            continue
-                        
-                        # Warunek 2: Sentiment
-                        # Hot Topic przepuszcza słabsze newsy (np. 0.05)
-                        threshold = MIN_SENTIMENT_SCORE
-                        if is_hot_topic:
-                            threshold = 0.05
+                    alert_type = "POSITIVE_NEWS"
+                    topic_str = f" | {', '.join(topic_tags)}" if topic_tags else ""
 
-                        if sentiment_score <= threshold:
-                            if sentiment_score > -0.1: # Loguj bliskie zera
-                                 logger.info(f"SKIP {ticker}: Low Sentiment {sentiment_score:.2f} <= {threshold} | {headline[:40]}...")
-                            continue
+                    # Zapis
+                    _save_processed_news(session, ticker, news_hash, alert_type, headline, url)
+                    
+                    # Wiadomość
+                    clean_msg = (
+                        f"{alert_emoji} <b>NEWS: {ticker}</b>\n"
+                        f"Sent: {sentiment_label} ({sentiment_score})\n"
+                        f"Rel: {relevance_score}{topic_str}\n"
+                        f"<a href='{url}'>{headline}</a>"
+                    )
+                    
+                    # Logi
+                    log_msg = f"NEWS: {ticker} (Sc:{sentiment_score}) | {headline[:40]}..."
+                    logger.info(f"✅ ALERT: {log_msg}")
+                    append_scan_log(session, log_msg)
+                    
+                    # Telegram
+                    send_telegram_alert(clean_msg)
+                    
+                    # UI System Alert (Tylko mocne)
+                    if sentiment_score >= 0.30 or is_hot_topic:
+                        update_system_control(session, 'system_alert', f"{ticker}: {headline[:50]}...")
 
-                        # === ALERT ===
-                        alerts_sent += 1
-                        
-                        alert_emoji = "🚀" if sentiment_score >= 0.4 else "📈"
-                        if is_hot_topic: alert_emoji = "🔥"
+                    processed_count += 1
 
-                        alert_type = "POSITIVE_NEWS"
-                        topic_str = f" | {', '.join(topic_tags)}" if topic_tags else ""
+        # 5. Aktualizacja czasu
+        _update_last_scan_time_to_now(session, scan_start_time)
 
-                        self._save_processed_news(ticker, news_hash, alert_type, headline, url)
-                        
-                        clean_msg = (
-                            f"{alert_emoji} <b>NEWS ALERT: {ticker}</b>\n"
-                            f"Sentyment: {sentiment_label} (Score: {sentiment_score})\n"
-                            f"Relevance: {relevance_score}{topic_str}\n\n"
-                            f"<b>{headline}</b>\n"
-                            f"{url}"
-                        )
-                        
-                        log_msg = f"NEWS: {ticker} (Sc:{sentiment_score}) | {headline[:50]}..."
-                        append_scan_log(self.session, log_msg)
-                        logger.info(f"✅ ALERT SENT: {log_msg}")
-                        
-                        # Wysłanie Alertu (Telegram)
-                        send_telegram_alert(clean_msg)
-                        
-                        # System Alert w UI
-                        if sentiment_score >= 0.35 or is_hot_topic:
-                            update_system_control(self.session, 'system_alert', f"{ticker}: {headline[:60]}...")
+        # Raport końcowy (Dla pewności "Znaku Życia")
+        if processed_count > 0:
+            logger.info(f"[NewsAgent] Cykl zakończony. Wysłano {processed_count} powiadomień.")
+            session.commit()
+        else:
+            # Ważne: Logujemy też brak wyników, żebyś wiedział że skan przeszedł!
+            logger.info("[NewsAgent] Cykl zakończony. Brak nowych newsów spełniających kryteria.")
 
-                        processed_count += 1
-
-            # 5. Aktualizacja czasu
-            self._update_last_scan_time_to_now(scan_start_time)
-
-            if processed_count > 0:
-                logger.info(f"[NewsAgent] Znaleziono {processed_count} newsów.")
-                self.session.commit()
-            else:
-                logger.debug("[NewsAgent] Brak nowych newsów.")
-
-        except Exception as e:
-            logger.error(f"[NewsAgent] Błąd krytyczny: {e}", exc_info=True)
-            self.session.rollback()
+    except Exception as e:
+        logger.error(f"[NewsAgent] CRITICAL ERROR: {e}", exc_info=True)
+        session.rollback()
