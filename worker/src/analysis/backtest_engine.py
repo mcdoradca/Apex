@@ -77,7 +77,7 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
         """
         Pobiera ceny i ucina je na dacie badania I AGREGUJE DO 4H.
         Naprawia problem braku danych w silniku SDAR w backteście poprzez
-        jawne żądanie danych historycznych (parametr month).
+        jawne żądanie danych historycznych (parametr month), zgodnie z zaleceniem Supportu AV.
         """
         try:
             # === KLUCZOWE: Obliczenie miesiąca dla zapytania API (np. '2024-01') ===
@@ -88,6 +88,8 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             cache_key = f'INTRADAY_60_{month_str}'
 
             # Pobieramy full history godzinową dla konkretnego miesiąca
+            # Interwał 60min jest wystarczający do aproksymacji mikro-struktury w backteście długoterminowym
+            # i znacznie lżejszy dla API/bazy niż 5min, przy zachowaniu precyzji VWAP.
             raw_data = get_raw_data_with_cache(
                 self.session, self.client, ticker, 
                 cache_key, 
@@ -120,7 +122,7 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
                 # self.log_debug(f"Zbyt mało świec po odcięciu: {len(df)}")
                 return None 
 
-            # === AGREGACJA DO 4H (Wymagane przez SDAR) ===
+            # === AGREGACJA DO 4H (Wymagane przez SDAR PDF) ===
             # Używamy '4h' (małe h) aby uniknąć błędów pandas
             df_virtual = df.resample('4h').agg({
                 'open': 'first',
