@@ -16,14 +16,11 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# KONFIGURACJA AGENTA (SKALIBRWANA POD RATE LIMIT)
+# KONFIGURACJA AGENTA
 # ==================================================================
 
-# FIX: Zmniejszono z 50 na 15. News Sentiment to "ciężki" endpoint.
-# Pytanie o 50 tickerów naraz często kończy się timeoutem lub blokadą API.
+# FIX: Zmniejszono z 50 na 15, aby uniknąć Rate Limitów dla endpointu News
 BATCH_SIZE = 15                 
-
-# FILTRY (Poluzowane, aby wyłapywać okazje)
 MIN_RELEVANCE_SCORE = 0.40      
 MIN_SENTIMENT_SCORE = 0.15      
 
@@ -80,13 +77,16 @@ def _update_last_scan_time_to_now(session: Session, current_dt: datetime):
     update_system_control(session, LAST_SCAN_KEY, fmt)
 
 # ==================================================================
-# GŁÓWNA FUNKCJA WORKERA
+# GŁÓWNA FUNKCJA WORKERA (Run Cycle)
 # ==================================================================
 
 def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
     """
     Funkcja wykonywana przez harmonogram (Schedule) w main.py.
     """
+    # === LOG ROZRUCHOWY (Żebyś widział, że funkcja została wywołana) ===
+    logger.info("[NewsAgent] >>> Uruchamianie cyklu monitorowania newsów...")
+
     try:
         # 1. Pobieranie Tickerów
         try:
@@ -94,25 +94,29 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
             active_signals = session.scalars(select(TradingSignal.ticker).where(TradingSignal.status.in_(['ACTIVE', 'PENDING']))).all()
             portfolio_tickers = session.scalars(select(PortfolioHolding.ticker)).all()
         except Exception as db_err:
-            logger.error(f"[NewsAgent] Błąd bazy danych: {db_err}")
+            logger.error(f"[NewsAgent] Błąd pobierania tickerów z bazy: {db_err}")
             return
 
         standard_tickers = set(active_signals + portfolio_tickers)
         all_tickers = list(phasex_tickers.union(standard_tickers))
         all_tickers.sort()
 
+        # === DIAGNOSTYKA PUSTEJ LISTY ===
         if not all_tickers:
-            # Ciche wyjście, jeśli nie ma co robić (częste przy restarcie)
+            msg = "⚠️ [NewsAgent] UWAGA: Lista monitorowanych spółek jest PUSTA! Sprawdź czy Fazy Skanowania (F1/FX) zapisały wyniki."
+            logger.warning(msg)
+            # append_scan_log(session, msg) 
             return
 
         # 2. Logika Czasu
         scan_start_time = datetime.utcnow()
         time_from_str = _get_time_from_param(session)
 
-        # Log informacyjny
-        logger.info(f"[NewsAgent] Start skanu: {len(all_tickers)} spółek od {time_from_str} (Batch: {BATCH_SIZE})")
+        # Log startowy w konsoli
+        logger.info(f"[NewsAgent] Cel: {len(all_tickers)} spółek. Zakres od: {time_from_str}. Batch: {BATCH_SIZE}.")
         
         processed_count = 0
+        total_batches = (len(all_tickers) + BATCH_SIZE - 1) // BATCH_SIZE
         
         # 3. Pętla po paczkach (Batching)
         batches = [all_tickers[i:i + BATCH_SIZE] for i in range(0, len(all_tickers), BATCH_SIZE)]
@@ -120,8 +124,11 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
         for i, batch in enumerate(batches):
             ticker_string = ",".join(batch)
             
+            # Log co 10 paczek, żeby nie spamować, ale pokazać życie
+            if i % 10 == 0:
+                logger.info(f"[NewsAgent] Przetwarzanie paczki {i+1}/{total_batches}...")
+
             try:
-                # Zapytanie do API
                 news_data = api_client.get_news_sentiment(
                     ticker=ticker_string, 
                     limit=1000, 
@@ -131,8 +138,7 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
                 logger.error(f"Agent Newsowy: Błąd API (Batch {i+1}): {e}")
                 continue
 
-            # FIX: Zwiększono opóźnienie z 0.2s na 1.5s
-            # Dajemy API czas na reset limitu "burst"
+            # FIX: Opóźnienie 1.5s dla bezpieczeństwa API
             if len(batches) > 1:
                 time.sleep(1.5) 
 
@@ -173,19 +179,14 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
                     except: continue
 
                     # === FILTRY ===
-                    
-                    # 1. Relevance
                     if relevance_score < MIN_RELEVANCE_SCORE:
-                        if relevance_score > 0.2:
-                            logger.debug(f"SKIP {ticker}: Rel {relevance_score:.2f} < {MIN_RELEVANCE_SCORE}")
+                        # logger.debug(f"SKIP {ticker}: Rel {relevance_score:.2f}")
                         continue
                     
-                    # 2. Sentiment (Threshold 0.05 dla Hot Topics)
                     threshold = 0.05 if is_hot_topic else MIN_SENTIMENT_SCORE
 
                     if sentiment_score <= threshold:
-                        if sentiment_score > -0.15:
-                             logger.debug(f"SKIP {ticker}: Sent {sentiment_score:.2f} <= {threshold} | {headline[:30]}...")
+                        # logger.debug(f"SKIP {ticker}: Sent {sentiment_score:.2f}")
                         continue
 
                     # === ALERT ===
