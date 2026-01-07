@@ -1,7 +1,4 @@
-{
-type: uploaded file
-fileName: mcdoradca/apex/Apex-1014123d25b2f1f9fc24be7ce170f91cfc86a5a1/worker/src/analysis/backtest_engine.py
-fullContent:
+
 import logging
 import pandas as pd
 import numpy as np
@@ -649,4 +646,3 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
         logger.error(err_msg, exc_info=True)
         append_scan_log(session, err_msg)
         update_system_control(session, 'backtest_request', 'NONE')
-}
