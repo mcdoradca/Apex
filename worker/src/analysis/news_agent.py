@@ -16,13 +16,16 @@ from ..data_ingestion.alpha_vantage_client import AlphaVantageClient
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# KONFIGURACJA AGENTA
+# KONFIGURACJA AGENTA (SKALIBRWANA POD RATE LIMIT)
 # ==================================================================
 
-BATCH_SIZE = 50                 
-# SKORYGOWANE FILTRY (Zgodnie z Twoim poleceniem)
-MIN_RELEVANCE_SCORE = 0.40      # Obniżono z 0.60
-MIN_SENTIMENT_SCORE = 0.15      # Obniżono z 0.20
+# FIX: Zmniejszono z 50 na 15. News Sentiment to "ciężki" endpoint.
+# Pytanie o 50 tickerów naraz często kończy się timeoutem lub blokadą API.
+BATCH_SIZE = 15                 
+
+# FILTRY (Poluzowane, aby wyłapywać okazje)
+MIN_RELEVANCE_SCORE = 0.40      
+MIN_SENTIMENT_SCORE = 0.15      
 
 LAST_SCAN_KEY = 'news_agent_last_scan_time'
 
@@ -77,7 +80,7 @@ def _update_last_scan_time_to_now(session: Session, current_dt: datetime):
     update_system_control(session, LAST_SCAN_KEY, fmt)
 
 # ==================================================================
-# GŁÓWNA FUNKCJA WORKERA (Run Cycle)
+# GŁÓWNA FUNKCJA WORKERA
 # ==================================================================
 
 def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
@@ -98,19 +101,16 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
         all_tickers = list(phasex_tickers.union(standard_tickers))
         all_tickers.sort()
 
-        # === DIAGNOSTYKA: LOGUJEMY JEŚLI LISTA PUSTA ===
         if not all_tickers:
-            msg = "⚠️ Agent Newsowy: Lista monitorowanych spółek jest PUSTA. Sprawdź Fazy Skanowania."
-            logger.warning(msg)
-            # append_scan_log(session, msg) # Odkomentuj jeśli chcesz to widzieć w UI
+            # Ciche wyjście, jeśli nie ma co robić (częste przy restarcie)
             return
 
         # 2. Logika Czasu
         scan_start_time = datetime.utcnow()
         time_from_str = _get_time_from_param(session)
 
-        # Log startowy w konsoli (potwierdzenie że żyje)
-        logger.info(f"[NewsAgent] Start skanu: {len(all_tickers)} spółek od {time_from_str}")
+        # Log informacyjny
+        logger.info(f"[NewsAgent] Start skanu: {len(all_tickers)} spółek od {time_from_str} (Batch: {BATCH_SIZE})")
         
         processed_count = 0
         
@@ -131,8 +131,10 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
                 logger.error(f"Agent Newsowy: Błąd API (Batch {i+1}): {e}")
                 continue
 
+            # FIX: Zwiększono opóźnienie z 0.2s na 1.5s
+            # Dajemy API czas na reset limitu "burst"
             if len(batches) > 1:
-                time.sleep(0.2) 
+                time.sleep(1.5) 
 
             if not news_data or 'feed' not in news_data:
                 continue
@@ -170,21 +172,18 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
                         sentiment_label = ts_data.get('ticker_sentiment_label', 'Neutral')
                     except: continue
 
-                    # === FILTRY (TERAZ ŁAGODNIEJSZE) ===
+                    # === FILTRY ===
                     
                     # 1. Relevance
                     if relevance_score < MIN_RELEVANCE_SCORE:
-                        # Loguj tylko te warte uwagi (np. > 0.2), żeby nie śmiecić
                         if relevance_score > 0.2:
                             logger.debug(f"SKIP {ticker}: Rel {relevance_score:.2f} < {MIN_RELEVANCE_SCORE}")
                         continue
                     
-                    # 2. Sentiment
-                    # Dla Hot Topics obniżamy próg do prawie zera (0.05)
+                    # 2. Sentiment (Threshold 0.05 dla Hot Topics)
                     threshold = 0.05 if is_hot_topic else MIN_SENTIMENT_SCORE
 
                     if sentiment_score <= threshold:
-                        # Loguj bliskie odrzucenia
                         if sentiment_score > -0.15:
                              logger.debug(f"SKIP {ticker}: Sent {sentiment_score:.2f} <= {threshold} | {headline[:30]}...")
                         continue
@@ -196,10 +195,8 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
                     alert_type = "POSITIVE_NEWS"
                     topic_str = f" | {', '.join(topic_tags)}" if topic_tags else ""
 
-                    # Zapis
                     _save_processed_news(session, ticker, news_hash, alert_type, headline, url)
                     
-                    # Wiadomość
                     clean_msg = (
                         f"{alert_emoji} <b>NEWS: {ticker}</b>\n"
                         f"Sent: {sentiment_label} ({sentiment_score})\n"
@@ -207,15 +204,12 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
                         f"<a href='{url}'>{headline}</a>"
                     )
                     
-                    # Logi
                     log_msg = f"NEWS: {ticker} (Sc:{sentiment_score}) | {headline[:40]}..."
                     logger.info(f"✅ ALERT: {log_msg}")
                     append_scan_log(session, log_msg)
                     
-                    # Telegram
                     send_telegram_alert(clean_msg)
                     
-                    # UI System Alert (Tylko mocne)
                     if sentiment_score >= 0.30 or is_hot_topic:
                         update_system_control(session, 'system_alert', f"{ticker}: {headline[:50]}...")
 
@@ -224,13 +218,11 @@ def run_news_agent_cycle(session: Session, api_client: AlphaVantageClient):
         # 5. Aktualizacja czasu
         _update_last_scan_time_to_now(session, scan_start_time)
 
-        # Raport końcowy (Dla pewności "Znaku Życia")
         if processed_count > 0:
             logger.info(f"[NewsAgent] Cykl zakończony. Wysłano {processed_count} powiadomień.")
             session.commit()
         else:
-            # Ważne: Logujemy też brak wyników, żebyś wiedział że skan przeszedł!
-            logger.info("[NewsAgent] Cykl zakończony. Brak nowych newsów spełniających kryteria.")
+            logger.info("[NewsAgent] Cykl zakończony. Brak nowych newsów.")
 
     except Exception as e:
         logger.error(f"[NewsAgent] CRITICAL ERROR: {e}", exc_info=True)
