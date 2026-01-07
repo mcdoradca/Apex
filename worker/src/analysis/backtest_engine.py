@@ -40,11 +40,12 @@ BIOTECH_KEYWORDS = [
     'Drug', 'Bio'
 ]
 
-# === KLASA POMOCNICZA: WEHIKUŁ CZASU DLA SDAR (NAPRAWIONA I OLOGOWANA) ===
+# === KLASA POMOCNICZA: WEHIKUŁ CZASU DLA SDAR (NAPRAWIONA - PREMIUM SUPPORT) ===
 class TimeTravelSDARAnalyzer(SDARAnalyzer):
     """
     Specjalna wersja analyzera SDAR dla Backtestu.
     Nadpisuje pobieranie danych, aby 'cofnąć się w czasie'.
+    Wykorzystuje pełną historię Intraday dostępną w planie Premium (parametr 'month').
     """
     def __init__(self, session, api_client, target_date: datetime):
         super().__init__(session, api_client)
@@ -55,7 +56,6 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
 
     def log_debug(self, msg: str):
         self.debug_log.append(msg)
-        # Opcjonalnie: print(msg) dla lokalnych testów
 
     def _get_news_data(self, ticker: str) -> list:
         try:
@@ -69,30 +69,35 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             )
             if resp and 'feed' in resp:
                 return resp['feed']
-        except Exception as e:
-            self.log_debug(f"News fetch error: {e}")
+        except Exception:
             pass
         return []
 
-    # === FIX: Zmiana nazwy metody na _get_virtual_candles aby nadpisać oryginał z phase_sdar.py ===
     def _get_virtual_candles(self, ticker: str):
         """
         Pobiera ceny i ucina je na dacie badania I AGREGUJE DO 4H.
-        Naprawia problem braku danych w silniku SDAR w backteście.
+        Naprawia problem braku danych w silniku SDAR w backteście poprzez
+        jawne żądanie danych historycznych (parametr month).
         """
         try:
-            # Pobieramy full history godzinową (60min jest stabilniejsze historycznie niż 5min)
-            # UWAGA: Alpha Vantage zwraca Intraday tylko z ostatnich ~60 dni (chyba że Extended).
-            # To jest najczęstsza przyczyna braku danych w Backteście historycznym.
+            # === KLUCZOWE: Obliczenie miesiąca dla zapytania API (np. '2024-01') ===
+            # Dzięki temu API Alpha Vantage zwróci dane historyczne dla tego okresu.
+            month_str = self.target_date.strftime('%Y-%m')
+            
+            # Unikalny klucz cache dla danego miesiąca i tickera
+            cache_key = f'INTRADAY_60_{month_str}'
+
+            # Pobieramy full history godzinową dla konkretnego miesiąca
             raw_data = get_raw_data_with_cache(
                 self.session, self.client, ticker, 
-                'INTRADAY_60', 
-                lambda t: self.client.get_intraday(t, interval='60min', outputsize='full'),
-                expiry_hours=24
+                cache_key, 
+                lambda t: self.client.get_intraday(t, interval='60min', outputsize='full', month=month_str),
+                expiry_hours=24 * 30 # Cache ważny bardzo długo (historia się nie zmienia)
             )
+            
             ts_key = 'Time Series (60min)'
             if not raw_data or ts_key not in raw_data: 
-                self.log_debug(f"Brak danych Intraday 60min API dla {ticker}")
+                # self.log_debug(f"Brak danych API (Intraday) dla {ticker} w {month_str}")
                 return None
             
             df = pd.DataFrame.from_dict(raw_data[ts_key], orient='index')
@@ -103,29 +108,21 @@ class TimeTravelSDARAnalyzer(SDARAnalyzer):
             cols = ['open', 'high', 'low', 'close', 'volume']
             for col in cols: df[col] = pd.to_numeric(df[col], errors='coerce')
 
-            # Diagnostyka zakresu danych
-            first_date = df.index[0]
-            last_date = df.index[-1]
-            
-            # Odcięcie przyszłości
+            # Odcięcie przyszłości (względem daty badania wewnątrz tego miesiąca)
             if df.index.tz is None:
                 cutoff_naive = self.cutoff_time.replace(tzinfo=None)
-                df_cut = df[df.index <= cutoff_naive]
+                df = df[df.index <= cutoff_naive]
             else:
                 cutoff_aware = self.cutoff_time.replace(tzinfo=df.index.tz)
-                df_cut = df[df.index <= cutoff_aware]
+                df = df[df.index <= cutoff_aware]
 
-            if df_cut.empty:
-                self.log_debug(f"DANE PUSTE PO ODCIĘCIU! API Range: {first_date} - {last_date}, Target: {self.cutoff_time}. Prawdopodobnie API nie zwróciło historii dla tego roku.")
-                return None
-
-            if len(df_cut) < 20: 
-                self.log_debug(f"Zbyt mało świec po odcięciu: {len(df_cut)}")
+            if len(df) < 10: 
+                # self.log_debug(f"Zbyt mało świec po odcięciu: {len(df)}")
                 return None 
 
             # === AGREGACJA DO 4H (Wymagane przez SDAR) ===
             # Używamy '4h' (małe h) aby uniknąć błędów pandas
-            df_virtual = df_cut.resample('4h').agg({
+            df_virtual = df.resample('4h').agg({
                 'open': 'first',
                 'high': 'max',
                 'low': 'min',
@@ -453,7 +450,7 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df['aqm_score_h3'] = df[['intraday_change', 'session_change']].max(axis=1) * 100
                     signal_df = df
                     
-                # === ŚCIEŻKA D: STRATEGIA SDAR (WZMOCNIONA DIAGNOSTYKA) ===
+                # === ŚCIEŻKA D: STRATEGIA SDAR (NAPRAWIONA DLA PREMIUM) ===
                 elif strategy_mode == 'SDAR':
                     # Ograniczamy zakres analizy do wybranego roku
                     df_sdar = df[(df.index >= start_date_ts) & (df.index <= end_date_ts)].copy()
@@ -461,7 +458,6 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     df_sdar['aqm_score_h3'] = 0.0 
                     
                     # Optymalizacja: Sprawdzamy co 5 dni, żeby backtest nie trwał latami
-                    # Możesz zmienić na 1 dla pełnej dokładności (kosztem czasu)
                     check_dates = df_sdar.index[::5] 
                     
                     signals_count_local = 0
@@ -470,11 +466,12 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                     verbose_logging = (processed_count < 3) 
 
                     for date_idx in check_dates:
-                        # Logowanie postępu co jakiś czas w logach UI
+                        # Logowanie dla usera co 10-ty sprawdzany dzień (żeby widział że mieli)
                         if verbose_logging and check_dates.get_loc(date_idx) == 0:
-                             append_scan_log(session, f"SDAR DEBUG: Start analizy {ticker} na rok {year}...")
+                           append_scan_log(session, f"SDAR DEBUG: Start analizy {ticker} (Month: {date_idx.strftime('%Y-%m')})...")
 
                         # Tworzymy analyzer dla konkretnego dnia
+                        # UWAGA: Teraz TimeTravelSDARAnalyzer używa parametru month dla Premium API
                         analyzer = TimeTravelSDARAnalyzer(session, api_client, target_date=date_idx)
                         
                         # Uruchamiamy analizę
@@ -487,18 +484,14 @@ def _run_historical_backtest_unified(session: Session, api_client, year: str, pa
                                 df_sdar.at[date_idx, 'is_signal'] = True
                                 signals_count_local += 1
                                 log_decision(session, ticker, "BT_SDAR", "SIGNAL", f"Score: {result.total_anomaly_score:.1f}")
-                            else:
-                                # Logujemy odrzucenia z wysokim wynikiem (blisko sukcesu)
-                                if result.total_anomaly_score > 50 and verbose_logging:
-                                    pass # Można dodać logowanie "Blisko sygnału"
                         else:
                             # Jeśli brak wyniku, sprawdzamy logi debugowania analyzera
                             if verbose_logging and analyzer.debug_log:
                                 # Logujemy pierwszy napotkany błąd dla tego tickera
                                 err = analyzer.debug_log[0]
-                                if "DANE PUSTE" in err:
+                                if "DANE PUSTE" in err: # Ignorujemy inne, żeby nie śmiecić
                                     append_scan_log(session, f"SDAR ERROR {ticker}: {err}")
-                                    verbose_logging = False # Nie spamuj tym samym błędem dla każdej daty
+                                    verbose_logging = False
                     
                     signal_df = df_sdar
 
