@@ -22,7 +22,10 @@ BATCH_DELAY = 1.0
 class SDARAnalyzer:
     """
     Silnik Analityczny SDAR (System Detekcji Anomalii Rynkowych).
-    Wersja poprawiona: VWAP na 5min, bezpieczny resampling, Earnings Guard.
+    Poprawiona implementacja:
+    - Prawidłowe rzutowanie typów NumPy na Python native (float/int) - FIX SQL Error.
+    - Prawidłowe obliczanie VWAP na danych 5-minutowych (Filar 1).
+    - Bezpieczna agregacja czasu (Filar 1).
     """
 
     def __init__(self, session: Session, api_client):
@@ -71,34 +74,45 @@ class SDARAnalyzer:
         news_data = self._get_news_data(ticker)
 
         # C. Obliczenia Filarów
-        # Przekazujemy df_5min do SAI, aby policzyć precyzyjny VWAP
         sai = self._calculate_sai(df_virtual, df_5min) 
         spd = self._calculate_spd(df_virtual, news_data)
         me  = self._calculate_me(df_virtual, news_data)
 
         # D. Scoring Hybrydowy
-        total_score = (sai['score'] * 0.4) + (spd['score'] * 0.4) + (me['score'] * 0.2)
+        # Upewniamy się, że składowe są floatami przed operacjami
+        raw_total_score = (float(sai['score']) * 0.4) + (float(spd['score']) * 0.4) + (float(me['score']) * 0.2)
         
         # Bull Trap Guard
         if me['is_trap']:
-            total_score *= 0.5
+            raw_total_score *= 0.5
 
+        # === FIX: JAWNA KONWERSJA TYPÓW DLA BAZY DANYCH ===
+        # Zapobiega błędowi "schema np does not exist"
         return SdarCandidate(
             ticker=ticker,
-            sai_score=sai['score'],
-            spd_score=spd['score'],
-            me_score=me['score'],
-            total_anomaly_score=total_score,
-            atr_compression=sai['atr_compression'],
-            obv_slope=sai['obv_slope'],
-            price_stability=sai['price_stability'],
-            smart_money_flow=sai['smart_money_flow'], 
-            sentiment_shock=spd['sentiment_shock'],
-            news_volume_spike=spd['news_count'],
-            price_resilience=spd['resilience_score'],
-            last_sentiment_score=spd['last_sentiment'],
-            metric_rsi=me['rsi'],
-            metric_apo=me['apo'],
+            
+            # Wyniki Główne
+            sai_score=float(sai['score']),
+            spd_score=float(spd['score']),
+            me_score=float(me['score']),
+            total_anomaly_score=float(raw_total_score),
+            
+            # Detale SAI
+            atr_compression=float(sai['atr_compression']),
+            obv_slope=float(sai['obv_slope']),
+            price_stability=float(sai['price_stability']),
+            smart_money_flow=float(sai['smart_money_flow']), 
+            
+            # Detale SPD
+            sentiment_shock=float(spd['sentiment_shock']),
+            news_volume_spike=float(spd['news_count']),
+            price_resilience=float(spd['resilience_score']),
+            last_sentiment_score=float(spd['last_sentiment']),
+            
+            # Detale ME
+            metric_rsi=float(me['rsi']),
+            metric_apo=float(me['apo']),
+            
             analysis_date=datetime.now()
         )
 
@@ -106,7 +120,6 @@ class SDARAnalyzer:
     def _calculate_sai(self, df_virtual: pd.DataFrame, df_5min: pd.DataFrame) -> Dict:
         """
         Analiza Cichej Akumulacji.
-        VWAP liczony na danych 5min (precyzyjny), trendy na 4h.
         """
         # 1. OBV (On Balance Volume) na świecach 4h
         df = df_virtual.copy()
@@ -116,12 +129,10 @@ class SDARAnalyzer:
         df['obv'] = (df['volume'] * df['obv_dir']).cumsum().fillna(0)
         
         # 2. VWAP Calculation (Precyzyjny na 5min)
-        # Obliczamy Cumulative VWAP na danych 5min
         df_5min['cum_pv'] = (df_5min['close'] * df_5min['volume']).cumsum()
         df_5min['cum_vol'] = df_5min['volume'].cumsum()
         df_5min['vwap_precise'] = df_5min['cum_pv'] / df_5min['cum_vol']
         
-        # Bierzemy ostatni znany VWAP z danych 5min
         current_vwap = df_5min['vwap_precise'].iloc[-1] if not df_5min.empty else 0
 
         # 3. ATR Calculation (Zmienność) na 4h
@@ -137,42 +148,35 @@ class SDARAnalyzer:
         x = np.arange(len(subset))
         
         try:
-            # Nachylenia (Slopes)
+            # Nachylenia (Slopes) - zwracają typy numpy
             slope_price = np.polyfit(x, subset['close'], 1)[0] / subset['close'].mean() * 100
             slope_obv = np.polyfit(x, subset['obv'], 1)[0] / (subset['volume'].mean() + 1)
             slope_atr = np.polyfit(x, subset['atr'].fillna(0), 1)[0]
         except Exception:
-            slope_price, slope_obv, slope_atr = 0, 0, 0
+            slope_price, slope_obv, slope_atr = 0.0, 0.0, 0.0
         
-        # VWAP Check: Czy cena jest powyżej VWAP? (Instytucjonalne wsparcie)
+        # VWAP Check
         last_price = subset['close'].iloc[-1]
         vwap_support = 1 if last_price > current_vwap else 0
 
         score = 0
-        # A. Dywergencja OBV (Cena płaska/spada, OBV rośnie)
         if slope_obv > 0.1: 
-            if abs(slope_price) < 0.5: score += 40 # Cena stabilna
-            elif slope_price < 0: score += 50      # Cena spada (Silna akumulacja)
+            if abs(slope_price) < 0.5: score += 40 
+            elif slope_price < 0: score += 50      
             
-        # B. Kompresja Zmienności
         if slope_atr < 0: score += 20
-        
-        # C. VWAP Support
         if vwap_support: score += 10
 
         return {
-            'score': min(score, 100),
-            'atr_compression': slope_atr,
-            'obv_slope': slope_obv,
-            'price_stability': 1.0 / (abs(slope_price) + 0.01),
-            'smart_money_flow': current_vwap
+            'score': float(min(score, 100)),
+            'atr_compression': float(slope_atr),
+            'obv_slope': float(slope_obv),
+            'price_stability': float(1.0 / (abs(slope_price) + 0.01)),
+            'smart_money_flow': float(current_vwap)
         }
 
     # --- FILAR 2: SPD (Sentiment-Price Divergence) ---
     def _calculate_spd(self, df: pd.DataFrame, news_data: List[Dict]) -> Dict:
-        """
-        Analiza tylko świeżych newsów (<48h) i poprawiona logika szoku.
-        """
         if not news_data or df.empty:
             return {'score':0, 'sentiment_shock':0, 'news_count':0, 'resilience_score':0, 'last_sentiment':0}
 
@@ -183,7 +187,7 @@ class SDARAnalyzer:
         valid_news = []
         for n in news_data:
             try:
-                pub_date_str = n.get('time_published') # Format: 20240101T123000
+                pub_date_str = n.get('time_published')
                 pub_date = datetime.strptime(pub_date_str, '%Y%m%dT%H%M%S').replace(tzinfo=timezone.utc)
                 if pub_date >= cutoff:
                     valid_news.append(n)
@@ -200,27 +204,25 @@ class SDARAnalyzer:
             except: pass
             
         # 2. Obliczanie Szoku Sentymentu
-        last_sent = sentiments[-1]
-        prev_avg = np.mean(sentiments[:-1]) if len(sentiments) > 1 else 0
+        last_sent = sentiments[-1] if sentiments else 0.0
+        prev_avg = np.mean(sentiments[:-1]) if len(sentiments) > 1 else 0.0
         sentiment_shock = last_sent - prev_avg
 
         # 3. Analiza Dywergencji
-        # Cena z ostatnich 24h (6 świec 4h)
         lookback = min(6, len(df))
-        price_change_24h = (df['close'].iloc[-1] / df['close'].iloc[-lookback] - 1) if lookback > 0 else 0
+        price_change_24h = (df['close'].iloc[-1] / df['close'].iloc[-lookback] - 1) if lookback > 0 else 0.0
         
         resilience_score = 0
-        # Scenariusz: Sentyment spada (złe wieści), ale cena nie spada
         if sentiment_shock < -0.15: 
-            if price_change_24h > -0.01: # Cena stabilna lub rośnie
-                resilience_score = 100 # BULLISH DIVERGENCE
+            if price_change_24h > -0.01:
+                resilience_score = 100 
                 
         return {
-            'score': 80 if resilience_score > 0 else 0,
-            'sentiment_shock': sentiment_shock,
-            'news_count': len(valid_news),
-            'resilience_score': resilience_score,
-            'last_sentiment': last_sent
+            'score': float(80 if resilience_score > 0 else 0),
+            'sentiment_shock': float(sentiment_shock),
+            'news_count': float(len(valid_news)),
+            'resilience_score': float(resilience_score),
+            'last_sentiment': float(last_sent)
         }
 
     # --- FILAR 3: ME (Momentum Exhaustion) ---
@@ -245,7 +247,6 @@ class SDARAnalyzer:
         is_trap = False
         me_score = 50 
         
-        # Logika Bull Trap
         if price_new_high:
             if current_apo < prev_apo and current_rsi > 70:
                 is_trap = True
@@ -253,14 +254,18 @@ class SDARAnalyzer:
         elif current_apo > prev_apo and current_apo > 0:
             me_score = 80
 
-        return {'score': me_score, 'is_trap': is_trap, 'rsi': current_rsi, 'apo': current_apo}
+        return {
+            'score': float(me_score), 
+            'is_trap': is_trap, 
+            'rsi': float(current_rsi), 
+            'apo': float(current_apo)
+        }
 
     # --- HELPERY DANYCH ---
 
     def _get_market_data(self, ticker: str):
         """
         Pobiera surowe dane 5min ORAZ agreguje je do 4h.
-        Zwraca (df_5min, df_virtual).
         """
         # 1. Pobranie danych 5min
         raw_data = get_raw_data_with_cache(
@@ -278,7 +283,6 @@ class SDARAnalyzer:
         df_5min.index = pd.to_datetime(df_5min.index)
         df_5min.sort_index(inplace=True)
         
-        # Konwersja typów
         for c in ['open', 'high', 'low', 'close', 'volume']:
             df_5min[c] = pd.to_numeric(df_5min[c], errors='coerce')
         
@@ -309,9 +313,6 @@ class SDARAnalyzer:
         return [r[0] for r in result]
 
     def _is_near_earnings(self, ticker: str) -> bool:
-        """
-        Sprawdza czy spółka ma wyniki w oknie zabronionym.
-        """
         try:
             query = text("SELECT days_to_earnings FROM phase1_candidates WHERE ticker=:t")
             res = self.session.execute(query, {'t': ticker}).first()
