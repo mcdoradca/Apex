@@ -167,12 +167,13 @@ const _renderH3ViewInternal = () => {
 
     UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals, state.liveQuotes);
 
-    // === RENDERING MODUŁU TAKTYCZNEGO SDAR ===
+    // === START: SDAR TACTICAL FEED LOGIC (Wstrzykiwanie do index.html) ===
     const sdarBody = document.getElementById('sdar-tactical-body');
-    if (sdarBody) {
+    if (sdarBody && renderers.sdarTacticalRows) {
+        // Wstrzyknij wiersze (korzystając z danych pobranych w showH3Signals)
         sdarBody.innerHTML = renderers.sdarTacticalRows(state.sdarCandidates || [], state.liveQuotes);
         
-        // Podpięcie przycisków szybkiego śledzenia (Tracking)
+        // Obsługa przycisków "Track" w tabeli SDAR
         sdarBody.querySelectorAll('.sdar-track-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 const ticker = e.currentTarget.dataset.ticker;
@@ -180,6 +181,7 @@ const _renderH3ViewInternal = () => {
                     btn.disabled = true;
                     btn.textContent = "...";
                     await api.addToWatchlist(ticker);
+                    // Wyświetl powiadomienie (funkcja zdefiniowana niżej w tym pliku)
                     showSystemAlert(`Ticker ${ticker} dodany do watchlisty (Ghost Mode).`);
                     refreshSidebarData();
                 } catch (err) {
@@ -192,6 +194,16 @@ const _renderH3ViewInternal = () => {
             });
         });
     }
+
+    // Obsługa przycisku odświeżania samej tabeli SDAR
+    const sdarRefreshBtn = document.getElementById('sdar-tactical-refresh-btn');
+    if (sdarRefreshBtn) {
+        sdarRefreshBtn.addEventListener('click', async (e) => {
+             // Odświeżamy cały widok H3 (co pociągnie za sobą odświeżenie SDAR)
+             showH3Signals(false);
+        });
+    }
+    // === END: SDAR TACTICAL FEED LOGIC ===
 
     const sortSelect = document.getElementById('h3-sort-select');
     const refreshBtn = document.getElementById('h3-refresh-btn');
@@ -228,19 +240,26 @@ export const showH3Signals = async (silent = false) => {
         try {
             const signals = await api.getPhase3Signals();
             state.phase3 = signals || [];
-            
-            // POBIERANIE KANDYDATÓW SDAR DLA TACTICAL FEED
+
+            // === START: POBIERANIE DANYCH SDAR ===
             try {
                 const sdarData = await api.getSdarCandidates();
                 state.sdarCandidates = sdarData || [];
             } catch (sdarErr) {
                 logger.warn("Błąd pobierania SDAR Tactical:", sdarErr);
             }
+            // === END: POBIERANIE DANYCH SDAR ===
+            
+            // Zbieramy tickery z obu źródeł (H3 + SDAR) dla Bulk Quotes
+            const tickersSet = new Set(signals.map(s => s.ticker));
+            if (state.sdarCandidates) {
+                state.sdarCandidates.forEach(c => tickersSet.add(c.ticker));
+            }
+            const allTickers = Array.from(tickersSet);
 
-            const tickers = signals.map(s => s.ticker);
-            if (tickers.length > 0) {
+            if (allTickers.length > 0) {
                 try {
-                    const bulkData = await api.getBulkQuotes(tickers);
+                    const bulkData = await api.getBulkQuotes(allTickers);
                     const newQuotes = {};
                     if (bulkData && Array.isArray(bulkData)) {
                         bulkData.forEach(q => {
