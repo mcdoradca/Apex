@@ -1,4 +1,3 @@
-
 import logging
 import time
 from datetime import datetime, timedelta
@@ -20,7 +19,7 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# AGENT BIOX (Faza X) - Cleaned & Optimized (No-AI)
+# AGENT BIOX (Faza X) - Cleaned & Optimized (Split-Aware)
 # ==================================================================
 
 # ==================================================================
@@ -30,18 +29,8 @@ logger = logging.getLogger(__name__)
 def run_biox_live_monitor(session: Session, api_client):
     """
     Strażnik BioX (Newsy).
-    
-    [ARCHITECTURAL CHANGE]:
-    Monitoring newsów dla spółek Fazy X (BioX) został przeniesiony do
-    scentralizowanego `news_agent.py` (V2), który obsługuje wszystkie
-    listy (Portfel, Sygnały, Faza X) w jednym wydajnym cyklu z Batchingiem.
-    
-    Ta funkcja pozostaje jako stub (zaślepka), aby nie łamać harmonogramu
-    w main.py, ale nie wykonuje żadnych zapytań API.
+    Delegowany do news_agent.py.
     """
-    # Możemy tu logować co jakiś czas, że BioX jest obsługiwany przez News Agenta,
-    # ale robimy to rzadko (debug), żeby nie śmiecić w logach produkcyjnych.
-    # logger.debug("BioX Monitor: News scanning delegated to Central News Agent V2.")
     pass
 
 # ==================================================================
@@ -52,10 +41,10 @@ def run_historical_catalyst_scan(session: Session, api_client, candidates: list 
     """
     Analiza Wsteczna dla Fazy X (BioX Audit).
     Szuka historycznych 'pomp' cenowych (>20%) w ciągu ostatniego roku.
-    Logika oparta na czystej matematyce (Pandas/Numpy), bez AI.
+    POPRAWKA: Obsługa Reverse Splits poprzez użycie Adjusted Close.
     """
     logger.info("BioX Audit: Uruchamianie analizy historycznej pomp...")
-    append_scan_log(session, "🧬 BioX Audit: Analiza historii cen w poszukiwaniu pomp >20%...")
+    append_scan_log(session, "🧬 BioX Audit: Analiza historii cen w poszukiwaniu pomp >20% (Filtr Splitów)...")
 
     # 1. Wybór kandydatów
     tickers_to_check = []
@@ -65,7 +54,6 @@ def run_historical_catalyst_scan(session: Session, api_client, candidates: list 
         tickers_to_check = candidates
     else:
         try:
-            # Pobieramy kandydatów, którzy nie byli sprawdzani w ciągu ostatnich 24h
             stmt = text("""
                 SELECT ticker FROM phasex_candidates 
                 WHERE last_pump_date IS NULL 
@@ -89,7 +77,8 @@ def run_historical_catalyst_scan(session: Session, api_client, candidates: list 
     
     for ticker in tickers_to_check:
         try:
-            # 2. Dane dzienne (Pobieranie z Cache Workera)
+            # 2. Dane dzienne
+            # Pobieramy DAILY_ADJUSTED, które zawiera zarówno 'close' (raw) jak i 'adjusted close'
             raw_data = get_raw_data_with_cache(
                 session, api_client, ticker, 
                 'DAILY_ADJUSTED', 'get_daily_adjusted', 
@@ -108,19 +97,35 @@ def run_historical_catalyst_scan(session: Session, api_client, candidates: list 
             
             if df_1y.empty: continue
 
-            # 3. Szukamy pomp (>20%) - BEZPIECZNE OBLICZENIA
+            # 3. Szukamy pomp (>20%) - LOGIKA "SPLIT-AWARE"
             
-            # Zabezpieczenie przed dzieleniem przez zero: 0 -> NaN
-            df_1y['prev_close'] = df_1y['close'].shift(1).replace(0, np.nan)
+            # Konwersja kolumn na liczby (na wypadek stringów)
+            cols_to_numeric = ['open', 'high', 'low', 'close', 'adjusted close']
+            for col in cols_to_numeric:
+                if col in df_1y.columns:
+                    df_1y[col] = pd.to_numeric(df_1y[col], errors='coerce')
+
+            # Obliczanie zmian
+            
+            # A. Pump Intraday: (High - Open) / Open
+            # Tutaj używamy RAW (open/high), bo splity rzadko zdarzają się w trakcie sesji, 
+            # a adjusted open/high często nie są dostępne wprost.
             df_1y['open'] = df_1y['open'].replace(0, np.nan)
-            
-            # Obliczenia z obsługą NaN (fillna(0.0))
-            # Pump Intraday: (High - Open) / Open
             df_1y['pump_intraday'] = ((df_1y['high'] - df_1y['open']) / df_1y['open']).fillna(0.0)
-            # Pump Session: (Close - PrevClose) / PrevClose
-            df_1y['pump_session'] = ((df_1y['close'] - df_1y['prev_close']) / df_1y['prev_close']).fillna(0.0)
+            
+            # B. Pump Session: Używamy ADJUSTED CLOSE!
+            # To eliminuje problem Reverse Splits (sztucznych pomp 5000%)
+            if 'adjusted close' in df_1y.columns:
+                df_1y['prev_adj_close'] = df_1y['adjusted close'].shift(1).replace(0, np.nan)
+                df_1y['pump_session'] = ((df_1y['adjusted close'] - df_1y['prev_adj_close']) / df_1y['prev_adj_close']).fillna(0.0)
+            else:
+                # Fallback jeśli brak adjusted (mało prawdopodobne przy tym endpoincie)
+                df_1y['prev_close'] = df_1y['close'].shift(1).replace(0, np.nan)
+                df_1y['pump_session'] = ((df_1y['close'] - df_1y['prev_close']) / df_1y['prev_close']).fillna(0.0)
             
             pump_threshold = 0.20
+            
+            # Wykrywanie pomp
             pumps = df_1y[
                 (df_1y['pump_intraday'] >= pump_threshold) | 
                 (df_1y['pump_session'] >= pump_threshold)
@@ -132,15 +137,14 @@ def run_historical_catalyst_scan(session: Session, api_client, candidates: list 
             
             if pump_count > 0:
                 pumps_found_count += 1
-                last_pump_row = pumps.iloc[-1]
+                last_pump_row = pumps.iloc[-1] # Bierzemy ostatnią chronologicznie
                 
-                # Bezpieczna konwersja daty (NaT check)
                 if pd.notna(last_pump_row.name):
                     last_pump_date = last_pump_row.name.date()
                 
+                # Wybieramy większą z dwóch wartości (Intraday vs Session)
                 max_pump = max(last_pump_row['pump_intraday'], last_pump_row['pump_session'])
                 
-                # Zabezpieczenie przed Infinity / NaN dla bazy danych
                 if pd.isna(max_pump) or np.isinf(max_pump):
                     last_pump_percent = 0.0
                 else:
@@ -171,11 +175,10 @@ def run_historical_catalyst_scan(session: Session, api_client, candidates: list 
             continue
         
         processed += 1
-        # Logowanie postępu co 20 spółek, żeby nie spamować
         if processed % 20 == 0:
             logger.info(f"BioX Audit: Przetworzono {processed}/{len(tickers_to_check)}.")
-            time.sleep(0.1) # Lekki throttle dla bazy
+            time.sleep(0.1)
 
-    summary = f"🏁 BioX Audit: Zakończono. Przeanalizowano: {updated_count} spółek (Zidentyfikowano pomp: {pumps_found_count})."
+    summary = f"🏁 BioX Audit: Zakończono (Split-Aware). Przeanalizowano: {updated_count}, Znaleziono Pomp: {pumps_found_count}."
     logger.info(summary)
     append_scan_log(session, summary)
