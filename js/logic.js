@@ -167,6 +167,32 @@ const _renderH3ViewInternal = () => {
 
     UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals, state.liveQuotes);
 
+    // === RENDERING MODUŁU TAKTYCZNEGO SDAR ===
+    const sdarBody = document.getElementById('sdar-tactical-body');
+    if (sdarBody) {
+        sdarBody.innerHTML = renderers.sdarTacticalRows(state.sdarCandidates || [], state.liveQuotes);
+        
+        // Podpięcie przycisków szybkiego śledzenia (Tracking)
+        sdarBody.querySelectorAll('.sdar-track-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const ticker = e.currentTarget.dataset.ticker;
+                try {
+                    btn.disabled = true;
+                    btn.textContent = "...";
+                    await api.addToWatchlist(ticker);
+                    showSystemAlert(`Ticker ${ticker} dodany do watchlisty (Ghost Mode).`);
+                    refreshSidebarData();
+                } catch (err) {
+                    logger.error(`Błąd trackingu dla ${ticker}:`, err);
+                    alert("Błąd: " + err.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "Track";
+                }
+            });
+        });
+    }
+
     const sortSelect = document.getElementById('h3-sort-select');
     const refreshBtn = document.getElementById('h3-refresh-btn');
     const cards = document.querySelectorAll('.phase3-item'); 
@@ -203,6 +229,14 @@ export const showH3Signals = async (silent = false) => {
             const signals = await api.getPhase3Signals();
             state.phase3 = signals || [];
             
+            // POBIERANIE KANDYDATÓW SDAR DLA TACTICAL FEED
+            try {
+                const sdarData = await api.getSdarCandidates();
+                state.sdarCandidates = sdarData || [];
+            } catch (sdarErr) {
+                logger.warn("Błąd pobierania SDAR Tactical:", sdarErr);
+            }
+
             const tickers = signals.map(s => s.ticker);
             if (tickers.length > 0) {
                 try {
