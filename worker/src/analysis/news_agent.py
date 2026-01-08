@@ -17,7 +17,6 @@ from . import utils
 logger = logging.getLogger(__name__)
 
 # === KONFIGURACJA ZGODNA Z SUPORTEM ALPHA VANTAGE (WARIANT B - STRICT PHASE X) ===
-# Zmniejszamy z 120 na 100 RPM dla pełnej stabilności (unikamy warningów o limicie).
 TARGET_RPM = 100  
 REQUEST_INTERVAL = 60.0 / TARGET_RPM  
 LOOKBACK_WINDOW_MINUTES = 2  
@@ -27,10 +26,6 @@ MIN_RELEVANCE_SCORE = 0.60
 DEFAULT_SENTIMENT_THRESHOLD = 0.30
 LIFE_SCIENCES_SENTIMENT_THRESHOLD = 0.25 
 URGENT_SENTIMENT_THRESHOLD = 0.45
-
-# Konfiguracja Telegrama (Pobierana z ENV Workera)
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 class NewsScout:
     def __init__(self, session: Session, api_client):
@@ -56,7 +51,6 @@ class NewsScout:
         else:
             try:
                 # ŚCISŁA REGUŁA: Tylko PhaseXCandidate (Biotech/Pharma)
-                # Żadnej Fazy 1, żadnych fallbacków.
                 q_phasex = self.session.query(models.PhaseXCandidate.ticker).all()
                 tickers = [t[0] for t in q_phasex]
                 
@@ -92,12 +86,12 @@ class NewsScout:
 
             self.stats["processed_tickers"] += 1
             
-            # Raportowanie postępu co 20 tickerów (częstsze raporty przy mniejszej liście)
+            # Raportowanie postępu co 20 tickerów
             if (i + 1) % 20 == 0:
                 progress_msg = f"NEWS: Przeanalizowano {i + 1}/{len(tickers)}..."
                 utils.append_scan_log(self.session, progress_msg)
             
-            # PACING - Odstęp czasowy między zapytaniami
+            # PACING
             elapsed = time.time() - step_start
             sleep_time = max(0, REQUEST_INTERVAL - elapsed)
             if sleep_time > 0:
@@ -184,27 +178,16 @@ class NewsScout:
             f"Link: {url}"
         )
         
-        # A. Wyświetl w Aplikacji (System Alert - Czerwona belka)
-        try:
-            utils.update_system_control(self.session, "system_alert", alert_msg)
-            # Dodatkowo wpis do logu operacyjnego z wyróżnieniem
-            utils.append_scan_log(self.session, f"!!! NEWS ALERT: {ticker} - {title[:50]}...")
-        except AttributeError:
-            # Fallback (zabezpieczenie)
-            try:
-                utils.set_system_control_value(self.session, "system_alert", alert_msg)
-            except:
-                pass
+        # A. Wyświetl w Aplikacji (System Alert)
+        # Używamy zweryfikowanej funkcji z utils.py
+        utils.update_system_control(self.session, "system_alert", alert_msg)
+        # Dodatkowo wpis do logu operacyjnego
+        utils.append_scan_log(self.session, f"!!! NEWS ALERT: {ticker} - {title[:50]}...")
         
         # B. Wyślij na Telegram
-        if hasattr(utils, 'send_telegram_alert'):
-            try:
-                utils.send_telegram_alert(alert_msg)
-                self.stats["alerts_sent"] += 1
-            except Exception as e:
-                logger.error(f"Błąd utils.send_telegram_alert: {e}")
-        else:
-            self._send_telegram(alert_msg)
+        # Bezpośrednie wywołanie sprawdzonej funkcji z utils.py
+        utils.send_telegram_alert(alert_msg)
+        self.stats["alerts_sent"] += 1
         
         # C. Notatka do sygnału (jeśli istnieje aktywny setup)
         try:
@@ -245,24 +228,6 @@ class NewsScout:
         except Exception as e:
             self.session.rollback()
             logger.error(f"Błąd zapisu newsa do DB: {e}")
-
-    def _send_telegram(self, message):
-        """Wysyła powiadomienie na Telegram (Implementacja zapasowa)."""
-        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-            return
-
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload = {
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True
-            }
-            requests.post(url, json=payload, timeout=5)
-            self.stats["alerts_sent"] += 1
-        except Exception as e:
-            logger.error(f"Błąd wysyłania Telegrama: {e}")
 
 def run_news_agent_cycle(session, api_client):
     """Funkcja wrapper uruchamiana przez Workera (schedule)."""
