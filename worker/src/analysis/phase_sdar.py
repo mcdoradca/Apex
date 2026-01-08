@@ -10,6 +10,8 @@ from typing import List, Dict, Optional
 # Importy z systemu Apex
 from ..models import SdarCandidate
 from .utils import get_raw_data_with_cache, standardize_df_columns
+# === NOWOŚĆ: Moduł Taktyczny ===
+from .phase_tactical import TacticalBridge
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +25,13 @@ class SDARAnalyzer:
     """
     Silnik Analityczny SDAR (System Detekcji Anomalii Rynkowych).
     Wersja UNLEASHED: Obsługa pełnej listy kandydatów (No Limit).
+    Wersja TACTICAL: Generuje plany wejścia/wyjścia.
     """
 
     def __init__(self, session: Session, api_client):
         self.session = session
         self.client = api_client
+        self.tactical = TacticalBridge() # <--- INICJALIZACJA MODUŁU TAKTYCZNEGO
 
     def run_sdar_cycle(self, limit: Optional[int] = None) -> List[str]:
         limit_str = f"{limit}" if limit else "ALL"
@@ -85,6 +89,24 @@ class SDARAnalyzer:
         if me['is_trap']:
             raw_total_score *= 0.5
 
+        # === E. MODUŁ TAKTYCZNY (GENEROWANIE PLANU) ===
+        # Pobieramy aktualną cenę z ostatniej świecy 5min
+        current_price = df_5min['close'].iloc[-1]
+        
+        # Generujemy plan
+        plan = self.tactical.generate_plan(
+            ticker, float(current_price), df_5min,
+            float(sai['score']), float(spd['score']), float(me['score'])
+        )
+
+        # Mapowanie wyników (z obsługą braku planu)
+        t_action = plan.action if plan else "WAIT"
+        t_entry = plan.entry_price if plan else None
+        t_sl = plan.stop_loss if plan else None
+        t_tp = plan.take_profit if plan else None
+        t_rr = plan.risk_reward if plan else None
+        t_comm = plan.comment if plan else None
+
         return SdarCandidate(
             ticker=ticker,
             sai_score=float(sai['score']),
@@ -101,6 +123,15 @@ class SDARAnalyzer:
             last_sentiment_score=float(spd['last_sentiment']),
             metric_rsi=float(me['rsi']),
             metric_apo=float(me['apo']),
+            
+            # === DANE TAKTYCZNE ===
+            tactical_action=t_action,
+            entry_price=t_entry,
+            stop_loss=t_sl,
+            take_profit=t_tp,
+            risk_reward_ratio=t_rr,
+            tactical_comment=t_comm,
+            
             analysis_date=datetime.now()
         )
 
