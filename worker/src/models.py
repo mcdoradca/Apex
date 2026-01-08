@@ -67,6 +67,14 @@ class SdarCandidate(Base):
     metric_rsi = Column(NUMERIC(10, 4), comment="RSI 14 na interwale 4H")
     metric_apo = Column(NUMERIC(10, 4), comment="Absolute Price Oscillator")
 
+    # === MODUŁ TAKTYCZNY (PLAN BITWY) - NOWOŚĆ ===
+    tactical_action = Column(VARCHAR(50), nullable=True) # BUY_LIMIT / BUY_STOP / WAIT
+    entry_price = Column(NUMERIC(12, 4), nullable=True)
+    stop_loss = Column(NUMERIC(12, 4), nullable=True)
+    take_profit = Column(NUMERIC(12, 4), nullable=True)
+    risk_reward_ratio = Column(NUMERIC(5, 2), nullable=True)
+    tactical_comment = Column(TEXT, nullable=True)
+
     analysis_date = Column(PG_TIMESTAMP(timezone=True), server_default=func.now())
 
 # === FAZA 4: KANDYDACI KINETIC ALPHA (H4) ===
