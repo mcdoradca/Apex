@@ -205,7 +205,8 @@ def run_sdar_task(session):
 
     # 4. Uruchomienie Silnika (tylko w trybie RISK_ON)
     analyzer = phase_sdar.SDARAnalyzer(session, api_client)
-    analyzer.run_sdar_cycle(limit=50) # Analiza Top 50
+    # ZMIANA: Zdjęcie limitu 50 spółek - Skanujemy wszystko z Fazy 1
+    analyzer.run_sdar_cycle(limit=None) 
 
 def run_backtest_task(session):
     req = utils.get_system_control_value(session, 'backtest_request')
