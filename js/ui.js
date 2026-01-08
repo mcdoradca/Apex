@@ -85,9 +85,8 @@ style.textContent = `
     .strat-badge-h3 { background-color: rgba(124, 58, 237, 0.2); color: #a78bfa; border-color: rgba(124, 58, 237, 0.4); box-shadow: 0 0 5px rgba(124, 58, 237, 0.2); }
     .strat-badge-aqm { background-color: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: rgba(6, 182, 212, 0.4); box-shadow: 0 0 5px rgba(6, 182, 212, 0.2); }
     .strat-badge-biox { background-color: rgba(236, 72, 153, 0.2); color: #f472b6; border-color: rgba(236, 72, 153, 0.4); box-shadow: 0 0 5px rgba(236, 72, 153, 0.2); }
-    
-    /* H4 Kinetic Badge */
     .strat-badge-h4 { background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 5px rgba(245, 158, 11, 0.2); }
+    .strat-badge-sdar { background-color: rgba(30, 64, 175, 0.2); color: #93c5fd; border-color: rgba(30, 64, 175, 0.4); box-shadow: 0 0 5px rgba(30, 64, 175, 0.2); }
     
     .strat-badge-unknown { background-color: rgba(75, 85, 99, 0.3); color: #9ca3af; border-color: rgba(75, 85, 99, 0.5); }
     
@@ -95,6 +94,10 @@ style.textContent = `
     .kinetic-bar-bg { background: rgba(255,255,255,0.1); height: 6px; width: 100%; border-radius: 3px; overflow: hidden; margin-top: 4px; }
     .kinetic-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
 
+    /* SDAR Action Colors */
+    .sdar-action-market { color: #10b981; font-weight: 900; text-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
+    .sdar-action-limit { color: #3b82f6; font-weight: 800; }
+    .sdar-action-watch { color: #9ca3af; font-style: italic; }
 `;
 document.head.appendChild(style);
 
@@ -128,6 +131,7 @@ const getStrategyInfo = (notes) => {
     if (n.includes("STRATEGIA: H3") || n.includes("STRATEGY: H3")) return { name: 'H3', class: 'strat-badge-h3', full: 'H3 Elite Sniper' };
     if (n.includes("STRATEGIA: AQM") || n.includes("STRATEGY: AQM")) return { name: 'AQM', class: 'strat-badge-aqm', full: 'AQM V4' };
     if (n.includes("STRATEGIA: BIOX") || n.includes("STRATEGY: BIOX")) return { name: 'BIOX', class: 'strat-badge-biox', full: 'BioX Pump' };
+    if (n.includes("STRATEGIA: SDAR") || n.includes("STRATEGY: SDAR")) return { name: 'SDAR', class: 'strat-badge-sdar', full: 'SDAR Anomaly' };
     
     return { name: 'MANUAL', class: 'strat-badge-unknown', full: 'Manual/Other' };
 };
@@ -176,7 +180,7 @@ export const renderers = {
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-2 strat-badge ${strat.class}">${strat.name}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
-    // === WIDOK SDAR (DODANO) ===
+    // === WIDOK SDAR (TABELA GŁÓWNA) ===
     sdarView: (candidates) => {
         const rows = candidates.map(c => {
             // Kolorowanie wyników
@@ -220,6 +224,46 @@ export const renderers = {
                 `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl"><table class="w-full text-sm text-left text-gray-300">${tableHeader}<tbody>${rows}</tbody></table></div>`
             }
         </div>`;
+    },
+
+    // === NOWOŚĆ: RENDERER DLA TACTICAL FEED SDAR (WIDOK H3/DASHBOARD) ===
+    sdarTacticalRows: (candidates, quotes = {}) => {
+        if (!candidates || candidates.length === 0) {
+            return `<tr><td colspan="9" class="px-4 py-8 text-center text-gray-500 italic">Oczekiwanie na dane z modułu taktycznego...</td></tr>`;
+        }
+        return candidates.map(c => {
+            const score = c.total_anomaly_score || 0;
+            let action = "WATCH";
+            let actionClass = "sdar-action-watch";
+            
+            // Logika kolorowania i rekomendacji
+            if (score > 85) { 
+                action = "MARKET_BUY"; 
+                actionClass = "sdar-action-market"; 
+            } else if (score > 70) { 
+                action = "BUY_LIMIT"; 
+                actionClass = "sdar-action-limit"; 
+            }
+
+            const price = quotes[c.ticker] ? parseFloat(quotes[c.ticker]['05. price']).toFixed(2) : '---';
+            const setupType = c.sai_score > c.spd_score ? "VOL_ACCUM" : "SENT_DIV";
+
+            return `<tr class="border-b border-gray-700/50 hover:bg-blue-900/10 transition-colors group">
+                <td class="px-4 py-3 font-bold text-white">${c.ticker}</td>
+                <td class="px-4 py-3 font-mono text-sky-400">${score.toFixed(1)}</td>
+                <td class="px-4 py-3 text-xs text-gray-500 uppercase font-bold">${setupType}</td>
+                <td class="px-4 py-3 text-xs ${actionClass}">${action}</td>
+                <td class="px-4 py-3 font-mono text-gray-400">${price}</td>
+                <td class="px-4 py-3 text-gray-600">---</td>
+                <td class="px-4 py-3 text-gray-600">---</td>
+                <td class="px-4 py-3 text-gray-600">---</td>
+                <td class="px-4 py-3 text-right">
+                    <button class="sdar-track-btn text-[10px] bg-sky-600/20 hover:bg-sky-600 text-sky-300 hover:text-white px-2 py-1 rounded border border-sky-600/30 transition-all uppercase font-black" data-ticker="${c.ticker}">
+                        Track
+                    </button>
+                </td>
+            </tr>`;
+        }).join('');
     },
 
     phase4View: (candidates) => {
@@ -425,7 +469,7 @@ export const renderers = {
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] text-xs font-mono"><td class="p-2 whitespace-nowrap sticky left-0 bg-[#161B22] hover:bg-[#1f2937] z-10 border-r border-gray-700">${auditBtn}</td><td class="p-2 whitespace-nowrap text-gray-400 sticky left-[50px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${new Date(t.open_date).toLocaleDateString('pl-PL')}</td><td class="p-2 whitespace-nowrap font-bold text-sky-400 sticky left-[140px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${t.ticker}</td><td class="p-2 whitespace-nowrap text-gray-300 sticky left-[210px] bg-[#161B22] hover:bg-[#1f2937] border-r border-gray-700">${setupNameShort}</td><td class="p-2 whitespace-nowrap text-right ${statusClass}">${t.status.replace('CLOSED_', '')}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.entry_price)}</td><td class="p-2 whitespace-nowrap text-right">${formatNumber(t.close_price)}</td><td class="p-2 whitespace-nowrap text-right font-bold">${formatPercent(t.final_profit_loss_percent)}</td><td class="p-2 whitespace-nowrap text-right text-purple-300">${formatMetric(t.metric_atr_14)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_time_dilation)}</td><td class="p-2 whitespace-nowrap text-right text-blue-300">${formatMetric(t.metric_price_gravity)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_td_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_pg_percentile_90)}</td><td class="p-2 whitespace-nowrap text-right text-green-300">${formatMetric(t.metric_inst_sync)}</td><td class="p-2 whitespace-nowrap text-right text-red-300">${formatMetric(t.metric_retail_herding)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-300 font-bold">${formatMetric(t.metric_aqm_score_h3)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_aqm_percentile_95)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_J_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_nabla_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-yellow-400">${formatMetric(t.metric_m_sq_norm)}</td><td class="p-2 whitespace-nowrap text-right text-pink-300">${formatMetric(t.metric_J)}</td><td class="p-2 whitespace-nowrap text-right text-gray-500">${formatMetric(t.metric_J_threshold_2sigma)}</td></tr>`;
         }).join('');
         const tradeTable = trades.length > 0 ? `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 max-h-[500px] overflow-y-auto"><table class="w-full text-sm text-left text-gray-300 min-w-[2400px]"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0 z-20"><tr>${tradeHeaders.map((h, index) => `<th scope="col" class="p-2 whitespace-nowrap ${headerClasses[index]}">${h}</th>`).join('')}</tr></thead><tbody>${tradeRows}</tbody></table></div>` : `<p class="text-center text-gray-500 py-10">Brak zamkniętych transakcji do wyświetlenia.</p>`;
-        const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option><option value="BIOX">BioX (Pump Hunter >20%)</option><option value="SDAR">SDAR (Anomaly Detector)</option></select></div><div class="flex items-start gap-3"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 0.95</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"><p class="text-[10px] text-gray-600 mt-1">Domyślny: -0.5</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"><p class="text-[10px] text-gray-600 mt-1">Hard Floor (V4)</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 5.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"><p class="text-[10px] text-gray-600 mt-1">Domyślny: 2.0</p></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"><p class="text-[10px] text-gray-600 mt-1">Nowe w V4</p></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"><p class="text-[10px] text-gray-600 mt-1">Oznaczenie w raportach</p></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
+        const backtestSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Uruchom Nowy Test Historyczny</h4><p class="text-sm text-gray-500 mb-4">Wpisz rok (np. 2010), aby przetestować strategie na historycznych danych dla tego roku.</p><div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-1 uppercase">Strategia Backtestu</label><select id="backtest-strategy-select" class="modal-input w-full cursor-pointer hover:bg-gray-800 transition-colors text-xs"><option value="H3">H3 (Elite Sniper)</option><option value="AQM">AQM (Adaptive Quantum)</option><option value="BIOX">BioX (Pump Hunter >20%)</option><option value="SDAR">SDAR (Anomaly Detector)</option></select></div><div class="flex items-start gap-3"><input type="number" id="backtest-year-input" class="modal-input w-32 !mb-0" placeholder="YYYY" min="2000" max="${new Date().getFullYear()}"><button id="run-backtest-year-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0 bg-sky-600 hover:bg-sky-700"><i data-lucide="play" class="w-4 h-4 mr-2"></i>Uruchom Test</button></div><button id="toggle-h3-params" class="text-xs text-gray-400 hover:text-white flex items-center focus:outline-none border border-gray-700 px-3 py-1 rounded bg-[#0D1117]"><span class="font-bold text-sky-500 mr-2">Zaawansowana Konfiguracja H3 (Symulator)</span><i data-lucide="chevron-down" id="h3-params-icon" class="w-4 h-4 transition-transform"></i></button><div id="h3-params-container" class="mt-3 p-4 bg-[#0D1117] border border-gray-700 rounded hidden grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Percentyl AQM</label><input type="number" id="h3-param-percentile" class="modal-input !mb-0 text-xs" placeholder="0.95" step="0.01" value="0.95"></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Próg Masy m²</label><input type="number" id="h3-param-mass" class="modal-input !mb-0 text-xs" placeholder="-0.5" step="0.1" value="-0.5"></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Min. AQM Score</label><input type="number" id="h3-param-min-score" class="modal-input !mb-0 text-xs" placeholder="0.0" step="0.1" value="0.0"></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik TP (ATR)</label><input type="number" id="h3-param-tp" class="modal-input !mb-0 text-xs" placeholder="5.0" step="0.5" value="5.0"></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Mnożnik SL (ATR)</label><input type="number" id="h3-param-sl" class="modal-input !mb-0 text-xs" placeholder="2.0" step="0.5" value="2.0"></div><div><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Max Hold (Dni)</label><input type="number" id="h3-param-hold" class="modal-input !mb-0 text-xs" placeholder="5" step="1" value="5"></div><div class="md:col-span-3 border-t border-gray-800 pt-3 mt-1"><label class="block text-xs font-bold text-gray-500 mb-1 uppercase">Nazwa Setupu (Suffix)</label><input type="text" id="h3-param-name" class="modal-input !mb-0 text-xs" placeholder="CUSTOM_TEST_1"></div></div><div id="backtest-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const quantumLabSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700 relative overflow-hidden"><div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none"><i data-lucide="atom" class="w-32 h-32 text-purple-500"></i></div><h4 class="text-lg font-semibold text-purple-400 mb-3 flex items-center"><i data-lucide="flask-conical" class="w-5 h-5 mr-2"></i>Quantum Lab (Apex V4)</h4><p class="text-sm text-gray-500 mb-4">Uruchom optymalizację bayesowską (Optuna), aby znaleźć idealne parametry H3 dla wybranego roku.</p><div class="flex flex-wrap gap-3"><button id="open-quantum-modal-btn" class="modal-button modal-button-primary bg-purple-600 hover:bg-purple-700 flex items-center flex-shrink-0"><i data-lucide="cpu" class="w-4 h-4 mr-2"></i>Konfiguruj Optymalizację</button><button id="view-optimization-results-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="list" class="w-4 h-4 mr-2"></i>Wyniki</button></div><div id="quantum-lab-status" class="text-sm mt-3 h-4"></div></div>`;
         const aiOptimizerSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Analiza Mega Agenta AI</h4><p class="text-sm text-gray-500 mb-4">Uruchom Mega Agenta, aby przeanalizował wszystkie zebrane dane i zasugerował optymalizacje strategii.</p><div class="flex items-start gap-3"><button id="run-ai-optimizer-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="brain-circuit" class="w-4 h-4 mr-2"></i>Analiza AI</button><button id="view-ai-report-btn" class="modal-button modal-button-secondary flex items-center flex-shrink-0"><i data-lucide="eye" class="w-4 h-4 mr-2"></i>Raport</button></div><div id="ai-optimizer-status-message" class="text-sm mt-3 h-4"></div></div>`;
         const exportSection = `<div class="bg-[#161B22] p-6 rounded-lg shadow-lg border border-gray-700"><h4 class="text-lg font-semibold text-gray-300 mb-3">Eksport Danych</h4><p class="text-sm text-gray-500 mb-4">Pobierz *wszystkie* ${total_trades_count} transakcje jako CSV.</p><div class="flex items-start gap-3"><button id="run-csv-export-btn" class="modal-button modal-button-primary flex items-center flex-shrink-0"><i data-lucide="download-cloud" class="w-4 h-4 mr-2"></i>Eksport CSV</button></div><div id="csv-export-status-message" class="text-sm mt-3 h-4"></div></div>`;
@@ -534,7 +578,7 @@ export const ui = {
             btnPhase3: get('btn-phase-3'),
             btnPhaseX: get('btn-phasex-scan'),
             btnPhase4: get('btn-phase4-scan'),
-            btnSdar: get('btn-sdar-scan'), // Dodano do obiektu zwracanego
+            btnSdar: get('btn-sdar-scan'),
             
             h3LiveModal: {
                 backdrop: get('h3-live-modal'),
@@ -648,6 +692,5 @@ export const ui = {
         };
     },
     
-    // Podpinamy wyeksportowany obiekt renderers, aby zachować strukturę ui.renderers
     renderers: renderers
 };
