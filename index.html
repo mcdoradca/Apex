@@ -40,6 +40,11 @@
         .modal-button-secondary { background-color: #30363D; color: #f0f0f0; }
         .modal-button-secondary:hover { background-color: #4b5563; }
         .hidden { display: none; }
+        
+        /* SDAR Tactical Colors - NOWOŚĆ */
+        .sdar-action-market { color: #10b981; font-weight: 900; text-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
+        .sdar-action-limit { color: #3b82f6; font-weight: 800; }
+        .sdar-action-watch { color: #9ca3af; font-style: italic; }
     </style>
 </head>
 <body class="text-gray-200">
@@ -79,6 +84,7 @@
                 <nav class="space-y-1">
                     <a href="#dashboard-view" id="dashboard-link" class="sidebar-item sidebar-item-active flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="layout-dashboard" class="mr-3 w-5 h-5"></i><span>Dashboard</span></a>
                     <a href="#h3-signals-view" id="h3-signals-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer text-sky-300"><i data-lucide="target" class="mr-3 w-5 h-5"></i><span>Sygnały H3 Live</span></a>
+                    <a href="#sdar-view" id="sdar-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer text-blue-400"><i data-lucide="ghost" class="mr-3 w-5 h-5"></i><span>Faza SDAR (Anomalie)</span></a>
                     <a href="#portfolio-view" id="portfolio-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="briefcase" class="mr-3 w-5 h-5"></i><span>Portfel</span></a>
                     <a href="#transactions-view" id="transactions-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="history" class="mr-3 w-5 h-5"></i><span>Transakcje</span></a>
                     <a href="#agent-report-view" id="agent-report-link" class="sidebar-item flex items-center p-2 rounded-lg transition-colors cursor-pointer"><i data-lucide="clipboard-check" class="mr-3 w-5 h-5"></i><span>Wydajność Agenta</span></a>
@@ -91,6 +97,10 @@
                     <button id="btn-phase-1" class="w-full text-left flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                         <i data-lucide="radar" class="mr-2 h-4 w-4"></i>
                         Skanuj F1 (Kandydaci)
+                    </button>
+                    <button id="btn-sdar-scan" class="w-full text-left flex items-center bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 py-2 px-3 rounded-md text-sm transition-colors mt-2">
+                        <i data-lucide="ghost" class="mr-2 h-4 w-4"></i>
+                        Skanuj SDAR (Anomalie)
                     </button>
                     <button id="btn-phase-3" class="w-full text-left flex items-center bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 py-2 px-3 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                         <i data-lucide="crosshair" class="mr-2 h-4 w-4"></i>
@@ -156,7 +166,7 @@
                                 <i data-lucide="crosshair" class="w-5 h-5 mr-2"></i> SDAR Tactical Feed (Anomalie)
                             </h3>
                             <div class="flex gap-2 items-center">
-                                <button class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-bold py-1 px-3 rounded border border-gray-600 transition-colors flex items-center gap-1" onclick="API.sendCommand('START_SDAR_REQUESTED')">
+                                <button id="sdar-tactical-refresh-btn" class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-bold py-1 px-3 rounded border border-gray-600 transition-colors flex items-center gap-1">
                                     <i data-lucide="refresh-cw" class="w-3 h-3"></i> Skanuj
                                 </button>
                                 <span class="bg-yellow-900/40 text-yellow-400 border border-yellow-600/50 text-[10px] px-2 py-0.5 rounded uppercase font-mono tracking-wider">LIVE</span>
@@ -177,7 +187,7 @@
                                         <th class="px-4 py-3 text-right">Panel</th>
                                     </tr>
                                 </thead>
-                                <tbody id="sdar-signals-body" class="divide-y divide-gray-700/50">
+                                <tbody id="sdar-tactical-body" class="divide-y divide-gray-700/50">
                                     <tr><td colspan="9" class="px-4 py-8 text-center text-gray-500 italic">Oczekiwanie na dane z modułu taktycznego...</td></tr>
                                 </tbody>
                             </table>
@@ -189,11 +199,13 @@
                             <h3 class="text-lg font-bold text-sky-400 flex items-center">
                                 <i data-lucide="target" class="w-5 h-5 mr-2"></i> Sygnały H3
                             </h3>
-                        </div>
+                            </div>
                         <div id="h3-signals-container">
                             </div>
                     </div>
                 </div>
+
+                <div id="sdar-view" class="view-section hidden"></div>
 
                 <div id="portfolio-view" class="view-section hidden"></div>
 
