@@ -1,3 +1,4 @@
+
 import logging
 import time
 import json
@@ -19,7 +20,12 @@ logger = logging.getLogger(__name__)
 # === KONFIGURACJA ZGODNA Z SUPORTEM ALPHA VANTAGE (WARIANT B - STRICT PHASE X) ===
 TARGET_RPM = 100  
 REQUEST_INTERVAL = 60.0 / TARGET_RPM  
-LOOKBACK_WINDOW_MINUTES = 2  
+
+# === FIX 1: LIKWIDACJA ŚLEPEJ PLAMKI ===
+# Zamiast 2 minut, patrzymy 60 minut wstecz.
+# Deduplikacja (news_hash) w bazie danych zapobiegnie powtórnym alertom,
+# a my mamy pewność, że żaden news nie ucieknie między cyklami.
+LOOKBACK_WINDOW_MINUTES = 60  
 
 # Progi decyzyjne dla Agenta
 MIN_RELEVANCE_SCORE = 0.60
@@ -62,7 +68,7 @@ class NewsScout:
                 tickers = []
 
         # LOGOWANIE DO UI (Dziennik Operacyjny) - START
-        msg_start = f"NEWS: Start skanowania Fazy X ({len(tickers)} tickerów, {TARGET_RPM} RPM)..."
+        msg_start = f"NEWS: Start skanowania Fazy X ({len(tickers)} tickerów, {TARGET_RPM} RPM, Window: {LOOKBACK_WINDOW_MINUTES}m)..."
         logger.info(msg_start)
         utils.append_scan_log(self.session, msg_start)
 
@@ -100,7 +106,11 @@ class NewsScout:
         duration = time.time() - start_time
         
         # LOGOWANIE DO UI - KONIEC
-        msg_end = f"NEWS: Koniec cyklu Fazy X ({duration:.1f}s). Znaleziono: {self.stats['articles_found']}, Alerty: {self.stats['alerts_sent']}."
+        if self.stats['articles_found'] > 0:
+            msg_end = f"NEWS: Koniec cyklu ({duration:.1f}s). ✅ Znaleziono: {self.stats['articles_found']} newsów."
+        else:
+            msg_end = f"NEWS: Koniec cyklu ({duration:.1f}s). Brak nowych wiadomości."
+            
         logger.info(msg_end)
         utils.append_scan_log(self.session, msg_end)
 
@@ -122,8 +132,8 @@ class NewsScout:
     def _analyze_article(self, ticker: str, article: dict):
         """Analizuje pojedynczy artykuł pod kątem relewancji i sentymentu."""
         url = article.get("url")
-        title = article.get("title")
-        source = article.get("source")
+        title = article.get("title", "")
+        source = article.get("source", "")
         time_published = article.get("time_published") 
         overall_sentiment_label = article.get("overall_sentiment_label", "Neutral")
         topics = article.get("topics", [])
@@ -138,19 +148,32 @@ class NewsScout:
         ticker_score = float(specific_sentiment.get("ticker_sentiment_score", 0))
         ticker_label = specific_sentiment.get("ticker_sentiment_label", overall_sentiment_label)
 
-        # Filtr 1: Relewancja
+        # Filtr 1: Relewancja (Musi dotyczyć tej spółki, a nie tylko o niej wspominać)
         if relevance_score < MIN_RELEVANCE_SCORE:
             return 
 
-        # Filtr 2: Life Sciences / Biotech (obniżony próg sentymentu)
+        # === FIX 2: KEYWORD BOOST (BIOTECH) ===
+        # Wykrywanie słów kluczowych dla branży Life Sciences
+        urgent_keywords = ["FDA", "CLINICAL", "TRIAL", "PHASE", "APPROVAL", "MERGER", "ACQUISITION", "PATENT", "BREAKTHROUGH"]
+        title_upper = title.upper()
+        
+        is_biotech_hot = any(kw in title_upper for kw in urgent_keywords)
+        
+        # Sprawdzanie tematów API
         is_life_sciences = any(
             t.get("topic") == "Life Sciences" or "Mergers & Acquisitions" in t.get("topic") 
             for t in topics
         )
         
+        # Dynamiczny próg sentymentu
         threshold = LIFE_SCIENCES_SENTIMENT_THRESHOLD if is_life_sciences else DEFAULT_SENTIMENT_THRESHOLD
         
-        # Filtr 3: Sentyment (mocny pozytywny lub negatywny)
+        # Jeśli news zawiera słowo kluczowe (np. FDA), obniżamy próg sentymentu prawie do zera,
+        # bo każdy news o FDA jest ważny (nawet neutralny/mixed).
+        if is_biotech_hot:
+            threshold = 0.1
+
+        # Filtr 3: Sentyment
         if abs(ticker_score) < threshold:
             return
 
@@ -169,27 +192,32 @@ class NewsScout:
         self._save_news(ticker, news_hash, ticker_label, title, url)
         self.stats["articles_found"] += 1
         
-        is_urgent = abs(ticker_score) >= URGENT_SENTIMENT_THRESHOLD
-        priority_label = "🔥 PILNE" if is_urgent else "INFO"
+        # === FIX 3: FORMATOWANIE ALERTU ===
+        # Priorytetyzacja etykiet
+        if is_biotech_hot or abs(ticker_score) >= URGENT_SENTIMENT_THRESHOLD:
+            priority_label = "🔥 BIOTECH HOT" if is_life_sciences else "🚀 PILNE"
+        else:
+            priority_label = "ℹ️ INFO"
+        
+        # Ikona sentymentu
+        sent_icon = "🟢" if ticker_score > 0 else "🔴"
         
         alert_msg = (
-            f"[{priority_label}] {ticker}: {ticker_label} (Score: {ticker_score:.2f}, Rel: {relevance_score})\n"
-            f"Tytuł: {title}\n"
-            f"Link: {url}"
+            f"{priority_label}: {ticker} {sent_icon}\n"
+            f"Sentyment: {ticker_label} ({ticker_score:.2f})\n"
+            f"{title}\n\n"
+            f"🔗 {url}"
         )
         
-        # A. Wyświetl w Aplikacji (System Alert)
-        # Używamy zweryfikowanej funkcji z utils.py
-        utils.update_system_control(self.session, "system_alert", alert_msg)
-        # Dodatkowo wpis do logu operacyjnego
+        # A. Wyświetl w Aplikacji (System Alert - krótki)
+        utils.update_system_control(self.session, "system_alert", f"{priority_label} {ticker}: {title[:40]}...")
         utils.append_scan_log(self.session, f"!!! NEWS ALERT: {ticker} - {title[:50]}...")
         
-        # B. Wyślij na Telegram
-        # Bezpośrednie wywołanie sprawdzonej funkcji z utils.py
+        # B. Wyślij na Telegram (Pełny)
         utils.send_telegram_alert(alert_msg)
         self.stats["alerts_sent"] += 1
         
-        # C. Notatka do sygnału (jeśli istnieje aktywny setup)
+        # C. Notatka do sygnału (Context injection)
         try:
             signal = self.session.query(models.TradingSignal).filter(
                 models.TradingSignal.ticker == ticker,
@@ -198,8 +226,8 @@ class NewsScout:
             
             if signal:
                 timestamp = datetime.now().strftime("%H:%M")
-                safe_title = title.replace("'", "").replace('"', "")[:50]
-                new_note = f"\n[{timestamp}] NEWS: {ticker_label} - {safe_title}..."
+                safe_title = title.replace("'", "").replace('"', "")[:40]
+                new_note = f"\n[{timestamp}] NEWS {sent_icon}: {safe_title}..."
                 signal.notes = (signal.notes or "") + new_note
                 self.session.commit()
         except Exception as e:
