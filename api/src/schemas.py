@@ -1,3 +1,4 @@
+
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime, date
 from typing import List, Optional, Any, Dict
@@ -90,7 +91,7 @@ class SdarCandidate(BaseModel):
     # Wyniki Główne
     sai_score: Optional[float] = None
     spd_score: Optional[float] = None
-    me_score: Optional[float] = None    # <--- DODANO (Momentum Exhaustion)
+    me_score: Optional[float] = None
     total_anomaly_score: Optional[float] = None
 
     # Komponenty SAI (Techniczne)
@@ -106,8 +107,16 @@ class SdarCandidate(BaseModel):
     last_sentiment_score: Optional[float] = None
     
     # Komponenty ME (Momentum Exhaustion)
-    metric_rsi: Optional[float] = None  # <--- DODANO
-    metric_apo: Optional[float] = None  # <--- DODANO
+    metric_rsi: Optional[float] = None
+    metric_apo: Optional[float] = None
+
+    # === DANE TAKTYCZNE (PLAN BITWY) - DODANO ===
+    tactical_action: Optional[str] = None
+    tactical_comment: Optional[str] = None
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    risk_reward_ratio: Optional[float] = None
 
     analysis_date: datetime
 
@@ -163,6 +172,10 @@ class TradingSignal(BaseModel):
     # Re-check Data
     expected_profit_factor: Optional[float] = None
     expected_win_rate: Optional[float] = None
+
+    # === ZARZĄDZANIE POZYCJĄ - DODANO ===
+    is_trailing_active: Optional[bool] = False
+    highest_price_since_entry: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
