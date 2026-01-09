@@ -108,6 +108,8 @@ class TacticalBridge:
         # Expert Filter: Odrzucamy słabe układy (Zgodnie z PDF: R:R min 2.0)
         # Wcześniej było 1.5, co naruszało zasady "Matematyki Zysku"
         if rr_ratio < 2.0:
-            return TacticalPlan("SKIP", entry, sl, tp, rr_ratio, f"Low R:R ({rr_ratio:.2f})")
+            # FIX: Rzutowanie na float() naprawia błąd "schema np does not exist"
+            return TacticalPlan("SKIP", float(round(entry, 2)), float(round(sl, 2)), float(round(tp, 2)), float(round(rr_ratio, 2)), f"Low R:R ({rr_ratio:.2f})")
 
-        return TacticalPlan(action, round(entry, 2), round(sl, 2), round(tp, 2), round(rr_ratio, 2), comment)
+        # FIX: Rzutowanie na float() naprawia błąd "schema np does not exist"
+        return TacticalPlan(action, float(round(entry, 2)), float(round(sl, 2)), float(round(tp, 2)), float(round(rr_ratio, 2)), comment)
