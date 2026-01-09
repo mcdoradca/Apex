@@ -1,3 +1,4 @@
+
 import os
 import time
 import schedule
@@ -247,6 +248,16 @@ def main_loop():
     global current_state, api_client, active_mode
     logger.info("Worker V6.3 (Real Money Nasdaq Edition) STARTED.")
     
+    # === FIX CRITICAL: AUTO-CREATION OF MISSING TABLES ===
+    # To zapewnia, że nowa tabela 'processed_news' (i inne) zostanie utworzona
+    # przy starcie, jeśli jeszcze nie istnieje w bazie.
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database Schema Checked/Created (Base.metadata.create_all).")
+    except Exception as e:
+        logger.critical(f"Database Schema Creation Error: {e}", exc_info=True)
+    # ====================================================
+
     # Inicjalizacja bazy i systemu
     try:
         with get_db_session() as session:
