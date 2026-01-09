@@ -1,3 +1,4 @@
+
 import logging
 import csv
 from io import StringIO
@@ -117,6 +118,14 @@ def _run_schema_and_index_migration(session: Session):
         safe_add_column('sdar_candidates', 'news_volume_spike', 'NUMERIC(10, 4)')
         safe_add_column('sdar_candidates', 'price_resilience', 'NUMERIC(10, 4)')
         safe_add_column('sdar_candidates', 'last_sentiment_score', 'NUMERIC(5, 4)')
+        
+        # === DODANO: Brakujące kolumny taktyczne (to naprawia błąd "UndefinedColumn") ===
+        safe_add_column('sdar_candidates', 'tactical_action', 'VARCHAR(50)')
+        safe_add_column('sdar_candidates', 'entry_price', 'NUMERIC(12, 4)')
+        safe_add_column('sdar_candidates', 'stop_loss', 'NUMERIC(12, 4)')
+        safe_add_column('sdar_candidates', 'take_profit', 'NUMERIC(12, 4)')
+        safe_add_column('sdar_candidates', 'risk_reward_ratio', 'NUMERIC(5, 2)')
+        safe_add_column('sdar_candidates', 'tactical_comment', 'TEXT')
         
         # === INDEKSY ===
         try:
