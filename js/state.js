@@ -1,3 +1,4 @@
+
 export const API_BASE_URL = "https://apex-predator-api-x0l8.onrender.com";
 export const PORTFOLIO_QUOTE_POLL_INTERVAL = 30000;
 export const ALERT_POLL_INTERVAL = 7000;
@@ -23,7 +24,10 @@ export const state = {
     currentReportPage: 1,
     activeH3DeepDivePolling: null,
 
-    // === NOWOŚĆ: Stan sortowania dla widoku Sygnały H3 ===
+    // === SDAR: System Detekcji Anomalii ===
+    sdarCandidates: [], // Przechowuje wyniki skanowania SDAR
+
+    // === Stan sortowania dla widoku Sygnały H3 ===
     h3SortBy: 'score',      // Opcje: 'score', 'rr', 'time', 'ticker', 'price'
     h3SortDirection: 'desc' // Opcje: 'asc', 'desc'
 };
