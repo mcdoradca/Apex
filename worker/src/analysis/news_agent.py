@@ -9,12 +9,6 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-# === TEST MODE START ===
-if ticker == "CYNC":  # Wybierz ticker, który na pewno ma newsy
-    utils.send_telegram_alert(f"🧪 TEST ALARMU: Znaleziono news dla {ticker}\nTytuł: {article.get('title')}\nLink: {article.get('url')}")
-    logger.info(f"🧪 TEST ALARM WYSŁANY DLA {ticker}")
-# === TEST MODE END ===
-
 # === IMPORTY ===
 # models są w katalogu wyżej (worker/src)
 from .. import models
