@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pl">
 <head>
@@ -41,7 +42,7 @@
         .modal-button-secondary:hover { background-color: #4b5563; }
         .hidden { display: none; }
         
-        /* SDAR Tactical Colors - NOWOŚĆ */
+        /* SDAR Tactical Colors */
         .sdar-action-market { color: #10b981; font-weight: 900; text-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
         .sdar-action-limit { color: #3b82f6; font-weight: 800; }
         .sdar-action-watch { color: #9ca3af; font-style: italic; }
@@ -155,11 +156,20 @@
             
             <div id="main-content" class="p-6 flex-grow">
                 
-                <div id="dashboard-view" class="view-section">
-                    </div>
+                <div id="dashboard-view" class="view-section"></div>
 
                 <div id="h3-signals-view" class="view-section hidden">
-                    
+                    <div class="bg-[#161B22] border border-gray-700 rounded-lg overflow-hidden">
+                        <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+                            <h3 class="text-lg font-bold text-sky-400 flex items-center">
+                                <i data-lucide="target" class="w-5 h-5 mr-2"></i> Sygnały H3
+                            </h3>
+                        </div>
+                        <div id="h3-signals-container"></div>
+                    </div>
+                </div>
+
+                <div id="sdar-view" class="view-section hidden">
                     <div class="bg-[#161B22] border border-yellow-600/30 shadow-lg shadow-yellow-900/10 rounded-lg mb-8 overflow-hidden">
                         <div class="flex justify-between items-center p-4 border-b border-gray-700 bg-yellow-900/10">
                             <h3 class="text-lg font-bold text-yellow-400 flex items-center">
@@ -193,19 +203,7 @@
                             </table>
                         </div>
                     </div>
-
-                    <div class="bg-[#161B22] border border-gray-700 rounded-lg overflow-hidden">
-                        <div class="p-4 border-b border-gray-700 flex justify-between items-center">
-                            <h3 class="text-lg font-bold text-sky-400 flex items-center">
-                                <i data-lucide="target" class="w-5 h-5 mr-2"></i> Sygnały H3
-                            </h3>
-                            </div>
-                        <div id="h3-signals-container">
-                            </div>
-                    </div>
                 </div>
-
-                <div id="sdar-view" class="view-section hidden"></div>
 
                 <div id="portfolio-view" class="view-section hidden"></div>
 
@@ -289,7 +287,7 @@
                 </div>
                 <div class="space-y-6">
                     <div class="bg-[#0D1117] p-5 rounded-lg border border-gray-700 relative">
-                         <h4 class="text-xs font-bold text-purple-500 uppercase mb-4 flex items-center tracking-wider"><i data-lucide="crosshair" class="w-3 h-3 mr-2"></i> Setup H3 (Quantum)</h4>
+                         <h4 class="text-xs font-bold text-purple-500 uppercase mb-4 flex items-center tracking-wider"><i data-lucide="crosshair" class="w-3 h-3 mr-2"></i> Plan Taktyczny / Setup</h4>
                         <div class="space-y-4">
                             <div class="flex justify-between items-center p-3 bg-gray-800/40 rounded border border-gray-700/50"><span class="text-sm text-purple-300 font-semibold">Wejście (Entry)</span><span id="sd-entry-price" class="font-mono text-xl text-white font-bold">---</span></div>
                             <div class="flex justify-between items-center p-3 bg-green-900/10 border border-green-500/20 rounded"><span class="text-sm text-green-400 font-semibold">Take Profit (TP)</span><span id="sd-take-profit" class="font-mono text-xl text-green-400 font-bold">---</span></div>
