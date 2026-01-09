@@ -1,3 +1,4 @@
+
 import { api } from './api.js';
 import { state, logger, PORTFOLIO_QUOTE_POLL_INTERVAL, ALERT_POLL_INTERVAL, REPORT_PAGE_SIZE, AI_OPTIMIZER_POLL_INTERVAL, H3_DEEP_DIVE_POLL_INTERVAL } from './state.js';
 import { renderers } from './ui.js';
@@ -168,6 +169,7 @@ const _renderH3ViewInternal = () => {
     UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals, state.liveQuotes);
 
     // === START: SDAR TACTICAL FEED LOGIC (Wstrzykiwanie do index.html) ===
+    // TO JEST NOWA SEKCJA ODPOWIEDZIALNA ZA WYŚWIETLANIE TABELI SDAR
     const sdarBody = document.getElementById('sdar-tactical-body');
     if (sdarBody && renderers.sdarTacticalRows) {
         // Wstrzyknij wiersze (korzystając z danych pobranych w showH3Signals)
@@ -181,7 +183,6 @@ const _renderH3ViewInternal = () => {
                     btn.disabled = true;
                     btn.textContent = "...";
                     await api.addToWatchlist(ticker);
-                    // Wyświetl powiadomienie (funkcja zdefiniowana niżej w tym pliku)
                     showSystemAlert(`Ticker ${ticker} dodany do watchlisty (Ghost Mode).`);
                     refreshSidebarData();
                 } catch (err) {
@@ -199,7 +200,6 @@ const _renderH3ViewInternal = () => {
     const sdarRefreshBtn = document.getElementById('sdar-tactical-refresh-btn');
     if (sdarRefreshBtn) {
         sdarRefreshBtn.addEventListener('click', async (e) => {
-             // Odświeżamy cały widok H3 (co pociągnie za sobą odświeżenie SDAR)
              showH3Signals(false);
         });
     }
@@ -241,7 +241,7 @@ export const showH3Signals = async (silent = false) => {
             const signals = await api.getPhase3Signals();
             state.phase3 = signals || [];
 
-            // === START: POBIERANIE DANYCH SDAR ===
+            // === START: POBIERANIE DANYCH SDAR (DODANO DLA SPÓJNOŚCI DANYCH) ===
             try {
                 const sdarData = await api.getSdarCandidates();
                 state.sdarCandidates = sdarData || [];
@@ -341,7 +341,7 @@ export const handleRunPhaseXScan = async () => {
     }
 };
 
-// === OBSŁUGA WIDOKU SDAR (NOWOŚĆ) ===
+// === OBSŁUGA WIDOKU SDAR (NOWOŚĆ - DODANO CAŁĄ FUNKCJĘ) ===
 export const showSdar = async () => {
     stopViewPolling();
     showLoading();
@@ -350,10 +350,14 @@ export const showSdar = async () => {
         try {
             const candidates = await api.getSdarCandidates();
             if (UI && UI.mainContent) {
-                UI.mainContent.innerHTML = renderers.sdarView(candidates);
+                // renderer.sdarView zostanie dodany w ui.js
+                if (renderers.sdarView) {
+                    UI.mainContent.innerHTML = renderers.sdarView(candidates);
+                } else {
+                    UI.mainContent.innerHTML = `<div class="p-4 text-yellow-400">Renderer SDAR niedostępny. Zaktualizuj plik ui.js.</div>`;
+                }
             }
             
-            // Podpięcie przycisku skanowania wewnątrz widoku
             const runBtn = document.getElementById('run-sdar-scan-btn');
             if (runBtn) {
                 runBtn.addEventListener('click', handleRunSdarScan);
@@ -369,7 +373,7 @@ export const showSdar = async () => {
     };
     
     await render();
-    state.activeViewPolling = setInterval(render, 15000); // Odświeżanie co 15s
+    state.activeViewPolling = setInterval(render, 15000); 
 };
 
 export const handleRunSdarScan = async () => {
@@ -905,12 +909,14 @@ export const showSignalDetails = async (ticker) => {
                 UI.signalDetails.marketStatus.textContent = statusText;
             }
             
+            // === DODANO DLA SDAR: Mapowanie pól Planu Bitwy ===
             if (data.setup) {
-                UI.signalDetails.entry.textContent = data.setup.entry_price ? data.setup.entry_price.toFixed(2) : "---";
-                UI.signalDetails.tp.textContent = data.setup.take_profit ? data.setup.take_profit.toFixed(2) : "---";
-                UI.signalDetails.sl.textContent = data.setup.stop_loss ? data.setup.stop_loss.toFixed(2) : "---";
-                UI.signalDetails.rr.textContent = data.setup.risk_reward ? data.setup.risk_reward.toFixed(2) : "---";
-                UI.signalDetails.generationDate.textContent = new Date(data.setup.generation_date).toLocaleString('pl-PL');
+                if (UI.signalDetails.entry) UI.signalDetails.entry.textContent = data.setup.entry_price ? data.setup.entry_price.toFixed(2) : "---";
+                if (UI.signalDetails.tp) UI.signalDetails.tp.textContent = data.setup.take_profit ? data.setup.take_profit.toFixed(2) : "---";
+                if (UI.signalDetails.sl) UI.signalDetails.sl.textContent = data.setup.stop_loss ? data.setup.stop_loss.toFixed(2) : "---";
+                if (UI.signalDetails.rr) UI.signalDetails.rr.textContent = data.setup.risk_reward ? data.setup.risk_reward.toFixed(2) : "---";
+                
+                if (UI.signalDetails.generationDate) UI.signalDetails.generationDate.textContent = new Date(data.setup.generation_date).toLocaleString('pl-PL');
 
                 if (data.setup.notes && data.setup.notes.includes("RANKING:")) {
                     _injectRankingCard(data.setup.notes);
