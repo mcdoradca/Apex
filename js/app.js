@@ -1,3 +1,4 @@
+
 import { ui, renderers } from './ui.js';
 import { api } from './api.js';
 import { logger, state } from './state.js';
@@ -18,7 +19,8 @@ import {
     showH3Signals,
     showPhaseX, handleRunPhaseXScan,
     showPhase4, handleRunPhase4Scan,
-    showSdar, handleRunSdarScan // <--- IMPORT SDAR
+    // === NOWOŚĆ: IMPORTY SDAR ===
+    showSdar, handleRunSdarScan 
 } from './logic.js';
 
 // Tworzymy lokalny obiekt Logic dla kompatybilności z resztą kodu
@@ -39,7 +41,8 @@ const Logic = {
     showH3Signals,
     showPhaseX, handleRunPhaseXScan,
     showPhase4, handleRunPhase4Scan,
-    showSdar, handleRunSdarScan // <--- REJESTRACJA SDAR W OBIEKCIE LOGIC
+    // === NOWOŚĆ: REJESTRACJA SDAR W OBIEKCIE LOGIC ===
+    showSdar, handleRunSdarScan 
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -170,10 +173,35 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // === NOWOŚĆ: Obsługa przycisku SDAR (System Detekcji Anomalii) ===
+        // To jest kluczowe "podłączenie", którego brakowało
         if (UI.btnSdar) {
             UI.btnSdar.addEventListener('click', (e) => {
                 e.preventDefault();
                 Logic.showSdar();
+                
+                // Aktualizacja aktywnej klasy w menu (UX)
+                if (UI.sidebarNav) {
+                    const items = UI.sidebarNav.querySelectorAll('.sidebar-item');
+                    items.forEach(i => i.classList.remove('sidebar-item-active'));
+                    const sdarLink = document.getElementById('sdar-link');
+                    if (sdarLink) sdarLink.classList.add('sidebar-item-active');
+                }
+            });
+        }
+        
+        // Obsługa linku w menu nawigacyjnym (jeśli został kliknięty)
+        const sdarMenuLink = document.getElementById('sdar-link');
+        if (sdarMenuLink) {
+            sdarMenuLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                Logic.showSdar();
+                
+                // Aktualizacja aktywnej klasy
+                if (UI.sidebarNav) {
+                    const items = UI.sidebarNav.querySelectorAll('.sidebar-item');
+                    items.forEach(i => i.classList.remove('sidebar-item-active'));
+                    sdarMenuLink.classList.add('sidebar-item-active');
+                }
             });
         }
         
@@ -285,7 +313,7 @@ async function handleShowAuditModal(tradeId, UI) {
         
         // Wypełnij dane
         UI.tradeAuditModal.expPf.textContent = data.expected_pf ? data.expected_pf.toFixed(2) : "N/A";
-        UI.tradeAuditModal.expWr.textContent = (data.expected_pf !== null) ? "High EV" : "N/A"; // Uproszczenie jeśli brak WR w modelu
+        UI.tradeAuditModal.expWr.textContent = (data.expected_pf !== null) ? "High EV" : "N/A"; 
         
         if (data.actual_pl !== null) {
             UI.tradeAuditModal.actPl.textContent = `${data.actual_pl > 0 ? '+' : ''}${data.actual_pl.toFixed(2)}%`;
