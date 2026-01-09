@@ -1,3 +1,4 @@
+
 import logging
 import time
 import pandas as pd
@@ -8,7 +9,7 @@ from sqlalchemy import text
 from typing import List, Dict, Optional
 
 # Importy z systemu Apex
-from ..models import SdarCandidate
+from ..models import SdarCandidate, TradingSignal
 from .utils import get_raw_data_with_cache, standardize_df_columns
 # === NOWOŚĆ: Moduł Taktyczny ===
 from .phase_tactical import TacticalBridge
@@ -26,6 +27,7 @@ class SDARAnalyzer:
     Silnik Analityczny SDAR (System Detekcji Anomalii Rynkowych).
     Wersja UNLEASHED: Obsługa pełnej listy kandydatów (No Limit).
     Wersja TACTICAL: Generuje plany wejścia/wyjścia.
+    Wersja LIVE: Posiada Most Egzekucyjny (Tworzy TradingSignals).
     """
 
     def __init__(self, session: Session, api_client):
@@ -58,6 +60,11 @@ class SDARAnalyzer:
                 
                 if result:
                     self._save_result(result)
+                    
+                    # === MOST EGZEKUCYJNY (EXECUTION BRIDGE) ===
+                    # Przekazujemy kandydata do weryfikacji transakcyjnej
+                    self._bridge_to_execution(result)
+                    
                     processed_tickers.append(ticker)
                     # Logujemy tylko sukcesy, ale rzadziej jeśli lista jest długa
                     logger.info(f"✅ SDAR [{i+1}/{len(candidates)}]: {ticker} | Score: {result.total_anomaly_score:.1f} | SAI: {result.sai_score:.0f} SPD: {result.spd_score:.0f} ME: {result.me_score:.0f}")
@@ -134,6 +141,57 @@ class SDARAnalyzer:
             
             analysis_date=datetime.now()
         )
+
+    # --- EXECUTION BRIDGE (NOWOŚĆ) ---
+    
+    def _bridge_to_execution(self, candidate: SdarCandidate):
+        """
+        Zamienia wynik analizy (SdarCandidate) na aktywny sygnał (TradingSignal),
+        jeśli spełnione są rygorystyczne wymogi strategii.
+        """
+        # 1. Sprawdzenie czy jest "Actionable"
+        if not candidate.tactical_action or candidate.tactical_action in ['WAIT', 'SKIP', 'OBSERVE']:
+            return
+
+        # 2. Rygorystyczny Filtr R:R (Zgodnie z PDF: musi być >= 2.0)
+        # Moduł taktyczny może przepuszczać 1.5, ale do handlu LIVE wymagamy 2.0.
+        if not candidate.risk_reward_ratio or candidate.risk_reward_ratio < 2.0:
+            logger.info(f"🚦 BRIDGE: {candidate.ticker} odrzucony. R:R {candidate.risk_reward_ratio} < 2.0")
+            return
+
+        # 3. Sprawdzenie Duplikatów (Idempotency)
+        # Nie chcemy dublować aktywnych sygnałów dla tej samej spółki
+        existing_signal = self.session.query(TradingSignal).filter(
+            TradingSignal.ticker == candidate.ticker,
+            TradingSignal.status.in_(['PENDING', 'ACTIVE'])
+        ).first()
+
+        if existing_signal:
+            return # Sygnał już jest w grze
+
+        # 4. Utworzenie Sygnału
+        try:
+            new_signal = TradingSignal(
+                ticker=candidate.ticker,
+                status='PENDING', # Oczekuje na wejście (Limit/Stop)
+                entry_price=candidate.entry_price,
+                stop_loss=candidate.stop_loss,
+                take_profit=candidate.take_profit,
+                risk_reward_ratio=candidate.risk_reward_ratio,
+                notes=f"SDAR {candidate.tactical_action}: {candidate.tactical_comment} | SAI:{candidate.sai_score:.0f} SPD:{candidate.spd_score:.0f}",
+                # Opcjonalne pola strefy (można rozwinąć w przyszłości)
+                entry_zone_bottom=candidate.entry_price, 
+                entry_zone_top=candidate.entry_price,
+                generation_date=datetime.now(timezone.utc)
+            )
+            
+            self.session.add(new_signal)
+            self.session.commit()
+            logger.info(f"⚡ BRIDGE: Wygenerowano Trading Signal dla {candidate.ticker} ({candidate.tactical_action}) R:R={candidate.risk_reward_ratio}")
+            
+        except Exception as e:
+            logger.error(f"BRIDGE Error saving signal for {candidate.ticker}: {e}")
+            self.session.rollback()
 
     # --- FILARY ---
     
