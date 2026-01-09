@@ -1,3 +1,4 @@
+
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text, desc, func, update, delete, Row
@@ -75,22 +76,15 @@ def _sanitize_trade_metrics(trade: models.VirtualTrade):
 
 def create_optimization_job(db: Session, request: schemas.OptimizationRequest) -> models.OptimizationJob:
     job_id = str(uuid.uuid4())
-    
-    # === FIX START: Obsługa scan_period ===
-    # Kopiujemy parametry lub tworzymy pusty słownik, jeśli None
     config = request.parameter_space.copy() if request.parameter_space else {}
-    
-    # Dodajemy scan_period do konfiguracji. Worker (apex_optimizer.py) odczyta to pole.
-    # Używamy getattr na wypadek gdyby pole nie istniało w starszej wersji schemas, choć już je dodaliśmy.
     config['scan_period'] = getattr(request, 'scan_period', 'FULL')
-    # === FIX END ===
 
     new_job = models.OptimizationJob(
         id=job_id,
         target_year=request.target_year,
         total_trials=request.n_trials,
         status='PENDING',
-        configuration=config, # Zapisujemy zaktualizowaną konfigurację (z scan_period)
+        configuration=config,
         created_at=datetime.now(timezone.utc)
     )
     db.add(new_job)
@@ -184,9 +178,6 @@ def record_buy_transaction(db: Session, buy_request: schemas.BuyRequest) -> mode
         db.add(holding)
 
     # === FIX: FORCE ACTIVATE SIGNAL ===
-    # Jeśli kupujemy, a sygnał jest PENDING -> ACTIVE.
-    # Jeśli sygnału brak -> Utwórz "MANUAL" ACTIVE, aby portfel miał skąd brać TP/SL.
-    
     signal = db.query(models.TradingSignal).filter(
         models.TradingSignal.ticker == ticker,
         models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
@@ -195,18 +186,13 @@ def record_buy_transaction(db: Session, buy_request: schemas.BuyRequest) -> mode
     buy_price_float = float(price_per_share)
 
     if signal:
-        # Aktualizujemy istniejący sygnał
         signal.status = 'ACTIVE'
-        # Aktualizujemy cenę wejścia na tę, po której faktycznie kupiliśmy
         signal.entry_price = buy_price_float
         signal.updated_at = datetime.now(timezone.utc)
         signal.notes = (signal.notes or "") + f"\n[AUTO] Aktywowano przez zakup portfelowy @ {buy_price_float}"
     else:
-        # Tworzymy sygnał "MANUAL", żeby portfel nie pokazywał UNK/---
-        # Domyślny SL -2%, TP +5%
         tp = buy_price_float * 1.05
         sl = buy_price_float * 0.98
-        
         new_signal = models.TradingSignal(
             ticker=ticker,
             status='ACTIVE',
@@ -261,7 +247,6 @@ def record_sell_transaction(db: Session, sell_request: schemas.SellRequest) -> O
 
     if remaining_quantity == 0:
         db.delete(holding)
-        # Jeśli sprzedajemy wszystko, zamykamy też sygnał (COMPLETED/MANUAL CLOSE)
         signal = db.query(models.TradingSignal).filter(
             models.TradingSignal.ticker == ticker,
             models.TradingSignal.status == 'ACTIVE'
@@ -304,6 +289,45 @@ def get_phase1_candidates(db: Session) -> List[Dict[str, Any]]:
             "sector_trend_score": float(c.sector_trend_score) if c.sector_trend_score is not None else None, 
             "analysis_date": c.analysis_date.isoformat() if c.analysis_date else None
         } for c in candidates_from_db
+    ]
+
+# === NOWOŚĆ: POBIERANIE KANDYDATÓW SDAR (ANALITYKA) ===
+def get_sdar_candidates(db: Session) -> List[Dict[str, Any]]:
+    # Pobieramy kandydatów posortowanych wg całkowitego wyniku anomalii
+    candidates = db.query(models.SdarCandidate).order_by(
+        desc(models.SdarCandidate.total_anomaly_score)
+    ).limit(50).all()
+    
+    return [
+        {
+            "ticker": c.ticker,
+            "total_anomaly_score": float(c.total_anomaly_score or 0),
+            "sai_score": float(c.sai_score or 0),
+            "spd_score": float(c.spd_score or 0),
+            "me_score": float(c.me_score or 0),
+            
+            "atr_compression": float(c.atr_compression or 0),
+            "obv_slope": float(c.obv_slope or 0),
+            "smart_money_flow": float(c.smart_money_flow or 0),
+            
+            "sentiment_shock": float(c.sentiment_shock or 0),
+            "news_volume_spike": float(c.news_volume_spike or 0),
+            "price_resilience": float(c.price_resilience or 0),
+            
+            "metric_rsi": float(c.metric_rsi or 0),
+            "metric_apo": float(c.metric_apo or 0),
+
+            # Dane taktyczne (zgodne ze schematem SdarCandidateSchema)
+            "tactical_action": c.tactical_action,
+            "tactical_comment": c.tactical_comment,
+            "entry_price": float(c.entry_price) if c.entry_price else None,
+            "stop_loss": float(c.stop_loss) if c.stop_loss else None,
+            "take_profit": float(c.take_profit) if c.take_profit else None,
+            "risk_reward_ratio": float(c.risk_reward_ratio) if c.risk_reward_ratio else None,
+            
+            "analysis_date": c.analysis_date
+        }
+        for c in candidates
     ]
 
 def get_phasex_candidates(db: Session) -> List[Dict[str, Any]]:
@@ -371,10 +395,11 @@ def get_phase2_results(db: Session) -> List[Dict[str, Any]]:
         } for r in results_from_db
     ]
 
+# === ZAKTUALIZOWANO: POBIERANIE SYGNAŁÓW (LIVE TRADING) ===
 def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
     signals_from_db = db.query(models.TradingSignal).filter(
         models.TradingSignal.status.in_(['ACTIVE', 'PENDING'])
-    ).order_by(models.TradingSignal.ticker).all()
+    ).order_by(desc(models.TradingSignal.generation_date)).all()
 
     return [
         {
@@ -392,11 +417,14 @@ def get_active_and_pending_signals(db: Session) -> List[Dict[str, Any]]:
             "notes": signal.notes,
             "expiration_date": signal.expiration_date.isoformat() if signal.expiration_date else None,
             "expected_profit_factor": _safe_float_stat(signal.expected_profit_factor),
-            "expected_win_rate": _safe_float_stat(signal.expected_win_rate)
+            "expected_win_rate": _safe_float_stat(signal.expected_win_rate),
+            
+            # Nowe pola zarządzania pozycją
+            "is_trailing_active": bool(signal.is_trailing_active),
+            "highest_price_since_entry": _safe_float_stat(signal.highest_price_since_entry)
+            
         } for signal in signals_from_db
     ]
-
-# Usunięto get_flux_signals (Faza 5)
 
 def get_discarded_signals_count_24h(db: Session) -> int:
     try:
