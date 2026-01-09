@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
@@ -104,8 +105,9 @@ class TacticalBridge:
         
         rr_ratio = reward / risk
         
-        # Expert Filter: Odrzucamy słabe układy
-        if rr_ratio < 1.5:
+        # Expert Filter: Odrzucamy słabe układy (Zgodnie z PDF: R:R min 2.0)
+        # Wcześniej było 1.5, co naruszało zasady "Matematyki Zysku"
+        if rr_ratio < 2.0:
             return TacticalPlan("SKIP", entry, sl, tp, rr_ratio, f"Low R:R ({rr_ratio:.2f})")
 
         return TacticalPlan(action, round(entry, 2), round(sl, 2), round(tp, 2), round(rr_ratio, 2), comment)
