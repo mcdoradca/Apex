@@ -1,3 +1,4 @@
+
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
 // === CSS INJECTION: HUD, ANIMACJE, SNIPER SCOPE, GLASSMORPHISM ===
@@ -180,22 +181,24 @@ export const renderers = {
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-2 strat-badge ${strat.class}">${strat.name}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
-    // === WIDOK SDAR (TABELA GŁÓWNA) ===
+    // === NOWOŚĆ: GŁÓWNY WIDOK SDAR ===
     sdarView: (candidates) => {
+        if (!candidates) candidates = [];
         const rows = candidates.map(c => {
-            // Kolorowanie wyników
             const totalScoreClass = c.total_anomaly_score > 80 ? 'text-red-500 font-black' : (c.total_anomaly_score > 60 ? 'text-green-400 font-bold' : 'text-yellow-400');
             const saiClass = c.sai_score > 70 ? 'text-green-400' : 'text-gray-300';
             const spdClass = c.spd_score > 60 ? 'text-blue-400 font-bold' : 'text-gray-300';
+            const shock = c.sentiment_shock != null ? c.sentiment_shock.toFixed(2) : '-';
+            const atr = c.atr_compression != null ? c.atr_compression.toFixed(3) : '-';
             
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
                 <td class="p-3 font-bold text-sky-400">${c.ticker}</td>
-                <td class="p-3 text-right ${totalScoreClass}">${c.total_anomaly_score.toFixed(1)}</td>
-                <td class="p-3 text-right ${saiClass}">${c.sai_score.toFixed(1)}</td>
-                <td class="p-3 text-right ${spdClass}">${c.spd_score.toFixed(1)}</td>
-                <td class="p-3 text-right font-mono text-gray-400">${c.sentiment_shock ? c.sentiment_shock.toFixed(2) : '-'}</td>
-                <td class="p-3 text-right font-mono text-gray-400">${c.atr_compression ? c.atr_compression.toFixed(3) : '-'}</td>
-                <td class="p-3 text-right text-xs text-gray-500">${new Date(c.analysis_date).toLocaleTimeString()}</td>
+                <td class="p-3 text-right ${totalScoreClass}">${c.total_anomaly_score ? c.total_anomaly_score.toFixed(1) : '0.0'}</td>
+                <td class="p-3 text-right ${saiClass}">${c.sai_score ? c.sai_score.toFixed(1) : '0.0'}</td>
+                <td class="p-3 text-right ${spdClass}">${c.spd_score ? c.spd_score.toFixed(1) : '0.0'}</td>
+                <td class="p-3 text-right font-mono text-gray-400">${shock}</td>
+                <td class="p-3 text-right font-mono text-gray-400">${atr}</td>
+                <td class="p-3 text-right text-xs text-gray-500">${c.analysis_date ? new Date(c.analysis_date).toLocaleTimeString() : '-'}</td>
             </tr>`;
         }).join('');
 
@@ -226,7 +229,7 @@ export const renderers = {
         </div>`;
     },
 
-    // === NOWOŚĆ: RENDERER DLA TACTICAL FEED SDAR (WIDOK H3/DASHBOARD) ===
+    // === NOWOŚĆ: RENDERER DLA TACTICAL FEED (WSTAWIANY W LOGIC.JS) ===
     sdarTacticalRows: (candidates, quotes = {}) => {
         if (!candidates || candidates.length === 0) {
             return `<tr><td colspan="9" class="px-4 py-8 text-center text-gray-500 italic">Oczekiwanie na dane z modułu taktycznego...</td></tr>`;
@@ -236,7 +239,7 @@ export const renderers = {
             let action = "WATCH";
             let actionClass = "sdar-action-watch";
             
-            // Logika kolorowania i rekomendacji
+            // Prosta logika wizualna dla akcji
             if (score > 85) { 
                 action = "MARKET_BUY"; 
                 actionClass = "sdar-action-market"; 
@@ -246,7 +249,7 @@ export const renderers = {
             }
 
             const price = quotes[c.ticker] ? parseFloat(quotes[c.ticker]['05. price']).toFixed(2) : '---';
-            const setupType = c.sai_score > c.spd_score ? "VOL_ACCUM" : "SENT_DIV";
+            const setupType = (c.sai_score || 0) > (c.spd_score || 0) ? "VOL_ACCUM" : "SENT_DIV";
 
             return `<tr class="border-b border-gray-700/50 hover:bg-blue-900/10 transition-colors group">
                 <td class="px-4 py-3 font-bold text-white">${c.ticker}</td>
@@ -559,6 +562,7 @@ export const ui = {
         }
 
         // === INIEKCJA PRZYCISKU SDAR (NOWOŚĆ) ===
+        // Dodaję ten blok, aby w menu pojawił się przycisk uruchamiający skaner
         if (sidebarControls && !document.getElementById('btn-sdar-scan')) {
              const btnSdar = document.createElement('button');
              btnSdar.id = 'btn-sdar-scan';
@@ -578,6 +582,7 @@ export const ui = {
             btnPhase3: get('btn-phase-3'),
             btnPhaseX: get('btn-phasex-scan'),
             btnPhase4: get('btn-phase4-scan'),
+            // Rejestracja nowego przycisku
             btnSdar: get('btn-sdar-scan'),
             
             h3LiveModal: {
