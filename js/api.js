@@ -1,3 +1,4 @@
+
 import { API_BASE_URL, logger, REPORT_PAGE_SIZE } from './state.js';
 
 const updateApiStatus = (status) => {
@@ -42,60 +43,63 @@ const apiRequest = async (endpoint, options = {}) => {
 
 export const api = {
     getWorkerStatus: () => apiRequest('api/v1/worker/status'),
+    
+    // === CONTROLLER ===
+    // Obsługuje komendy: start_phase1, start_phase3, start_phasex, start_phase4, start_sdar
     sendWorkerControl: (action, params = null) => apiRequest(`api/v1/worker/control/${action}`, { 
         method: 'POST',
         headers: params ? { 'Content-Type': 'application/json' } : {},
         body: params ? JSON.stringify(params) : null
     }),
+
+    // === CANDIDATES & DATA ===
     getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
-    
-    // Pobieranie kandydatów Fazy X (BioX)
     getPhaseXCandidates: () => apiRequest('api/v1/candidates/phasex'),
-
-    // Pobieranie kandydatów Fazy 4 (H4 Kinetic Alpha)
     getPhase4Candidates: () => apiRequest('api/v1/candidates/phase4'),
-
-    // Pobieranie kandydatów SDAR (System Detekcji Anomalii) - NOWOŚĆ
+    
+    // [SDAR] Pobieranie kandydatów z tabeli sdar_candidates
     getSdarCandidates: () => apiRequest('api/v1/candidates/sdar'),
-
-    // === NOWOŚĆ: Pobieranie stanu Monitora Fazy 5 (Omni-Flux) ===
-    getPhase5MonitorState: () => apiRequest('api/v1/monitor/phase5'),
 
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
     
-    // Pobieranie szczegółów sygnału (z walidacją Live)
+    // === SIGNAL DETAILS (LIVE CHECK) ===
     getSignalDetails: (ticker) => apiRequest(`api/v1/signal/${ticker}/details`),
 
     getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
     getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
-    
-    // Bulk Quotes (dla wydajnego Portfela Live i Sygnałów H3)
     getBulkQuotes: (tickers) => apiRequest(`api/v1/quotes/bulk?tickers=${tickers.join(',')}`),
 
+    // === USER ACTIONS ===
     addToWatchlist: (ticker) => apiRequest(`api/v1/watchlist/${ticker}`, { method: 'POST' }),
     getSystemAlert: () => apiRequest('api/v1/system/alert'),
+    
+    // === PORTFOLIO ===
     getPortfolio: () => apiRequest('api/v1/portfolio'),
     buyStock: (data) => apiRequest('api/v1/portfolio/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
     sellStock: (data) => apiRequest('api/v1/portfolio/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
     getTransactionHistory: () => apiRequest('api/v1/transactions'),
-    getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
     
-    // RE-CHECK (Pobieranie raportu audytu)
+    // === REPORTS & AUDIT ===
+    getVirtualAgentReport: (page = 1, pageSize = REPORT_PAGE_SIZE) => apiRequest(`api/v1/virtual-agent/report?page=${page}&page_size=${pageSize}`),
     getTradeAuditDetails: (tradeId) => apiRequest(`api/v1/virtual-agent/trade/${tradeId}/audit`),
 
+    // === TOOLS & OPTIMIZATION ===
     requestBacktest: (year, params = null) => apiRequest('api/v1/backtest/request', { 
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year, parameters: params })
     }),
     getApiRootStatus: () => apiRequest(''),
+    
     requestAIOptimizer: () => apiRequest('api/v1/ai-optimizer/request', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
     }),
     getAIOptimizerReport: () => apiRequest('api/v1/ai-optimizer/report'),
+    
     requestH3DeepDive: (year) => apiRequest('api/v1/analysis/h3-deep-dive', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: year })
     }),
     getH3DeepDiveReport: () => apiRequest('api/v1/analysis/h3-deep-dive-report'),
+    
     getExportCsvUrl: () => `${API_BASE_URL}/api/v1/export/trades.csv`,
 
     startOptimization: (requestData) => apiRequest('api/v1/optimization/start', {
@@ -103,6 +107,5 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestData)
     }),
-    
     getOptimizationResults: () => apiRequest('api/v1/optimization/results')
 };
