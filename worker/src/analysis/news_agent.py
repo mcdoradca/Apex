@@ -13,7 +13,6 @@ from sqlalchemy import text
 if ticker == "CYNC":  # Wybierz ticker, który na pewno ma newsy
     utils.send_telegram_alert(f"🧪 TEST ALARMU: Znaleziono news dla {ticker}\nTytuł: {article.get('title')}\nLink: {article.get('url')}")
     logger.info(f"🧪 TEST ALARM WYSŁANY DLA {ticker}")
-    return # Przerywamy, żeby nie dublować z normalną logiką
 # === TEST MODE END ===
 
 # === IMPORTY ===
