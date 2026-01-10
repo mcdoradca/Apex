@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
@@ -6,110 +5,129 @@ from typing import Optional
 
 @dataclass
 class TacticalPlan:
-    action: str          # BUY_LIMIT, BUY_STOP, WAIT, OBSERVE
+    action: str          # BUY_LIMIT, BUY_STOP, WAIT, SKIP
     entry_price: float
     stop_loss: float
     take_profit: float
     risk_reward: float
+    ttl_days: int        # NOWOŚĆ: Szacowany czas życia setupu
     comment: str
 
 class TacticalBridge:
     """
-    Moduł Taktyczny dla SDAR.
-    Zamienia abstrakcyjne wyniki (SAI/SPD) na konkretne poziomy cenowe.
-    Używa: ATR (Zmienność) + Volume Nodes (Skupiska Wolumenu).
+    Moduł Taktyczny dla SDAR v2.0 (Dynamic TTL & Strict Rules).
     """
 
     def generate_plan(self, ticker: str, current_price: float, df_5min: pd.DataFrame, 
                       sai_score: float, spd_score: float, me_score: float) -> Optional[TacticalPlan]:
         
-        # 1. Oblicz ATR (Zmienność) - Twój "margines błędu"
+        # 1. Oblicz ATR (Zmienność) - Nasz "Prędkościomierz"
         df = df_5min.copy()
-        # True Range calculation
         df['tr'] = np.maximum(df['high'] - df['low'], 
                    np.maximum(abs(df['high'] - df['close'].shift()), abs(df['low'] - df['close'].shift())))
         
-        # Bierzemy ostatni dostępny ATR (14 okresów)
-        atr_series = df['tr'].rolling(window=14).mean()
-        if atr_series.empty:
-            return None
-            
+        # ATR z 14 okresów (5min) to trochę mało dla TTL dziennego.
+        # Lepiej użyć większej próbki lub przeskalować.
+        # Przyjmijmy ATR z ostatnich 24h (288 świec 5min).
+        atr_window = 288 
+        atr_series = df['tr'].rolling(window=atr_window).mean()
+        
+        if atr_series.empty: return None
         atr = atr_series.iloc[-1]
         
-        if np.isnan(atr) or atr == 0:
-            return None # Brak danych do wyceny ryzyka
+        if np.isnan(atr) or atr == 0: return None 
 
-        # 2. Znajdź "Volume Node" (Cena, gdzie przemieliło się najwięcej akcji w ostatnich 24h)
-        # To jest potencjalne wsparcie instytucjonalne (Tam gdzie "Gruby" kupował)
-        last_day = df.iloc[-288:] # Ostatnie ~24h (przy świecach 5min: 12h sesji * 24 świece/h)
-        if last_day.empty:
-            return None
-            
+        # Szacowana dzienna zmienność (Daily Range)
+        # Zakładamy, że ATR(24h) na 5min to średnia zmienność świecy. 
+        # Zmienność dzienna to w przybliżeniu suma ruchów lub ATR dzienny.
+        # Uproszczenie: Daily Move ~ 30 * ATR_5min (dla aktywnych sesji)
+        daily_volatility = atr * 30 
+
+        # 2. Volume Node (POC) - Wsparcie Instytucjonalne
+        last_day = df.iloc[-288:] 
         volume_profile = last_day.groupby('close')['volume'].sum()
-        if volume_profile.empty:
-            poc_price = current_price
-        else:
-            poc_price = volume_profile.idxmax() # Point of Control (Cena z max wolumenem)
+        poc_price = volume_profile.idxmax() if not volume_profile.empty else current_price
 
-        # 3. Znajdź lokalne ekstrema (Struktura Rynku)
         local_min = last_day['low'].min()
         local_max = last_day['high'].max()
 
-        # === STRATEGIA A: ŁOWIENIE (Fishing) - Dominacja SAI ===
-        # Scenariusz: Instytucje akumulują. My chcemy kupić tanio, razem z nimi.
-        if sai_score >= 40 and spd_score < 60:
-            # Entry: Na poziomie POC (tam gdzie jest wolumen) lub lekko pod rynkiem
+        action = "WAIT"
+        entry, sl, tp = 0.0, 0.0, 0.0
+        ttl_factor = 1.0 # Mnożnik czasu (Fishing trwa dłużej)
+
+        # === STRATEGIA A: ŁOWIENIE (Fishing / Silent Mode) ===
+        # Wymagamy teraz BARDZO silnej akumulacji (SAI >= 60), żeby w ogóle o tym myśleć.
+        if sai_score >= 60 and spd_score < 50:
             entry = poc_price
             
-            # Jeśli obecna cena jest dużo wyższa (>1.5 ATR) od POC, to czekamy na korektę
-            if current_price > entry + (1.5 * atr):
+            # Jeśli cena jest daleko, ustawiamy limit i czekamy cierpliwie
+            if current_price > entry + (2.0 * atr):
                 action = "BUY_LIMIT"
-                comment = "Fishing at Volume Node (POC)"
+                comment = "Sniper: Waiting for Pullback to POC"
+                ttl_factor = 2.0 # Dajemy mu więcej czasu na powrót
             else:
-                # Jesteśmy blisko, można brać
+                # Jesteśmy w strefie
                 entry = current_price
-                action = "MARKET_BUY" # Lub agresywny limit
-                comment = "Accumulation Zone Entry"
+                action = "MARKET_BUY"
+                comment = "Silent Accumulation Zone"
+                ttl_factor = 1.2
 
-            # Stop Loss: Poniżej lokalnego dołka o 1 ATR (żeby szum nas nie wyrzucił)
-            sl = local_min - (1.0 * atr)
-            
-            # Cel: Górna banda konsolidacji (Range Play)
-            tp = local_max 
+            # SL ciasny, pod dołkiem
+            sl = local_min - (1.5 * atr)
+            # TP ambitne (górna banda + bonus za kompresję)
+            tp = local_max + (2.0 * atr)
 
-        # === STRATEGIA B: WYBICIE (Breakout) - Dominacja SPD ===
-        # Scenariusz: Rynek jest sprężyną. Czekamy na eksplozję.
-        elif spd_score >= 60:
-            # Entry: Powyżej lokalnego szczytu (potwierdzenie siły)
-            entry = local_max + (0.2 * atr) 
+        # === STRATEGIA B: WYBICIE (Breakout / Loud Mode) ===
+        # Tylko przy potężnym sentymencie (SPD >= 70)
+        elif spd_score >= 70:
+            entry = local_max + (0.5 * atr) # Kupujemy dopiero jak przebije z impetem
             action = "BUY_STOP"
-            comment = "Momentum Breakout (Resilience)"
+            comment = "Momentum Breakout (News Driven)"
+            ttl_factor = 0.8 # Wybicie musi być szybkie, albo jest fałszywe
             
-            # Stop Loss: W połowie drogi (nie chcemy, żeby cena wróciła do bazy)
             sl = current_price - (2.0 * atr)
-            
-            # Cel: Niebo (Agresywny TP - podążanie za trendem)
-            tp = entry + (3.0 * (entry - sl))
+            tp = entry + (4.0 * (entry - sl)) # Celujemy w księżyc
 
-        # === STRATEGIA C: NEUTRALNA / PUŁAPKA ===
         else:
-            return TacticalPlan("WAIT", 0.0, 0.0, 0.0, 0.0, "No clear tactical edge")
+            # Odsiewamy "przeciętniaków"
+            return TacticalPlan("SKIP", 0.0, 0.0, 0.0, 0.0, 0, "Weak Edge")
 
-        # 4. Walidacja Ryzyka (Risk Management Guard)
-        # Czy zysk jest przynajmniej 1.5x - 2x większy niż ryzyko?
+        # 3. Walidacja Ryzyka (Matematyka Zysku)
         risk = entry - sl
         reward = tp - entry
         
-        if risk <= 0: 
-            return None # Błąd logiczny
+        if risk <= 0.0001: return None 
         
         rr_ratio = reward / risk
         
-        # Expert Filter: Odrzucamy słabe układy (Zgodnie z PDF: R:R min 2.0)
-        # Wcześniej było 1.5, co naruszało zasady "Matematyki Zysku"
-        if rr_ratio < 2.0:
-            # FIX: Rzutowanie na float() naprawia błąd "schema np does not exist"
-            return TacticalPlan("SKIP", float(round(entry, 2)), float(round(sl, 2)), float(round(tp, 2)), float(round(rr_ratio, 2)), f"Low R:R ({rr_ratio:.2f})")
+        # ZAOLSTRZENIE: Dla strategii Fishing (gdzie łapiemy spadający nóż) chcemy R:R min 2.5
+        min_rr = 2.5 if "Fishing" in comment else 2.0
+        
+        if rr_ratio < min_rr:
+            return TacticalPlan("SKIP", entry, sl, tp, rr_ratio, 0, f"Low R:R ({rr_ratio:.2f} < {min_rr})")
 
-        # FIX: Rzutowanie na float() naprawia błąd "schema np does not exist"
-        return TacticalPlan(action, float(round(entry, 2)), float(round(sl, 2)), float(round(tp, 2)), float(round(rr_ratio, 2)), comment)
+        # === 4. DYNAMICZNY TTL (FIZYKA RUCHU) ===
+        # Jak daleko mamy do celu?
+        distance_to_target = abs(tp - entry)
+        
+        # Ile dni zajmie pokonanie tego dystansu przy obecnej zmienności?
+        if daily_volatility > 0:
+            estimated_days = distance_to_target / daily_volatility
+        else:
+            estimated_days = 5.0 # Fallback
+            
+        # Aplikujemy czynnik strategii i bufor
+        final_ttl = int(np.ceil(estimated_days * ttl_factor * 1.5))
+        
+        # Bezpieczniki (nie mniej niż 2 dni, nie więcej niż 14)
+        final_ttl = max(2, min(14, final_ttl))
+
+        return TacticalPlan(
+            action=action, 
+            entry_price=float(round(entry, 2)), 
+            stop_loss=float(round(sl, 2)), 
+            take_profit=float(round(tp, 2)), 
+            risk_reward=float(round(rr_ratio, 2)), 
+            ttl_days=final_ttl,
+            comment=comment
+        )
