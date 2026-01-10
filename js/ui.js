@@ -137,13 +137,11 @@ const getStrategyInfo = (notes) => {
     return { name: 'MANUAL', class: 'strat-badge-unknown', full: 'Manual/Other' };
 };
 
-// =========================================================================
-// === EXPORT 1: RENDERERS (Wyciągnięte na zewnątrz dla Logic.js) ===
-// =========================================================================
 export const renderers = {
     loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
     
     phase1List: (candidates) => candidates.map(c => {
+        // ... (bez zmian)
         let sectorBadge = "";
         if (c.sector_ticker) {
             const isTrendUp = parseFloat(c.sector_trend_score || 0) > 0;
@@ -160,15 +158,14 @@ export const renderers = {
         let scoreDisplay = "";
         let scoreVal = 0;
         const strat = getStrategyInfo(s.notes);
+        // ... (bez zmian reszty logiki dla listy bocznej)
         if (s.notes && s.notes.includes("SCORE:")) {
             try {
                 const parts = s.notes.split("SCORE:");
                 if (parts.length > 1) {
                     const scorePart = parts[1].trim().split(/[\s\/]/)[0].replace(",", "").replace(".", "."); 
                     scoreVal = parseFloat(scorePart);
-                    
                     let scoreBg = "bg-blue-900/30 text-blue-300";
-                    
                     if (strat.name !== 'BIOX') {
                         scoreDisplay = `<span class="ml-2 text-xs ${scoreBg} px-1 rounded">SC: ${scoreVal.toFixed(0)}</span>`;
                     } else {
@@ -181,7 +178,6 @@ export const renderers = {
         return `<div class="candidate-item phase3-item flex items-center text-xs p-2 rounded-md cursor-pointer transition-colors ${statusClass} hover:bg-gray-800" data-ticker="${s.ticker}"><i data-lucide="${icon}" class="w-4 h-4 mr-2"></i><span class="font-bold">${s.ticker}</span><span class="ml-2 strat-badge ${strat.class}">${strat.name}</span>${scoreDisplay}<span class="ml-auto text-gray-500">${s.status}</span></div>`;
     }).join('') || `<p class="text-xs text-gray-500 p-2">Brak sygnałów.</p>`,
 
-    // === NOWOŚĆ: GŁÓWNY WIDOK SDAR ===
     sdarView: (candidates) => {
         if (!candidates) candidates = [];
         const rows = candidates.map(c => {
@@ -190,7 +186,6 @@ export const renderers = {
             const spdClass = c.spd_score > 60 ? 'text-blue-400 font-bold' : 'text-gray-300';
             const shock = c.sentiment_shock != null ? c.sentiment_shock.toFixed(2) : '-';
             const atr = c.atr_compression != null ? c.atr_compression.toFixed(3) : '-';
-            
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors">
                 <td class="p-3 font-bold text-sky-400">${c.ticker}</td>
                 <td class="p-3 text-right ${totalScoreClass}">${c.total_anomaly_score ? c.total_anomaly_score.toFixed(1) : '0.0'}</td>
@@ -201,7 +196,6 @@ export const renderers = {
                 <td class="p-3 text-right text-xs text-gray-500">${c.analysis_date ? new Date(c.analysis_date).toLocaleTimeString() : '-'}</td>
             </tr>`;
         }).join('');
-
         const tableHeader = `<thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0"><tr>
             <th class="p-3 text-left">Ticker</th>
             <th class="p-3 text-right">Total Score</th>
@@ -211,7 +205,6 @@ export const renderers = {
             <th class="p-3 text-right">ATR Comp.</th>
             <th class="p-3 text-right">Czas</th>
         </tr></thead>`;
-
         return `<div id="sdar-view" class="max-w-6xl mx-auto">
             <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
                 <div>
@@ -229,7 +222,6 @@ export const renderers = {
         </div>`;
     },
 
-    // === NOWOŚĆ: RENDERER DLA TACTICAL FEED (WSTAWIANY W LOGIC.JS) ===
     sdarTacticalRows: (candidates, quotes = {}) => {
         if (!candidates || candidates.length === 0) {
             return `<tr><td colspan="9" class="px-4 py-8 text-center text-gray-500 italic">Oczekiwanie na dane z modułu taktycznego...</td></tr>`;
@@ -238,8 +230,6 @@ export const renderers = {
             const score = c.total_anomaly_score || 0;
             let action = "WATCH";
             let actionClass = "sdar-action-watch";
-            
-            // Prosta logika wizualna dla akcji
             if (score > 85) { 
                 action = "MARKET_BUY"; 
                 actionClass = "sdar-action-market"; 
@@ -247,10 +237,8 @@ export const renderers = {
                 action = "BUY_LIMIT"; 
                 actionClass = "sdar-action-limit"; 
             }
-
             const price = quotes[c.ticker] ? parseFloat(quotes[c.ticker]['05. price']).toFixed(2) : '---';
             const setupType = (c.sai_score || 0) > (c.spd_score || 0) ? "VOL_ACCUM" : "SENT_DIV";
-
             return `<tr class="border-b border-gray-700/50 hover:bg-blue-900/10 transition-colors group">
                 <td class="px-4 py-3 font-bold text-white">${c.ticker}</td>
                 <td class="px-4 py-3 font-mono text-sky-400">${score.toFixed(1)}</td>
@@ -270,6 +258,7 @@ export const renderers = {
     },
 
     phase4View: (candidates) => {
+        // ... (bez zmian)
         const rows = candidates.map(c => {
             const scoreColor = c.kinetic_score >= 80 ? 'text-amber-400 font-black' : (c.kinetic_score >= 50 ? 'text-yellow-200 font-bold' : 'text-gray-400');
             const shotsClass = c.max_daily_shots >= 3 ? 'text-green-400 font-bold' : 'text-gray-300';
@@ -283,6 +272,7 @@ export const renderers = {
     },
 
     dashboard: () => {
+        // ... (bez zmian)
         const activeSignalsCount = state.phase3.filter(s => s.status === 'ACTIVE').length;
         const pendingSignalsCount = state.phase3.filter(s => s.status === 'PENDING').length;
         let pulseClass = "pulse-idle";
@@ -302,6 +292,7 @@ export const renderers = {
         const activeCount = signals.filter(s => s.status === 'ACTIVE').length;
         const pendingCount = signals.filter(s => s.status === 'PENDING').length;
         const cardsHtml = signals.length > 0 ? signals.map(s => {
+            // ... (logika obliczeń R:R, score, itp. bez zmian)
             let score = "N/A";
             const strat = getStrategyInfo(s.notes);
             if (s.notes && s.notes.includes("SCORE:")) {
@@ -378,15 +369,41 @@ export const renderers = {
             }
             
             let statusColor = s.status === 'ACTIVE' ? 'border-green-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'border-yellow-500';
-            
             const statusIcon = s.status === 'ACTIVE' ? 'zap' : 'hourglass';
-            return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}"><div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div><div class="flex justify-between items-start mb-3"><div><div class="flex items-center gap-2"><h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4><span class="strat-badge ${strat.class}">${strat.name}</span><i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i></div><div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div></div><div class="text-right"><div class="flex flex-col items-end"><span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span><span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span></div></div></div><div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2"><div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div><div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div><div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div></div><div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div><div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div></div>`;
+            
+            // --- ZMIANA: Dodanie przycisku DELETE ---
+            return `<div class="phase3-item bg-[#161B22] rounded-lg p-4 border-l-4 ${statusColor} hover:bg-[#1f2937] transition-all cursor-pointer relative overflow-hidden group" data-ticker="${s.ticker}">
+                <div class="absolute bottom-0 left-0 h-1 bg-gray-700 w-full"><div class="bg-sky-600 h-full transition-all duration-1000" style="width: ${timeBarWidth}%"></div></div>
+                <div class="flex justify-between items-start mb-3">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h4 class="font-bold text-white text-xl tracking-wide">${s.ticker}</h4>
+                            <span class="strat-badge ${strat.class}">${strat.name}</span>
+                            <i data-lucide="${statusIcon}" class="w-4 h-4 ${s.status === 'ACTIVE' ? 'text-green-400' : 'text-yellow-400'}"></i>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1 font-mono">Wejście: <span class="text-gray-300">${s.entry_price ? parseFloat(s.entry_price).toFixed(2) : '---'}</span></div>
+                    </div>
+                    <div class="text-right flex flex-col items-end">
+                        <button class="delete-signal-btn text-gray-500 hover:text-red-500 transition-colors p-1 mb-1" title="Usuń sygnał" data-id="${s.id}"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                        <span class="text-xs bg-gray-800 border border-gray-700 px-2 py-1 rounded text-sky-300 font-mono mb-1 shadow-sm">AQM: ${score}</span>
+                        <span class="text-sm ${rValueClass} font-mono mt-1 flex items-center gap-1 bg-black/40 px-2 rounded border border-white/10">${rValueDisplay}${isLive ? '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span>' : ''}</span>
+                    </div>
+                </div>
+                <div class="flex justify-between items-end text-[10px] font-mono text-gray-500 mb-1 mt-2">
+                    <div class="text-left"><span class="block text-[9px] uppercase text-red-500/70">Stop Loss</span><span class="text-red-400 font-bold text-xs">${s.stop_loss ? parseFloat(s.stop_loss).toFixed(2) : '---'}</span></div>
+                    <div class="text-center pb-1"><span class="${priceDisplayClass} text-base tracking-wider drop-shadow-md">${currentPrice > 0 ? currentPrice.toFixed(2) : '---'}</span></div>
+                    <div class="text-right"><span class="block text-[9px] uppercase text-green-500/70">Take Profit</span><span class="text-green-400 font-bold text-xs">${s.take_profit ? parseFloat(s.take_profit).toFixed(2) : '---'}</span></div>
+                </div>
+                <div class="sniper-scope-container" title="Zakres: SL (Lewo) | TP (Prawo)"><div class="scope-zone-risk" style="width: ${entryPercent}"></div><div class="scope-zone-reward" style="width: calc(100% - ${entryPercent})"></div><div class="entry-marker" style="left: ${entryPercent}"></div><div class="scope-marker" style="left: ${scopeLeft}"></div></div>
+                <div class="mt-3 flex justify-between items-center"><span class="text-[10px] text-gray-500 font-mono flex items-center" title="Czas do wygaśnięcia setupu"><i data-lucide="clock" class="w-3 h-3 mr-1"></i>TTL: ${timeRemaining}</span><button class="text-xs bg-sky-600/10 hover:bg-sky-600/30 text-sky-400 px-2 py-1 rounded transition-colors">Szczegóły ></button></div>
+            </div>`;
         }).join('') : `<p class="text-center text-gray-500 col-span-full py-20">Brak aktywnych sygnałów H3. Uruchom skaner.</p>`;
         
         return `<div id="h3-signals-view" class="max-w-7xl mx-auto"><div class="flex flex-wrap justify-between items-center mb-4 border-b border-gray-700 pb-4 gap-2"><div><h2 class="text-xl font-bold text-white flex items-center"><i data-lucide="target" class="w-5 h-5 mr-2 text-purple-500"></i>Sygnały H3 Live</h2><p class="text-xs text-gray-500 mt-1">Aktywne: <span class="text-green-400 font-bold">${activeCount}</span> | Oczekujące: <span class="text-yellow-400 font-bold">${pendingCount}</span></p></div><div class="flex items-center gap-2 mt-2 sm:mt-0"><div class="relative"><select id="h3-sort-select" class="bg-[#161B22] border border-gray-700 text-gray-300 text-xs rounded-md focus:ring-sky-500 focus:border-sky-500 block w-full p-1.5 pl-2 pr-6 appearance-none cursor-pointer hover:bg-gray-800 transition-colors"><option value="score">Wg AQM Score</option><option value="rr">Wg R-Factor (Najlepsze)</option><option value="time">Wg Czasu Wygaśnięcia</option><option value="ticker">Wg Ticker (A-Z)</option></select><div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400"><i data-lucide="arrow-up-down" class="w-3 h-3"></i></div></div><button id="h3-refresh-btn" class="p-1.5 bg-gray-800 hover:bg-gray-700 rounded-md border border-gray-700 text-gray-300 transition-colors" title="Odśwież"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></div></div><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">${cardsHtml}</div></div>`;
     },
 
     phaseXView: (candidates) => {
+        // ... (bez zmian)
         const rows = candidates.map(c => {
             const dateStr = c.last_pump_date ? new Date(c.last_pump_date).toLocaleDateString() : '-';
             const pumpVal = c.last_pump_percent || 0.0;
@@ -398,6 +415,7 @@ export const renderers = {
     },
 
     portfolio: (holdings, quotes) => {
+        // ... (bez zmian)
         let totalPortfolioValue = 0;
         let totalProfitLoss = 0;
         const rows = holdings.map(h => {
@@ -438,6 +456,7 @@ export const renderers = {
     },
     
     transactions: (transactions) => {
+        // ... (bez zmian)
             const rows = transactions.map(t => {
             const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
             const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
@@ -448,6 +467,7 @@ export const renderers = {
     },
     
     agentReport: (report) => {
+        // ... (bez zmian)
         const stats = report.stats;
         const trades = report.trades;
         const total_trades_count = report.total_trades_count;
@@ -482,6 +502,7 @@ export const renderers = {
     },
 
     optimizationResults: (job) => {
+        // ... (bez zmian)
         if (!job) return `<p class="text-gray-500">Brak danych o optymalizacji.</p>`;
         const trials = job.trials || [];
         trials.sort((a, b) => (b.profit_factor || 0) - (a.profit_factor || 0));
@@ -496,11 +517,9 @@ export const renderers = {
     }
 };
 
-// =========================================================================
-// === EXPORT 2: UI (Konstrukcja i Inicjalizacja) ===
-// =========================================================================
 export const ui = {
     init: () => {
+        // ... (bez zmian)
         const get = (id) => document.getElementById(id);
         
         // Iniekcja elementów do modalu H3
