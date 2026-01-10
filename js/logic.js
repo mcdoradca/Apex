@@ -221,6 +221,25 @@ const _renderH3ViewInternal = () => {
         refreshBtn.addEventListener('click', () => showH3Signals(false));
     }
 
+    // === OBSŁUGA USUWANIA SYGNAŁU ===
+    const deleteButtons = document.querySelectorAll('.delete-signal-btn');
+    deleteButtons.forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation(); // Zapobiegnij otwarciu modalu
+            const signalId = btn.dataset.id;
+            if (confirm("Czy na pewno chcesz usunąć ten sygnał?")) {
+                try {
+                    await api.deleteSignal(signalId);
+                    showSystemAlert("Sygnał usunięty.");
+                    // Odśwież natychmiast
+                    showH3Signals(true);
+                } catch (err) {
+                    alert("Błąd usuwania: " + err.message);
+                }
+            }
+        });
+    });
+
     cards.forEach(card => {
         card.addEventListener('click', () => {
             const ticker = card.dataset.ticker;
