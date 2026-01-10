@@ -1,3 +1,4 @@
+
 import logging
 import sys
 import json
@@ -26,7 +27,7 @@ except Exception as e:
     logger.critical(f"FATAL: Failed to create database tables: {e}", exc_info=True)
     sys.exit(1)
 
-app = FastAPI(title="APEX Predator API", version="5.1.0") # V5.1.0: Phase 5 Removed
+app = FastAPI(title="APEX Predator API", version="5.1.0") 
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +41,6 @@ api_av_client = AlphaVantageClient()
 
 @app.get("/", summary="Root endpoint confirming API is running")
 def read_root_get():
-    # === CRITICAL FIX: Słowo 'running' jest wymagane przez Frontend (js/app.js) ===
     return {"status": "APEX Predator API V5.1 is running"}
 
 @app.head("/", summary="Health check endpoint for HEAD requests")
@@ -116,9 +116,7 @@ def get_phasex_candidates_endpoint(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/candidates/sdar", response_model=List[schemas.SdarCandidate])
 def get_sdar_candidates_endpoint(db: Session = Depends(get_db)):
-    """Pobiera listę kandydatów SDAR (Nowa Idea), sortując po wyniku anomalii."""
     try:
-        # Bezpośrednie zapytanie, aby uniknąć konieczności edycji pliku CRUD
         return db.query(models.SdarCandidate).order_by(models.SdarCandidate.total_anomaly_score.desc()).all()
     except Exception as e:
         logger.error(f"Error fetching SDAR candidates: {e}", exc_info=True)
@@ -126,7 +124,6 @@ def get_sdar_candidates_endpoint(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/candidates/phase4", response_model=List[schemas.Phase4Candidate])
 def get_phase4_candidates_endpoint(db: Session = Depends(get_db)):
-    """Pobiera listę kandydatów Kinetic Alpha (Petardy)."""
     try:
         return crud.get_phase4_candidates(db)
     except Exception as e:
@@ -139,8 +136,16 @@ def get_phase2_results_endpoint(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/signals/phase3", response_model=List[schemas.TradingSignal])
 def get_phase3_signals_endpoint(db: Session = Depends(get_db)):
-    # Ten endpoint zwraca wszystkie aktywne/oczekujące sygnały
     return crud.get_active_and_pending_signals(db)
+
+# === NOWOŚĆ: USUWANIE SYGNAŁU (MANUALNE) ===
+@app.delete("/api/v1/signal/{signal_id}", status_code=204)
+def delete_signal_endpoint(signal_id: int, db: Session = Depends(get_db)):
+    result = crud.delete_trading_signal(db, signal_id)
+    if not result:
+        # Jeśli nie znaleziono lub już usunięty, zwracamy 404, ale dla UI to też OK
+        raise HTTPException(status_code=404, detail="Sygnał nie istnieje lub został już zamknięty.")
+    return Response(status_code=204)
 
 @app.get("/api/v1/signal/{ticker}/details")
 def get_signal_details_live(ticker: str, db: Session = Depends(get_db)):
@@ -279,7 +284,6 @@ def get_virtual_agent_report_endpoint(page: int = 1, page_size: int = 200, db: S
 
 @app.get("/api/v1/virtual-agent/trade/{trade_id}/audit", response_model=Dict[str, Any])
 def get_trade_audit_details(trade_id: int, db: Session = Depends(get_db)):
-    """Pobiera szczegółowy raport audytu dla pojedynczej transakcji."""
     try:
         trade = db.query(models.VirtualTrade).filter(models.VirtualTrade.id == trade_id).first()
         if not trade:
@@ -464,7 +468,7 @@ def control_worker(action: str, params: Dict[str, Any] = Body(default=None), db:
         "start_phase3": "START_PHASE_3_REQUESTED",
         "start_phasex": "START_PHASE_X_REQUESTED",
         "start_phase4": "START_PHASE_4_REQUESTED",
-        "start_sdar": "START_SDAR_REQUESTED"  # <--- NOWA IDEA: SDAR TRIGGER
+        "start_sdar": "START_SDAR_REQUESTED" 
     }
     if action not in allowed_actions:
         raise HTTPException(status_code=400, detail="Invalid action.")
