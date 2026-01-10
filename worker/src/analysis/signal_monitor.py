@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 # Stała dla Trailing Stopu: ile ATR od szczytu ma być oddalony stop?
 TRAILING_ATR_MULTIPLIER = 2.5 
+# Nowa stała: Bufor bezpieczeństwa przy starcie (0.2%)
+STARTUP_GRACE_BUFFER = 0.002 
 
 def _update_linked_virtual_trade(session: Session, signal_id: int, close_price: float, exit_reason: str):
     """
@@ -46,14 +48,7 @@ def _update_linked_virtual_trade(session: Session, signal_id: int, close_price: 
 
 def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
     """
-    Cykl Strażnika Sygnałów (Signal Monitor) - V6: TTL + RR GUARD + BURNOUT.
-    
-    Funkcje:
-    - Trailing Stop (Chandelier Exit).
-    - Hard TP/SL.
-    - Automatyczne wygaszanie starych sygnałów (TTL).
-    - Usuwanie sygnałów spalonych przed wejściem (Burnout).
-    - Ochrona przed wejściem na słabym R:R (Gap Up).
+    Cykl Strażnika Sygnałów (Signal Monitor) - V6: TTL + RR GUARD + BURNOUT + INSTANT KILL FIX.
     """
     logger.info("Uruchamianie cyklu Strażnika Sygnałów (V6 + Cleaner)...")
 
@@ -92,13 +87,13 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
     
     for signal in signals:
         # === 1. CLEANER: Time-To-Live (Wygaśnięcie Czasowe) ===
-        if signal.expiration_date and now_utc > signal.expiration_date:
+        if signal.expiration_date and now_utc > signal.expiration_date.replace(tzinfo=timezone.utc):
             signal.status = 'EXPIRED'
             signal.notes = (signal.notes or "") + f" [EXPIRED: Czas minął]"
             signal.updated_at = now_utc
             append_scan_log(session, f"🗑️ STRAŻNIK: {signal.ticker} WYGASŁ (TTL). Usunięto z listy.")
             updates_count += 1
-            continue # Sygnał usunięty, przechodzimy do następnego
+            continue 
 
         current_price = live_prices.get(signal.ticker)
         if not current_price: continue
@@ -122,10 +117,24 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
         if signal.status == 'PENDING':
             # A. BURNOUT: Czy cena spadła poniżej SL przed wejściem?
             if current_price <= sl:
-                new_status = 'INVALIDATED'
-                note_update = f"[BURNT] Cena {current_price:.2f} przebiła SL {sl:.2f} przed aktywacją."
-                append_scan_log(session, f"🔥 STRAŻNIK: {signal.ticker} SPALONY (Cena < SL przed wejściem).")
-                status_changed = True
+                # --- FIX: OCHRONA PRZED INSTANT KILL ---
+                is_buy_stop = "BUY_STOP" in (signal.notes or "")
+                should_kill = True
+                
+                if is_buy_stop:
+                    # Dla BUY_STOP: Cena poniżej SL przed wejściem NIE unieważnia setupu (czekamy na wybicie).
+                    should_kill = False
+                else:
+                    # Dla innych: Dajemy mały bufor (Grace Period) na spread/szum
+                    sl_with_grace = sl * (1.0 - STARTUP_GRACE_BUFFER)
+                    if current_price > sl_with_grace:
+                        should_kill = False # Uratowany przez bufor
+
+                if should_kill:
+                    new_status = 'INVALIDATED'
+                    note_update = f"[BURNT] Cena {current_price:.2f} przebiła SL {sl:.2f} przed aktywacją."
+                    append_scan_log(session, f"🔥 STRAŻNIK: {signal.ticker} SPALONY (Cena < SL przed wejściem).")
+                    status_changed = True
             
             # B. ACTIVATION & RR GUARD: Czy cena przebiła Entry?
             elif current_price >= entry:
