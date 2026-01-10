@@ -12,13 +12,12 @@ logger = logging.getLogger(__name__)
 
 # Stała dla Trailing Stopu: ile ATR od szczytu ma być oddalony stop?
 TRAILING_ATR_MULTIPLIER = 2.5 
-# Nowa stała: Bufor bezpieczeństwa przy starcie (0.2%)
+# === FIX: Bufor bezpieczeństwa przy starcie (0.2%) ===
 STARTUP_GRACE_BUFFER = 0.002 
 
 def _update_linked_virtual_trade(session: Session, signal_id: int, close_price: float, exit_reason: str):
     """
     Pomocnicza funkcja do natychmiastowej synchronizacji Wirtualnego Portfela.
-    Gdy Strażnik zamyka sygnał, zamykamy też powiązaną transakcję wirtualną.
     """
     try:
         virtual_trade = session.query(models.VirtualTrade).filter(
@@ -27,7 +26,6 @@ def _update_linked_virtual_trade(session: Session, signal_id: int, close_price: 
         ).first()
 
         if virtual_trade:
-            # Mapowanie statusu sygnału na status transakcji
             vt_status = 'CLOSED_TP' if exit_reason == 'COMPLETED' else 'CLOSED_SL'
             if "TRAILING" in exit_reason: 
                  vt_status = 'CLOSED_TP' 
@@ -36,7 +34,6 @@ def _update_linked_virtual_trade(session: Session, signal_id: int, close_price: 
             virtual_trade.close_price = close_price
             virtual_trade.close_date = datetime.now(timezone.utc)
             
-            # Oblicz P/L %
             if virtual_trade.entry_price:
                 p_l = ((close_price - float(virtual_trade.entry_price)) / float(virtual_trade.entry_price)) * 100
                 virtual_trade.final_profit_loss_percent = p_l
@@ -48,9 +45,10 @@ def _update_linked_virtual_trade(session: Session, signal_id: int, close_price: 
 
 def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
     """
-    Cykl Strażnika Sygnałów (Signal Monitor) - V6: TTL + RR GUARD + BURNOUT + INSTANT KILL FIX.
+    Cykl Strażnika Sygnałów (Signal Monitor) - V6.1: Active Protection.
+    Zabezpieczony przed 'Instant Kill' na otwarciu rynku.
     """
-    logger.info("Uruchamianie cyklu Strażnika Sygnałów (V6 + Cleaner)...")
+    logger.info("Uruchamianie cyklu Strażnika Sygnałów (V6.1 + Protection)...")
 
     # 1. Pobierz aktywne i oczekujące sygnały
     signals = session.query(models.TradingSignal).filter(
@@ -61,10 +59,9 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
         logger.info("Strażnik: Brak aktywnych sygnałów do monitorowania.")
         return
 
-    # 2. Pobierz listę tickerów
     tickers = [s.ticker for s in signals]
     
-    # 3. Pobierz ceny LIVE (Bulk Request)
+    # 2. Pobierz ceny LIVE
     bulk_csv = api_client.get_bulk_quotes(tickers)
     
     live_prices = {}
@@ -80,13 +77,13 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
                     live_prices[symbol] = price
         except Exception as e:
             logger.error(f"Strażnik: Błąd parsowania CSV: {e}")
-            return # Jeśli nie mamy cen, nie robimy nic (bezpieczeństwo)
+            return 
 
     updates_count = 0
     now_utc = datetime.now(timezone.utc)
     
     for signal in signals:
-        # === 1. CLEANER: Time-To-Live (Wygaśnięcie Czasowe) ===
+        # === 1. CLEANER: Time-To-Live ===
         if signal.expiration_date and now_utc > signal.expiration_date.replace(tzinfo=timezone.utc):
             signal.status = 'EXPIRED'
             signal.notes = (signal.notes or "") + f" [EXPIRED: Czas minął]"
@@ -102,7 +99,6 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
         tp = float(signal.take_profit) if signal.take_profit else 0
         entry = float(signal.entry_price) if signal.entry_price else 0
         
-        # Obsługa Trailing Stop
         highest_price = float(signal.highest_price_since_entry) if signal.highest_price_since_entry else 0.0
         if highest_price == 0 and entry > 0:
             highest_price = entry
@@ -113,22 +109,23 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
         alert_msg = ""
         sync_virtual_portfolio = False
 
-        # === 2. CLEANER: PENDING SIGNALS LOGIC (Burnout & RR Guard) ===
+        # === 2. PENDING SIGNALS (Zabezpieczone) ===
         if signal.status == 'PENDING':
-            # A. BURNOUT: Czy cena spadła poniżej SL przed wejściem?
+            # A. BURNOUT Check (Z OCHRONĄ!)
             if current_price <= sl:
                 # --- FIX: OCHRONA PRZED INSTANT KILL ---
                 is_buy_stop = "BUY_STOP" in (signal.notes or "")
                 should_kill = True
                 
                 if is_buy_stop:
-                    # Dla BUY_STOP: Cena poniżej SL przed wejściem NIE unieważnia setupu (czekamy na wybicie).
+                    # Dla BUY_STOP: Cena poniżej SL przed wejściem NIE unieważnia setupu.
+                    # Czekamy na wybicie w górę.
                     should_kill = False
                 else:
-                    # Dla innych: Dajemy mały bufor (Grace Period) na spread/szum
+                    # Dla innych: Dajemy mały bufor na spread/szum
                     sl_with_grace = sl * (1.0 - STARTUP_GRACE_BUFFER)
                     if current_price > sl_with_grace:
-                        should_kill = False # Uratowany przez bufor
+                        should_kill = False 
 
                 if should_kill:
                     new_status = 'INVALIDATED'
@@ -136,9 +133,9 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
                     append_scan_log(session, f"🔥 STRAŻNIK: {signal.ticker} SPALONY (Cena < SL przed wejściem).")
                     status_changed = True
             
-            # B. ACTIVATION & RR GUARD: Czy cena przebiła Entry?
+            # B. ACTIVATION Check
             elif current_price >= entry:
-                # Sprawdź R:R przy obecnej cenie (ochrona przed Gap Up)
+                # RR Guard: Sprawdź czy Gap Up nie zepsuł R:R
                 potential_profit = tp - current_price
                 potential_risk = current_price - sl
                 
@@ -146,22 +143,19 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
                 if potential_risk > 0:
                     current_rr = potential_profit / potential_risk
                 
-                # Jeśli R:R jest fatalny (np. < 1.0), nie wchodzimy
                 if current_rr < 1.0:
                     new_status = 'INVALIDATED'
-                    note_update = f"[RR REJECT] Cena otwarcia {current_price:.2f} zbyt wysoka. RR spadł do {current_rr:.2f}."
-                    append_scan_log(session, f"⛔ STRAŻNIK: {signal.ticker} ODRZUCONY PRZY WEJŚCIU (Słaby R:R: {current_rr:.2f}).")
+                    note_update = f"[RR REJECT] Cena otwarcia {current_price:.2f} zbyt wysoka. RR: {current_rr:.2f}."
+                    append_scan_log(session, f"⛔ STRAŻNIK: {signal.ticker} ODRZUCONY PRZY WEJŚCIU (Słaby R:R).")
                     status_changed = True
                 else:
-                    # Normalna aktywacja
                     new_status = 'ACTIVE'
                     note_update = f"[ENTRY] Cena ({current_price:.2f}) przebiła Entry ({entry:.2f})."
                     alert_msg = f"🚀 ENTRY: {signal.ticker}\nCena: {current_price:.2f}."
                     status_changed = True
                     signal.highest_price_since_entry = current_price
-                    # Tu opcjonalnie: auto-otwarcie Virtual Trade
 
-        # === 3. ACTIVE SIGNALS LOGIC (Standard Monitoring) ===
+        # === 3. ACTIVE SIGNALS ===
         elif signal.status == 'ACTIVE':
             if current_price > highest_price:
                 highest_price = current_price
@@ -183,23 +177,22 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
             # B. Hard SL / TP
             if not status_changed:
                 if current_price <= sl:
-                    new_status = 'INVALIDATED'
-                    note_update = f"[HARD SL] Cena ({current_price:.2f}) przebiła SL ({sl:.2f})."
+                    new_status = 'CLOSED_SL' # Zmieniono z INVALIDATED na CLOSED_SL dla porządku w statystykach
+                    note_update = f"[STOP LOSS] Cena ({current_price:.2f}) przebiła SL ({sl:.2f})."
                     alert_msg = f"🛑 STOP LOSS: {signal.ticker}\nWyjście: {current_price:.2f}."
                     status_changed = True
                     sync_virtual_portfolio = True
 
                 elif current_price >= tp:
-                    new_status = 'COMPLETED'
-                    note_update = f"[TP HIT] Cena ({current_price:.2f}) osiągnęła cel ({tp:.2f})."
+                    new_status = 'CLOSED_TP' # Zmieniono z COMPLETED na CLOSED_TP
+                    note_update = f"[TAKE PROFIT] Cena ({current_price:.2f}) osiągnęła cel ({tp:.2f})."
                     alert_msg = f"💰 TAKE PROFIT: {signal.ticker}\nCel: {current_price:.2f}."
                     status_changed = True
                     sync_virtual_portfolio = True
 
-        # === APLIKOWANIE ZMIAN ===
+        # === ZAPIS ===
         if status_changed:
             logger.info(f"Strażnik: Aktualizacja {signal.ticker} -> {new_status}")
-            
             signal.status = new_status
             timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')
             signal.notes = f"{timestamp}: {note_update}\n{signal.notes or ''}"
@@ -207,8 +200,8 @@ def run_signal_monitor_cycle(session: Session, api_client: AlphaVantageClient):
             
             updates_count += 1
             if alert_msg: send_telegram_alert(alert_msg)
-            # Logowanie tylko istotnych zmian statusu do UI
-            if new_status in ['ACTIVE', 'COMPLETED', 'INVALIDATED']:
+            
+            if new_status in ['ACTIVE', 'CLOSED_TP', 'CLOSED_SL', 'INVALIDATED']:
                  append_scan_log(session, f"STRAŻNIK: {signal.ticker} -> {new_status}. Cena: {current_price:.2f}")
             
             if sync_virtual_portfolio:
