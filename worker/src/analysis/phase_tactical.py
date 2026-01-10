@@ -39,7 +39,6 @@ class TacticalBridge:
         # === FIX TTL: KALIBRACJA ZMIENNOŚCI DZIENNEJ ===
         # Wcześniej: atr * 30 (Zbyt szybko!)
         # Teraz: atr * 10 (Zgodnie z zasadą sqrt(czas): sqrt(78 świec 5min) ~= 8.8)
-        # To daje realny szacunek dziennego zasięgu (Daily Range).
         daily_volatility = atr * 10 
 
         # 2. Znajdź "Volume Node" (POC) - Wsparcie Instytucjonalne
@@ -86,16 +85,22 @@ class TacticalBridge:
         else:
             return TacticalPlan("SKIP", 0.0, 0.0, 0.0, 0.0, 0, "Weak Edge")
 
+        # === FIX 2: MINIMALNE RYZYKO (Likwidacja R:R 27.0) ===
+        # Stop Loss nie może być bliżej niż 0.5% ceny wejścia lub 2 centy.
+        min_risk_dist = max(entry * 0.005, 0.02)
+        
+        current_risk = entry - sl
+        
+        # Jeśli wyliczony SL jest zbyt ciasny (np. 1 cent), poszerzamy go
+        if current_risk < min_risk_dist:
+            sl = entry - min_risk_dist
+            
         # 3. Walidacja Ryzyka (Matematyka Zysku)
         risk = entry - sl
         reward = tp - entry
         
-        # Ochrona przed dzieleniem przez zero (Minimalny spread)
-        if risk <= 0.0001: 
-            # Wymuszamy minimalny SL (np. 0.5% ceny), jeśli wyliczony jest zbyt ciasny
-            min_risk = entry * 0.005 
-            sl = entry - min_risk
-            risk = entry - sl
+        # Ochrona przed dzieleniem przez zero
+        if risk <= 0.0001: return None
         
         rr_ratio = reward / risk
         
@@ -104,7 +109,7 @@ class TacticalBridge:
         if rr_ratio < min_rr:
             return TacticalPlan("SKIP", float(round(entry, 2)), float(round(sl, 2)), float(round(tp, 2)), float(round(rr_ratio, 2)), 0, f"Low R:R ({rr_ratio:.2f} < {min_rr})")
 
-        # === 4. DYNAMICZNY TTL (FIZYKA RUCHU - POPRAWIONA) ===
+        # === 4. DYNAMICZNY TTL (FIZYKA RUCHU) ===
         distance_to_target = abs(tp - entry)
         
         if daily_volatility > 0:
