@@ -10,21 +10,21 @@ from typing import List, Dict, Optional
 # Importy z systemu Apex
 from ..models import SdarCandidate, TradingSignal
 from .utils import get_raw_data_with_cache, standardize_df_columns
-# === NOWOŚĆ: Moduł Taktyczny ===
+# === Moduł Taktyczny ===
 from .phase_tactical import TacticalBridge
 
 logger = logging.getLogger(__name__)
 
-# === KONFIGURACJA SDAR (ZGODNA Z PDF) ===
-SDAR_RAW_INTERVAL = '5min'      # Dane źródłowe (Mikro-struktura)
-SDAR_VIRTUAL_TIMEFRAME = '4h'   # Wirtualne świece
+# === KONFIGURACJA SDAR ===
+SDAR_RAW_INTERVAL = '5min'      
+SDAR_VIRTUAL_TIMEFRAME = '4h'   
 SDAR_MIN_CANDLES = 20           
-BATCH_DELAY = 1.0               # 1.0s opóźnienia daje ~50 tickerów/min
+BATCH_DELAY = 1.0               
 
 class SDARAnalyzer:
     """
     Silnik Analityczny SDAR (System Detekcji Anomalii Rynkowych).
-    Wersja 2.0 (ADAPTIVE): Inteligentne ważenie wyników (Silent/Loud Mode).
+    Wersja 2.1 (Adaptive Scoring + Dynamic TTL).
     """
 
     def __init__(self, session: Session, api_client):
@@ -34,7 +34,7 @@ class SDARAnalyzer:
 
     def run_sdar_cycle(self, limit: Optional[int] = None) -> List[str]:
         limit_str = f"{limit}" if limit else "ALL"
-        logger.info(f"🚀 SDAR v2.0: Start analizy adaptacyjnej (Input: {SDAR_RAW_INTERVAL}, Limit: {limit_str})")
+        logger.info(f"🚀 SDAR v2.1: Start analizy (Limit: {limit_str}, Adaptive Logic: ON)")
 
         candidates = self._fetch_candidates(limit)
         if not candidates:
@@ -48,8 +48,7 @@ class SDARAnalyzer:
             try:
                 # 0. Risk Guard: Earnings Filter
                 if self._is_near_earnings(ticker):
-                    logger.debug(f"SDAR: {ticker} pominięty (Earnings Risk).")
-                    continue
+                    continue # Cicho pomijamy
 
                 time.sleep(BATCH_DELAY)
                 result = self.analyze_ticker(ticker)
@@ -57,16 +56,14 @@ class SDARAnalyzer:
                 if result:
                     self._save_result(result)
                     
-                    # === MOST EGZEKUCYJNY ===
+                    # === MOST EGZEKUCYJNY (Decyzja o Setupie) ===
                     self._bridge_to_execution(result)
                     
                     processed_tickers.append(ticker)
-                    # Logujemy, jaki tryb (Mode) został użyty
-                    mode_info = "STD"
-                    if result.sai_score > 50 and result.spd_score < 20: mode_info = "SILENT"
-                    elif result.spd_score > 60 and result.sai_score < 30: mode_info = "LOUD"
                     
-                    logger.info(f"✅ SDAR [{i+1}/{len(candidates)}]: {ticker} ({mode_info}) | Score: {result.total_anomaly_score:.1f} | SAI: {result.sai_score:.0f} SPD: {result.spd_score:.0f}")
+                    # Logujemy tylko istotne wyniki (>40), żeby nie śmiecić
+                    if result.total_anomaly_score > 40:
+                        logger.info(f"✅ SDAR [{i+1}/{len(candidates)}]: {ticker} | Score: {result.total_anomaly_score:.1f} | Action: {result.tactical_action}")
 
             except Exception as e:
                 logger.error(f"❌ SDAR Error dla {ticker}: {str(e)}", exc_info=True)
@@ -75,13 +72,13 @@ class SDARAnalyzer:
         return processed_tickers
 
     def analyze_ticker(self, ticker: str) -> Optional[SdarCandidate]:
-        # A. Pobranie danych Mikro (5min) i Agregacja do 4h
+        # A. Pobranie danych
         df_5min, df_virtual = self._get_market_data(ticker)
         
         if df_virtual is None or len(df_virtual) < 10:
             return None
 
-        # B. Dane News (Sentyment)
+        # B. Dane News
         news_data = self._get_news_data(ticker)
 
         # C. Obliczenia Filarów
@@ -89,30 +86,33 @@ class SDARAnalyzer:
         spd = self._calculate_spd(df_virtual, news_data)
         me  = self._calculate_me(df_virtual, news_data)
 
-        # === D. SCORING ADAPTACYJNY (SILENT ASSASSIN FIX) ===
+        # === D. SCORING ADAPTACYJNY ("Silent Assassin") ===
         sai_val = float(sai['score'])
         spd_val = float(spd['score'])
         me_val = float(me['score'])
         
-        # Logika wyboru trybu
-        if sai_val >= 50 and spd_val < 30:
-            # TRYB CICHY: Ignorujemy niski SPD, skupiamy się na akumulacji
-            # Premia za ciszę: Jeśli SPD=0, to dobrze dla akumulacji!
+        # 1. TRYB CICHY (Silent Mode)
+        # Jeśli jest duża akumulacja (SAI >= 60) ale cisza w newsach (SPD < 30)
+        # Nagradzamy "ciszę" zamiast karać za brak newsów.
+        if sai_val >= 60 and spd_val < 30:
             raw_total_score = (sai_val * 0.8) + (me_val * 0.2)
+            # Bonus za ciszę absolutną (SPD bliskie 0)
+            if spd_val < 10: raw_total_score += 10
         
-        elif spd_val >= 60 and sai_val < 40:
-            # TRYB GŁOŚNY: Ignorujemy brak wolumenu, skupiamy się na szoku newsowym
-            raw_total_score = (spd_val * 0.8) + (me_val * 0.2)
+        # 2. TRYB GŁOŚNY (Loud Mode)
+        # Jeśli jest potężny news (SPD >= 70), ignorujemy brak techniki
+        elif spd_val >= 70:
+            raw_total_score = (spd_val * 0.7) + (sai_val * 0.2) + (me_val * 0.1)
             
+        # 3. TRYB HYBRYDOWY (Standard)
         else:
-            # TRYB STANDARDOWY (Hybryda): Zbalansowane podejście
             raw_total_score = (sai_val * 0.4) + (spd_val * 0.4) + (me_val * 0.2)
         
-        # Kara za pułapkę momentum (ME Trap)
+        # Kara za pułapkę (Bull Trap)
         if me['is_trap']:
             raw_total_score *= 0.5
 
-        # === E. MODUŁ TAKTYCZNY (GENEROWANIE PLANU) ===
+        # === E. MODUŁ TAKTYCZNY + TTL ===
         current_price = df_5min['close'].iloc[-1]
         
         plan = self.tactical.generate_plan(
@@ -120,14 +120,22 @@ class SDARAnalyzer:
             sai_val, spd_val, me_val
         )
 
-        t_action = plan.action if plan else "WAIT"
-        t_entry = plan.entry_price if plan else None
-        t_sl = plan.stop_loss if plan else None
-        t_tp = plan.take_profit if plan else None
-        t_rr = plan.risk_reward if plan else None
-        t_comm = plan.comment if plan else None
+        t_action = "WAIT"
+        t_entry, t_sl, t_tp, t_rr = None, None, None, None
+        t_comm = None
+        
+        # Jeśli plan istnieje, mapujemy go
+        if plan:
+            t_action = plan.action
+            t_entry = plan.entry_price
+            t_sl = plan.stop_loss
+            t_tp = plan.take_profit
+            t_rr = plan.risk_reward
+            # Dodajemy TTL do komentarza dla informacji w tabeli
+            t_comm = f"{plan.comment} (TTL: {plan.ttl_days}d)"
 
-        return SdarCandidate(
+        # Tworzymy obiekt kandydata
+        candidate = SdarCandidate(
             ticker=ticker,
             sai_score=sai_val,
             spd_score=spd_val,
@@ -150,30 +158,51 @@ class SDARAnalyzer:
             take_profit=t_tp,
             risk_reward_ratio=t_rr,
             tactical_comment=t_comm,
-            
             analysis_date=datetime.now()
         )
+        
+        # Hack: Doklejamy obiekt planu do kandydata w pamięci (nie do bazy),
+        # aby przekazać `ttl_days` do funkcji `_bridge_to_execution`.
+        candidate._plan_object = plan 
+        
+        return candidate
 
-    # --- EXECUTION BRIDGE ---
+    # --- EXECUTION BRIDGE (FILTR JAKOŚCI) ---
     
     def _bridge_to_execution(self, candidate: SdarCandidate):
         """
-        Zamienia wynik analizy (SdarCandidate) na aktywny sygnał (TradingSignal).
+        Zamienia wynik analizy na sygnał, JEŚLI spełnia ostre kryteria.
         """
+        # 1. Czy jest akcja?
         if not candidate.tactical_action or candidate.tactical_action in ['WAIT', 'SKIP', 'OBSERVE']:
             return
 
-        # Rygorystyczny Filtr R:R (Zgodnie z PDF: musi być >= 2.0)
+        # 2. FILTR JAKOŚCI (Threshold)
+        # Odrzucamy wszystko z wynikiem < 45. To wytnie słabe setupy (np. ZYME).
+        if candidate.total_anomaly_score < 45:
+            return
+
+        # 3. Filtr R:R (już sprawdzony w module taktycznym, ale dla pewności)
         if not candidate.risk_reward_ratio or candidate.risk_reward_ratio < 2.0:
             return
 
+        # 4. Sprawdzenie duplikatów
         existing_signal = self.session.query(TradingSignal).filter(
             TradingSignal.ticker == candidate.ticker,
             TradingSignal.status.in_(['PENDING', 'ACTIVE'])
         ).first()
 
-        if existing_signal:
-            return 
+        if existing_signal: return 
+
+        # 5. Wyliczenie daty wygaśnięcia (Dynamic TTL)
+        expiration_dt = None
+        if hasattr(candidate, '_plan_object') and candidate._plan_object:
+            # Używamy TTL wyliczonego z fizyki rynku (ATR)
+            ttl_days = candidate._plan_object.ttl_days
+            expiration_dt = datetime.now(timezone.utc) + timedelta(days=ttl_days)
+        else:
+            # Fallback
+            expiration_dt = datetime.now(timezone.utc) + timedelta(days=5)
 
         try:
             new_signal = TradingSignal(
@@ -183,21 +212,22 @@ class SDARAnalyzer:
                 stop_loss=candidate.stop_loss,
                 take_profit=candidate.take_profit,
                 risk_reward_ratio=candidate.risk_reward_ratio,
-                notes=f"SDAR {candidate.tactical_action}: {candidate.tactical_comment} | Score:{candidate.total_anomaly_score:.0f}",
+                notes=f"SDAR v2 {candidate.tactical_action}: {candidate.tactical_comment} | Score:{candidate.total_anomaly_score:.0f}",
                 entry_zone_bottom=candidate.entry_price, 
                 entry_zone_top=candidate.entry_price,
-                generation_date=datetime.now(timezone.utc)
+                generation_date=datetime.now(timezone.utc),
+                expiration_date=expiration_dt # <--- ZAPIS DYNAMICZNEGO TTL
             )
             
             self.session.add(new_signal)
             self.session.commit()
-            logger.info(f"⚡ BRIDGE: Wygenerowano Trading Signal dla {candidate.ticker} ({candidate.tactical_action})")
+            logger.info(f"⚡ BRIDGE: Utworzono Sygnał {candidate.ticker} (R:R {candidate.risk_reward_ratio:.1f}, Ważny do: {expiration_dt.strftime('%Y-%m-%d')})")
             
         except Exception as e:
             logger.error(f"BRIDGE Error saving signal for {candidate.ticker}: {e}")
             self.session.rollback()
 
-    # --- FILARY (Bez zmian logicznych, tylko optymalizacja kodu) ---
+    # --- FILARY (STANDARDOWE METODY) ---
     
     def _calculate_sai(self, df_virtual: pd.DataFrame, df_5min: pd.DataFrame) -> Dict:
         df = df_virtual.copy()
@@ -317,8 +347,6 @@ class SDARAnalyzer:
             me_score = 80
 
         return {'score': float(me_score), 'is_trap': is_trap, 'rsi': float(current_rsi), 'apo': float(current_apo)}
-
-    # --- DATA & FETCHING ---
 
     def _get_market_data(self, ticker: str):
         raw_data = get_raw_data_with_cache(
