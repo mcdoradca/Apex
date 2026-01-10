@@ -15,8 +15,8 @@ class TacticalPlan:
 
 class TacticalBridge:
     """
-    Moduł Taktyczny dla SDAR v2.0 (Dynamic TTL & Strict Rules).
-    Zamienia abstrakcyjne wyniki (SAI/SPD) na konkretne poziomy cenowe.
+    Moduł Taktyczny dla SDAR v2.2 (Real Physics TTL).
+    Skalibrowany mnożnik zmienności (Volatility Scaler).
     """
 
     def generate_plan(self, ticker: str, current_price: float, df_5min: pd.DataFrame, 
@@ -36,9 +36,11 @@ class TacticalBridge:
         
         if np.isnan(atr) or atr == 0: return None 
 
-        # Szacowana dzienna zmienność (Daily Range)
-        # Przyjmujemy przybliżenie: ATR_dzienny ~= 30 * ATR_5min
-        daily_volatility = atr * 30 
+        # === FIX TTL: KALIBRACJA ZMIENNOŚCI DZIENNEJ ===
+        # Wcześniej: atr * 30 (Zbyt szybko!)
+        # Teraz: atr * 10 (Zgodnie z zasadą sqrt(czas): sqrt(78 świec 5min) ~= 8.8)
+        # To daje realny szacunek dziennego zasięgu (Daily Range).
+        daily_volatility = atr * 10 
 
         # 2. Znajdź "Volume Node" (POC) - Wsparcie Instytucjonalne
         last_day = df.iloc[-288:] 
@@ -52,77 +54,67 @@ class TacticalBridge:
 
         action = "WAIT"
         entry, sl, tp = 0.0, 0.0, 0.0
-        ttl_factor = 1.0 # Mnożnik czasu (Strategie Fishing trwają dłużej)
+        ttl_factor = 1.0 
 
         # === STRATEGIA A: ŁOWIENIE (Fishing / Silent Mode) ===
-        # Wymagamy teraz BARDZO silnej akumulacji (SAI >= 60), żeby w ogóle o tym myśleć.
         if sai_score >= 60 and spd_score < 50:
             entry = poc_price
             
-            # Jeśli cena jest daleko od POC (> 2 ATR), ustawiamy limit i czekamy
             if current_price > entry + (2.0 * atr):
                 action = "BUY_LIMIT"
                 comment = "Sniper: Waiting for Pullback to POC"
-                ttl_factor = 2.0 # Dajemy mu więcej czasu na powrót do bazy
+                ttl_factor = 2.0 
             else:
-                # Jesteśmy w strefie akumulacji
                 entry = current_price
                 action = "MARKET_BUY"
                 comment = "Silent Accumulation Zone"
                 ttl_factor = 1.2
 
-            # SL ciasny, pod lokalnym dołkiem
             sl = local_min - (1.5 * atr)
-            # TP ambitne (górna banda + bonus za kompresję)
             tp = local_max + (2.0 * atr)
 
         # === STRATEGIA B: WYBICIE (Breakout / Loud Mode) ===
-        # Tylko przy potężnym sentymencie (SPD >= 70)
         elif spd_score >= 70:
-            # Kupujemy dopiero jak przebije szczyt z impetem
             entry = local_max + (0.5 * atr) 
             action = "BUY_STOP"
             comment = "Momentum Breakout (News Driven)"
-            ttl_factor = 0.8 # Wybicie musi być szybkie, albo jest fałszywe
+            ttl_factor = 0.8 
             
-            # SL w połowie ruchu
             sl = current_price - (2.0 * atr)
-            # TP: Celujemy w księżyc (Momentum)
             tp = entry + (4.0 * (entry - sl)) 
 
         else:
-            # Odsiewamy "przeciętniaków"
             return TacticalPlan("SKIP", 0.0, 0.0, 0.0, 0.0, 0, "Weak Edge")
 
         # 3. Walidacja Ryzyka (Matematyka Zysku)
         risk = entry - sl
         reward = tp - entry
         
-        if risk <= 0.0001: return None 
+        # Ochrona przed dzieleniem przez zero (Minimalny spread)
+        if risk <= 0.0001: 
+            # Wymuszamy minimalny SL (np. 0.5% ceny), jeśli wyliczony jest zbyt ciasny
+            min_risk = entry * 0.005 
+            sl = entry - min_risk
+            risk = entry - sl
         
         rr_ratio = reward / risk
         
-        # ZAOSTRZENIE: Dla strategii Fishing (łapanie dołka) wymagamy większej nagrody
         min_rr = 2.5 if "Fishing" in comment or "Accumulation" in comment else 2.0
         
         if rr_ratio < min_rr:
-            # Rzutowanie na float() zapobiega błędom bazy danych (numpy type error)
             return TacticalPlan("SKIP", float(round(entry, 2)), float(round(sl, 2)), float(round(tp, 2)), float(round(rr_ratio, 2)), 0, f"Low R:R ({rr_ratio:.2f} < {min_rr})")
 
-        # === 4. DYNAMICZNY TTL (FIZYKA RUCHU) ===
-        # Jak daleko mamy do celu?
+        # === 4. DYNAMICZNY TTL (FIZYKA RUCHU - POPRAWIONA) ===
         distance_to_target = abs(tp - entry)
         
-        # Ile dni zajmie pokonanie tego dystansu przy obecnej zmienności?
         if daily_volatility > 0:
             estimated_days = distance_to_target / daily_volatility
         else:
-            estimated_days = 5.0 # Fallback
+            estimated_days = 5.0
             
-        # Aplikujemy czynnik strategii i bufor bezpieczeństwa (x1.5)
         final_ttl = int(np.ceil(estimated_days * ttl_factor * 1.5))
         
-        # Bezpieczniki (nie mniej niż 2 dni, nie więcej niż 14)
+        # Bezpieczniki: Widełki 2 - 14 dni
         final_ttl = max(2, min(14, final_ttl))
 
         return TacticalPlan(
