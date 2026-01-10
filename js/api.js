@@ -45,7 +45,6 @@ export const api = {
     getWorkerStatus: () => apiRequest('api/v1/worker/status'),
     
     // === CONTROLLER ===
-    // Obsługuje komendy: start_phase1, start_phase3, start_phasex, start_phase4, start_sdar
     sendWorkerControl: (action, params = null) => apiRequest(`api/v1/worker/control/${action}`, { 
         method: 'POST',
         headers: params ? { 'Content-Type': 'application/json' } : {},
@@ -56,16 +55,15 @@ export const api = {
     getPhase1Candidates: () => apiRequest('api/v1/candidates/phase1'),
     getPhaseXCandidates: () => apiRequest('api/v1/candidates/phasex'),
     getPhase4Candidates: () => apiRequest('api/v1/candidates/phase4'),
-    
-    // [SDAR] Pobieranie kandydatów z tabeli sdar_candidates
     getSdarCandidates: () => apiRequest('api/v1/candidates/sdar'),
-
     getPhase2Results: () => apiRequest('api/v1/results/phase2'),
     getPhase3Signals: () => apiRequest('api/v1/signals/phase3'),
     
-    // === SIGNAL DETAILS (LIVE CHECK) ===
+    // === SIGNAL MANAGEMENT ===
+    // NOWOŚĆ: Usuwanie sygnału
+    deleteSignal: (id) => apiRequest(`api/v1/signal/${id}`, { method: 'DELETE' }),
+    
     getSignalDetails: (ticker) => apiRequest(`api/v1/signal/${ticker}/details`),
-
     getDiscardedCount: () => apiRequest('api/v1/signals/discarded-count-24h'),
     getLiveQuote: (ticker) => apiRequest(`api/v1/quote/${ticker}`),
     getBulkQuotes: (tickers) => apiRequest(`api/v1/quotes/bulk?tickers=${tickers.join(',')}`),
