@@ -1,4 +1,3 @@
-
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
 // === CSS INJECTION: HUD, ANIMACJE, SNIPER SCOPE, GLASSMORPHISM ===
@@ -141,7 +140,6 @@ export const renderers = {
     loading: (text) => `<div class="text-center py-10"><div role="status" class="flex flex-col items-center"><svg aria-hidden="true" class="inline w-8 h-8 text-gray-600 animate-spin fill-sky-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/><path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/></svg><p class="text-sky-400 mt-4">${text}</p></div></div>`,
     
     phase1List: (candidates) => candidates.map(c => {
-        // ... (bez zmian)
         let sectorBadge = "";
         if (c.sector_ticker) {
             const isTrendUp = parseFloat(c.sector_trend_score || 0) > 0;
@@ -158,7 +156,6 @@ export const renderers = {
         let scoreDisplay = "";
         let scoreVal = 0;
         const strat = getStrategyInfo(s.notes);
-        // ... (bez zmian reszty logiki dla listy bocznej)
         if (s.notes && s.notes.includes("SCORE:")) {
             try {
                 const parts = s.notes.split("SCORE:");
@@ -456,14 +453,129 @@ export const renderers = {
     },
     
     transactions: (transactions) => {
-        // ... (bez zmian)
-            const rows = transactions.map(t => {
-            const typeClass = t.transaction_type === 'BUY' ? 'text-green-400' : 'text-red-400';
-            const profitLossClass = t.profit_loss_usd == null ? '' : (t.profit_loss_usd >= 0 ? 'text-green-500' : 'text-red-500');
-            const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL');
-            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937]"><td class="p-3 text-gray-400 text-xs">${transactionDate}</td><td class="p-3 font-bold text-sky-400">${t.ticker}</td><td class="p-3 font-semibold ${typeClass}">${t.transaction_type}</td><td class="p-3 text-right">${t.quantity}</td><td class="p-3 text-right">${t.price_per_share.toFixed(4)}</td><td class="p-3 text-right ${profitLossClass}">${t.profit_loss_usd != null ? t.profit_loss_usd.toFixed(2) + ' USD' : '---'}</td></tr>`;
+        // 1. OBLICZENIA STATYSTYCZNE
+        let totalRealizedPL = 0;
+        let totalSellValue = 0;
+        let winCount = 0;
+        let lossCount = 0;
+        let totalWinAmt = 0;
+        let totalLossAmt = 0;
+        
+        // Sortujemy od najnowszych
+        const sortedTrans = [...transactions].sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
+
+        const rows = sortedTrans.map(t => {
+            const isSell = t.transaction_type === 'SELL';
+            const typeClass = t.transaction_type === 'BUY' ? 'text-sky-400 bg-sky-900/20' : 'text-orange-400 bg-orange-900/20';
+            const transactionDate = new Date(t.transaction_date).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            const totalValue = t.quantity * t.price_per_share;
+            
+            let profitDisplay = "---";
+            let percentDisplay = "---";
+            let profitClass = "text-gray-500";
+            
+            if (isSell && t.profit_loss_usd !== null && t.profit_loss_usd !== undefined) {
+                const pl = t.profit_loss_usd;
+                totalRealizedPL += pl;
+                totalSellValue += totalValue;
+                
+                // Logika statystyk
+                if (pl > 0) { winCount++; totalWinAmt += pl; }
+                else { lossCount++; totalLossAmt += Math.abs(pl); }
+
+                // Obliczanie ROI %
+                // Koszt uzyskania przychodu = Wartość Sprzedaży - Zysk
+                const costBasis = totalValue - pl;
+                let roi = 0;
+                if (costBasis > 0) {
+                    roi = (pl / costBasis) * 100;
+                }
+
+                profitDisplay = `${pl > 0 ? '+' : ''}${pl.toFixed(2)} $`;
+                percentDisplay = `${roi > 0 ? '+' : ''}${roi.toFixed(2)}%`;
+                
+                if (pl > 0) profitClass = "text-green-400 font-bold";
+                else if (pl < 0) profitClass = "text-red-500 font-bold";
+                else profitClass = "text-gray-400";
+            }
+
+            return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors group">
+                <td class="p-3 text-gray-400 text-xs font-mono">${transactionDate}</td>
+                <td class="p-3 font-bold text-white tracking-wide">${t.ticker}</td>
+                <td class="p-3"><span class="text-xs px-2 py-1 rounded font-bold ${typeClass}">${t.transaction_type}</span></td>
+                <td class="p-3 text-right font-mono text-gray-300">${t.quantity}</td>
+                <td class="p-3 text-right font-mono text-gray-300">${t.price_per_share.toFixed(2)}</td>
+                <td class="p-3 text-right font-mono text-gray-400">${totalValue.toFixed(2)} $</td>
+                <td class="p-3 text-right font-mono ${profitClass}">${profitDisplay}</td>
+                <td class="p-3 text-right font-mono ${profitClass} text-xs bg-black/20">${percentDisplay}</td>
+            </tr>`;
         }).join('');
-        return `<div id="transactions-view" class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold text-sky-400 mb-6 border-b border-gray-700 pb-2">Historia Transakcji</h2>${transactions.length === 0 ? '<p class="text-center text-gray-500 py-10">Brak historii transakcji.</p>' : `<div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700"><table class="w-full text-sm text-left text-gray-300"><thead class="text-xs text-gray-400 uppercase bg-[#0D1117]"><tr><th scope="col" class="p-3">Data</th><th scope="col" class="p-3">Ticker</th><th scope="col" class="p-3">Typ</th><th scope="col" class="p-3 text-right">Ilość</th><th scope="col" class="p-3 text-right">Cena (USD)</th><th scope="col" class="p-3 text-right">Zysk / Strata (USD)</th></tr></thead><tbody>${rows}</tbody></table></div>` }</div>`;
+
+        // 2. AGREGACJA DANYCH DO PANELU GÓRNEGO
+        const totalTrades = winCount + lossCount;
+        const winRate = totalTrades > 0 ? (winCount / totalTrades) * 100 : 0;
+        const avgWin = winCount > 0 ? (totalWinAmt / winCount) : 0;
+        const avgLoss = lossCount > 0 ? (totalLossAmt / lossCount) : 0;
+        const profitFactor = totalLossAmt > 0 ? (totalWinAmt / totalLossAmt) : (totalWinAmt > 0 ? 999 : 0);
+        
+        const totalPLClass = totalRealizedPL >= 0 ? "text-green-400" : "text-red-500";
+
+        // 3. RENDEROWANIE WIDOKU
+        return `
+        <div id="transactions-view" class="max-w-6xl mx-auto">
+            <h2 class="text-2xl font-bold text-white mb-6 border-b border-gray-700 pb-2 flex items-center">
+                <i data-lucide="history" class="w-6 h-6 mr-3 text-sky-500"></i>
+                Dziennik Transakcyjny
+            </h2>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                <div class="bg-[#161B22] p-4 rounded-lg border border-gray-700 shadow-lg">
+                    <p class="text-xs text-gray-500 uppercase font-bold mb-1">Zrealizowany P/L</p>
+                    <p class="text-2xl font-black ${totalPLClass}">${totalRealizedPL > 0 ? '+' : ''}${totalRealizedPL.toFixed(2)} USD</p>
+                </div>
+                <div class="bg-[#161B22] p-4 rounded-lg border border-gray-700 shadow-lg">
+                    <p class="text-xs text-gray-500 uppercase font-bold mb-1">Skuteczność (Win Rate)</p>
+                    <div class="flex items-end gap-2">
+                        <p class="text-2xl font-bold text-white">${winRate.toFixed(1)}%</p>
+                        <span class="text-xs text-gray-500 mb-1">(${winCount}W / ${lossCount}L)</span>
+                    </div>
+                    <div class="w-full bg-gray-800 h-1 mt-2 rounded overflow-hidden">
+                        <div class="bg-green-500 h-full" style="width: ${winRate}%"></div>
+                    </div>
+                </div>
+                <div class="bg-[#161B22] p-4 rounded-lg border border-gray-700 shadow-lg">
+                    <p class="text-xs text-gray-500 uppercase font-bold mb-1">Profit Factor</p>
+                    <p class="text-2xl font-bold ${profitFactor >= 1.5 ? 'text-green-400' : 'text-yellow-400'}">${profitFactor.toFixed(2)}</p>
+                </div>
+                <div class="bg-[#161B22] p-4 rounded-lg border border-gray-700 shadow-lg">
+                    <p class="text-xs text-gray-500 uppercase font-bold mb-1">Średnia (Win vs Loss)</p>
+                    <p class="text-sm text-green-400 font-mono">W: +${avgWin.toFixed(2)} $</p>
+                    <p class="text-sm text-red-400 font-mono">L: -${avgLoss.toFixed(2)} $</p>
+                </div>
+            </div>
+
+            ${transactions.length === 0 ? '<div class="text-center py-20 bg-[#161B22] rounded-lg border border-gray-700"><i data-lucide="ghost" class="w-12 h-12 mx-auto text-gray-600 mb-3"></i><p class="text-gray-500">Brak historii transakcji. Czas zacząć polowanie.</p></div>' : `
+            <div class="overflow-x-auto bg-[#161B22] rounded-lg border border-gray-700 shadow-xl">
+                <table class="w-full text-sm text-left text-gray-300">
+                    <thead class="text-xs text-gray-400 uppercase bg-[#0D1117] sticky top-0">
+                        <tr>
+                            <th scope="col" class="p-3">Data</th>
+                            <th scope="col" class="p-3">Ticker</th>
+                            <th scope="col" class="p-3">Typ</th>
+                            <th scope="col" class="p-3 text-right">Ilość</th>
+                            <th scope="col" class="p-3 text-right">Cena</th>
+                            <th scope="col" class="p-3 text-right">Wartość (Cash)</th>
+                            <th scope="col" class="p-3 text-right">P/L (USD)</th>
+                            <th scope="col" class="p-3 text-right">ROI (%)</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800">
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+            `}
+        </div>`;
     },
     
     agentReport: (report) => {
