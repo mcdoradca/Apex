@@ -1,4 +1,3 @@
-
 import { api } from './api.js';
 import { state, logger, PORTFOLIO_QUOTE_POLL_INTERVAL, ALERT_POLL_INTERVAL, REPORT_PAGE_SIZE, AI_OPTIMIZER_POLL_INTERVAL, H3_DEEP_DIVE_POLL_INTERVAL } from './state.js';
 import { renderers } from './ui.js';
@@ -26,6 +25,33 @@ const updateElement = (el, content, isHtml = false) => {
     if (!el) return;
     if (isHtml) el.innerHTML = content;
     else el.textContent = content;
+};
+
+// === FIX RESPANSYWNOŚCI: Inteligentne renderowanie z zachowaniem Scrolla ===
+const updateContentWithScrollLock = (htmlContent) => {
+    if (!UI || !UI.mainContent) return;
+    
+    // 1. Sprawdź, czy istnieje aktywna tabela z przewijaniem (kontener .overflow-x-auto)
+    const scrollContainer = UI.mainContent.querySelector('.overflow-x-auto');
+    let savedScrollLeft = 0;
+    let savedScrollTop = 0;
+    
+    if (scrollContainer) {
+        savedScrollLeft = scrollContainer.scrollLeft;
+        savedScrollTop = scrollContainer.scrollTop;
+    }
+    
+    // 2. Podmień zawartość
+    UI.mainContent.innerHTML = htmlContent;
+    
+    // 3. Przywróć pozycję scrolla (jeśli kontener nadal istnieje)
+    if (scrollContainer) {
+         const newScrollContainer = UI.mainContent.querySelector('.overflow-x-auto');
+         if (newScrollContainer) {
+             newScrollContainer.scrollLeft = savedScrollLeft;
+             newScrollContainer.scrollTop = savedScrollTop;
+         }
+    }
 };
 
 const showLoading = () => {
@@ -125,7 +151,8 @@ export const showPortfolio = async (silent = false) => {
                 }
             }
             
-            UI.mainContent.innerHTML = renderers.portfolio(holdings, quotes);
+            // Używamy funkcji z blokadą scrolla zamiast zwykłego przypisania
+            updateContentWithScrollLock(renderers.portfolio(holdings, quotes));
             
         } catch (error) {
             if (!silent) UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania portfela: ${error.message}</p>`;
@@ -169,13 +196,10 @@ const _renderH3ViewInternal = () => {
     UI.mainContent.innerHTML = renderers.h3SignalsPanel(sortedSignals, state.liveQuotes);
 
     // === START: SDAR TACTICAL FEED LOGIC (Wstrzykiwanie do index.html) ===
-    // TO JEST NOWA SEKCJA ODPOWIEDZIALNA ZA WYŚWIETLANIE TABELI SDAR
     const sdarBody = document.getElementById('sdar-tactical-body');
     if (sdarBody && renderers.sdarTacticalRows) {
-        // Wstrzyknij wiersze (korzystając z danych pobranych w showH3Signals)
         sdarBody.innerHTML = renderers.sdarTacticalRows(state.sdarCandidates || [], state.liveQuotes);
         
-        // Obsługa przycisków "Track" w tabeli SDAR
         sdarBody.querySelectorAll('.sdar-track-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 const ticker = e.currentTarget.dataset.ticker;
@@ -196,7 +220,6 @@ const _renderH3ViewInternal = () => {
         });
     }
 
-    // Obsługa przycisku odświeżania samej tabeli SDAR
     const sdarRefreshBtn = document.getElementById('sdar-tactical-refresh-btn');
     if (sdarRefreshBtn) {
         sdarRefreshBtn.addEventListener('click', async (e) => {
@@ -221,17 +244,15 @@ const _renderH3ViewInternal = () => {
         refreshBtn.addEventListener('click', () => showH3Signals(false));
     }
 
-    // === OBSŁUGA USUWANIA SYGNAŁU ===
     const deleteButtons = document.querySelectorAll('.delete-signal-btn');
     deleteButtons.forEach(btn => {
         btn.addEventListener('click', async (e) => {
-            e.stopPropagation(); // Zapobiegnij otwarciu modalu
+            e.stopPropagation();
             const signalId = btn.dataset.id;
             if (confirm("Czy na pewno chcesz usunąć ten sygnał?")) {
                 try {
                     await api.deleteSignal(signalId);
                     showSystemAlert("Sygnał usunięty.");
-                    // Odśwież natychmiast
                     showH3Signals(true);
                 } catch (err) {
                     alert("Błąd usuwania: " + err.message);
@@ -260,16 +281,13 @@ export const showH3Signals = async (silent = false) => {
             const signals = await api.getPhase3Signals();
             state.phase3 = signals || [];
 
-            // === START: POBIERANIE DANYCH SDAR (DODANO DLA SPÓJNOŚCI DANYCH) ===
             try {
                 const sdarData = await api.getSdarCandidates();
                 state.sdarCandidates = sdarData || [];
             } catch (sdarErr) {
                 logger.warn("Błąd pobierania SDAR Tactical:", sdarErr);
             }
-            // === END: POBIERANIE DANYCH SDAR ===
             
-            // Zbieramy tickery z obu źródeł (H3 + SDAR) dla Bulk Quotes
             const tickersSet = new Set(signals.map(s => s.ticker));
             if (state.sdarCandidates) {
                 state.sdarCandidates.forEach(c => tickersSet.add(c.ticker));
@@ -307,7 +325,6 @@ export const showH3Signals = async (silent = false) => {
     state.activeViewPolling = setInterval(runCycle, VIEW_POLL_INTERVAL_MS);
 };
 
-// === OBSŁUGA WIDOKU FAZY X (BioX) ===
 export const showPhaseX = async () => {
     stopViewPolling();
     showLoading();
@@ -315,7 +332,8 @@ export const showPhaseX = async () => {
     const render = async () => {
         try {
             const candidates = await api.getPhaseXCandidates();
-            UI.mainContent.innerHTML = renderers.phaseXView(candidates);
+            // Scroll lock dla tabeli Fazy X
+            updateContentWithScrollLock(renderers.phaseXView(candidates));
             
             const runBtn = document.getElementById('run-phasex-scan-btn');
             if (runBtn) {
@@ -360,7 +378,6 @@ export const handleRunPhaseXScan = async () => {
     }
 };
 
-// === OBSŁUGA WIDOKU SDAR (NOWOŚĆ - DODANO CAŁĄ FUNKCJĘ) ===
 export const showSdar = async () => {
     stopViewPolling();
     showLoading();
@@ -369,9 +386,9 @@ export const showSdar = async () => {
         try {
             const candidates = await api.getSdarCandidates();
             if (UI && UI.mainContent) {
-                // renderer.sdarView zostanie dodany w ui.js
                 if (renderers.sdarView) {
-                    UI.mainContent.innerHTML = renderers.sdarView(candidates);
+                    // Scroll lock dla tabeli SDAR
+                    updateContentWithScrollLock(renderers.sdarView(candidates));
                 } else {
                     UI.mainContent.innerHTML = `<div class="p-4 text-yellow-400">Renderer SDAR niedostępny. Zaktualizuj plik ui.js.</div>`;
                 }
@@ -422,7 +439,6 @@ export const handleRunSdarScan = async () => {
     }
 };
 
-// === OBSŁUGA WIDOKU FAZY 4 (H4: Kinetic Alpha) ===
 export const showPhase4 = async () => {
     stopViewPolling();
     showLoading();
@@ -430,7 +446,8 @@ export const showPhase4 = async () => {
     const render = async () => {
         try {
             const candidates = await api.getPhase4Candidates();
-            UI.mainContent.innerHTML = renderers.phase4View(candidates);
+            // Scroll lock dla tabeli Fazy 4
+            updateContentWithScrollLock(renderers.phase4View(candidates));
             const runBtn = document.getElementById('run-phase4-scan-btn');
             if (runBtn) {
                 runBtn.addEventListener('click', handleRunPhase4Scan);
@@ -479,7 +496,8 @@ export const showTransactions = async (silent = false) => {
     const runCycle = async () => {
         try {
             const history = await api.getTransactionHistory();
-            UI.mainContent.innerHTML = renderers.transactions(history);
+            // Scroll lock dla historii transakcji
+            updateContentWithScrollLock(renderers.transactions(history));
         } catch (error) {
             if (!silent) UI.mainContent.innerHTML = `<p class="text-red-500 p-4">Błąd ładowania historii: ${error.message}</p>`;
         }
@@ -696,7 +714,6 @@ export const handleSellConfirm = async () => {
     }
 };
 
-// === OBSŁUGA BACKTESTU ===
 export const handleYearBacktestRequest = async () => {
     const input = document.getElementById('backtest-year-input');
     const status = document.getElementById('backtest-status-message');
@@ -928,7 +945,6 @@ export const showSignalDetails = async (ticker) => {
                 UI.signalDetails.marketStatus.textContent = statusText;
             }
             
-            // === DODANO DLA SDAR: Mapowanie pól Planu Bitwy ===
             if (data.setup) {
                 if (UI.signalDetails.entry) UI.signalDetails.entry.textContent = data.setup.entry_price ? data.setup.entry_price.toFixed(2) : "---";
                 if (UI.signalDetails.tp) UI.signalDetails.tp.textContent = data.setup.take_profit ? data.setup.take_profit.toFixed(2) : "---";
