@@ -1,3 +1,4 @@
+
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
 // === CSS INJECTION: HUD, ANIMACJE, SNIPER SCOPE, GLASSMORPHISM ===
@@ -474,29 +475,46 @@ export const renderers = {
             let percentDisplay = "---";
             let profitClass = "text-gray-500";
             
-            if (isSell && t.profit_loss_usd !== null && t.profit_loss_usd !== undefined) {
-                const pl = t.profit_loss_usd;
-                totalRealizedPL += pl;
-                totalSellValue += totalValue;
-                
-                // Logika statystyk
-                if (pl > 0) { winCount++; totalWinAmt += pl; }
-                else { lossCount++; totalLossAmt += Math.abs(pl); }
+            // Zmienne dla dwóch cen
+            let entryPriceDisplay = "---";
+            let exitPriceDisplay = "---";
 
-                // Obliczanie ROI %
-                // Koszt uzyskania przychodu = Wartość Sprzedaży - Zysk
-                const costBasis = totalValue - pl;
-                let roi = 0;
-                if (costBasis > 0) {
-                    roi = (pl / costBasis) * 100;
+            if (isSell) {
+                // To jest transakcja SPRZEDAŻY
+                exitPriceDisplay = t.price_per_share.toFixed(2);
+                
+                if (t.profit_loss_usd !== null && t.profit_loss_usd !== undefined) {
+                    const pl = t.profit_loss_usd;
+                    totalRealizedPL += pl;
+                    totalSellValue += totalValue;
+                    
+                    // Statystyki
+                    if (pl > 0) { winCount++; totalWinAmt += pl; }
+                    else { lossCount++; totalLossAmt += Math.abs(pl); }
+
+                    // Obliczanie ROI i Ceny Wejścia (Inżynieria wsteczna)
+                    // P/L = (Exit - Entry) * Qty  =>  Entry = Exit - (P/L / Qty)
+                    const impliedEntryPrice = t.price_per_share - (pl / t.quantity);
+                    entryPriceDisplay = impliedEntryPrice.toFixed(2);
+
+                    // ROI
+                    const costBasis = totalValue - pl;
+                    let roi = 0;
+                    if (costBasis > 0) {
+                        roi = (pl / costBasis) * 100;
+                    }
+
+                    profitDisplay = `${pl > 0 ? '+' : ''}${pl.toFixed(2)} $`;
+                    percentDisplay = `${roi > 0 ? '+' : ''}${roi.toFixed(2)}%`;
+                    
+                    if (pl > 0) profitClass = "text-green-400 font-bold";
+                    else if (pl < 0) profitClass = "text-red-500 font-bold";
+                    else profitClass = "text-gray-400";
                 }
-
-                profitDisplay = `${pl > 0 ? '+' : ''}${pl.toFixed(2)} $`;
-                percentDisplay = `${roi > 0 ? '+' : ''}${roi.toFixed(2)}%`;
-                
-                if (pl > 0) profitClass = "text-green-400 font-bold";
-                else if (pl < 0) profitClass = "text-red-500 font-bold";
-                else profitClass = "text-gray-400";
+            } else {
+                // To jest transakcja KUPNA
+                entryPriceDisplay = t.price_per_share.toFixed(2);
+                exitPriceDisplay = "---";
             }
 
             return `<tr class="border-b border-gray-800 hover:bg-[#1f2937] transition-colors group">
@@ -504,7 +522,10 @@ export const renderers = {
                 <td class="p-3 font-bold text-white tracking-wide">${t.ticker}</td>
                 <td class="p-3"><span class="text-xs px-2 py-1 rounded font-bold ${typeClass}">${t.transaction_type}</span></td>
                 <td class="p-3 text-right font-mono text-gray-300">${t.quantity}</td>
-                <td class="p-3 text-right font-mono text-gray-300">${t.price_per_share.toFixed(2)}</td>
+                
+                <td class="p-3 text-right font-mono text-sky-300">${entryPriceDisplay}</td>
+                <td class="p-3 text-right font-mono text-orange-300">${exitPriceDisplay}</td>
+                
                 <td class="p-3 text-right font-mono text-gray-400">${totalValue.toFixed(2)} $</td>
                 <td class="p-3 text-right font-mono ${profitClass}">${profitDisplay}</td>
                 <td class="p-3 text-right font-mono ${profitClass} text-xs bg-black/20">${percentDisplay}</td>
@@ -563,7 +584,8 @@ export const renderers = {
                             <th scope="col" class="p-3">Ticker</th>
                             <th scope="col" class="p-3">Typ</th>
                             <th scope="col" class="p-3 text-right">Ilość</th>
-                            <th scope="col" class="p-3 text-right">Cena</th>
+                            <th scope="col" class="p-3 text-right">Cena Wejścia</th>
+                            <th scope="col" class="p-3 text-right">Cena Wyjścia</th>
                             <th scope="col" class="p-3 text-right">Wartość (Cash)</th>
                             <th scope="col" class="p-3 text-right">P/L (USD)</th>
                             <th scope="col" class="p-3 text-right">ROI (%)</th>
