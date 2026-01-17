@@ -1,4 +1,3 @@
-
 import { logger, state, REPORT_PAGE_SIZE } from './state.js';
 
 // === CSS INJECTION: HUD, ANIMACJE, SNIPER SCOPE, GLASSMORPHISM ===
@@ -99,6 +98,31 @@ style.textContent = `
     .sdar-action-market { color: #10b981; font-weight: 900; text-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
     .sdar-action-limit { color: #3b82f6; font-weight: 800; }
     .sdar-action-watch { color: #9ca3af; font-style: italic; }
+
+    /* === MOBILE RESPONSIVENESS FIXES (NAPRAWA KOMÓRKI) === */
+    
+    /* 1. Fix Tabeli (zapobieganie 'snap back' i wymuszanie scrolla) */
+    .overflow-x-auto {
+        -webkit-overflow-scrolling: touch; /* Płynność na iOS */
+        overscroll-behavior-x: contain;    /* Zapobiega przesuwaniu całej strony przy końcu tabeli */
+    }
+
+    /* 2. Fix Modala Szczegółów (przewijanie pionowe) */
+    @media (max-width: 768px) {
+        #signal-details-modal {
+            align-items: flex-start !important; /* Ważne: Start od góry, nie od środka */
+            overflow-y: auto !important;        /* Włącza scroll całego overlayu */
+            padding-top: 2rem !important;
+            padding-bottom: 4rem !important;    /* Miejsce na dole */
+        }
+        
+        #signal-details-modal > div {
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+            max-height: none !important;        /* Pozwala oknu rosnąć */
+            overflow: visible !important;
+        }
+    }
 `;
 document.head.appendChild(style);
 
@@ -852,3 +876,4 @@ export const ui = {
     
     renderers: renderers
 };
+}
