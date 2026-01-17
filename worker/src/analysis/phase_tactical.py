@@ -10,24 +10,23 @@ class TacticalPlan:
     stop_loss: float
     take_profit: float
     risk_reward: float
-    ttl_days: int        # NOWOŚĆ: Szacowany czas życia setupu
+    ttl_days: int        
     comment: str
 
 class TacticalBridge:
     """
-    Moduł Taktyczny dla SDAR v2.2 (Real Physics TTL).
-    Skalibrowany mnożnik zmienności (Volatility Scaler).
+    Moduł Taktyczny dla SDAR v2.4 (Fast Breakout Fix).
+    Zmniejszony bufor wybicia dla szybszej reakcji.
     """
 
     def generate_plan(self, ticker: str, current_price: float, df_5min: pd.DataFrame, 
                       sai_score: float, spd_score: float, me_score: float) -> Optional[TacticalPlan]:
         
-        # 1. Oblicz ATR (Zmienność) - Nasz "Prędkościomierz"
+        # 1. Oblicz ATR (Zmienność)
         df = df_5min.copy()
         df['tr'] = np.maximum(df['high'] - df['low'], 
                    np.maximum(abs(df['high'] - df['close'].shift()), abs(df['low'] - df['close'].shift())))
         
-        # Używamy dłuższego okna ATR (288 świec = 24h), żeby wygładzić szum intraday
         atr_window = 288 
         atr_series = df['tr'].rolling(window=atr_window).mean()
         
@@ -36,12 +35,9 @@ class TacticalBridge:
         
         if np.isnan(atr) or atr == 0: return None 
 
-        # === FIX TTL: KALIBRACJA ZMIENNOŚCI DZIENNEJ ===
-        # Wcześniej: atr * 30 (Zbyt szybko!)
-        # Teraz: atr * 10 (Zgodnie z zasadą sqrt(czas): sqrt(78 świec 5min) ~= 8.8)
         daily_volatility = atr * 10 
 
-        # 2. Znajdź "Volume Node" (POC) - Wsparcie Instytucjonalne
+        # 2. Analiza Wolumenu (POC) i Struktury
         last_day = df.iloc[-288:] 
         if last_day.empty: return None
         
@@ -56,14 +52,17 @@ class TacticalBridge:
         ttl_factor = 1.0 
 
         # === STRATEGIA A: ŁOWIENIE (Fishing / Silent Mode) ===
+        # Tutaj wchodzimy "na dołku" lub w korekcie - tu opóźnienie nie jest problemem
         if sai_score >= 60 and spd_score < 50:
             entry = poc_price
             
+            # Jeśli cena jest daleko od bazy, czekamy na limit
             if current_price > entry + (2.0 * atr):
                 action = "BUY_LIMIT"
-                comment = "Sniper: Waiting for Pullback to POC"
+                comment = "Sniper: Waiting for Pullback"
                 ttl_factor = 2.0 
             else:
+                # Jesteśmy w strefie - wchodzimy z rynku
                 entry = current_price
                 action = "MARKET_BUY"
                 comment = "Silent Accumulation Zone"
@@ -73,53 +72,53 @@ class TacticalBridge:
             tp = local_max + (2.0 * atr)
 
         # === STRATEGIA B: WYBICIE (Breakout / Loud Mode) ===
+        # FIX: "Lateness" - Zmniejszamy bufor z 0.5 ATR na 0.1 ATR
         elif spd_score >= 70:
-            entry = local_max + (0.5 * atr) 
+            # Wcześniej: entry = local_max + (0.5 * atr) -> ZBYT WOLNE!
+            # Teraz: Wchodzimy tuż po przebiciu szczytu (+ mały szum)
+            entry = local_max + (0.1 * atr) 
+            
             action = "BUY_STOP"
-            comment = "Momentum Breakout (News Driven)"
+            comment = "Momentum Breakout (Fast)"
             ttl_factor = 0.8 
             
-            sl = current_price - (2.0 * atr)
+            # SL musi być teraz liczony od ENTRY, a nie od Current Price
+            # Skoro wchodzimy na szczycie, SL dajemy pod ostatnią korektą (np. -1.5 ATR)
+            sl = entry - (1.5 * atr)
+            
+            # TP dynamiczne: Celujemy w zasięg 3-4x ryzyko
             tp = entry + (4.0 * (entry - sl)) 
 
         else:
             return TacticalPlan("SKIP", 0.0, 0.0, 0.0, 0.0, 0, "Weak Edge")
 
-        # === FIX 2: MINIMALNE RYZYKO (Likwidacja R:R 27.0) ===
-        # Stop Loss nie może być bliżej niż 0.5% ceny wejścia lub 2 centy.
+        # === FIX: MINIMALNE RYZYKO (RR Guard) ===
         min_risk_dist = max(entry * 0.005, 0.02)
-        
         current_risk = entry - sl
         
-        # Jeśli wyliczony SL jest zbyt ciasny (np. 1 cent), poszerzamy go
         if current_risk < min_risk_dist:
             sl = entry - min_risk_dist
             
-        # 3. Walidacja Ryzyka (Matematyka Zysku)
+        # 3. Walidacja Ryzyka
         risk = entry - sl
         reward = tp - entry
         
-        # Ochrona przed dzieleniem przez zero
-        if risk <= 0.0001: return None
+        if risk <= 0.0001: return None 
         
         rr_ratio = reward / risk
-        
-        min_rr = 2.5 if "Fishing" in comment or "Accumulation" in comment else 2.0
+        min_rr = 2.5 if "Fishing" in comment else 2.0
         
         if rr_ratio < min_rr:
             return TacticalPlan("SKIP", float(round(entry, 2)), float(round(sl, 2)), float(round(tp, 2)), float(round(rr_ratio, 2)), 0, f"Low R:R ({rr_ratio:.2f} < {min_rr})")
 
-        # === 4. DYNAMICZNY TTL (FIZYKA RUCHU) ===
+        # 4. TTL Calculation
         distance_to_target = abs(tp - entry)
-        
         if daily_volatility > 0:
             estimated_days = distance_to_target / daily_volatility
         else:
             estimated_days = 5.0
             
         final_ttl = int(np.ceil(estimated_days * ttl_factor * 1.5))
-        
-        # Bezpieczniki: Widełki 2 - 14 dni
         final_ttl = max(2, min(14, final_ttl))
 
         return TacticalPlan(
