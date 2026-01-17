@@ -876,4 +876,3 @@ export const ui = {
     
     renderers: renderers
 };
-}
